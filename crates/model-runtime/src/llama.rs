@@ -16,6 +16,50 @@ pub struct LlamaClient {
     context_tokens: u32,
 }
 impl LlamaClient {
+    /// Private filesystem IPC for an owned local backend, without a TCP port race.
+    #[cfg(unix)]
+    pub fn private_socket(
+        socket: &std::path::Path,
+        key: String,
+        model: String,
+        context_tokens: u32,
+    ) -> Result<Self, ModelError> {
+        use std::os::unix::{
+            ffi::OsStrExt,
+            fs::{FileTypeExt, MetadataExt},
+        };
+        let parent = socket.parent().ok_or(ModelError::Invalid)?;
+        let parent_meta = std::fs::symlink_metadata(parent).map_err(|_| ModelError::Unavailable)?;
+        let metadata = std::fs::symlink_metadata(socket).map_err(|_| ModelError::Unavailable)?;
+        if !socket.is_absolute()
+            || socket.as_os_str().as_bytes().len() > 100
+            || !parent_meta.is_dir()
+            || parent_meta.mode() & 0o077 != 0
+            || !metadata.file_type().is_socket()
+            || key.len() < 32
+            || key.len() > 256
+            || !key.bytes().all(|b| b.is_ascii_alphanumeric())
+            || !orange_protocol::valid_id(&model)
+            || !(256..=32768).contains(&context_tokens)
+        {
+            return Err(ModelError::Invalid);
+        }
+        let client = Client::builder()
+            .unix_socket(socket)
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .connect_timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(120))
+            .build()
+            .map_err(|_| ModelError::Unavailable)?;
+        Ok(Self {
+            client,
+            endpoint: Url::parse("http://localhost/").map_err(|_| ModelError::Invalid)?,
+            key,
+            model,
+            context_tokens,
+        })
+    }
     pub fn new(
         endpoint: &str,
         key: String,
@@ -54,6 +98,22 @@ impl LlamaClient {
     }
     fn url(&self, path: &str) -> Result<Url, ModelError> {
         self.endpoint.join(path).map_err(|_| ModelError::Invalid)
+    }
+    pub async fn health(&self) -> Result<(), ModelError> {
+        let response = self
+            .client
+            .get(self.url("health")?)
+            .bearer_auth(&self.key)
+            .timeout(Duration::from_secs(2))
+            .send()
+            .await
+            .map_err(|_| ModelError::Unavailable)?;
+        let value: Value =
+            serde_json::from_slice(&bounded(response).await?).map_err(|_| ModelError::Protocol)?;
+        if value["status"] != "ok" {
+            return Err(ModelError::Unavailable);
+        }
+        Ok(())
     }
     async fn json(&self, path: &str, body: Value) -> Result<Value, ModelError> {
         let response = self

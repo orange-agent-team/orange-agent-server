@@ -3,6 +3,8 @@ pub mod cache;
 pub mod llama;
 pub mod metering;
 pub mod stream;
+#[cfg(unix)]
+pub mod supervisor;
 pub use orange_protocol::model::{
     GenerateRequest, Message, NativeUsage, ResponseCandidate, Role, ToolCall, ToolDefinition,
 };
