@@ -26,6 +26,8 @@ mod unix {
         startup_timeout_seconds: u64,
         #[serde(default)]
         control_nonce: Option<String>,
+        #[serde(default)]
+        instance_id: Option<String>,
     }
     pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         let args: Vec<_> = std::env::args_os().skip(1).collect();
@@ -144,7 +146,7 @@ mod unix {
             let _ = cancel.send(true);
             failed
         });
-        let launched = ManagedCpuModel::launch_with_cancel(
+        let launched = ManagedCpuModel::launch_from_host(
             &config.runtime_directory,
             CpuProfile {
                 executable: config.executable,
@@ -157,6 +159,7 @@ mod unix {
                 startup_timeout: Duration::from_secs(config.startup_timeout_seconds),
             },
             receiver,
+            config.instance_id,
         )
         .await;
         let mut process = match launched {

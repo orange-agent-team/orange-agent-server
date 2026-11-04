@@ -1,0 +1,151 @@
+#!/usr/bin/env python3
+"""Real pinned model -> explicit isolated-owner approval -> real file -> durable recovery.
+
+No synthetic model replies and no auto-approval in product code. This acceptance
+driver only approves bounded reads of the fixture it creates itself.
+"""
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import selectors
+import shutil
+import sqlite3
+import subprocess
+import tempfile
+import time
+import uuid
+
+ROOT=Path(__file__).resolve().parents[1]
+PRIVATE=ROOT/'.local/model-runtime'
+REPORT=ROOT/'.local/real-agent'
+
+def digest(path):
+    value=hashlib.sha256()
+    with path.open('rb') as stream:
+        for data in iter(lambda:stream.read(1024*1024),b''):value.update(data)
+    return value.hexdigest()
+
+def write(path,value):
+    descriptor=os.open(path,os.O_CREAT|os.O_WRONLY|os.O_NOFOLLOW,0o600)
+    with os.fdopen(descriptor,'w') as stream:
+        stream.truncate();json.dump(value,stream);stream.flush();os.fsync(stream.fileno())
+
+def main():
+    os.umask(0o077)
+    write(REPORT/'last-report.json',{'passed':False,'phase':'preparing','test_run_id':uuid.uuid4().hex})
+    lock=json.loads((ROOT/'config/local-model.lock.json').read_text())
+    build=json.loads((PRIVATE/'build.json').read_text())
+    backend=PRIVATE/'build/bin/llama-server';model=PRIVATE/(lock['model']['sha256']+'.gguf')
+    if not model.is_file() or model.stat().st_size!=lock['model']['bytes'] or digest(model)!=lock['model']['sha256']:raise RuntimeError('Pinned actual model required')
+    if build['backend_commit']!=lock['backend']['commit'] or build['gpu_enabled'] or digest(backend)!=build['executable_sha256']:raise RuntimeError('Verified fixed CPU backend required')
+    rustup=shutil.which('rustup') or '/opt/homebrew/opt/rustup/bin/rustup'
+    cargo=Path(subprocess.check_output([rustup,'which','--toolchain','stable','cargo'],text=True).strip())
+    env=os.environ.copy();env['PATH']=str(cargo.parent)+os.pathsep+env.get('PATH','')
+    subprocess.run([str(cargo),'build','-p','orange-agent-runtime','--example','local-agent','--locked'],cwd=ROOT,env=env,check=True)
+    subprocess.run([str(cargo),'build','-p','orange-model-runtime','--bin','orange-model-host','--locked'],cwd=ROOT,env=env,check=True)
+    REPORT.mkdir(parents=True,exist_ok=True,mode=0o700)
+    result={'scope':'actual pinned CPU model, isolated local file, explicit test-owner approvals and SQLite recovery; not hosted Agent, public identity, charges or GPU',
+            'model_sha256':lock['model']['sha256'],'backend_commit':lock['backend']['commit'],'phases':[],'approved_operations':0,'passed':False}
+    # Short private root avoids Unix socket path limits. Never use user-selected directories.
+    with tempfile.TemporaryDirectory(prefix='oa-real-',dir='/private/tmp' if os.uname().sysname=='Darwin' else None) as temporary:
+        base=Path(temporary).resolve();runtime=base/'m';state=base/'j';workspace=base/'w'
+        for folder in [runtime,state,workspace]:folder.mkdir(mode=0o700)
+        sentinel='ORANGE_EVIDENCE_'+uuid.uuid4().hex
+        (workspace/'proof.txt').write_text(sentinel+'\n')
+        nonce=uuid.uuid4().hex+uuid.uuid4().hex;instance=uuid.uuid4().hex
+        write(runtime/'profile.json',{'protocol':1,'runtime_directory':str(runtime),'executable':str(backend),'executable_sha256':build['executable_sha256'],
+            'model':str(model),'model_sha256':lock['model']['sha256'],'model_bytes':lock['model']['bytes'],'model_version':'qwen-agent-test-v1','context_tokens':4096,
+            'startup_timeout_seconds':120,'control_nonce':nonce,'instance_id':instance})
+        with (runtime/'host.log').open('w') as log:
+            host=subprocess.Popen([str(ROOT/'target/debug/orange-model-host'),str(runtime/'profile.json')],cwd=ROOT,env={'PATH':'/usr/bin:/bin'},stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=log,text=True)
+            try:
+                host.stdin.write('auth '+nonce+'\n');host.stdin.flush()
+                selector=selectors.DefaultSelector();selector.register(host.stdout,selectors.EVENT_READ)
+                for _ in range(30):
+                    if host.poll() is not None:raise RuntimeError('Actual model host exited before ready')
+                    host.stdin.write('ping\n');host.stdin.flush()
+                    if selector.select(5):break
+                else:raise RuntimeError('Actual model readiness deadline')
+                ready=json.loads(host.stdout.readline());selector.close()
+                if ready['record']['phase']!='ready' or ready['record']['instance_id']!=instance:raise RuntimeError('Wrong model instance')
+                config={'run':{'owner':'real-agent-fixture-owner','run_id':uuid.uuid4().hex,'policy':'read-only-fixture-v1','environment':'pending-grant-info','model_version':'qwen-agent-test-v1',
+                    'max_steps':12,'max_invocations':6,'max_output_tokens':256,'deadline_unix':int(time.time())+180},'grant_id':'real-agent-fixture-grant','workspace':str(workspace),
+                    'journal':str(state/'journal.sqlite'),'private_roots':[str(runtime),str(state),str(PRIVATE)],'model_socket':str(runtime/'engine.sock'),
+                    'model_key_file':str(runtime/'api.key'),'context_tokens':4096,
+                    'prompt':'Use read_file to read the existing workspace file proof.txt with the relative path proof.txt. Do not guess its content. After the tool result is returned, answer with the exact file text.'}
+                path=state/'agent.json';write(path,config)
+                def invoke(operation,*arguments,expect_error=False):
+                    child=subprocess.Popen([str(ROOT/'target/debug/examples/local-agent'),str(path),operation,*arguments],cwd=ROOT,env={'PATH':'/usr/bin:/bin'},stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+                    try:
+                        for _ in range(25):
+                            try:out,error=child.communicate(timeout=5);break
+                            except subprocess.TimeoutExpired:host.stdin.write('ping\n');host.stdin.flush()
+                        else:raise RuntimeError('Bounded CLI transition deadline')
+                        if expect_error:
+                            if child.returncode==0 or 'ApprovalRequired' not in error:raise RuntimeError('Unapproved tool was not explicitly rejected')
+                            return None
+                        if child.returncode:raise RuntimeError('Local Agent transition failed: '+error[:1000])
+                        return json.loads(out)
+                    finally:
+                        if child.poll() is None:child.kill();child.wait()
+                config['run']['environment']=invoke('grant-info')['environment'];write(path,config)
+                view=invoke('start');result['phases'].append(view['phase'])
+                seen=set();negative=False
+                for _ in range(16):
+                    if view['phase']=='completed':break
+                    if view['phase'] not in ['ready','tools_pending']:raise RuntimeError('Agent entered non-executable phase: '+str(view))
+                    pending=view.get('pending',[])
+                    if pending:
+                        if not negative:
+                            invoke('step',expect_error=True);negative=True
+                        for item in pending:
+                            request=item['request'];tool=request['tool'];arguments=request['arguments']
+                            if tool=='read_file':
+                                if arguments.get('path')!='proof.txt':raise RuntimeError('Unexpected read target; approval refused')
+                            elif tool=='list_directory':
+                                if arguments.get('path','') not in ['','.']:raise RuntimeError('Unexpected directory; approval refused')
+                            else:raise RuntimeError('Unexpected capability; approval refused')
+                            if item['operation_id'] not in seen:
+                                invoke('approve',item['operation_id']);seen.add(item['operation_id']);result['approved_operations']+=1
+                    view=invoke('step');result['phases'].append(view['phase'])
+                result['final_phase']=view['phase'];result['sentinel_matched']=sentinel in (view.get('final_text') or '')
+                if view['phase']!='completed' or not result['sentinel_matched'] or not negative or not seen:raise RuntimeError('Real model/tool/file evidence did not complete; no substitute response used')
+                def evidence_counts():
+                    db=sqlite3.connect(state/'journal.sqlite')
+                    try:
+                        db.execute('PRAGMA query_only=ON')
+                        return {'model_invocations':db.execute('SELECT count(*) FROM runtime_invocations').fetchone()[0],
+                                'operations':db.execute('SELECT count(*) FROM operations').fetchone()[0],
+                                'committed_results':db.execute('SELECT count(*) FROM operations WHERE result_json IS NOT NULL').fetchone()[0]}
+                    finally:db.close()
+                before=evidence_counts();restored=invoke('show');again=invoke('step');after=evidence_counts()
+                if restored!=view or again!=view or before!=after or before['committed_results']<1:raise RuntimeError('Completed recovery changed effects or lost committed evidence')
+                result.update(before);result['preapproval_rejected']=True;result['reopen_no_replay']=True;result['passed']=True
+            except Exception as error:
+                result['failure']=str(error)[:1600]
+                if (state/'journal.sqlite').is_file():
+                    snapshot=REPORT/('failure-'+uuid.uuid4().hex)
+                    try:
+                        # CLI writers have exited. Preserve database and WAL
+                        # together; diagnostics must not hide the original error.
+                        shutil.copytree(state,snapshot,symlinks=True,ignore=shutil.ignore_patterns('agent.json'))
+                        result['fixture_journal_snapshot']=str(snapshot.relative_to(ROOT))
+                    except OSError as snapshot_error:
+                        result['snapshot_error_kind']=type(snapshot_error).__name__
+                raise
+            finally:
+                if host.stdin:host.stdin.close()
+                host.wait(timeout=15)
+                record_path=runtime/'process.json'
+                result['model_stopped']=record_path.is_file() and json.loads(record_path.read_text())['phase']=='stopped'
+                result['passed']=result['passed'] and result['model_stopped']
+                write(REPORT/'last-report.json',result)
+                if not result['model_stopped']:raise RuntimeError('Actual model cleanup unconfirmed')
+    print(json.dumps(result))
+
+if __name__=='__main__':
+    REPORT.mkdir(parents=True,exist_ok=True,mode=0o700)
+    with (REPORT/'acceptance.lock').open('a') as guard:
+        fcntl.flock(guard,fcntl.LOCK_EX|fcntl.LOCK_NB);main()

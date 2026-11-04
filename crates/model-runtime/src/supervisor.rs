@@ -76,12 +76,23 @@ impl ManagedCpuModel {
     pub async fn launch_with_cancel(
         root: &Path,
         profile: CpuProfile,
+        cancellation: tokio::sync::watch::Receiver<bool>,
+    ) -> Result<Self, ProcessError> {
+        Self::launch_from_host(root, profile, cancellation, None).await
+    }
+    /// Trusted supervisor may preallocate an instance identity to bind an OS job
+    /// and its private control channel to this exact model startup. Never reuse it.
+    pub async fn launch_from_host(
+        root: &Path,
+        profile: CpuProfile,
         mut cancellation: tokio::sync::watch::Receiver<bool>,
+        instance_id: Option<String>,
     ) -> Result<Self, ProcessError> {
         if *cancellation.borrow() || cancellation.has_changed().is_err() {
             return Err(ProcessError::Cancelled);
         }
         if !root.is_absolute()
+            || instance_id.as_ref().is_some_and(|id| !valid_id(id))
             || !profile.executable.is_absolute()
             || !profile.model.is_absolute()
             || root.is_symlink()
@@ -121,6 +132,9 @@ impl ManagedCpuModel {
             {
                 return Err(ProcessError::RecoveryRequired);
             }
+            if instance_id.as_deref() == Some(record.instance_id.as_str()) {
+                return Err(ProcessError::Invalid);
+            }
         }
         let hash_lease = lease.clone();
         let profile = tokio::task::spawn_blocking(move || {
@@ -156,7 +170,7 @@ impl ManagedCpuModel {
         let key_path = root.join("api.key");
         write_private(&key_path, key.as_bytes())?;
         let record = ProcessRecord {
-            instance_id: uuid::Uuid::new_v4().to_string(),
+            instance_id: instance_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
             model_version: profile.model_version.clone(),
             executable_sha256: profile.executable_sha256,
             model_sha256: profile.model_sha256,

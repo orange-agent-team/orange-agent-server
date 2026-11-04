@@ -97,6 +97,46 @@ async fn owned_process_private_ipc_and_explicit_shutdown_release_lease() {
     assert_ne!(next.record().instance_id, managed.record().instance_id);
     next.shutdown().await.expect("stop");
 }
+
+#[tokio::test]
+async fn preallocated_host_identity_cannot_be_reused_after_confirmed_stop() {
+    let f = Fixture::new(b"GGUF-ready");
+    let (sender, receiver) = tokio::sync::watch::channel(false);
+    let mut model = ManagedCpuModel::launch_from_host(
+        &f.root,
+        f.profile(),
+        receiver,
+        Some("owned-host-instance".into()),
+    )
+    .await
+    .expect("host instance");
+    assert_eq!(model.record().instance_id, "owned-host-instance");
+    model.shutdown().await.expect("stop");
+    let before = fs::read(f.root.join("process.json")).expect("durable receipt");
+    assert!(matches!(
+        ManagedCpuModel::launch_from_host(
+            &f.root,
+            f.profile(),
+            sender.subscribe(),
+            Some("owned-host-instance".into())
+        )
+        .await,
+        Err(ProcessError::Invalid)
+    ));
+    assert_eq!(
+        fs::read(f.root.join("process.json")).expect("no mutation"),
+        before
+    );
+    let mut next = ManagedCpuModel::launch_from_host(
+        &f.root,
+        f.profile(),
+        sender.subscribe(),
+        Some("different-host-instance".into()),
+    )
+    .await
+    .expect("fresh identity");
+    next.shutdown().await.expect("stop");
+}
 #[tokio::test]
 async fn corruption_and_nonprivate_paths_never_start_a_process() {
     let f = Fixture::new(b"GGUF-ready");
@@ -323,6 +363,7 @@ async fn authenticated_private_control_starts_only_after_the_matching_parent_fra
         serde_json::from_slice(&fs::read(&path).expect("profile")).expect("json");
     let nonce = "a".repeat(64);
     config["control_nonce"] = serde_json::json!(nonce);
+    config["instance_id"] = serde_json::json!("authenticated-host-instance");
     fs::write(&path, serde_json::to_vec(&config).expect("json")).expect("private existing profile");
     let mut host = tokio::process::Command::new(env!("CARGO_BIN_EXE_orange-model-host"))
         .arg(&path)
@@ -357,6 +398,7 @@ async fn authenticated_private_control_starts_only_after_the_matching_parent_fra
         serde_json::from_str::<serde_json::Value>(&ready).expect("record")["record"]["phase"],
         "ready"
     );
+    assert_eq!(f.record().instance_id, "authenticated-host-instance");
     host.stdin
         .as_mut()
         .expect("input")

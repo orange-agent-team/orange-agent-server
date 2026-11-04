@@ -20,4 +20,4 @@ Future被丢弃或对象Drop只记录unknown并请求终止，不伪造stopped�
 
 真实`check-local-model.py`已改用监督程序、私有socket与控制心跳，避免共享开发TCP端口及未经确认的进程回收；仍必须先有准确SHA的官方GGUF和固定CPU构建。缺模型时不启动任何后端。
 
-真实固定GGUF仍因网络条件未获得，因此不得把上述测试当作模型加载/推理成功。Windows监督/IPC、真实GPU、监督器自身崩溃后的恢复身份核验、完整诊断及桌面模型管理仍未完成。
+固定GGUF已从经核验的官方ModelScope渠道获得，原SHA与大小未改变；真实CPU推理和Agent单场景已通过，见[真实验收](real-model-agent-acceptance.md)。本文件的进程单元/集成用例仍使用明确后端替身，不能混为真实模型质量认证。Windows监督/IPC、实际GPU、完整孤儿恢复、诊断和桌面模型管理仍未完成。
