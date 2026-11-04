@@ -16,6 +16,10 @@ required-features = ["integration-tests"]
 name = "admin_identity"
 required-features = ["integration-tests"]
 
+[[test]]
+name = "teams"
+required-features = ["integration-tests"]
+
 [dependencies]
 orange-domain.workspace = true
 orange-protocol.workspace = true

@@ -1,4 +1,5 @@
 pub mod model;
+pub mod team;
 
 use orange_domain::Credits;
 use serde::{Deserialize, Serialize};
