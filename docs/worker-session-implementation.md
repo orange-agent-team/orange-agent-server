@@ -36,6 +36,8 @@ Welcome 返回 session、epoch 和控制会话到期时间。HeartbeatAck 只延
 
 ## 验证证据
 
+E08 的 `services/worker/src/control.rs` 已实现实际客户端库：强制HTTPS/mTLS、限定帧大小、验证Welcome/HeartbeatAck绑定node/session/epoch，并从请求发送时的单调时间计算44秒本地停止上限。它不依赖客户端墙钟，不把控制在线状态转换成任务执行Lease。网络结果不明、撤权、旧世代、未知执行消息或心跳Future被丢弃后，本连接不能继续复用，必须重新完成认证握手。当前没有自动重试执行命令或伪造ACK。
+
 `python3 scripts/check-worker-session.py` 生成临时本地 CA 和独立客户端证书，仅用于测试；不修改系统信任库。真实 loopback TLS/HTTP2/gRPC 与专用 PostgreSQL 测试覆盖：
 
 - 正确证书绑定 node，心跳只产生 HeartbeatAck；未知任务执行能力明确失败。
@@ -43,5 +45,6 @@ Welcome 返回 session、epoch 和控制会话到期时间。HeartbeatAck 只延
 - 两个 Gateway 顺序/同时争同一 node，只有最新 epoch 可续控制会话，旧关闭不能下线新连接。
 - 已连接证书撤销、账户停用、owner 受限和组织成员撤销即时失去后续权限。
 - 数据库连接池实际关闭后不使用旧内存权限；协议不匹配与到期会话不能靠心跳恢复。
+- 实际E08客户端拒绝明文端点，撤权和旧epoch使其失效；真实网络心跳Future被中断后仍保持失效，不能靠取消Future延长权限。
 
 测试中的 CA、设备登记记录和账户是明确夹具；mTLS 握手、网络传输与数据库不是替身。实际 Windows Worker、公共注册、设备密钥保护、完整任务命令投递、真实 GPU 和生产跨域控制未因此获得认证。

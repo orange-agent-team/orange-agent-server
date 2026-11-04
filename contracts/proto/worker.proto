@@ -13,6 +13,7 @@ message Lease {
   google.protobuf.Timestamp expires_at = 6;
 }
 message Hello { string node_id = 1; uint32 protocol_version = 2; string capabilities_digest = 3; }
+// Protocol v1 control-session TTL is 45 seconds; it is not an execution lease.
 message Welcome { string session_id = 1; uint64 connection_epoch = 2; uint32 protocol_version = 3; google.protobuf.Timestamp expires_at = 4; }
 message Assignment {
   string command_id = 1; string payload_digest = 2; Lease lease = 3;

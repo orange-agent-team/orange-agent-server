@@ -7,7 +7,7 @@ publish.workspace = true
 
 [dependencies]
 orange-domain.workspace = true
-orange-protocol.workspace = true
+orange-protocol = { workspace = true, features = ["grpc"] }
 rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -15,6 +15,8 @@ thiserror.workspace = true
 tokio.workspace = true
 uuid.workspace = true
 libc.workspace = true
+tonic.workspace = true
+tokio-stream.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -476,3 +476,91 @@ async fn organization_membership_is_current_authority_not_certificate_possession
     drop(stream);
     server.stop().await;
 }
+
+fn worker_config(server: &Running, device: &Device) -> orange_worker::control::ControlConfig {
+    orange_worker::control::ControlConfig {
+        endpoint: format!("https://127.0.0.1:{}/", server.port),
+        server_name: "localhost".into(),
+        server_ca_pem: file("ca.pem"),
+        certificate_pem: file(&format!("{}.pem", device.certificate)),
+        private_key_pem: file(&format!("{}.key", device.certificate)),
+        node_id: device.node.clone(),
+        capabilities_digest: "a".repeat(64),
+    }
+}
+#[tokio::test]
+async fn real_worker_client_rejects_plaintext_and_loses_authority_after_revoke() {
+    use orange_worker::control::{ControlConnection, ControlError};
+    let d = device("client-k").await;
+    let server = Running::start(&d.store).await;
+    let mut plaintext = worker_config(&server, &d);
+    plaintext.endpoint = format!("http://127.0.0.1:{}/", server.port);
+    assert!(matches!(
+        ControlConnection::connect(plaintext).await,
+        Err(ControlError::Invalid)
+    ));
+    let mut client = ControlConnection::connect(worker_config(&server, &d))
+        .await
+        .expect("real Worker client");
+    assert_eq!(client.identity().node_id, d.node);
+    assert!(client.is_current_locally());
+    client
+        .heartbeat("worker-observation-1")
+        .await
+        .expect("heartbeat");
+    sqlx::query("UPDATE worker_credentials SET active=false WHERE certificate_sha256=$1")
+        .bind(&d.fingerprint)
+        .execute(d.store.pool())
+        .await
+        .expect("revoke");
+    assert!(matches!(
+        client.heartbeat("worker-observation-2").await,
+        Err(ControlError::Unauthorized)
+    ));
+    assert!(!client.is_current_locally());
+    assert!(matches!(
+        client.heartbeat("worker-observation-3").await,
+        Err(ControlError::Stale)
+    ));
+    client.close();
+    server.stop().await;
+}
+#[tokio::test]
+async fn real_worker_client_old_epoch_and_dropped_heartbeat_cannot_remain_active() {
+    use orange_worker::control::{ControlConnection, ControlError};
+    let d = device("client-l").await;
+    let a = Running::start(&d.store).await;
+    let b = Running::start(&d.store).await;
+    let mut old = ControlConnection::connect(worker_config(&a, &d))
+        .await
+        .expect("old");
+    let mut new = ControlConnection::connect(worker_config(&b, &d))
+        .await
+        .expect("new");
+    assert!(new.identity().connection_epoch > old.identity().connection_epoch);
+    assert!(matches!(
+        old.heartbeat("snapshot").await,
+        Err(ControlError::Stale)
+    ));
+    assert!(!old.is_current_locally());
+    old.close();
+    new.heartbeat("snapshot").await.expect("new current");
+    let mut pending = Box::pin(new.heartbeat("snapshot-next"));
+    std::future::poll_fn(|cx| match std::future::Future::poll(pending.as_mut(), cx) {
+        std::task::Poll::Pending => std::task::Poll::Ready(()),
+        std::task::Poll::Ready(_) => panic!("expected real network heartbeat to yield"),
+    })
+    .await;
+    drop(pending);
+    assert!(
+        !new.is_current_locally(),
+        "dropped future must not keep control authority"
+    );
+    assert!(matches!(
+        new.heartbeat("snapshot-again").await,
+        Err(ControlError::Stale)
+    ));
+    new.close();
+    a.stop().await;
+    b.stop().await;
+}

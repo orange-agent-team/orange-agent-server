@@ -1664,6 +1664,7 @@ dependencies = [
  "openidconnect",
  "orange-domain",
  "orange-protocol",
+ "orange-worker",
  "prost-types",
  "serde",
  "serde_json",
@@ -1729,6 +1730,8 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
+ "tokio-stream",
+ "tonic",
  "uuid",
 ]
 

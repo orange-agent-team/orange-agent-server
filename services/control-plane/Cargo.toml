@@ -58,6 +58,7 @@ libc.workspace = true
 
 [dev-dependencies]
 tower.workspace = true
+orange-worker = { path = "../worker", version = "=0.1.0" }
 
 [lints]
 workspace = true
