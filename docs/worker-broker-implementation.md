@@ -26,10 +26,14 @@ Broker 使用私有 SQLite/WAL/FULL 和独占文件锁，存储固定设备/审�
 
 `set_remote_allowed` 和 `invalidate` 是可信宿主钩子；未来 IPC 必须分别绑定已登记用户和真实 OS 事件权限。Broker 不接受用户文件正文、任意 shell 命令或任意 PID 终止请求。
 
+2026-11-05补充：显式关闭贡献策略会在同一SQLite事务内关闭新供给、将当前已预留/运行远端grant置为draining并记录事件。旧预留不再能ConfirmStart，旧运行不能Renew，同一Acquire请求也不能取回已失效许可。重新启用贡献不会复活旧grant。本地Agent许可不受此操作影响。`draining_grants`仅向当前已认证监督器返回其自身待停止任务，不把读取列表当完成回执；仍需实际停止后通过Release探针。重复关闭不重复记录同一grant排空，写盘/审计失败使整个策略变更回滚并返回错误，调用者不能显示已关闭成功。
+
 ## 验证与待办
 
 `python3 scripts/check-broker.py` 运行实际临时 SQLite/文件锁与并发测试，覆盖单例、唯一获准者、幂等内容冲突、ACK 与启动分离、预留/运行抢占、旧世代拒绝、重启、保守期限、缺探针隔离、探针 Future 中断、私有路径/链接防护、休眠失效入口和不可变审计。
 
+当前14项测试还覆盖贡献撤销后的预留启动拒绝、运行续约拒绝、本地任务保留、监督器排空列表隔离、重新启用不恢复旧许可，以及审计故障时的事务回滚。没有新增真实GPU或OS身份认证声明。
+
 测试明确使用 OS 身份、云授权、设备探针替身。当前真实证据只有本机 Rust/SQLite/文件系统行为；Windows Named Pipe/DACL、SID/进程创建时间核验、Job Object/WSL 监督、NVML、GPU 型号映射、真实驱动重置和清理仍未认证。纯 CPU 任务不需要这个 GPU Broker。
 
-后续实现：Worker 注册/CSR/mTLS、云端持久命令和会话世代、Worker 命令日志、两阶段用户态监督器、平台安全 IPC、真实设备探针、贡献策略，以及恢复后的配置/profile 升级流程。Broker 库和目录存在不代表 E08 整个工程完成。
+实际mTLS控制会话/世代已实现，见[会话实现](worker-session-implementation.md)。后续实现包括公开注册/CSR、云端命令投递和Worker命令日志、两阶段用户态监督器、平台安全IPC、真实设备探针、贡献策略接线，以及恢复后的配置/profile升级。Admin节点命令尚未接入本机撤销钩子；Broker库和目录存在不代表E08整个工程完成。

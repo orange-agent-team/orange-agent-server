@@ -421,12 +421,62 @@ impl Broker {
         Ok(())
     }
     /// Trusted contribution policy hook. IPC must gate this on the enrolled user.
-    pub fn set_remote_allowed(&self, allowed: bool) -> Result<(), BrokerError> {
-        self.connection.execute(
+    /// Revocation atomically drains every current remote grant, including reserved
+    /// grants. It never frees a slot or stops a local Agent grant. The supervisor
+    /// must stop its tasks and use release() with actual cleanup evidence.
+    pub fn set_remote_allowed(&mut self, allowed: bool) -> Result<(), BrokerError> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let previous: bool = tx.query_row(
+            "SELECT remote_allowed FROM broker_meta WHERE singleton=1",
+            [],
+            |r| r.get(0),
+        )?;
+        if !allowed {
+            let grants = {
+                let mut statement = tx.prepare("SELECT g.device_id,g.grant_id FROM grants g JOIN slots s ON s.grant_id=g.grant_id WHERE g.epoch=? AND g.mode='remote' AND g.state IN('reserved','running') AND s.state IN('reserved_remote','running_remote')")?;
+                statement
+                    .query_map([self.epoch], |r| {
+                        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?
+            };
+            for (device, grant) in grants {
+                tx.execute("UPDATE slots SET state='draining',reason='contribution_revoked' WHERE device_id=? AND grant_id=?", params![device,grant])?;
+                tx.execute(
+                    "UPDATE grants SET state='draining' WHERE grant_id=?",
+                    [&grant],
+                )?;
+                tx.execute("INSERT INTO broker_events(device_id,grant_id,kind,details) VALUES(?,?,'grant.draining','contribution_revoked')", params![device,grant])?;
+            }
+        }
+        tx.execute(
             "UPDATE broker_meta SET remote_allowed=? WHERE singleton=1",
             [allowed],
         )?;
+        if previous != allowed {
+            tx.execute(
+                "INSERT INTO broker_events(kind,details) VALUES('contribution.policy_changed',?)",
+                [if allowed { "enabled" } else { "disabled" }],
+            )?;
+        }
+        tx.commit()?;
         Ok(())
+    }
+    /// Durable stop work for this authenticated supervisor. Reading this list is
+    /// not a cleanup acknowledgement; entries remain until a verified release.
+    pub fn draining_grants(&self, supervisor: &Supervisor) -> Result<Vec<Grant>, BrokerError> {
+        self.authenticate(supervisor)?;
+        let ids = {
+            let mut statement=self.connection.prepare("SELECT g.grant_id FROM grants g JOIN slots s ON s.grant_id=g.grant_id WHERE g.supervisor=? AND g.epoch=? AND g.state='draining' AND s.state='draining' ORDER BY g.device_id")?;
+            statement
+                .query_map(params![supervisor.instance, self.epoch], |r| {
+                    r.get::<_, String>(0)
+                })?
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        ids.into_iter().map(|id| self.grant(&id)).collect()
     }
     pub fn slot(&self, device: &str) -> Result<SlotView, BrokerError> {
         let row:Option<SlotRow>=self.connection.query_row("SELECT state,epoch,generation,grant_id,local_pending,reason FROM slots WHERE device_id=?",[device],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?))).optional()?;

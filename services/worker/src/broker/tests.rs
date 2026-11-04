@@ -83,6 +83,217 @@ const GOOD: Probe = Probe {
     healthy: true,
     matched: true,
 };
+
+#[tokio::test]
+async fn contribution_revocation_fences_reserved_grants_without_claiming_cleanup() {
+    let dir = directory();
+    let mut broker = initialized(&dir).await;
+    broker.set_remote_allowed(true).expect("enable");
+    let supervisor = broker
+        .register_supervisor(peer("remote-owner"))
+        .expect("supervisor");
+    let other = broker
+        .register_supervisor(peer("another-supervisor"))
+        .expect("other");
+    let req = request("reserved-before-revocation", Holder::Remote);
+    let grant = reserved(broker.acquire(&supervisor, &req).expect("reserve"));
+    let cloud = VerifiedCloudGrant::from_verified_start(
+        req.remote.clone().expect("remote"),
+        Instant::now(),
+        Duration::from_secs(45),
+    )
+    .expect("cloud fixture");
+    broker.set_remote_allowed(false).expect("revoke");
+    broker.set_remote_allowed(false).expect("repeat revocation");
+    assert_eq!(
+        broker.slot(&grant.device_id).expect("slot").state,
+        "draining"
+    );
+    assert!(matches!(
+        broker.confirm_start(&supervisor, &grant, Some(&cloud)),
+        Err(BrokerError::Stale)
+    ));
+    assert!(matches!(
+        broker.acquire(&supervisor, &req),
+        Err(BrokerError::Stale)
+    ));
+    assert_eq!(
+        broker.draining_grants(&supervisor).expect("owned drains"),
+        vec![grant.clone()]
+    );
+    assert!(
+        broker
+            .draining_grants(&other)
+            .expect("other cannot consume grant")
+            .is_empty()
+    );
+    let count: i64 = broker
+        .connection
+        .query_row(
+            "SELECT count(*) FROM broker_events WHERE grant_id=? AND kind='grant.draining'",
+            [&grant.grant_id],
+            |r| r.get(0),
+        )
+        .expect("audit");
+    assert_eq!(count, 1);
+    broker.set_remote_allowed(true).expect("new consent");
+    assert!(
+        matches!(
+            broker.confirm_start(&supervisor, &grant, Some(&cloud)),
+            Err(BrokerError::Stale)
+        ),
+        "new consent cannot resurrect an old grant"
+    );
+    assert_eq!(
+        broker.slot(&grant.device_id).expect("still occupied").state,
+        "draining"
+    );
+    broker
+        .release(&supervisor, &grant, &GOOD)
+        .await
+        .expect("explicit probe substitute");
+    assert!(
+        broker
+            .draining_grants(&supervisor)
+            .expect("drained")
+            .is_empty()
+    );
+    assert_eq!(
+        broker.slot(&grant.device_id).expect("released").state,
+        "idle"
+    );
+}
+
+#[tokio::test]
+async fn contribution_revocation_drains_running_remote_and_preserves_local_work() {
+    let dir = directory();
+    let mut configuration = config();
+    configuration.devices.push("second-device".into());
+    let mut broker =
+        Broker::open(&dir.path().join("broker.sqlite"), configuration.clone()).expect("open");
+    for device in &configuration.devices {
+        broker.reconcile(device, &GOOD).await.expect("test probe");
+    }
+    let local = broker
+        .register_supervisor(peer("local-owner"))
+        .expect("local");
+    let remote = broker
+        .register_supervisor(peer("remote-owner"))
+        .expect("remote");
+    let mut local_request = request("local-before-revocation", Holder::Local);
+    local_request.device_id = "second-device".into();
+    let local_grant = reserved(
+        broker
+            .acquire(&local, &local_request)
+            .expect("local reserve"),
+    );
+    broker
+        .confirm_start(&local, &local_grant, None)
+        .expect("local start");
+    broker.set_remote_allowed(true).expect("enable");
+    let req = request("remote-before-revocation", Holder::Remote);
+    let grant = reserved(broker.acquire(&remote, &req).expect("remote reserve"));
+    let cloud = VerifiedCloudGrant::from_verified_start(
+        req.remote.expect("remote"),
+        Instant::now(),
+        Duration::from_secs(45),
+    )
+    .expect("cloud fixture");
+    broker
+        .confirm_start(&remote, &grant, Some(&cloud))
+        .expect("remote start");
+    broker.set_remote_allowed(false).expect("revoke");
+    assert_eq!(
+        broker.slot(&grant.device_id).expect("remote slot").state,
+        "draining"
+    );
+    assert!(matches!(
+        broker.renew(&remote, &grant, None),
+        Err(BrokerError::Stale)
+    ));
+    assert_eq!(
+        broker
+            .slot(&local_grant.device_id)
+            .expect("local slot")
+            .state,
+        "running_local"
+    );
+    broker
+        .renew(&local, &local_grant, None)
+        .expect("local unaffected");
+    assert_eq!(
+        broker.draining_grants(&remote).expect("stop list"),
+        vec![grant.clone()]
+    );
+    assert!(
+        broker
+            .draining_grants(&local)
+            .expect("local stop list")
+            .is_empty()
+    );
+    drop(broker);
+    let restarted =
+        Broker::open(&dir.path().join("broker.sqlite"), configuration).expect("restart");
+    assert_eq!(
+        restarted
+            .slot(&grant.device_id)
+            .expect("remote reconciliation")
+            .state,
+        "reconciling"
+    );
+    let allowed: bool = restarted
+        .connection
+        .query_row("SELECT remote_allowed FROM broker_meta", [], |r| r.get(0))
+        .expect("persisted consent");
+    assert!(!allowed);
+    assert!(matches!(
+        restarted.draining_grants(&remote),
+        Err(BrokerError::Unauthorized)
+    ));
+}
+
+#[tokio::test]
+async fn contribution_revocation_rolls_back_if_durable_evidence_cannot_commit() {
+    let dir = directory();
+    let mut broker = initialized(&dir).await;
+    broker.set_remote_allowed(true).expect("enable");
+    let remote = broker
+        .register_supervisor(peer("remote-owner"))
+        .expect("remote");
+    let req = request("reserve", Holder::Remote);
+    let grant = reserved(broker.acquire(&remote, &req).expect("reserve"));
+    broker.connection.execute_batch("CREATE TEMP TRIGGER deny_revocation_audit BEFORE INSERT ON broker_events WHEN NEW.kind='contribution.policy_changed' BEGIN SELECT RAISE(ABORT,'test audit storage fault'); END;").expect("fault injection");
+    assert!(broker.set_remote_allowed(false).is_err());
+    assert_eq!(
+        broker
+            .slot(&grant.device_id)
+            .expect("atomic rollback")
+            .state,
+        "reserved_remote"
+    );
+    assert!(
+        broker
+            .draining_grants(&remote)
+            .expect("no partial drain")
+            .is_empty()
+    );
+    let allowed: bool = broker
+        .connection
+        .query_row("SELECT remote_allowed FROM broker_meta", [], |r| r.get(0))
+        .expect("policy rolled back");
+    assert!(allowed);
+    broker
+        .connection
+        .execute_batch("DROP TRIGGER deny_revocation_audit;")
+        .expect("remove fixture fault");
+    broker
+        .set_remote_allowed(false)
+        .expect("retry succeeds after storage recovery");
+    assert_eq!(
+        broker.draining_grants(&remote).expect("drain durable"),
+        vec![grant]
+    );
+}
 async fn initialized(dir: &tempfile::TempDir) -> Broker {
     let mut broker = Broker::open(&dir.path().join("broker.sqlite"), config()).expect("open");
     broker
