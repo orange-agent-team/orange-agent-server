@@ -1,0 +1,340 @@
+{
+  "schema_version": 1,
+  "profile_id": "orange-visible-components-v1",
+  "tokenizer_sha256": "44c2f46b715f585c6ab513970e8a006bfa5badd6108560054921cf598d154d8c",
+  "input_rendering": "explicit test-template fixture; not a certified model template",
+  "rendered_input": "<|im_start|>system\nLocal test assistant.<|im_end|>\n<|im_start|>user\nSummarize or call the declared tools.<|im_end|>\n<|im_start|>assistant\n",
+  "input_token_ids": [
+    151644,
+    8948,
+    198,
+    7319,
+    1273,
+    17847,
+    13,
+    151645,
+    198,
+    151644,
+    872,
+    198,
+    9190,
+    5612,
+    551,
+    476,
+    1618,
+    279,
+    14275,
+    7375,
+    13,
+    151645,
+    198,
+    151644,
+    77091,
+    198
+  ],
+  "output_limit": 128,
+  "input_price_per_1000": "2000",
+  "output_price_per_1000": "6000",
+  "fee_basis_points": 2000,
+  "cases": [
+    {
+      "id": "plain_text",
+      "text": "Hello orange.",
+      "tools": [],
+      "delivery": "committed_success",
+      "expected_texts": [
+        "Hello orange."
+      ],
+      "expected_token_ids": [
+        [
+          9707,
+          18575,
+          13
+        ]
+      ],
+      "expected_output_units": 3,
+      "expected_price": {
+        "charge": "70",
+        "platform_fee": "14",
+        "provider_pending": "56",
+        "quote_maximum": "820"
+      }
+    },
+    {
+      "id": "tool_only",
+      "text": "",
+      "tools": [
+        {
+          "name": "read_file",
+          "arguments_json": "{ \"path\": \"README.md\", \"limit\": 100 }"
+        }
+      ],
+      "delivery": "committed_success",
+      "expected_texts": [
+        "",
+        "read_file",
+        "{\"limit\":100,\"path\":\"README.md\"}"
+      ],
+      "expected_token_ids": [
+        [],
+        [
+          878,
+          2458
+        ],
+        [
+          4913,
+          9506,
+          788,
+          16,
+          15,
+          15,
+          1335,
+          2343,
+          3252,
+          54675,
+          21324,
+          9207
+        ]
+      ],
+      "expected_output_units": 14,
+      "expected_price": {
+        "charge": "136",
+        "platform_fee": "27",
+        "provider_pending": "109",
+        "quote_maximum": "820"
+      }
+    },
+    {
+      "id": "text_two_tools",
+      "text": "I will inspect two files.",
+      "tools": [
+        {
+          "name": "read_file",
+          "arguments_json": "{ \"path\": \"README.md\", \"limit\": 100 }"
+        },
+        {
+          "name": "list_directory",
+          "arguments_json": "{\"recursive\":false,\"path\":\"src\"}"
+        }
+      ],
+      "delivery": "committed_success",
+      "expected_texts": [
+        "I will inspect two files.",
+        "read_file",
+        "{\"limit\":100,\"path\":\"README.md\"}",
+        "list_directory",
+        "{\"path\":\"src\",\"recursive\":false}"
+      ],
+      "expected_token_ids": [
+        [
+          40,
+          686,
+          24085,
+          1378,
+          3542,
+          13
+        ],
+        [
+          878,
+          2458
+        ],
+        [
+          4913,
+          9506,
+          788,
+          16,
+          15,
+          15,
+          1335,
+          2343,
+          3252,
+          54675,
+          21324,
+          9207
+        ],
+        [
+          1607,
+          14846
+        ],
+        [
+          4913,
+          2343,
+          3252,
+          3548,
+          2198,
+          49512,
+          788,
+          3849,
+          92
+        ]
+      ],
+      "expected_output_units": 31,
+      "expected_price": {
+        "charge": "238",
+        "platform_fee": "47",
+        "provider_pending": "191",
+        "quote_maximum": "820"
+      }
+    },
+    {
+      "id": "equivalent_fragments",
+      "text_fragments": [
+        "I will ",
+        "inspect ",
+        "two files."
+      ],
+      "tools": [
+        {
+          "name": "read_file",
+          "argument_fragments": [
+            "{\n \"limit\":",
+            "100,\"path\":\"README.md\"}"
+          ]
+        },
+        {
+          "name": "list_directory",
+          "argument_fragments": [
+            "{\"path\":",
+            "\"src\", \"recursive\": false}"
+          ]
+        }
+      ],
+      "delivery": "committed_success",
+      "equivalent_to": "text_two_tools",
+      "expected_texts": [
+        "I will inspect two files.",
+        "read_file",
+        "{\"limit\":100,\"path\":\"README.md\"}",
+        "list_directory",
+        "{\"path\":\"src\",\"recursive\":false}"
+      ],
+      "expected_token_ids": [
+        [
+          40,
+          686,
+          24085,
+          1378,
+          3542,
+          13
+        ],
+        [
+          878,
+          2458
+        ],
+        [
+          4913,
+          9506,
+          788,
+          16,
+          15,
+          15,
+          1335,
+          2343,
+          3252,
+          54675,
+          21324,
+          9207
+        ],
+        [
+          1607,
+          14846
+        ],
+        [
+          4913,
+          2343,
+          3252,
+          3548,
+          2198,
+          49512,
+          788,
+          3849,
+          92
+        ]
+      ],
+      "expected_output_units": 31,
+      "expected_price": {
+        "charge": "238",
+        "platform_fee": "47",
+        "provider_pending": "191",
+        "quote_maximum": "820"
+      }
+    },
+    {
+      "id": "truncated_tool",
+      "text": "I will read the file.",
+      "tools": [
+        {
+          "name": "read_file",
+          "arguments_json": "{\"path\":\"README.md\""
+        }
+      ],
+      "delivery": "uncommitted",
+      "expected_projection_error": "INVALID_PROJECTION",
+      "expected_texts": null,
+      "expected_token_ids": null,
+      "expected_output_units": null,
+      "expected_price": {
+        "charge": "0",
+        "platform_fee": "0",
+        "provider_pending": "0",
+        "quote_maximum": "820"
+      }
+    },
+    {
+      "id": "cancelled_persisted_text",
+      "text": "Partial answer.",
+      "tools": [],
+      "delivery": "cancelled_persisted_text",
+      "expected_texts": [
+        "Partial answer."
+      ],
+      "expected_token_ids": [
+        [
+          37314,
+          4226,
+          13
+        ]
+      ],
+      "expected_output_units": 3,
+      "expected_price": {
+        "charge": "70",
+        "platform_fee": "14",
+        "provider_pending": "56",
+        "quote_maximum": "820"
+      }
+    },
+    {
+      "id": "winning_retry",
+      "text": "Hello orange.",
+      "tools": [],
+      "delivery": "committed_success",
+      "old_attempt_text": "Discard this failed attempt.",
+      "expected_texts": [
+        "Hello orange."
+      ],
+      "expected_token_ids": [
+        [
+          9707,
+          18575,
+          13
+        ]
+      ],
+      "expected_output_units": 3,
+      "expected_price": {
+        "charge": "70",
+        "platform_fee": "14",
+        "provider_pending": "56",
+        "quote_maximum": "820"
+      },
+      "old_attempt_token_ids": [
+        23477,
+        567,
+        419,
+        4641,
+        4774,
+        13
+      ],
+      "expected_old_charge": "0"
+    }
+  ]
+}

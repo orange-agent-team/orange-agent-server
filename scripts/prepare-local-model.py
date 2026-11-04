@@ -58,7 +58,7 @@ def download():
             print('Official model transfer failed; bounded retry', attempt+1, flush=True)
             time.sleep(2**attempt)
 
-def build(checkout):
+def build(checkout, target):
     if checkout is None:
         raise SystemExit('--source-checkout is mandatory for explicit fixed source import')
     commit = LOCK['backend']['commit']
@@ -110,22 +110,27 @@ def build(checkout):
                     '-DLLAMA_BUILD_TESTS=OFF', '-DLLAMA_BUILD_EXAMPLES=OFF', '-DLLAMA_BUILD_APP=OFF',
                     '-DLLAMA_BUILD_SERVER=ON', '-DLLAMA_BUILD_UI=OFF', '-DLLAMA_USE_PREBUILT_UI=OFF',
                     '-DLLAMA_CONNECT=OFF', '-DLLAMA_SUBPROCESS=OFF', '-DLLAMA_OPENSSL=OFF'], env=environment, check=True)
-    subprocess.run(['cmake', '--build', str(output), '--target', 'llama-server', '-j', '2'], env=environment, check=True)
-    binary = output/'bin/llama-server'
+    subprocess.run(['cmake', '--build', str(output), '--target', target, '-j', '2'], env=environment, check=True)
+    binary = output/'bin'/target
     report = {'backend_commit': commit, 'source_tree_sha256': source_hash.hexdigest(), 'executable_sha256': digest(binary),
               'model_sha256': LOCK['model']['sha256'], 'gpu_enabled': False}
-    (PRIVATE/'build.json').write_text(json.dumps(report, indent=2)+'\n')
-    print('Pinned CPU-only llama-server built; no GPU or upstream tool subprocess support', flush=True)
+    report['target'] = target
+    if target == 'llama-tokenize':
+        report['vocabulary_sha256'] = digest(source/'models/ggml-vocab-qwen2.gguf')
+    filename = 'build.json' if target == 'llama-server' else 'tokenizer-build.json'
+    (PRIVATE/filename).write_text(json.dumps(report, indent=2)+'\n')
+    print('Pinned CPU-only', target, 'built; no GPU or upstream tool subprocess support', flush=True)
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('action', choices=['download', 'build'])
     parser.add_argument('--source-checkout', type=Path)
+    parser.add_argument('--target', choices=['llama-server','llama-tokenize'], default='llama-server')
     args = parser.parse_args()
     PRIVATE.mkdir(parents=True, exist_ok=True, mode=0o700)
     with (PRIVATE/(args.action+'.lock')).open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         if args.action == 'download': download()
-        else: build(args.source_checkout)
+        else: build(args.source_checkout, args.target)
 if __name__ == '__main__':
     main()

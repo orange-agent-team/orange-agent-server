@@ -25,3 +25,5 @@ python3 scripts/check-local-model.py
 此时尚未支持完整工具结果历史、各工具 JSON Schema 与能力批准、所有四种模型协议、图像/嵌入/转写、生产模型注册或 Broker 租约。当前 `length` 截断响应保守拒绝；合法纯文本前缀交付和 DR-01 结构化计量仍需后续切片，不能据此开放收费。取消只证明请求停止等待；生产 CPU 沙箱/内存硬限额及真实 GPU 回收仍待 E08 实现。
 
 参考[固定 llama.cpp 服务协议](https://github.com/ggml-org/llama.cpp/blob/b74298c109c107494b792c30af4bb8fa0ce1eb2f/tools/server/README.md)和[官方 Qwen 模型](https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/tree/9217f5db79a29953eb74d5343926648285ec7e67)。是否实测通过，以执行台账 MODEL-LOCAL-001 的具体证据为准。
+
+补充：已有源码词表可独立构建`llama-tokenize`，现已用它完成[DR-01候选投影与七组固定计量样例](structured-output-metering.md)。这不依赖权重下载，不改变完整模型推理仍未验证的状态；独立词表和生产模型的匹配尚待核对。

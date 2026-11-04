@@ -1,0 +1,11 @@
+{
+  "purpose": "real vocabulary fixtures only, not full-model compatibility certification",
+  "backend_commit": "b74298c109c107494b792c30af4bb8fa0ce1eb2f",
+  "tokenizer_file": "models/ggml-vocab-qwen2.gguf",
+  "tokenizer_bytes": 5928681,
+  "tokenizer_sha256": "44c2f46b715f585c6ab513970e8a006bfa5badd6108560054921cf598d154d8c",
+  "profile_id": "orange-visible-components-v1",
+  "add_bos": false,
+  "parse_special": false,
+  "escape": false
+}

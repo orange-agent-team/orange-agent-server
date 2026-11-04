@@ -223,8 +223,16 @@ impl ChatAssembler {
             {
                 return Err(ModelError::Protocol);
             }
-            let arguments: Value =
-                serde_json::from_str(&tool.arguments).map_err(|_| ModelError::Incomplete)?;
+            let arguments: Value = orange_protocol::canonical::parse_tool_arguments(
+                &tool.arguments,
+            )
+            .map_err(|error| match error {
+                orange_protocol::canonical::CanonicalError::IncompleteJson => {
+                    ModelError::Incomplete
+                }
+                orange_protocol::canonical::CanonicalError::TooLarge => ModelError::Limit,
+                _ => ModelError::Protocol,
+            })?;
             if !arguments.is_object() {
                 return Err(ModelError::Protocol);
             }

@@ -93,6 +93,68 @@ pub fn split_fee(charge: Credits, basis_points: u16) -> Result<(Credits, Credits
     Ok((fee, charge.checked_sub(fee)?))
 }
 
+/// Eligibility comes from the host's committed delivery facts, never model output or client claims.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextDelivery {
+    CommittedSuccess,
+    CancelledPersistedText,
+    Uncommitted,
+    Failed,
+    Superseded,
+}
+#[derive(Debug, Clone, Copy)]
+pub struct TextQuote {
+    pub input_units: u64,
+    pub output_limit: u64,
+    pub input_price: Credits,
+    pub output_price: Credits,
+}
+impl TextQuote {
+    pub fn maximum(self) -> Result<Credits, DomainError> {
+        text_price(
+            self.input_units,
+            self.output_limit,
+            self.input_price,
+            self.output_price,
+        )
+    }
+    /// Pure preview/calculation; this function does not establish delivery, debit funds or settle a Job.
+    pub fn charge(
+        self,
+        delivery: TextDelivery,
+        output_units: u64,
+        has_tools: bool,
+    ) -> Result<Credits, DomainError> {
+        if matches!(
+            delivery,
+            TextDelivery::Uncommitted | TextDelivery::Failed | TextDelivery::Superseded
+        ) {
+            return Ok(Credits::ZERO);
+        }
+        if output_units > self.output_limit {
+            return Err(DomainError::BudgetExceeded);
+        }
+        if delivery == TextDelivery::CancelledPersistedText {
+            if has_tools {
+                return Err(DomainError::EvidenceRequired);
+            }
+            if output_units == 0 {
+                return Ok(Credits::ZERO);
+            }
+        }
+        let charge = text_price(
+            self.input_units,
+            output_units,
+            self.input_price,
+            self.output_price,
+        )?;
+        if charge > self.maximum()? {
+            return Err(DomainError::BudgetExceeded);
+        }
+        Ok(charge)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Budget {
     pub limit: Credits,

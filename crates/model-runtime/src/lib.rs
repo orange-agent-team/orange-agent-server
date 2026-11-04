@@ -1,5 +1,6 @@
 //! Model adapters produce uncommitted candidates. Only the owning host may commit a response.
 pub mod llama;
+pub mod metering;
 pub mod stream;
 pub use orange_protocol::model::{
     GenerateRequest, Message, NativeUsage, ResponseCandidate, Role, ToolCall, ToolDefinition,
