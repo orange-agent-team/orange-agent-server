@@ -1,8 +1,12 @@
 //! Local development consumer API. This is deliberately not an OIDC/Admin implementation.
+use crate::events::{EventError, EventStore};
 use crate::store::{Store, StoreError};
 use axum::{
     Json, Router,
-    extract::{DefaultBodyLimit, Path, State, rejection::JsonRejection},
+    extract::{
+        DefaultBodyLimit, Path, Query, State,
+        rejection::{JsonRejection, QueryRejection},
+    },
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -68,8 +72,23 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v1/jobs", post(submit_job))
         .route("/api/v1/jobs/{id}", get(get_job))
         .route("/api/v1/jobs/{id}/cancel", post(cancel_job))
+        .route("/api/v1/event-streams", get(find_event_stream))
+        .route("/api/v1/event-streams/{id}", get(read_event_stream))
         .layer(DefaultBodyLimit::max(64 * 1024))
+        .layer(axum::middleware::from_fn(private_headers))
         .with_state(state)
+}
+
+async fn private_headers(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let mut response = next.run(request).await;
+    response.headers_mut().insert(
+        "cache-control",
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    response
 }
 
 async fn health(State(s): State<ApiState>) -> StatusCode {
@@ -148,6 +167,50 @@ async fn cancel_job(
         .map(Json)
         .map_err(|e| HttpError::store(e, &h))
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FindStreamQuery {
+    entity_kind: String,
+    entity_id: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReadStreamQuery {
+    after: Option<String>,
+    limit: Option<u16>,
+}
+async fn find_event_stream(
+    State(s): State<ApiState>,
+    h: HeaderMap,
+    q: Result<Query<FindStreamQuery>, QueryRejection>,
+) -> Result<Json<orange_protocol::events::EventStreamView>, HttpError> {
+    let owner = s.owner(&h)?;
+    let Query(q) = q.map_err(|_| HttpError::invalid(&h))?;
+    EventStore::new(s.store.pool().clone())
+        .discover(&owner, &q.entity_kind, &q.entity_id)
+        .await
+        .map(Json)
+        .map_err(|e| HttpError::event(e, &h))
+}
+async fn read_event_stream(
+    State(s): State<ApiState>,
+    h: HeaderMap,
+    Path(id): Path<String>,
+    q: Result<Query<ReadStreamQuery>, QueryRejection>,
+) -> Result<Json<orange_protocol::events::EventPage>, HttpError> {
+    let owner = s.owner(&h)?;
+    let Query(q) = q.map_err(|_| HttpError::invalid(&h))?;
+    EventStore::new(s.store.pool().clone())
+        .read(
+            &owner,
+            &id,
+            q.after.as_deref().unwrap_or("0"),
+            q.limit.unwrap_or(50),
+        )
+        .await
+        .map(Json)
+        .map_err(|e| HttpError::event(e, &h))
+}
 fn idempotency(h: &HeaderMap) -> Result<String, HttpError> {
     h.get("idempotency-key")
         .and_then(|v| v.to_str().ok())
@@ -164,6 +227,17 @@ fn request_id(h: &HeaderMap) -> String {
 }
 pub struct HttpError(StatusCode, ApiError);
 impl HttpError {
+    fn event(error: EventError, headers: &HeaderMap) -> Self {
+        let (status, code) = match error {
+            EventError::Invalid => (StatusCode::BAD_REQUEST, "INVALID_ARGUMENT"),
+            EventError::Forbidden => (StatusCode::FORBIDDEN, "FORBIDDEN"),
+            EventError::NotFound => (StatusCode::NOT_FOUND, "NOT_FOUND"),
+            EventError::SnapshotRequired => (StatusCode::CONFLICT, "SNAPSHOT_REQUIRED"),
+            EventError::Undelivered => (StatusCode::CONFLICT, "EVENTS_UNDELIVERED"),
+            EventError::Database(_) => (StatusCode::SERVICE_UNAVAILABLE, "STORAGE_UNAVAILABLE"),
+        };
+        Self::new(status, code, "never", headers)
+    }
     fn new(status: StatusCode, code: &str, retry: &str, h: &HeaderMap) -> Self {
         Self(
             status,

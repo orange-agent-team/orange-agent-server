@@ -13,6 +13,8 @@
 
 Admin 已新增独立 OIDC/MFA、当前授权/会话、总览和操作列表后端；真实本地验证与限制见 [身份实施记录](admin-identity-implementation.md)。
 
+团队角色与独立资源ACL已完成内部事务切片及4项真实数据库测试，见[团队授权记录](team-authorization-implementation.md)。持久通知、游标重放和PostgreSQL事务inbox已完成7项真实数据库测试，见[事件队列记录](events-queue-implementation.md)；自动消费者进程、公共用户身份和完整Worker链路仍待接入。
+
 没有实现的部分仍PENDING：生产身份/团队、价格/模型注册到Quote的真实计价、模型执行、Job运行中取消/结算、Worker/实际GPU、完整工具/连接器、Web云Host、支付、Admin写操作/独立批准及G4—G6。当前HTTP不会伪造这些功能成功。
 
 ## 本机运行

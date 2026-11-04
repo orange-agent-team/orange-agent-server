@@ -26,12 +26,12 @@ else:
     if '--http' in sys.argv:
         run('build', '--bin', 'orange-api', '--locked')
         subprocess.run([sys.executable,str(ROOT/'scripts/http-smoke.py')],cwd=ROOT,env=environment,check=True)
-    if '--postgres' in sys.argv or '--teams' in sys.argv:
+    if any(flag in sys.argv for flag in ['--postgres', '--teams', '--events', '--queue']):
         url = ROOT/'.local/database-url'
         if not environment.get('ORANGE_TEST_DATABASE_URL'):
             if not url.is_file():
                 raise SystemExit('Real PostgreSQL required: run scripts/local-postgres.py start first')
             environment['ORANGE_TEST_DATABASE_URL'] = url.read_text().strip()
-        for flag, name in [('--postgres', 'postgres'), ('--teams', 'teams')]:
+        for flag, name in [('--postgres', 'postgres'), ('--teams', 'teams'), ('--events','events'), ('--queue','queue')]:
             if flag in sys.argv:
                 run('test', '-p', 'orange-control-plane', '--features', 'integration-tests', '--test', name, '--locked')

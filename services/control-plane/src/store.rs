@@ -484,13 +484,7 @@ async fn emit(
     kind: &str,
     payload: &str,
 ) -> Result<(), StoreError> {
-    sqlx::query("INSERT INTO outbox(owner_id,entity_id,event_type,payload) VALUES($1,$2,$3,$4)")
-        .bind(owner)
-        .bind(id)
-        .bind(kind)
-        .bind(payload)
-        .execute(&mut **tx)
-        .await?;
+    crate::events::append(tx, owner, id, kind, payload).await?;
     Ok(())
 }
 async fn ledger(

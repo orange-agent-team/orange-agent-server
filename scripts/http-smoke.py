@@ -42,8 +42,12 @@ with tempfile.TemporaryDirectory(prefix='http-smoke-',dir=root/'.local') as fold
         if data is not None:headers['Content-Type']='application/json'
         req=urllib.request.Request(base+path,data=data,method=method,headers=headers)
         try:
-            with urllib.request.urlopen(req,timeout=5) as r:return r.status,json.load(r)
-        except urllib.error.HTTPError as e:return e.code,json.load(e)
+            with urllib.request.urlopen(req,timeout=5) as r:
+                assert r.headers.get('Cache-Control')=='no-store'
+                return r.status,json.load(r)
+        except urllib.error.HTTPError as e:
+            assert e.headers.get('Cache-Control')=='no-store'
+            return e.code,json.load(e)
     try:
         ready=False
         for _ in range(60):
@@ -70,7 +74,16 @@ with tempfile.TemporaryDirectory(prefix='http-smoke-',dir=root/'.local') as fold
         assert status==200 and cancelled['execution_state']=='cancelled' and cancelled['charge']=='0'
         assert request('POST','/api/v1/jobs/'+job['job_id']+'/cancel',key='cancel')[1]['charge']=='0'
         assert request('GET','/api/v1/budgets/'+root_id)[1]['reserved']=='0'
-        print('PASS: actual HTTP + PostgreSQL create/replay/reserve/cross-owner reject/cancel/source release')
+        status,stream=request('GET','/api/v1/event-streams?'+urllib.parse.urlencode({'entity_kind':'job','entity_id':job['job_id']}))
+        assert status==200
+        stream_path='/api/v1/event-streams/'+stream['stream_id']
+        status,first=request('GET',stream_path+'?after=0&limit=1')
+        assert status==200 and [e['event_type'] for e in first['events']]==['job.queued']
+        status,second=request('GET',stream_path+'?after='+first['next_cursor'])
+        assert status==200 and [e['event_type'] for e in second['events']]==['job.cancelled']
+        assert request('GET',stream_path+'?after=0',credential=other_token)[0]==404
+        assert request('GET',stream_path+'?after=01')[0]==400
+        print('PASS: actual HTTP + PostgreSQL create/replay/reserve/cross-owner reject/cancel/source release/event cursor replay/no-store')
         print('Identity/funding/quote are explicit development fixtures; no model execution, OIDC or payments certified')
     finally:
         if child.poll() is None:

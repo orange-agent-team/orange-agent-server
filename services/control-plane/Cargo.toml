@@ -20,6 +20,14 @@ required-features = ["integration-tests"]
 name = "teams"
 required-features = ["integration-tests"]
 
+[[test]]
+name = "events"
+required-features = ["integration-tests"]
+
+[[test]]
+name = "queue"
+required-features = ["integration-tests"]
+
 [dependencies]
 orange-domain.workspace = true
 orange-protocol.workspace = true
