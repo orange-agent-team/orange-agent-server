@@ -28,7 +28,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let identity = AdminIdentity::discover(store.pool().clone(), config).await?;
     let listener = tokio::net::TcpListener::bind(address).await?;
     eprintln!(
-        "Admin OIDC/read-only API listening on {}; no write actions enabled",
+        "Development Admin API listening on {}; node intents/approvals enabled, device completion remains separate",
         listener.local_addr()?
     );
     axum::serve(listener, routes::router(identity))

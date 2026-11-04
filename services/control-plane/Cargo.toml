@@ -17,6 +17,10 @@ name = "admin_identity"
 required-features = ["integration-tests"]
 
 [[test]]
+name = "admin_actions"
+required-features = ["integration-tests"]
+
+[[test]]
 name = "teams"
 required-features = ["integration-tests"]
 

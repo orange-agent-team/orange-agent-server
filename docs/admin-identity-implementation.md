@@ -10,7 +10,7 @@
 
 Cookie 固定 `__Host-`、Secure、HttpOnly、SameSite=Lax、Path=/，服务端仅保存会话随机值的 SHA-256。管理登录与用户开发 Bearer 身份相互独立。登出与 step-up 需要精确 Origin、CSRF 和请求键。step-up 绑定原会话与主体，成功后撤销原会话。失败的代码交换不自动重试。
 
-总览查询现有真实 Job、管理操作投影、节点和对账事项表；操作列表按租户、动作领域权限及稳定游标过滤。读事件写入不可变审计表。节点/对账表的业务生产流程和管理动作的创建、批准、执行尚未实现，不会伪造执行成功。
+总览查询现有真实 Job、管理操作投影、节点和对账事项表；操作列表按租户、动作领域权限及稳定游标过滤。读事件写入不可变审计表。节点操作的创建、批准、撤回和持久命令入队已在后续切片实现，见[节点操作实现](admin-actions-implementation.md)；实际设备效果和对账生产流程仍未完成。
 
 ## 重复运行
 
@@ -30,6 +30,6 @@ Keycloak 固定 `26.8.1` 官方镜像摘要 `sha256:3f3c5f8e03c614774b4bd9173b88
 - 三项真实 Chrome/Keycloak 流程：错误 TOTP 拒绝，正确双因子到实际总览，跨环境/租户拒绝，撤权立即生效，登出；PKCE/nonce/state、跨浏览器和重复回调拒绝；真实签名的仅密码 ACR1 被拒绝建立管理会话。
 - 现有 Admin 替身浏览器测试仍单独保留，用于 UI 缓存与错误行为；不会混称真实身份认证。
 
-本切片支持开发部署的 platform:platform 与 tenant 读取；region/resource 范围明确拒绝。生产入口仍关闭。JWKS 热轮换、入口限流、完整拒绝审计、企业身份认证、实际硬件 MFA、管理动作/独立批准、价格草稿、支持授权等仍是后续任务。当前公钥变化会失败关闭，需要重新发现，不宣称已完成生产密钥轮换。Keycloak 开发 H2 数据库不属于生产部署方案。
+总览支持开发部署的 platform:platform 与 tenant；后续动作列表和节点详情支持精确 region/resource 授权。生产入口仍关闭。JWKS 热轮换、入口限流、完整拒绝审计、企业身份认证、实际硬件 MFA、其余管理动作、设备恢复、价格草稿、支持授权等仍是后续任务。当前公钥变化会失败关闭，需要重新发现，不宣称已完成生产密钥轮换。Keycloak 开发 H2 数据库不属于生产部署方案。
 
 参考固定版本[认证流程源码与官方说明](https://github.com/keycloak/keycloak/blob/26.8.1/docs/documentation/server_admin/topics/authentication/flows.adoc)、[LoA 实现](https://github.com/keycloak/keycloak/blob/26.8.1/services/src/main/java/org/keycloak/authentication/authenticators/conditional/ConditionalLoaAuthenticator.java)、[Rust OIDC 验证库](https://docs.rs/openidconnect/4.1.0/openidconnect/)。

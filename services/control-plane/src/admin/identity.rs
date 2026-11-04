@@ -158,17 +158,27 @@ impl AdminIdentity {
         Ok(token)
     }
     pub async fn current(&self, headers: &HeaderMap) -> Result<CurrentSession, AdminError> {
-        let token_hash = hash_secret(&cookie(headers, SESSION_COOKIE)?);
         let mut tx = self.pool.begin().await?;
+        let current = self.current_in(headers, &mut tx).await?;
+        tx.commit().await?;
+        Ok(current)
+    }
+    // Keep session/principal/grant locks until the caller commits its domain mutation.
+    pub(super) async fn current_in(
+        &self,
+        headers: &HeaderMap,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ) -> Result<CurrentSession, AdminError> {
+        let token_hash = hash_secret(&cookie(headers, SESSION_COOKIE)?);
         let now: i64 =
             sqlx::query_scalar("SELECT FLOOR(EXTRACT(EPOCH FROM clock_timestamp()))::bigint")
-                .fetch_one(&mut *tx)
+                .fetch_one(&mut **tx)
                 .await?;
         let row=sqlx::query("SELECT s.*,p.policy_version FROM admin_sessions s JOIN admin_principals p USING(principal_id) WHERE s.token_hash=$1 AND NOT s.revoked AND p.active AND s.idle_expires_at>$2 AND s.absolute_expires_at>$2 FOR UPDATE OF s FOR SHARE OF p")
-            .bind(&token_hash).bind(now).fetch_optional(&mut *tx).await?.ok_or(AdminError::Unauthenticated)?;
+            .bind(&token_hash).bind(now).fetch_optional(&mut **tx).await?.ok_or(AdminError::Unauthenticated)?;
         let principal_id: String = row.try_get("principal_id")?;
         let rows=sqlx::query("SELECT * FROM admin_grants WHERE principal_id=$1 AND environment=$2 AND NOT revoked AND expires_at>$3 FOR SHARE")
-            .bind(&principal_id).bind(&self.config.environment).bind(now).fetch_all(&mut *tx).await?;
+            .bind(&principal_id).bind(&self.config.environment).bind(now).fetch_all(&mut **tx).await?;
         let registry = role_permissions();
         let mut roles = BTreeSet::new();
         let mut grants: BTreeMap<Scope, BTreeSet<String>> = BTreeMap::new();
@@ -209,7 +219,7 @@ impl AdminIdentity {
         sqlx::query("UPDATE admin_sessions SET idle_expires_at=$2 WHERE token_hash=$1")
             .bind(&token_hash)
             .bind(expires)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
         let auth_time = row.try_get("auth_time")?;
         let view = SessionView {
@@ -223,7 +233,6 @@ impl AdminIdentity {
             csrf_token: row.try_get("csrf_token")?,
             policy_version: row.try_get::<i64, _>("policy_version")?.to_string(),
         };
-        tx.commit().await?;
         Ok(CurrentSession {
             view,
             token_hash,

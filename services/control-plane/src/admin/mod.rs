@@ -1,3 +1,4 @@
+pub mod actions;
 pub mod identity;
 pub mod routes;
 
@@ -29,6 +30,12 @@ pub enum AdminError {
     Unavailable,
     #[error("NOT_FOUND")]
     NotFound,
+    #[error("ACTION_NOT_EXECUTABLE")]
+    Conflict,
+    #[error("VERSION_CONFLICT")]
+    Precondition,
+    #[error("IDEMPOTENCY_CONFLICT")]
+    Idempotency,
 }
 impl From<crate::auth::AuthError> for AdminError {
     fn from(error: crate::auth::AuthError) -> Self {
@@ -55,6 +62,8 @@ impl IntoResponse for AdminError {
             Self::Forbidden | Self::Csrf | Self::StepUp => StatusCode::FORBIDDEN,
             Self::Invalid => StatusCode::UNPROCESSABLE_ENTITY,
             Self::NotFound => StatusCode::NOT_FOUND,
+            Self::Conflict | Self::Idempotency => StatusCode::CONFLICT,
+            Self::Precondition => StatusCode::PRECONDITION_FAILED,
             Self::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
         };
         let retry = if matches!(self, Self::Unauthenticated | Self::StepUp) {
@@ -131,4 +140,37 @@ pub fn role_permissions() -> BTreeMap<String, BTreeSet<String>> {
             .expect("checked embedded contract");
     serde_json::from_value(document["x-platform-role-permissions"].clone())
         .expect("checked permission registry")
+}
+
+#[cfg(test)]
+mod contract_tests {
+    use super::*;
+    #[test]
+    fn emitted_errors_exist_in_the_frozen_contract() {
+        let schema: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../contracts/json-schema/admin.schema.json"
+        ))
+        .expect("embedded schema");
+        let codes = schema["$defs"]["Error"]["properties"]["code"]["enum"]
+            .as_array()
+            .expect("codes");
+        for error in [
+            AdminError::Unauthenticated,
+            AdminError::Forbidden,
+            AdminError::Csrf,
+            AdminError::StepUp,
+            AdminError::Invalid,
+            AdminError::Unavailable,
+            AdminError::NotFound,
+            AdminError::Conflict,
+            AdminError::Precondition,
+            AdminError::Idempotency,
+        ] {
+            assert!(
+                codes.contains(&serde_json::json!(error.to_string())),
+                "{}",
+                error
+            );
+        }
+    }
 }

@@ -20,7 +20,27 @@ pub fn router(identity: AdminIdentity) -> Router {
         .route("/admin/v1/session", get(session).delete(logout))
         .route("/admin/v1/session/revocation", get(revocation_context))
         .route("/admin/v1/overview", get(overview))
-        .route("/admin/v1/actions", get(actions))
+        .route("/admin/v1/nodes/{node_id}", get(super::actions::get_node))
+        .route(
+            "/admin/v1/actions",
+            get(actions).post(super::actions::create),
+        )
+        .route(
+            "/admin/v1/actions/{action_id}",
+            get(super::actions::get_one),
+        )
+        .route(
+            "/admin/v1/actions/{action_id}/approvals",
+            post(super::actions::decide),
+        )
+        .route(
+            "/admin/v1/actions/{action_id}/execute",
+            post(super::actions::execute),
+        )
+        .route(
+            "/admin/v1/actions/{action_id}/cancel",
+            post(super::actions::cancel),
+        )
         .layer(DefaultBodyLimit::max(64 * 1024))
         .layer(middleware::from_fn(security_headers))
         .with_state(Arc::new(identity))
@@ -141,7 +161,10 @@ pub struct ScopedQuery {
 impl ScopedQuery {
     fn scope(&self) -> Result<Scope, AdminError> {
         if !matches!(self.environment.as_str(), "dev" | "staging" | "production")
-            || !matches!(self.scope_kind.as_str(), "platform" | "tenant")
+            || !matches!(
+                self.scope_kind.as_str(),
+                "platform" | "tenant" | "region" | "resource"
+            )
             || !orange_protocol::valid_id(&self.scope_id)
         {
             return Err(AdminError::Invalid);
@@ -198,7 +221,10 @@ async fn overview(
 ) -> Result<Json<Value>, AdminError> {
     let query = query.map_err(|_| AdminError::Invalid)?.0;
     let scope = query.scope()?;
-    if query.cursor.is_some() || query.limit.is_some() {
+    if query.cursor.is_some()
+        || query.limit.is_some()
+        || !matches!(scope.kind.as_str(), "platform" | "tenant")
+    {
         return Err(AdminError::Invalid);
     }
     let current = identity.current(&headers).await?;
@@ -276,13 +302,8 @@ async fn actions(
     } else {
         String::new()
     };
-    let owner = if scope.kind == "tenant" {
-        Some(scope.scope_id.as_str())
-    } else {
-        None
-    };
-    let rows=sqlx::query("SELECT action_id,document::text AS document FROM admin_actions WHERE environment=$1 AND ($2::text IS NULL OR (scope_kind='tenant' AND scope_id=$2)) AND action_type=ANY($3) AND action_id>$4 ORDER BY action_id LIMIT $5")
-        .bind(&scope.environment).bind(owner).bind(readable_actions(permissions)).bind(after).bind(i64::from(limit)+1).fetch_all(&identity.pool).await?;
+    let rows=sqlx::query("SELECT action_id,document::text AS document FROM admin_actions WHERE environment=$1 AND ($6='platform' OR (scope_kind=$6 AND scope_id=$2)) AND action_type=ANY($3) AND action_id>$4 ORDER BY action_id LIMIT $5")
+        .bind(&scope.environment).bind(&scope.scope_id).bind(readable_actions(permissions)).bind(after).bind(i64::from(limit)+1).bind(&scope.kind).fetch_all(&identity.pool).await?;
     let more = rows.len() > usize::from(limit);
     let mut data = Vec::new();
     let mut last = String::new();
