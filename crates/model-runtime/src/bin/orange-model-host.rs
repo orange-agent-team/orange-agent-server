@@ -24,6 +24,8 @@ mod unix {
         model_version: String,
         context_tokens: u32,
         startup_timeout_seconds: u64,
+        #[serde(default)]
+        control_nonce: Option<String>,
     }
     pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         let args: Vec<_> = std::env::args_os().skip(1).collect();
@@ -46,6 +48,16 @@ mod unix {
             .read(true)
             .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
             .open(&path)?;
+        let opened = file.metadata()?;
+        if !opened.is_file()
+            || opened.dev() != metadata.dev()
+            || opened.ino() != metadata.ino()
+            || opened.nlink() != 1
+            || opened.mode() & 0o077 != 0
+            || opened.len() > 16 * 1024
+        {
+            return Err("private profile identity changed".into());
+        }
         let mut bytes = Vec::new();
         file.take(16 * 1024 + 1).read_to_end(&mut bytes)?;
         if bytes.len() > 16 * 1024 {
@@ -71,7 +83,10 @@ mod unix {
         output.write_all(b"\n")?;
         output.flush()
     }
-    async fn command(input: &mut tokio::io::Stdin) -> Result<Option<Vec<u8>>, std::io::Error> {
+    async fn command(
+        input: &mut tokio::io::Stdin,
+        limit: usize,
+    ) -> Result<Option<Vec<u8>>, std::io::Error> {
         let mut value = Vec::new();
         let mut byte = [0];
         loop {
@@ -86,7 +101,7 @@ mod unix {
                 };
             }
             value.push(byte[0]);
-            if value.len() > 32 {
+            if value.len() > limit {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     "control frame limit",
@@ -98,11 +113,28 @@ mod unix {
         }
     }
     async fn run(config: Config) -> Result<(), Box<dyn std::error::Error>> {
+        let mut input = tokio::io::stdin();
+        // Named private control channels need proof of their parent before any
+        // model/artifact lease is opened. Legacy inherited pipes remain supported.
+        if let Some(nonce) = &config.control_nonce {
+            if nonce.len() != 64 || !nonce.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                return Err("invalid private control profile".into());
+            }
+            let expected = format!("auth {nonce}\n");
+            let frame =
+                tokio::time::timeout(Duration::from_secs(5), command(&mut input, 96)).await??;
+            use sha2::{Digest, Sha256};
+            if frame
+                .as_ref()
+                .is_none_or(|value| Sha256::digest(value) != Sha256::digest(expected.as_bytes()))
+            {
+                return Err("private control authentication failed".into());
+            }
+        }
         let (cancel, receiver) = tokio::sync::watch::channel(false);
         let mut control = tokio::spawn(async move {
-            let mut input = tokio::io::stdin();
             let failed = loop {
-                match tokio::time::timeout(Duration::from_secs(30), command(&mut input)).await {
+                match tokio::time::timeout(Duration::from_secs(30), command(&mut input, 32)).await {
                     Ok(Ok(Some(frame))) if frame == b"ping\n" => {}
                     Ok(Ok(Some(frame))) if frame == b"shutdown\n" => break false,
                     Ok(Ok(None)) => break false,

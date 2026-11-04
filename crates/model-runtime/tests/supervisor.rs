@@ -313,6 +313,106 @@ async fn supervisor_control_eof_or_invalid_frame_stops_and_reaps_model() {
         assert!(!f.root.join("api.key").exists());
     }
 }
+
+#[tokio::test]
+async fn authenticated_private_control_starts_only_after_the_matching_parent_frame() {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let f = Fixture::new(b"GGUF-ready");
+    let path = f.host_config();
+    let mut config: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).expect("profile")).expect("json");
+    let nonce = "a".repeat(64);
+    config["control_nonce"] = serde_json::json!(nonce);
+    fs::write(&path, serde_json::to_vec(&config).expect("json")).expect("private existing profile");
+    let mut host = tokio::process::Command::new(env!("CARGO_BIN_EXE_orange-model-host"))
+        .arg(&path)
+        .env_clear()
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .expect("host");
+    let mut lines = BufReader::new(host.stdout.take().expect("stdout")).lines();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(150), lines.next_line())
+            .await
+            .is_err(),
+        "no readiness before authentication"
+    );
+    assert!(!f.root.join("process.json").exists());
+    assert!(!f.root.join("engine.lease").exists());
+    host.stdin
+        .as_mut()
+        .expect("input")
+        .write_all(format!("auth {nonce}\nping\n").as_bytes())
+        .await
+        .expect("authenticate");
+    let ready = tokio::time::timeout(Duration::from_secs(10), lines.next_line())
+        .await
+        .expect("deadline")
+        .expect("line")
+        .expect("ready");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&ready).expect("record")["record"]["phase"],
+        "ready"
+    );
+    host.stdin
+        .as_mut()
+        .expect("input")
+        .write_all(b"shutdown\n")
+        .await
+        .expect("shutdown");
+    assert!(
+        tokio::time::timeout(Duration::from_secs(8), host.wait())
+            .await
+            .expect("deadline")
+            .expect("exit")
+            .success()
+    );
+    assert_eq!(f.record().phase, "stopped");
+}
+
+#[tokio::test]
+async fn wrong_or_absent_parent_authentication_has_no_model_process_effect() {
+    use tokio::io::AsyncWriteExt;
+    for wrong in [false, true] {
+        let f = Fixture::new(b"GGUF-ready");
+        let path = f.host_config();
+        let mut config: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).expect("profile")).expect("json");
+        config["control_nonce"] = serde_json::json!("a".repeat(64));
+        fs::write(&path, serde_json::to_vec(&config).expect("json")).expect("profile");
+        let mut host = tokio::process::Command::new(env!("CARGO_BIN_EXE_orange-model-host"))
+            .arg(path)
+            .env_clear()
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("host");
+        if wrong {
+            host.stdin
+                .as_mut()
+                .expect("input")
+                .write_all(format!("auth {}\n", "b".repeat(64)).as_bytes())
+                .await
+                .expect("wrong auth fixture");
+        }
+        drop(host.stdin.take());
+        assert!(
+            !tokio::time::timeout(Duration::from_secs(8), host.wait())
+                .await
+                .expect("deadline")
+                .expect("exit")
+                .success()
+        );
+        assert!(!f.root.join("process.json").exists());
+        assert!(!f.root.join("engine.lease").exists());
+        assert!(!f.root.join("api.key").exists());
+    }
+}
 #[tokio::test]
 async fn ui_process_crash_triggers_owned_supervisor_cleanup() {
     use tokio::io::{AsyncBufReadExt, BufReader};
