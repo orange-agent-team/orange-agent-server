@@ -621,13 +621,13 @@ async fn mutate(
                 } else {
                     "quarantined"
                 };
-                sqlx::query("UPDATE nodes SET state=$2,version=version+1 WHERE node_id=$1")
+                let generation: i64 = sqlx::query_scalar("UPDATE nodes SET state=$2,version=version+1,policy_generation=policy_generation+1 WHERE node_id=$1 RETURNING policy_generation")
                     .bind(&m.request.payload.node_id)
                     .bind(new_state)
-                    .execute(&mut *tx)
+                    .fetch_one(&mut *tx)
                     .await?;
-                sqlx::query("INSERT INTO admin_node_commands(command_id,action_id,node_id,command_kind,target_version,state,created_at) VALUES($1,$2,$3,$4,$5,'queued',$6)")
-                    .bind(&command).bind(action).bind(&m.request.payload.node_id).bind(&m.request.action_type).bind(version).bind(now(&mut tx).await?).execute(&mut *tx).await?;
+                sqlx::query("INSERT INTO admin_node_commands(command_id,action_id,node_id,command_kind,target_version,state,created_at,policy_generation) VALUES($1,$2,$3,$4,$5,'queued',$6,$7)")
+                    .bind(&command).bind(action).bind(&m.request.payload.node_id).bind(&m.request.action_type).bind(version).bind(now(&mut tx).await?).bind(generation).execute(&mut *tx).await?;
                 m.doc["state"] = json!("executing");
                 m.doc["business_ref"] = json!(command);
                 why = "Durable node command queued; device completion remains unconfirmed".into();

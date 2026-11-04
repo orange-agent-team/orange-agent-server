@@ -213,6 +213,20 @@ async fn drain_is_atomic_idempotent_intent_not_device_completion() {
         .await
         .expect("state");
     assert_eq!(state, "draining");
+    let generation: i64 =
+        sqlx::query_scalar("SELECT policy_generation FROM nodes WHERE node_id=$1")
+            .bind(&f.node)
+            .fetch_one(&f.pool)
+            .await
+            .expect("policy generation");
+    assert_eq!(generation, 1);
+    let queued_generation: i64 =
+        sqlx::query_scalar("SELECT policy_generation FROM admin_node_commands WHERE node_id=$1")
+            .bind(&f.node)
+            .fetch_one(&f.pool)
+            .await
+            .expect("immutable command generation");
+    assert_eq!(queued_generation, generation);
     let node_path = format!("/admin/v1/nodes/{}?environment=dev", f.node);
     let (status, node, tag) = http(&f, &f.maker, "GET", &node_path, "", "", json!(null)).await;
     assert_eq!(status, StatusCode::OK);

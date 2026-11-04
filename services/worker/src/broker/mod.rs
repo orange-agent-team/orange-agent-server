@@ -1,6 +1,6 @@
 //! Persistent arbitration core for trusted OS/transport adapters. This module
 //! does not authenticate Named Pipe peers or certify GPU cleanup by itself.
-mod storage;
+pub(crate) mod storage;
 use orange_protocol::{request_digest, valid_digest, valid_id};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};

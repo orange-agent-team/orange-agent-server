@@ -22,7 +22,7 @@ E02 的 `grpc` feature 从服务端唯一 `contracts/proto` 编译 Worker 与 Ru
 
 Welcome 返回 session、epoch 和控制会话到期时间。HeartbeatAck 只延长这条控制会话，不返回执行 Lease 或 StartGrant。每个心跳和支持的控制操作重新查库，连接空闲时每 2 秒检查一次；数据库不可用、证书撤销/过期、账户停用、owner 受限、成员撤销、旧 epoch 或会话到期都关闭权限。心跳不能复活已过期 session，需重新握手取得新 epoch。
 
-旧 Gateway 的迟到输出或关闭动作不能修改新 session。当前尚未接入 Assignment/ACK/执行 Lease/输出/完成，相关帧返回明确 `UNIMPLEMENTED`，不写 Preparing、不返回 StartGrant、不执行算力任务。未知/空 frame 和重复 Hello 拒绝。后续接执行操作时仍必须在同一业务事务校验当前 session 和任务 fencing，不能只依赖建立连接时的鉴权。
+旧 Gateway 的迟到输出或关闭动作不能修改新 session。当前尚未接入 Assignment/ACK/执行 Lease/输出/完成，相关帧返回明确 `UNIMPLEMENTED`，不写 Preparing、不返回 StartGrant、不执行算力任务。未知/空 frame 和重复 Hello 拒绝。后续[节点命令切片](node-command-implementation.md)通过独立能力协商支持drain/quarantine意图和持久接收回执；它不等于模型执行权限或设备完成。所有命令事务仍重新检查当前session及策略generation。
 
 全局每 Gateway 最多 128 条控制流，每连接最多 8 条并发流，单消息最多 64 KiB，输出队列最多 8 项。慢读者、数据库等待和 TLS/Hello 均有上限。关闭 Gateway 会通知活动流退出；若无法写断开记录，已有会话仍按数据库期限失效，不能假设内存退出已经删除权威记录。
 

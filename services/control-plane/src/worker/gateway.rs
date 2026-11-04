@@ -1,5 +1,5 @@
-//! mTLS-only Worker control transport. Enrollment and execution commands are
-//! separate slices; unsupported frames explicitly fail instead of acknowledging.
+//! mTLS-only Worker control transport and negotiated durable node receipt.
+//! Enrollment/model execution/cleanup are separate; unsupported frames fail.
 use super::{DeviceSession, SessionError, WorkerSessionStore};
 use orange_protocol::grpc::worker::{
     self, server_frame, worker_frame,
@@ -87,6 +87,7 @@ fn welcome(s: &DeviceSession) -> worker::ServerFrame {
             connection_epoch: s.connection_epoch as u64,
             protocol_version: 1,
             expires_at: timestamp(s.expires_at_unix),
+            node_control_version: s.node_control_version,
         })),
     }
 }
@@ -123,13 +124,17 @@ impl WorkerGateway for Gateway {
         let Some(worker_frame::Body::Hello(hello)) = first.body else {
             return Err(Status::invalid_argument("first frame must be Hello"));
         };
-        if hello.protocol_version != 1 {
+        if hello.protocol_version != 1 || hello.node_control_version > 1 {
             return Err(Status::failed_precondition("unsupported protocol version"));
         }
         let session = tokio::time::timeout(
             Duration::from_secs(5),
-            self.store
-                .claim(&hello.node_id, &fingerprint, &hello.capabilities_digest),
+            self.store.claim(
+                &hello.node_id,
+                &fingerprint,
+                &hello.capabilities_digest,
+                hello.node_control_version,
+            ),
         )
         .await
         .map_err(|_| Status::unavailable("authoritative store timeout"))?
@@ -150,8 +155,12 @@ impl WorkerGateway for Gateway {
                     _=sender.closed()=>break,
                     _=shutdown.changed()=>Err(Status::unavailable("gateway stopping")),
                     _=interval.tick()=>{
-                        match tokio::time::timeout(Duration::from_secs(5),store.check(&session)).await{
-                            Ok(result)=>result.map(|()|None).map_err(status),Err(_)=>Err(Status::unavailable("authoritative store timeout")),
+                        let operation=async {
+                            store.check(&session).await?;
+                            store.next_node_command(&session).await
+                        };
+                        match tokio::time::timeout(Duration::from_secs(5),operation).await{
+                            Ok(result)=>result.map(|command|command.map(|command|worker::ServerFrame {body:Some(server_frame::Body::NodeCommand(command))})).map_err(status),Err(_)=>Err(Status::unavailable("authoritative store timeout")),
                         }
                     }
                     frame=stream.message()=>{
@@ -197,6 +206,13 @@ async fn handle(
     frame: worker::WorkerFrame,
 ) -> Result<Option<worker::ServerFrame>, Status> {
     match frame.body {
+        Some(worker_frame::Body::NodeReceipt(receipt)) => {
+            store
+                .receive_node_receipt(session, &receipt)
+                .await
+                .map_err(status)?;
+            Ok(None)
+        }
         Some(worker_frame::Body::Heartbeat(heartbeat)) => {
             *session = store
                 .heartbeat(

@@ -4,7 +4,7 @@ use std::{
     fs::{self, File},
     path::Path,
 };
-pub(super) fn open(path: &Path) -> Result<(Connection, File), BrokerError> {
+pub(crate) fn open(path: &Path) -> Result<(Connection, File), BrokerError> {
     let parent = path
         .parent()
         .ok_or(BrokerError::StoragePolicy)?

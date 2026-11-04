@@ -12,9 +12,9 @@ message Lease {
   uint64 fencing_token = 5;
   google.protobuf.Timestamp expires_at = 6;
 }
-message Hello { string node_id = 1; uint32 protocol_version = 2; string capabilities_digest = 3; }
+message Hello { string node_id = 1; uint32 protocol_version = 2; string capabilities_digest = 3; uint32 node_control_version = 4; }
 // Protocol v1 control-session TTL is 45 seconds; it is not an execution lease.
-message Welcome { string session_id = 1; uint64 connection_epoch = 2; uint32 protocol_version = 3; google.protobuf.Timestamp expires_at = 4; }
+message Welcome { string session_id = 1; uint64 connection_epoch = 2; uint32 protocol_version = 3; google.protobuf.Timestamp expires_at = 4; uint32 node_control_version = 5; }
 message Assignment {
   string command_id = 1; string payload_digest = 2; Lease lease = 3;
   string model_version_id = 4; string execution_profile_id = 5;
@@ -50,12 +50,27 @@ message Heartbeat { string node_id = 1; uint64 connection_epoch = 2; string capa
 // Control-session liveness only. This does not renew any execution lease.
 message HeartbeatAck { string node_id = 1; uint64 connection_epoch = 2; string session_id = 3; google.protobuf.Timestamp expires_at = 4; }
 message ProtocolError { string code = 1; string request_id = 2; bool retry_same_command = 3; }
+// Optional capability, explicitly negotiated as node_control_version=1. Old
+// clients offering0 never receive these frames. No node resume or GPU release.
+enum NodeStopKind { NODE_STOP_KIND_UNSPECIFIED = 0; NODE_STOP_KIND_DRAIN = 1; NODE_STOP_KIND_QUARANTINE = 2; }
+message NodeCommand {
+  string command_id = 1; string action_id = 2; string node_id = 3;
+  uint64 policy_generation = 4; NodeStopKind kind = 5; string payload_digest = 6;
+  string session_id = 7; uint64 connection_epoch = 8;
+}
+// Only emitted after local WAL/FULL commit. This is RECEIVED, not APPLIED or
+// CLEANED. It cannot release a resource or make an Admin action succeeded.
+message NodeReceipt {
+  string command_id = 1; string node_id = 2; uint64 policy_generation = 3;
+  string payload_digest = 4; string receipt_id = 5;
+  string session_id = 6; uint64 connection_epoch = 7;
+}
 message WorkerFrame {
   oneof body { Hello hello = 1; Acknowledge acknowledge = 2; Renew renew = 3;
     ResumeRequest resume = 4; OutputChunk output = 5; Completion completion = 6;
-    CleanupReport cleanup = 7; Heartbeat heartbeat = 8; }
+    CleanupReport cleanup = 7; Heartbeat heartbeat = 8; NodeReceipt node_receipt = 9; }
 }
 message ServerFrame {
   oneof body { Welcome welcome = 1; Assignment assignment = 2; StartGrant start = 3;
-    Lease renewed = 4; ResumeGrant resume = 5; Cancel cancel = 6; ProtocolError error = 7; HeartbeatAck heartbeat = 8; }
+    Lease renewed = 4; ResumeGrant resume = 5; Cancel cancel = 6; ProtocolError error = 7; HeartbeatAck heartbeat = 8; NodeCommand node_command = 9; }
 }

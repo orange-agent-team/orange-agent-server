@@ -1,4 +1,6 @@
 //! Authenticated control liveness. A connected session is never an execution lease.
+use crate::node_journal::{NodeJournal, ReceivedNodeIntent};
+use orange_protocol::node_control::{NodeStopIntent, StopKind};
 use orange_protocol::{
     grpc::worker::{self, server_frame, worker_frame, worker_gateway_client::WorkerGatewayClient},
     valid_digest, valid_id,
@@ -47,9 +49,29 @@ pub struct ControlConnection {
     stream: Streaming<worker::ServerFrame>,
     stop_at: Instant,
     active: bool,
+    node_control_version: u32,
 }
 impl ControlConnection {
     pub async fn connect(config: ControlConfig) -> Result<Self, ControlError> {
+        Self::connect_mode(config, 0).await
+    }
+    pub async fn connect_node_control(
+        config: ControlConfig,
+        journal: &mut NodeJournal,
+    ) -> Result<Self, ControlError> {
+        if config.node_id != journal.node_id() {
+            return Err(ControlError::Invalid);
+        }
+        let connection = Self::connect_mode(config, 1).await?;
+        journal
+            .bind(connection.identity())
+            .map_err(|_| ControlError::Unavailable)?;
+        Ok(connection)
+    }
+    async fn connect_mode(
+        config: ControlConfig,
+        node_control_version: u32,
+    ) -> Result<Self, ControlError> {
         if !valid_id(&config.node_id)
             || !valid_digest(&config.capabilities_digest)
             || config.server_name.is_empty()
@@ -87,12 +109,19 @@ impl ControlConnection {
             .connect()
             .await
             .map_err(|_| ControlError::Unavailable)?;
-        Self::establish(channel, config.node_id, config.capabilities_digest).await
+        Self::establish(
+            channel,
+            config.node_id,
+            config.capabilities_digest,
+            node_control_version,
+        )
+        .await
     }
     async fn establish(
         channel: Channel,
         node: String,
         capabilities: String,
+        node_control_version: u32,
     ) -> Result<Self, ControlError> {
         let mut client = WorkerGatewayClient::new(channel)
             .max_decoding_message_size(64 * 1024)
@@ -105,6 +134,7 @@ impl ControlConnection {
                     node_id: node.clone(),
                     protocol_version: 1,
                     capabilities_digest: capabilities,
+                    node_control_version,
                 })),
             })
             .await
@@ -135,6 +165,9 @@ impl ControlConnection {
         {
             return Err(ControlError::Protocol);
         }
+        if welcome.node_control_version != node_control_version {
+            return Err(ControlError::Unsupported);
+        }
         // Protocol v1 control sessions have 45s TTL. Subtract transport latency
         // by starting from send time, and retain a one-second safety margin.
         let stop_at = sent + Duration::from_secs(44);
@@ -151,6 +184,7 @@ impl ControlConnection {
             stream,
             stop_at,
             active: true,
+            node_control_version,
         })
     }
     pub fn identity(&self) -> &ControlIdentity {
@@ -162,6 +196,32 @@ impl ControlConnection {
     /// No execution grant is returned or renewed here. On any uncertain outcome
     /// this connection is unusable until a fresh authenticated handshake.
     pub async fn heartbeat(&mut self, capability_snapshot: &str) -> Result<(), ControlError> {
+        if self.node_control_version != 0 {
+            return Err(ControlError::Unsupported);
+        }
+        self.heartbeat_inner(capability_snapshot, None)
+            .await
+            .map(|_| ())
+    }
+    /// Returned records prove local durable receipt only, not server acceptance,
+    /// Broker policy application, process exit, or device cleanup. No automatic
+    /// effect replay occurs on reconnect or after an uncertain result.
+    pub async fn heartbeat_node_control(
+        &mut self,
+        capability_snapshot: &str,
+        journal: &mut NodeJournal,
+    ) -> Result<Vec<ReceivedNodeIntent>, ControlError> {
+        if self.node_control_version != 1 || journal.node_id() != self.identity.node_id {
+            return Err(ControlError::Unsupported);
+        }
+        self.heartbeat_inner(capability_snapshot, Some(journal))
+            .await
+    }
+    async fn heartbeat_inner(
+        &mut self,
+        capability_snapshot: &str,
+        mut journal: Option<&mut NodeJournal>,
+    ) -> Result<Vec<ReceivedNodeIntent>, ControlError> {
         if !self.is_current_locally() {
             self.active = false;
             return Err(ControlError::Stale);
@@ -184,32 +244,81 @@ impl ControlConnection {
                 })
                 .await
                 .map_err(|_| ControlError::Unavailable)?;
-            let frame = self
-                .stream
-                .message()
-                .await
-                .map_err(status)?
-                .ok_or(ControlError::Unavailable)?;
-            let Some(server_frame::Body::Heartbeat(ack)) = frame.body else {
-                return Err(ControlError::Unsupported);
-            };
-            if ack.node_id != self.identity.node_id
-                || ack.session_id != self.identity.session_id
-                || ack.connection_epoch != self.identity.connection_epoch
-                || ack
-                    .expires_at
-                    .is_none_or(|t| t.seconds <= 0 || !(0..1_000_000_000).contains(&t.nanos))
-            {
-                return Err(ControlError::Protocol);
+            let mut received = Vec::new();
+            loop {
+                let frame = self
+                    .stream
+                    .message()
+                    .await
+                    .map_err(status)?
+                    .ok_or(ControlError::Unavailable)?;
+                if let Some(server_frame::Body::NodeCommand(command)) = &frame.body {
+                    if self.node_control_version != 1
+                        || received.len() >= 8
+                        || command.node_id != self.identity.node_id
+                        || command.session_id != self.identity.session_id
+                        || command.connection_epoch != self.identity.connection_epoch
+                        || Instant::now() >= deadline
+                    {
+                        return Err(ControlError::Protocol);
+                    }
+                    let kind = match worker::NodeStopKind::try_from(command.kind) {
+                        Ok(worker::NodeStopKind::Drain) => StopKind::Drain,
+                        Ok(worker::NodeStopKind::Quarantine) => StopKind::Quarantine,
+                        _ => return Err(ControlError::Protocol),
+                    };
+                    let intent = NodeStopIntent {
+                        command_id: command.command_id.clone(),
+                        action_id: command.action_id.clone(),
+                        node_id: command.node_id.clone(),
+                        policy_generation: command.policy_generation.to_string(),
+                        kind,
+                    };
+                    let store = journal.as_deref_mut().ok_or(ControlError::Unsupported)?;
+                    let receipt = store
+                        .receive(&self.identity, &intent, &command.payload_digest)
+                        .map_err(|_| ControlError::Unavailable)?;
+                    if Instant::now() >= deadline {
+                        return Err(ControlError::Stale);
+                    }
+                    self.sender
+                        .send(worker::WorkerFrame {
+                            body: Some(worker_frame::Body::NodeReceipt(worker::NodeReceipt {
+                                command_id: command.command_id.clone(),
+                                node_id: self.identity.node_id.clone(),
+                                policy_generation: command.policy_generation,
+                                payload_digest: command.payload_digest.clone(),
+                                receipt_id: receipt.receipt_id.clone(),
+                                session_id: self.identity.session_id.clone(),
+                                connection_epoch: self.identity.connection_epoch,
+                            })),
+                        })
+                        .await
+                        .map_err(|_| ControlError::Unavailable)?;
+                    received.push(receipt);
+                    continue;
+                }
+                let Some(server_frame::Body::Heartbeat(ack)) = frame.body else {
+                    return Err(ControlError::Unsupported);
+                };
+                if ack.node_id != self.identity.node_id
+                    || ack.session_id != self.identity.session_id
+                    || ack.connection_epoch != self.identity.connection_epoch
+                    || ack
+                        .expires_at
+                        .is_none_or(|t| t.seconds <= 0 || !(0..1_000_000_000).contains(&t.nanos))
+                {
+                    return Err(ControlError::Protocol);
+                }
+                return Ok(received);
             }
-            Ok(())
         };
-        tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), operation)
+        let received = tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), operation)
             .await
             .map_err(|_| ControlError::Unavailable)??;
         self.stop_at = sent + Duration::from_secs(44);
         self.active = true;
-        Ok(())
+        Ok(received)
     }
     /// Transport close only. Caller must separately drain any future execution.
     pub fn close(self) {

@@ -1,6 +1,7 @@
 pub mod canonical;
 pub mod events;
 pub mod model;
+pub mod node_control;
 #[cfg(feature = "grpc")]
 pub mod grpc {
     pub mod worker {
