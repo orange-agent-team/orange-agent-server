@@ -591,7 +591,21 @@ async fn authorized_recovery_view_refuses_deleted_or_changed_completed_sources()
         let cancelled = j
             .cancel_agent_run("alice", "run-1")
             .expect("owner can stop without reopening deleted source");
-        assert_eq!(cancelled.phase, Phase::Cancelled);
+        // Revocation hides content; it must not rewrite a completed history.
+        assert_eq!(cancelled.phase, Phase::Completed);
         assert!(cancelled.final_text.is_none());
     }
+    let f = Fixture::new();
+    let mut j = f.open();
+    f.start(&mut j);
+    f.grant.request_revoke();
+    std::fs::remove_file(f.workspace.path().join("note.txt")).expect("deleted source");
+    drop(j);
+    let mut j = f.open();
+    assert_eq!(
+        j.cancel_agent_run("alice", "run-1")
+            .expect("stop active run without filesystem authority")
+            .phase,
+        Phase::Cancelled
+    );
 }
