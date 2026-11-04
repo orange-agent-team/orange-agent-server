@@ -1,0 +1,31 @@
+[workspace]
+members = ["crates/domain", "crates/protocol", "crates/agent-runtime", "services/control-plane"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+publish = false
+
+[workspace.dependencies]
+orange-domain = { path = "crates/domain" }
+orange-protocol = { path = "crates/protocol" }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
+axum = "=0.8.9"
+tokio = { version = "=1.54.1", features = ["full"] }
+sqlx = { version = "=0.9.0", default-features = false, features = ["runtime-tokio", "postgres", "migrate", "macros"] }
+sha2 = "=0.11.1"
+hex = "=0.4.3"
+uuid = { version = "=1.29.0", features = ["v4"] }
+tower = { version = "=0.5.3", features = ["util"] }
+rusqlite = { version = "=0.39.0", features = ["bundled"] }
+thiserror = "=2.0.21"
+tempfile = "=3.27.0"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+unwrap_used = "warn"

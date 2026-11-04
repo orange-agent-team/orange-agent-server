@@ -1,0 +1,2727 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:orange:contracts:admin:0.1.0",
+  "title": "Orange Admin API draft types",
+  "description": "Design draft. Backend enforces scope, MFA, approval, idempotency and domain invariants.",
+  "$defs": {
+    "Scope": {
+      "type": "object",
+      "properties": {
+        "environment": {
+          "type": "string",
+          "enum": [
+            "dev",
+            "staging",
+            "production"
+          ]
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "platform",
+            "region",
+            "tenant",
+            "resource"
+          ]
+        },
+        "scope_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        }
+      },
+      "required": [
+        "environment",
+        "kind",
+        "scope_id"
+      ],
+      "additionalProperties": false
+    },
+    "Money": {
+      "type": "object",
+      "properties": {
+        "currency": {
+          "type": "string",
+          "enum": [
+            "USD",
+            "JPY",
+            "CNY",
+            "HKD"
+          ]
+        },
+        "minor_units": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$",
+          "maxLength": 18
+        }
+      },
+      "required": [
+        "currency",
+        "minor_units"
+      ],
+      "additionalProperties": false
+    },
+    "Error": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string",
+          "enum": [
+            "UNAUTHENTICATED",
+            "FORBIDDEN",
+            "STEP_UP_REQUIRED",
+            "CSRF_INVALID",
+            "VALIDATION_ERROR",
+            "IDEMPOTENCY_CONFLICT",
+            "VERSION_CONFLICT",
+            "APPROVAL_REQUIRED",
+            "SELF_APPROVAL_FORBIDDEN",
+            "APPROVAL_EXPIRED",
+            "ACTION_NOT_EXECUTABLE",
+            "EVIDENCE_REQUIRED",
+            "NOT_FOUND",
+            "RATE_LIMITED",
+            "SERVICE_UNAVAILABLE"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "retry_class": {
+          "type": "string",
+          "enum": [
+            "never",
+            "read_retry",
+            "query_original",
+            "after_reauth"
+          ]
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "request_id",
+        "retry_class"
+      ],
+      "additionalProperties": false
+    },
+    "AdminSession": {
+      "type": "object",
+      "properties": {
+        "principal_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "roles": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "platform_admin",
+              "support_operator",
+              "compute_operator",
+              "finance_operator",
+              "security_operator",
+              "release_operator",
+              "auditor"
+            ]
+          },
+          "minItems": 1,
+          "maxItems": 7
+        },
+        "scopes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Scope"
+          },
+          "minItems": 1,
+          "maxItems": 100
+        },
+        "permissions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "minItems": 0,
+          "maxItems": 100
+        },
+        "mfa_verified": {
+          "type": "boolean"
+        },
+        "step_up_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "csrf_token": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "policy_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        }
+      },
+      "required": [
+        "principal_id",
+        "roles",
+        "scopes",
+        "permissions",
+        "mfa_verified",
+        "step_up_at",
+        "expires_at",
+        "csrf_token",
+        "policy_version"
+      ],
+      "additionalProperties": false
+    },
+    "ApprovalCreate": {
+      "type": "object",
+      "properties": {
+        "decision": {
+          "type": "string",
+          "enum": [
+            "approve",
+            "reject"
+          ]
+        },
+        "payload_digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "policy_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        }
+      },
+      "required": [
+        "decision",
+        "payload_digest",
+        "policy_version",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "Approval": {
+      "type": "object",
+      "properties": {
+        "approval_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "approver_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "decision": {
+          "type": "string",
+          "enum": [
+            "approve",
+            "reject"
+          ]
+        },
+        "payload_digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "policy_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "decided_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        }
+      },
+      "required": [
+        "approval_id",
+        "approver_id",
+        "decision",
+        "payload_digest",
+        "policy_version",
+        "decided_at",
+        "expires_at"
+      ],
+      "additionalProperties": false
+    },
+    "AdminActionCreate": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "scope": {
+              "$ref": "#/$defs/Scope"
+            },
+            "target_version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "ticket_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 5,
+              "maxLength": 1000
+            },
+            "action_type": {
+              "const": "run.cancel"
+            },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "run_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                }
+              },
+              "required": [
+                "run_id"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "scope",
+            "target_version",
+            "ticket_id",
+            "reason",
+            "action_type",
+            "payload"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "scope": {
+              "$ref": "#/$defs/Scope"
+            },
+            "target_version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "ticket_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 5,
+              "maxLength": 1000
+            },
+            "action_type": {
+              "const": "node.drain"
+            },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "node_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                }
+              },
+              "required": [
+                "node_id"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "scope",
+            "target_version",
+            "ticket_id",
+            "reason",
+            "action_type",
+            "payload"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "scope": {
+              "$ref": "#/$defs/Scope"
+            },
+            "target_version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "ticket_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 5,
+              "maxLength": 1000
+            },
+            "action_type": {
+              "const": "node.quarantine"
+            },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "node_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                },
+                "reason_code": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64
+                }
+              },
+              "required": [
+                "node_id",
+                "reason_code"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "scope",
+            "target_version",
+            "ticket_id",
+            "reason",
+            "action_type",
+            "payload"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "scope": {
+              "$ref": "#/$defs/Scope"
+            },
+            "target_version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "ticket_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 5,
+              "maxLength": 1000
+            },
+            "action_type": {
+              "const": "node.resume"
+            },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "node_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                },
+                "health_report_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                }
+              },
+              "required": [
+                "node_id",
+                "health_report_id"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "scope",
+            "target_version",
+            "ticket_id",
+            "reason",
+            "action_type",
+            "payload"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "scope": {
+              "$ref": "#/$defs/Scope"
+            },
+            "target_version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "ticket_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 5,
+              "maxLength": 1000
+            },
+            "action_type": {
+              "const": "model.activate"
+            },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "model_version_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                },
+                "certification_report_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                }
+              },
+              "required": [
+                "model_version_id",
+                "certification_report_id"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "scope",
+            "target_version",
+            "ticket_id",
+            "reason",
+            "action_type",
+            "payload"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "scope": {
+              "$ref": "#/$defs/Scope"
+            },
+            "target_version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "ticket_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 5,
+              "maxLength": 1000
+            },
+            "action_type": {
+              "const": "model.disable"
+            },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "model_version_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                }
+              },
+              "required": [
+                "model_version_id"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "scope",
+            "target_version",
+            "ticket_id",
+            "reason",
+            "action_type",
+            "payload"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "scope": {
+              "$ref": "#/$defs/Scope"
+            },
+            "target_version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "ticket_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 5,
+              "maxLength": 1000
+            },
+            "action_type": {
+              "const": "account.restrict"
+            },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "subject_type": {
+                  "type": "string",
+                  "enum": [
+                    "user",
+                    "organization"
+                  ]
+                },
+                "subject_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                },
+                "restriction": {
+                  "type": "string",
+                  "enum": [
+                    "new_runs",
+                    "new_spend",
+                    "new_uploads"
+                  ]
+                },
+                "expires_at": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "Z$"
+                }
+              },
+              "required": [
+                "subject_type",
+                "subject_id",
+                "restriction",
+                "expires_at"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "scope",
+            "target_version",
+            "ticket_id",
+            "reason",
+            "action_type",
+            "payload"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "scope": {
+              "$ref": "#/$defs/Scope"
+            },
+            "target_version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "ticket_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 5,
+              "maxLength": 1000
+            },
+            "action_type": {
+              "const": "credential.revoke"
+            },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "credential_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                }
+              },
+              "required": [
+                "credential_id"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "scope",
+            "target_version",
+            "ticket_id",
+            "reason",
+            "action_type",
+            "payload"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "scope": {
+              "$ref": "#/$defs/Scope"
+            },
+            "target_version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "ticket_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 5,
+              "maxLength": 1000
+            },
+            "action_type": {
+              "const": "payment.refund"
+            },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "payment_order_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                },
+                "amount": {
+                  "$ref": "#/$defs/Money"
+                },
+                "reconciliation_case_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                }
+              },
+              "required": [
+                "payment_order_id",
+                "amount",
+                "reconciliation_case_id"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "scope",
+            "target_version",
+            "ticket_id",
+            "reason",
+            "action_type",
+            "payload"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "scope": {
+              "$ref": "#/$defs/Scope"
+            },
+            "target_version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "ticket_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 5,
+              "maxLength": 1000
+            },
+            "action_type": {
+              "const": "ledger.reverse"
+            },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "ledger_transaction_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                },
+                "reconciliation_case_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                }
+              },
+              "required": [
+                "ledger_transaction_id",
+                "reconciliation_case_id"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "scope",
+            "target_version",
+            "ticket_id",
+            "reason",
+            "action_type",
+            "payload"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "scope": {
+              "$ref": "#/$defs/Scope"
+            },
+            "target_version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "ticket_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 5,
+              "maxLength": 1000
+            },
+            "action_type": {
+              "const": "pricing.publish"
+            },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "price_version_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                },
+                "effective_at": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "Z$"
+                },
+                "review_report_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                }
+              },
+              "required": [
+                "price_version_id",
+                "effective_at",
+                "review_report_id"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "scope",
+            "target_version",
+            "ticket_id",
+            "reason",
+            "action_type",
+            "payload"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "scope": {
+              "$ref": "#/$defs/Scope"
+            },
+            "target_version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "ticket_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 5,
+              "maxLength": 1000
+            },
+            "action_type": {
+              "const": "release.rollout"
+            },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "release_manifest_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                },
+                "channel": {
+                  "type": "string",
+                  "enum": [
+                    "canary",
+                    "stable"
+                  ]
+                },
+                "percentage": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 100
+                },
+                "evidence_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                }
+              },
+              "required": [
+                "release_manifest_id",
+                "channel",
+                "percentage",
+                "evidence_id"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "scope",
+            "target_version",
+            "ticket_id",
+            "reason",
+            "action_type",
+            "payload"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "scope": {
+              "$ref": "#/$defs/Scope"
+            },
+            "target_version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "ticket_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 5,
+              "maxLength": 1000
+            },
+            "action_type": {
+              "const": "release.revoke"
+            },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "release_manifest_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                }
+              },
+              "required": [
+                "release_manifest_id"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "scope",
+            "target_version",
+            "ticket_id",
+            "reason",
+            "action_type",
+            "payload"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "scope": {
+              "$ref": "#/$defs/Scope"
+            },
+            "target_version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "ticket_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 5,
+              "maxLength": 1000
+            },
+            "action_type": {
+              "const": "feature.disable"
+            },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "feature_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                }
+              },
+              "required": [
+                "feature_id"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "scope",
+            "target_version",
+            "ticket_id",
+            "reason",
+            "action_type",
+            "payload"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "scope": {
+              "$ref": "#/$defs/Scope"
+            },
+            "target_version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "ticket_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 5,
+              "maxLength": 1000
+            },
+            "action_type": {
+              "const": "feature.enable"
+            },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "feature_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                },
+                "evidence_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                }
+              },
+              "required": [
+                "feature_id",
+                "evidence_id"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "scope",
+            "target_version",
+            "ticket_id",
+            "reason",
+            "action_type",
+            "payload"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "scope": {
+              "$ref": "#/$defs/Scope"
+            },
+            "target_version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "ticket_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 5,
+              "maxLength": 1000
+            },
+            "action_type": {
+              "const": "admin.role_grant"
+            },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "principal_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                },
+                "role": {
+                  "type": "string",
+                  "enum": [
+                    "platform_admin",
+                    "support_operator",
+                    "compute_operator",
+                    "finance_operator",
+                    "security_operator",
+                    "release_operator",
+                    "auditor"
+                  ]
+                },
+                "expires_at": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "Z$"
+                }
+              },
+              "required": [
+                "principal_id",
+                "role",
+                "expires_at"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "scope",
+            "target_version",
+            "ticket_id",
+            "reason",
+            "action_type",
+            "payload"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "scope": {
+              "$ref": "#/$defs/Scope"
+            },
+            "target_version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "ticket_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 5,
+              "maxLength": 1000
+            },
+            "action_type": {
+              "const": "support_access.grant"
+            },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "subject_user_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                },
+                "user_authorization_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                },
+                "resource_ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                  },
+                  "minItems": 1,
+                  "maxItems": 20
+                },
+                "content_fields": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "input_text",
+                      "file_content",
+                      "tool_output",
+                      "memory"
+                    ]
+                  },
+                  "minItems": 1,
+                  "maxItems": 4
+                },
+                "expires_at": {
+                  "type": "string",
+                  "format": "date-time",
+                  "pattern": "Z$"
+                }
+              },
+              "required": [
+                "subject_user_id",
+                "user_authorization_id",
+                "resource_ids",
+                "content_fields",
+                "expires_at"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "scope",
+            "target_version",
+            "ticket_id",
+            "reason",
+            "action_type",
+            "payload"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "AdminAction": {
+      "type": "object",
+      "properties": {
+        "action_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "requested_by": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "request": {
+          "$ref": "#/$defs/AdminActionCreate"
+        },
+        "payload_digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "policy_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "approval_policy": {
+          "type": "string",
+          "enum": [
+            "single_operator",
+            "maker_checker"
+          ]
+        },
+        "required_approvals": {
+          "type": "integer",
+          "enum": [
+            0,
+            1
+          ]
+        },
+        "approvals": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Approval"
+          },
+          "minItems": 0,
+          "maxItems": 20
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "pending_approval",
+            "ready",
+            "executing",
+            "succeeded",
+            "failed",
+            "unknown",
+            "rejected",
+            "cancelled",
+            "expired"
+          ]
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "business_ref": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "reconciliation_case_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        }
+      },
+      "required": [
+        "action_id",
+        "requested_by",
+        "request",
+        "payload_digest",
+        "policy_version",
+        "approval_policy",
+        "required_approvals",
+        "approvals",
+        "state",
+        "version",
+        "created_at",
+        "expires_at"
+      ],
+      "additionalProperties": false
+    },
+    "ExecuteRequest": {
+      "type": "object",
+      "properties": {
+        "payload_digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "policy_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        }
+      },
+      "required": [
+        "payload_digest",
+        "policy_version"
+      ],
+      "additionalProperties": false
+    },
+    "CancelRequest": {
+      "type": "object",
+      "properties": {
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "User": {
+      "type": "object",
+      "properties": {
+        "user_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "active",
+            "restricted",
+            "closing",
+            "closed"
+          ]
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        }
+      },
+      "required": [
+        "user_id",
+        "status",
+        "created_at",
+        "version"
+      ],
+      "additionalProperties": false
+    },
+    "UserList": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/User"
+          },
+          "minItems": 0,
+          "maxItems": 200
+        },
+        "next_cursor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "Organization": {
+      "type": "object",
+      "properties": {
+        "organization_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "active",
+            "restricted",
+            "closing",
+            "closed"
+          ]
+        },
+        "member_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        }
+      },
+      "required": [
+        "organization_id",
+        "status",
+        "member_count",
+        "version"
+      ],
+      "additionalProperties": false
+    },
+    "OrganizationList": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Organization"
+          },
+          "minItems": 0,
+          "maxItems": 200
+        },
+        "next_cursor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "Run": {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "owner_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "queued",
+            "running",
+            "paused",
+            "waiting_approval",
+            "completed",
+            "failed",
+            "cancelled",
+            "recovery_required"
+          ]
+        },
+        "execution_kind": {
+          "type": "string",
+          "enum": [
+            "desktop",
+            "cloud"
+          ]
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        }
+      },
+      "required": [
+        "run_id",
+        "owner_id",
+        "status",
+        "execution_kind",
+        "created_at",
+        "version"
+      ],
+      "additionalProperties": false
+    },
+    "RunList": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Run"
+          },
+          "minItems": 0,
+          "maxItems": 200
+        },
+        "next_cursor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "Workspace": {
+      "type": "object",
+      "properties": {
+        "workspace_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "owner_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "run_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "requested",
+            "preparing",
+            "ready",
+            "running",
+            "draining",
+            "deleted",
+            "quarantined"
+          ]
+        },
+        "resource_profile_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        }
+      },
+      "required": [
+        "workspace_id",
+        "owner_id",
+        "run_id",
+        "status",
+        "resource_profile_id",
+        "expires_at",
+        "version"
+      ],
+      "additionalProperties": false
+    },
+    "WorkspaceList": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Workspace"
+          },
+          "minItems": 0,
+          "maxItems": 200
+        },
+        "next_cursor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "Node": {
+      "type": "object",
+      "properties": {
+        "node_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "region_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "online",
+            "draining",
+            "offline",
+            "quarantined",
+            "revoked"
+          ]
+        },
+        "health_report_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        }
+      },
+      "required": [
+        "node_id",
+        "region_id",
+        "status",
+        "version"
+      ],
+      "additionalProperties": false
+    },
+    "NodeList": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Node"
+          },
+          "minItems": 0,
+          "maxItems": 200
+        },
+        "next_cursor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "ModelVersion": {
+      "type": "object",
+      "properties": {
+        "model_version_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "draft",
+            "active",
+            "disabled"
+          ]
+        },
+        "modality": {
+          "type": "string",
+          "enum": [
+            "text",
+            "embedding",
+            "image",
+            "transcription"
+          ]
+        },
+        "certification_report_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        }
+      },
+      "required": [
+        "model_version_id",
+        "status",
+        "modality",
+        "version"
+      ],
+      "additionalProperties": false
+    },
+    "ModelVersionList": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ModelVersion"
+          },
+          "minItems": 0,
+          "maxItems": 200
+        },
+        "next_cursor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "Payment": {
+      "type": "object",
+      "properties": {
+        "payment_order_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "owner_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "merchant_ref": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "created",
+            "submitted",
+            "pending",
+            "unknown",
+            "confirmed",
+            "failed",
+            "cancelled"
+          ]
+        },
+        "amount": {
+          "$ref": "#/$defs/Money"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        }
+      },
+      "required": [
+        "payment_order_id",
+        "owner_id",
+        "merchant_ref",
+        "status",
+        "amount",
+        "version"
+      ],
+      "additionalProperties": false
+    },
+    "PaymentList": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Payment"
+          },
+          "minItems": 0,
+          "maxItems": 200
+        },
+        "next_cursor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "LedgerTransaction": {
+      "type": "object",
+      "properties": {
+        "transaction_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "business_key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "owner_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "amount_microcredits": {
+          "type": "string",
+          "pattern": "^-?(0|[1-9][0-9]*)$",
+          "maxLength": 19
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "reversal_of": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        }
+      },
+      "required": [
+        "transaction_id",
+        "business_key",
+        "owner_id",
+        "amount_microcredits",
+        "created_at",
+        "version"
+      ],
+      "additionalProperties": false
+    },
+    "LedgerTransactionList": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LedgerTransaction"
+          },
+          "minItems": 0,
+          "maxItems": 200
+        },
+        "next_cursor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "ReconciliationCase": {
+      "type": "object",
+      "properties": {
+        "case_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "owner_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "open",
+            "investigating",
+            "waiting_external",
+            "resolved"
+          ]
+        },
+        "business_ref": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "next_check_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        }
+      },
+      "required": [
+        "case_id",
+        "owner_id",
+        "state",
+        "business_ref",
+        "next_check_at",
+        "version"
+      ],
+      "additionalProperties": false
+    },
+    "ReconciliationCaseList": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ReconciliationCase"
+          },
+          "minItems": 0,
+          "maxItems": 200
+        },
+        "next_cursor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "RiskCase": {
+      "type": "object",
+      "properties": {
+        "case_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "subject_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "open",
+            "investigating",
+            "restricted",
+            "resolved"
+          ]
+        },
+        "reason_code": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        }
+      },
+      "required": [
+        "case_id",
+        "subject_id",
+        "state",
+        "reason_code",
+        "version"
+      ],
+      "additionalProperties": false
+    },
+    "RiskCaseList": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RiskCase"
+          },
+          "minItems": 0,
+          "maxItems": 200
+        },
+        "next_cursor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "Release": {
+      "type": "object",
+      "properties": {
+        "release_manifest_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "artifact_digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "candidate",
+            "canary",
+            "stable",
+            "revoked"
+          ]
+        },
+        "signature_ref": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        }
+      },
+      "required": [
+        "release_manifest_id",
+        "artifact_digest",
+        "status",
+        "signature_ref",
+        "version"
+      ],
+      "additionalProperties": false
+    },
+    "ReleaseList": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Release"
+          },
+          "minItems": 0,
+          "maxItems": 200
+        },
+        "next_cursor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "FeatureFlag": {
+      "type": "object",
+      "properties": {
+        "feature_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "policy_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        }
+      },
+      "required": [
+        "feature_id",
+        "scope",
+        "enabled",
+        "policy_version",
+        "version"
+      ],
+      "additionalProperties": false
+    },
+    "FeatureFlagList": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FeatureFlag"
+          },
+          "minItems": 0,
+          "maxItems": 200
+        },
+        "next_cursor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "AuditEvent": {
+      "type": "object",
+      "properties": {
+        "event_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "actor_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "action_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "event_type": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "result": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        }
+      },
+      "required": [
+        "event_id",
+        "actor_id",
+        "scope",
+        "event_type",
+        "result",
+        "occurred_at",
+        "request_id",
+        "version"
+      ],
+      "additionalProperties": false
+    },
+    "AuditEventList": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AuditEvent"
+          },
+          "minItems": 0,
+          "maxItems": 200
+        },
+        "next_cursor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "AdminActionList": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AdminAction"
+          },
+          "minItems": 0,
+          "maxItems": 200
+        },
+        "next_cursor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "Overview": {
+      "type": "object",
+      "properties": {
+        "as_of": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "queued_jobs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "running_jobs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unknown_actions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "open_reconciliation_cases": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "quarantined_nodes": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "as_of",
+        "scope",
+        "queued_jobs",
+        "running_jobs",
+        "unknown_actions",
+        "open_reconciliation_cases",
+        "quarantined_nodes"
+      ],
+      "additionalProperties": false
+    },
+    "SupportGrant": {
+      "type": "object",
+      "properties": {
+        "grant_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "subject_user_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "resource_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+          },
+          "minItems": 1,
+          "maxItems": 20
+        },
+        "content_fields": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "input_text",
+              "file_content",
+              "tool_output",
+              "memory"
+            ]
+          },
+          "minItems": 1,
+          "maxItems": 4
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "active",
+            "revoked",
+            "expired"
+          ]
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        }
+      },
+      "required": [
+        "grant_id",
+        "subject_user_id",
+        "resource_ids",
+        "content_fields",
+        "expires_at",
+        "status",
+        "version"
+      ],
+      "additionalProperties": false
+    },
+    "SupportGrantList": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SupportGrant"
+          },
+          "minItems": 0,
+          "maxItems": 200
+        },
+        "next_cursor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "SupportRead": {
+      "type": "object",
+      "properties": {
+        "grant_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "resource_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "content_field": {
+          "type": "string",
+          "enum": [
+            "input_text",
+            "file_content",
+            "tool_output",
+            "memory"
+          ]
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "limit_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65536
+        }
+      },
+      "required": [
+        "grant_id",
+        "resource_id",
+        "content_field",
+        "offset",
+        "limit_bytes"
+      ],
+      "additionalProperties": false
+    },
+    "SupportContent": {
+      "type": "object",
+      "properties": {
+        "grant_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "resource_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "content_field": {
+          "type": "string",
+          "enum": [
+            "input_text",
+            "file_content",
+            "tool_output",
+            "memory"
+          ]
+        },
+        "content": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 65536
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "audit_event_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        }
+      },
+      "required": [
+        "grant_id",
+        "resource_id",
+        "content_field",
+        "content",
+        "truncated",
+        "audit_event_id"
+      ],
+      "additionalProperties": false
+    },
+    "Refund": {
+      "type": "object",
+      "properties": {
+        "refund_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "payment_order_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "amount": {
+          "$ref": "#/$defs/Money"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "created",
+            "submitted",
+            "pending",
+            "unknown",
+            "confirmed",
+            "failed",
+            "cancelled"
+          ]
+        },
+        "provider_ref": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        }
+      },
+      "required": [
+        "refund_id",
+        "payment_order_id",
+        "amount",
+        "status",
+        "version"
+      ],
+      "additionalProperties": false
+    },
+    "RefundList": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Refund"
+          },
+          "maxItems": 200
+        },
+        "next_cursor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$ref": "#/$defs/AdminActionCreate"
+}

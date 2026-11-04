@@ -1,0 +1,14 @@
+{
+  "scope": {
+    "environment": "staging",
+    "kind": "resource",
+    "scope_id": "node_demo_01"
+  },
+  "target_version": "v1",
+  "ticket_id": "ticket_demo_01",
+  "reason": "Drain test node for maintenance",
+  "action_type": "node.drain",
+  "payload": {
+    "node_id": "node_demo_01"
+  }
+}
