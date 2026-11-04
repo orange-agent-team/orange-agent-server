@@ -141,6 +141,7 @@ fn run_fixture_parent(args: &[String]) -> Result<(), Box<dyn std::error::Error>>
     }
     let model = std::fs::read(&args[2])?;
     let profile = CpuProfile {
+        socket_directory: None,
         executable: args[1].clone().into(),
         executable_sha256: hex::encode(Sha256::digest(std::fs::read(&args[1])?)),
         model: args[2].clone().into(),

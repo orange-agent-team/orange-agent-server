@@ -16,6 +16,8 @@ mod unix {
     struct Config {
         protocol: u32,
         runtime_directory: PathBuf,
+        #[serde(default)]
+        socket_directory: Option<PathBuf>,
         executable: PathBuf,
         executable_sha256: String,
         model: PathBuf,
@@ -149,6 +151,7 @@ mod unix {
         let launched = ManagedCpuModel::launch_from_host(
             &config.runtime_directory,
             CpuProfile {
+                socket_directory: config.socket_directory,
                 executable: config.executable,
                 executable_sha256: config.executable_sha256,
                 model: config.model,

@@ -39,6 +39,9 @@ pub enum ProcessError {
 }
 /// Constructed by the trusted installer/profile registry, never model arguments.
 pub struct CpuProfile {
+    /// Trusted private IPC directory, optionally shorter than durable state.
+    /// Contains only the socket and a non-secret binding to this state root.
+    pub socket_directory: Option<PathBuf>,
     pub executable: PathBuf,
     pub executable_sha256: String,
     pub model: PathBuf,
@@ -63,6 +66,7 @@ pub struct ProcessRecord {
 pub struct ManagedCpuModel {
     child: Child,
     root: PathBuf,
+    socket: PrivateEndpoint,
     record: ProcessRecord,
     lease: Option<Arc<File>>,
     client: Option<LlamaClient>,
@@ -112,10 +116,7 @@ impl ManagedCpuModel {
             return Err(ProcessError::Invalid);
         }
         let root = root.canonicalize()?;
-        let socket = root.join("engine.sock");
-        if socket.as_os_str().as_bytes().len() > 100 {
-            return Err(ProcessError::Invalid);
-        }
+        let socket = PrivateEndpoint::open(&root, profile.socket_directory.as_deref())?;
         let lease = Arc::new(private_file(&root.join("engine.lease"), false)?);
         lease.try_lock().map_err(|_| ProcessError::Busy)?;
         let prior = root.join("process.json");
@@ -160,7 +161,7 @@ impl ManagedCpuModel {
         if *cancellation.borrow() || cancellation.has_changed().is_err() {
             return Err(ProcessError::Cancelled);
         }
-        if fs::symlink_metadata(&socket).is_ok() {
+        if fs::symlink_metadata(&socket.path).is_ok() {
             // A confirmed shutdown removes the socket before its stopped receipt.
             // Any remaining endpoint is unresolved; never unlink a live listener.
             return Err(ProcessError::RecoveryRequired);
@@ -184,7 +185,7 @@ impl ManagedCpuModel {
             .args(["--model"])
             .arg(&profile.model)
             .args(["--host"])
-            .arg(&socket)
+            .arg(&socket.path)
             .args(["--api-key-file"])
             .arg(&key_path)
             .args([
@@ -229,6 +230,7 @@ impl ManagedCpuModel {
         let mut managed = Self {
             child,
             root,
+            socket,
             record,
             lease: Some(lease),
             client: None,
@@ -243,8 +245,9 @@ impl ManagedCpuModel {
                 if managed.child.try_wait()?.is_some() {
                     return Err(ProcessError::Startup);
                 }
+                managed.socket.observe()?;
                 if let Ok(client) = LlamaClient::private_socket(
-                    &socket,
+                    &managed.socket.path,
                     key.clone(),
                     profile.model_version.clone(),
                     profile.context_tokens,
@@ -316,20 +319,109 @@ impl ManagedCpuModel {
         self.finish(status)
     }
     fn finish(&mut self, status: ExitStatus) -> Result<(), ProcessError> {
-        let socket = self.root.join("engine.sock");
-        if let Ok(meta) = fs::symlink_metadata(&socket) {
-            if meta.file_type().is_socket() {
-                fs::remove_file(socket)?;
-            } else {
-                return Err(ProcessError::Invalid);
-            }
-        }
+        self.socket.remove_owned()?;
         fs::remove_file(self.root.join("api.key"))?;
         self.record.phase = "stopped".into();
         self.record.exit_code = status.code();
         save_record(&self.root, &self.record)?;
         self.stopped = true;
         self.lease.take();
+        Ok(())
+    }
+}
+struct PrivateEndpoint {
+    path: PathBuf,
+    parent_identity: (u64, u64),
+    identity: Option<(u64, u64)>,
+}
+impl PrivateEndpoint {
+    fn open(root: &Path, selected: Option<&Path>) -> Result<Self, ProcessError> {
+        let directory = selected.unwrap_or(root);
+        let metadata = fs::symlink_metadata(directory)?;
+        if !directory.is_absolute() || !metadata.is_dir() || metadata.mode() & 0o077 != 0 {
+            return Err(ProcessError::Invalid);
+        }
+        let directory = directory.canonicalize()?;
+        let path = directory.join("engine.sock");
+        if path.as_os_str().as_bytes().len() > 100 {
+            return Err(ProcessError::Invalid);
+        }
+        if directory != root {
+            // Different durable roots must never race to bind or unlink the
+            // same short endpoint. This immutable binding also survives helper
+            // death before the backend has created its socket. The backend keeps
+            // the durable root's execution lease through inherited stdin.
+            let state = fs::metadata(root)?;
+            let mut digest = Sha256::new();
+            digest.update(b"orange-private-endpoint-v1\0");
+            digest.update(root.as_os_str().as_bytes());
+            digest.update(state.dev().to_be_bytes());
+            digest.update(state.ino().to_be_bytes());
+            let binding = hex::encode(digest.finalize());
+            let file = directory.join("state-binding");
+            match OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+                .open(&file)
+            {
+                Ok(mut opened) => {
+                    opened.write_all(binding.as_bytes())?;
+                    opened.sync_all()?;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    if private_read(&file, 64)? != binding.as_bytes() {
+                        return Err(ProcessError::RecoveryRequired);
+                    }
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Ok(Self {
+            path,
+            parent_identity: (metadata.dev(), metadata.ino()),
+            identity: None,
+        })
+    }
+    fn check_parent(&self) -> Result<(), ProcessError> {
+        let parent = self.path.parent().ok_or(ProcessError::Invalid)?;
+        let metadata = fs::symlink_metadata(parent)?;
+        if !metadata.is_dir()
+            || metadata.mode() & 0o077 != 0
+            || (metadata.dev(), metadata.ino()) != self.parent_identity
+        {
+            return Err(ProcessError::CleanupUnknown);
+        }
+        Ok(())
+    }
+    fn observe(&mut self) -> Result<(), ProcessError> {
+        self.check_parent()?;
+        match fs::symlink_metadata(&self.path) {
+            Ok(metadata) => {
+                if !metadata.file_type().is_socket() {
+                    return Err(ProcessError::CleanupUnknown);
+                }
+                let identity = (metadata.dev(), metadata.ino());
+                if self.identity.is_some_and(|previous| previous != identity) {
+                    return Err(ProcessError::CleanupUnknown);
+                }
+                self.identity = Some(identity);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        Ok(())
+    }
+    fn remove_owned(&mut self) -> Result<(), ProcessError> {
+        self.observe()?;
+        if self.identity.is_some() {
+            match fs::remove_file(&self.path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
         Ok(())
     }
 }

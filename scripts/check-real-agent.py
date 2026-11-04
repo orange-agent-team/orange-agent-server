@@ -50,12 +50,16 @@ def main():
             'model_sha256':lock['model']['sha256'],'backend_commit':lock['backend']['commit'],'phases':[],'approved_operations':0,'passed':False}
     # Short private root avoids Unix socket path limits. Never use user-selected directories.
     with tempfile.TemporaryDirectory(prefix='oa-real-',dir='/private/tmp' if os.uname().sysname=='Darwin' else None) as temporary:
-        base=Path(temporary).resolve();runtime=base/'m';state=base/'j';workspace=base/'w'
-        for folder in [runtime,state,workspace]:folder.mkdir(mode=0o700)
+        base=Path(temporary).resolve();runtime=base/('durable-model-state-'*6);ipc=base/'m';state=base/'j';workspace=base/'w'
+        for folder in [runtime,ipc,state,workspace]:folder.mkdir(mode=0o700)
+        result['separate_private_ipc']=True
+        result['durable_socket_path_bytes']=len(os.fsencode(runtime/'engine.sock'))
+        result['actual_socket_path_bytes']=len(os.fsencode(ipc/'engine.sock'))
+        if result['durable_socket_path_bytes']<=100 or result['actual_socket_path_bytes']>100:raise RuntimeError('Long-state/short-IPC regression not exercised')
         sentinel='ORANGE_EVIDENCE_'+uuid.uuid4().hex
         (workspace/'proof.txt').write_text(sentinel+'\n')
         nonce=uuid.uuid4().hex+uuid.uuid4().hex;instance=uuid.uuid4().hex
-        write(runtime/'profile.json',{'protocol':1,'runtime_directory':str(runtime),'executable':str(backend),'executable_sha256':build['executable_sha256'],
+        write(runtime/'profile.json',{'protocol':1,'runtime_directory':str(runtime),'socket_directory':str(ipc),'executable':str(backend),'executable_sha256':build['executable_sha256'],
             'model':str(model),'model_sha256':lock['model']['sha256'],'model_bytes':lock['model']['bytes'],'model_version':'qwen-agent-test-v1','context_tokens':4096,
             'startup_timeout_seconds':120,'control_nonce':nonce,'instance_id':instance})
         with (runtime/'host.log').open('w') as log:
@@ -72,7 +76,7 @@ def main():
                 if ready['record']['phase']!='ready' or ready['record']['instance_id']!=instance:raise RuntimeError('Wrong model instance')
                 config={'run':{'owner':'real-agent-fixture-owner','run_id':uuid.uuid4().hex,'policy':'read-only-fixture-v1','environment':'pending-grant-info','model_version':'qwen-agent-test-v1',
                     'max_steps':12,'max_invocations':6,'max_output_tokens':256,'deadline_unix':int(time.time())+180},'grant_id':'real-agent-fixture-grant','workspace':str(workspace),
-                    'journal':str(state/'journal.sqlite'),'private_roots':[str(runtime),str(state),str(PRIVATE)],'model_socket':str(runtime/'engine.sock'),
+                    'journal':str(state/'journal.sqlite'),'private_roots':[str(runtime),str(ipc),str(state),str(PRIVATE)],'model_socket':str(ipc/'engine.sock'),
                     'model_key_file':str(runtime/'api.key'),'context_tokens':4096,
                     'prompt':'Use read_file to read the existing workspace file proof.txt with the relative path proof.txt. Do not guess its content. After the tool result is returned, answer with the exact file text.'}
                 path=state/'agent.json';write(path,config)

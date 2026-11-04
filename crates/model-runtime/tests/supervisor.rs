@@ -35,6 +35,7 @@ impl Fixture {
     }
     fn profile(&self) -> CpuProfile {
         CpuProfile {
+            socket_directory: None,
             executable: self.binary.clone(),
             executable_sha256: hex::encode(Sha256::digest(fs::read(&self.binary).expect("binary"))),
             model: self.model.clone(),
@@ -136,6 +137,125 @@ async fn preallocated_host_identity_cannot_be_reused_after_confirmed_stop() {
     .await
     .expect("fresh identity");
     next.shutdown().await.expect("stop");
+}
+#[tokio::test]
+async fn long_durable_root_uses_short_private_ipc_without_moving_secrets() {
+    let mut f = Fixture::new(b"GGUF-ready");
+    let ipc = f.root.join("s");
+    fs::create_dir(&ipc).expect("IPC directory");
+    fs::set_permissions(&ipc, fs::Permissions::from_mode(0o700)).expect("private IPC");
+    let long = f
+        .root
+        .join("durable-application-support-directory-".repeat(3));
+    fs::create_dir(&long).expect("long durable directory");
+    fs::set_permissions(&long, fs::Permissions::from_mode(0o700)).expect("private state");
+    f.root = long;
+    assert!(matches!(
+        ManagedCpuModel::launch(&f.root, f.profile()).await,
+        Err(ProcessError::Invalid)
+    ));
+    let mut profile = f.profile();
+    profile.socket_directory = Some(ipc.clone());
+    let mut managed = ManagedCpuModel::launch(&f.root, profile)
+        .await
+        .expect("short private endpoint");
+    assert_eq!(f.record().phase, "ready");
+    assert!(f.root.join("api.key").is_file());
+    assert!(ipc.join("engine.sock").exists());
+    assert!(!ipc.join("api.key").exists());
+    assert!(!ipc.join("process.json").exists());
+    managed
+        .client()
+        .expect("healthy fixture")
+        .health()
+        .await
+        .expect("actual socket");
+    managed.shutdown().await.expect("confirmed shutdown");
+    assert!(!ipc.join("engine.sock").exists());
+    assert!(!f.root.join("api.key").exists());
+    let mut profile = f.profile();
+    profile.socket_directory = Some(ipc);
+    let mut restarted = ManagedCpuModel::launch(&f.root, profile)
+        .await
+        .expect("binding permits same state root");
+    restarted.shutdown().await.expect("stop restarted fixture");
+}
+
+#[tokio::test]
+async fn short_ipc_is_bound_to_one_durable_root_and_rejects_public_or_linked_paths() {
+    use std::os::unix::fs::symlink;
+    let f = Fixture::new(b"GGUF-ready");
+    let ipc = f.root.join("s");
+    fs::create_dir(&ipc).expect("IPC");
+    fs::set_permissions(&ipc, fs::Permissions::from_mode(0o755)).expect("public IPC fixture");
+    let mut profile = f.profile();
+    profile.socket_directory = Some(ipc.clone());
+    assert!(matches!(
+        ManagedCpuModel::launch(&f.root, profile).await,
+        Err(ProcessError::Invalid)
+    ));
+    assert!(!f.root.join("process.json").exists());
+    fs::set_permissions(&ipc, fs::Permissions::from_mode(0o700)).expect("private IPC");
+    let alias = f.root.join("linked-ipc");
+    symlink(&ipc, &alias).expect("link");
+    let mut profile = f.profile();
+    profile.socket_directory = Some(alias);
+    assert!(matches!(
+        ManagedCpuModel::launch(&f.root, profile).await,
+        Err(ProcessError::Invalid)
+    ));
+    let mut profile = f.profile();
+    profile.socket_directory = Some(ipc.clone());
+    let mut managed = ManagedCpuModel::launch(&f.root, profile)
+        .await
+        .expect("original owner");
+    let binding = fs::read(ipc.join("state-binding")).expect("binding");
+    let other = f.root.join("other-state");
+    fs::create_dir(&other).expect("other state");
+    fs::set_permissions(&other, fs::Permissions::from_mode(0o700)).expect("private other state");
+    for stopped in [false, true] {
+        if stopped {
+            managed.shutdown().await.expect("stop original");
+        }
+        let mut profile = f.profile();
+        profile.socket_directory = Some(ipc.clone());
+        assert!(matches!(
+            ManagedCpuModel::launch(&other, profile).await,
+            Err(ProcessError::RecoveryRequired)
+        ));
+        assert_eq!(
+            fs::read(ipc.join("state-binding")).expect("unchanged binding"),
+            binding
+        );
+        assert!(!other.join("process.json").exists());
+        assert!(!other.join("api.key").exists());
+    }
+}
+
+#[tokio::test]
+async fn replaced_socket_is_not_unlinked_or_reported_as_confirmed_cleanup() {
+    use std::os::unix::{fs::MetadataExt, net::UnixListener};
+    let f = Fixture::new(b"GGUF-ready");
+    let mut managed = ManagedCpuModel::launch(&f.root, f.profile())
+        .await
+        .expect("owned backend");
+    let socket = f.root.join("engine.sock");
+    // Keep original inode allocated by the live listener while replacing path.
+    fs::rename(&socket, f.root.join("old.sock")).expect("move owned socket");
+    let unrelated = UnixListener::bind(&socket).expect("unrelated listener fixture");
+    let inode = fs::metadata(&socket).expect("replacement metadata").ino();
+    assert!(matches!(
+        managed.shutdown().await,
+        Err(ProcessError::CleanupUnknown)
+    ));
+    assert_eq!(
+        fs::metadata(&socket)
+            .expect("unrelated endpoint preserved")
+            .ino(),
+        inode
+    );
+    assert_ne!(f.record().phase, "stopped");
+    drop(unrelated);
 }
 #[tokio::test]
 async fn corruption_and_nonprivate_paths_never_start_a_process() {
