@@ -1,23 +1,8 @@
 use super::*;
-use openidconnect::{
-    AccessTokenHash, AsyncHttpClient, AuthenticationContextClass, AuthorizationCode, ClientId,
-    ClientSecret, CsrfToken, EndpointMaybeSet, EndpointNotSet, EndpointSet, IssuerUrl, Nonce,
-    OAuth2TokenResponse, PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, TokenResponse,
-    core::{CoreAuthenticationFlow, CoreClient, CoreProviderMetadata},
-    reqwest,
-    url::Url,
-};
+use crate::auth::oidc::{OidcProvider, ProviderConfig};
 use sqlx::{PgPool, Row};
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
-type ConfiguredClient = CoreClient<
-    EndpointSet,
-    EndpointNotSet,
-    EndpointNotSet,
-    EndpointNotSet,
-    EndpointMaybeSet,
-    EndpointMaybeSet,
->;
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OidcConfig {
@@ -32,81 +17,53 @@ pub struct OidcConfig {
 pub struct AdminIdentity {
     pub pool: PgPool,
     pub config: Arc<OidcConfig>,
-    client: ConfiguredClient,
-    http: reqwest::Client,
-    issuer_origin: String,
+    provider: OidcProvider,
 }
 pub struct LoginStart {
     pub authorization_url: String,
     pub browser_secret: String,
 }
 
-fn checked_url(value: &str, development: bool) -> Result<Url, AdminError> {
-    let url = Url::parse(value).map_err(|_| AdminError::Invalid)?;
-    let local = matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
-    if !url.username().is_empty()
-        || url.password().is_some()
-        || url.fragment().is_some()
-        || url.query().is_some()
-        || !(url.scheme() == "https" || (development && local && url.scheme() == "http"))
-    {
-        return Err(AdminError::Invalid);
-    }
-    Ok(url)
-}
-async fn send(
-    http: reqwest::Client,
-    origin: String,
-    request: openidconnect::HttpRequest,
-) -> Result<openidconnect::HttpResponse, AdminError> {
-    let url = Url::parse(&request.uri().to_string()).map_err(|_| AdminError::Invalid)?;
-    if url.origin().ascii_serialization() != origin {
-        return Err(AdminError::Forbidden);
-    }
-    let mut response = http
-        .execute(request.try_into().map_err(|_| AdminError::Invalid)?)
-        .await
-        .map_err(|_| AdminError::Unavailable)?;
-    const LIMIT: usize = 1024 * 1024;
-    if response.content_length().is_some_and(|n| n > LIMIT as u64) {
-        return Err(AdminError::Unavailable);
-    }
-    let mut result = axum::http::Response::builder().status(response.status());
-    for (name, value) in response.headers() {
-        result = result.header(name, value);
-    }
-    let mut body = Vec::new();
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|_| AdminError::Unavailable)?
-    {
-        if chunk.len() > LIMIT - body.len() {
-            return Err(AdminError::Unavailable);
-        }
-        body.extend_from_slice(&chunk);
-    }
-    result.body(body).map_err(|_| AdminError::Unavailable)
-}
-struct ScopedHttp {
-    client: reqwest::Client,
-    origin: String,
-}
-impl<'c> AsyncHttpClient<'c> for ScopedHttp {
-    type Error = AdminError;
-    type Future = std::pin::Pin<
-        Box<
-            dyn std::future::Future<Output = Result<openidconnect::HttpResponse, AdminError>>
-                + Send
-                + Sync
-                + 'c,
-        >,
-    >;
-    fn call(&'c self, request: openidconnect::HttpRequest) -> Self::Future {
-        Box::pin(send(self.client.clone(), self.origin.clone(), request))
-    }
-}
 impl AdminIdentity {
+    pub async fn revocation_context(
+        &self,
+        headers: &HeaderMap,
+    ) -> Result<orange_protocol::user::SessionRevocationContext, AdminError> {
+        let hash = hash_secret(&cookie(headers, SESSION_COOKIE)?);
+        let csrf: Option<String> = sqlx::query_scalar(
+            "SELECT csrf_token FROM admin_sessions WHERE token_hash=$1 AND NOT revoked",
+        )
+        .bind(hash)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(orange_protocol::user::SessionRevocationContext {
+            csrf_token: csrf.ok_or(AdminError::Unauthenticated)?,
+        })
+    }
+    pub async fn revoke_self(&self, headers: &HeaderMap) -> Result<(), AdminError> {
+        let hash = hash_secret(&cookie(headers, SESSION_COOKIE)?);
+        let mut tx = self.pool.begin().await?;
+        let row = sqlx::query("SELECT * FROM admin_sessions WHERE token_hash=$1 FOR UPDATE")
+            .bind(&hash)
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or(AdminError::Unauthenticated)?;
+        crate::auth::check_write(
+            headers,
+            &self.config.admin_origin,
+            &row.try_get::<String, _>("csrf_token")?,
+        )?;
+        if !row.try_get::<bool, _>("revoked")? {
+            sqlx::query("UPDATE admin_sessions SET revoked=TRUE WHERE token_hash=$1")
+                .bind(hash)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("INSERT INTO admin_audit(event_id,principal_id,event_type,occurred_at) VALUES($1,$2,'session.revoked',FLOOR(EXTRACT(EPOCH FROM clock_timestamp()))::bigint)")
+                .bind(uuid::Uuid::new_v4().to_string()).bind(row.try_get::<String,_>("principal_id")?).execute(&mut *tx).await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
     pub async fn discover(pool: PgPool, config: OidcConfig) -> Result<Self, AdminError> {
         if !matches!(
             config.environment.as_str(),
@@ -116,76 +73,29 @@ impl AdminIdentity {
         {
             return Err(AdminError::Invalid);
         }
-        let issuer = checked_url(&config.issuer, config.environment == "dev")?;
-        let admin = checked_url(&config.admin_origin, config.environment == "dev")?;
-        if admin.scheme() != "https"
-            || admin.path() != "/"
-            || config.admin_origin.trim_end_matches('/') != admin.origin().ascii_serialization()
-        {
-            return Err(AdminError::Invalid);
-        }
-        let http = reqwest::ClientBuilder::new()
-            .redirect(reqwest::redirect::Policy::none())
-            .timeout(Duration::from_secs(10))
-            .build()
-            .map_err(|_| AdminError::Unavailable)?;
-        let issuer_origin = issuer.origin().ascii_serialization();
-        let metadata = CoreProviderMetadata::discover_async(
-            IssuerUrl::new(config.issuer.clone()).map_err(|_| AdminError::Invalid)?,
-            &ScopedHttp {
-                client: http.clone(),
-                origin: issuer_origin.clone(),
-            },
-        )
-        .await
-        .map_err(|_| AdminError::Unavailable)?;
-        for endpoint in [
-            Some(metadata.authorization_endpoint().url()),
-            metadata.token_endpoint().map(|e| e.url()),
-        ] {
-            if !endpoint.is_some_and(|u| u.origin().ascii_serialization() == issuer_origin) {
-                return Err(AdminError::Invalid);
-            }
-        }
-        let redirect = format!(
-            "{}/admin/v1/auth/callback",
-            config.admin_origin.trim_end_matches('/')
-        );
-        let client = CoreClient::from_provider_metadata(
-            metadata,
-            ClientId::new(config.client_id.clone()),
-            Some(ClientSecret::new(config.client_secret.clone())),
-        )
-        .set_redirect_uri(RedirectUrl::new(redirect).map_err(|_| AdminError::Invalid)?);
+        let provider = OidcProvider::discover(ProviderConfig {
+            issuer: config.issuer.clone(),
+            client_id: config.client_id.clone(),
+            client_secret: config.client_secret.clone(),
+            origin: config.admin_origin.clone(),
+            callback_path: "/admin/v1/auth/callback".into(),
+            development: config.environment == "dev",
+        })
+        .await?;
         Ok(Self {
             pool,
             config: Arc::new(config),
-            client,
-            http,
-            issuer_origin,
+            provider,
         })
     }
     pub async fn start(&self, existing: Option<&CurrentSession>) -> Result<LoginStart, AdminError> {
-        let (challenge, verifier) = PkceCodeChallenge::new_random_sha256();
-        let auth = self
-            .client
-            .authorize_url(
-                CoreAuthenticationFlow::AuthorizationCode,
-                CsrfToken::new_random,
-                Nonce::new_random,
-            )
-            .set_pkce_challenge(challenge)
-            .set_max_age(Duration::ZERO)
-            .add_auth_context_value(AuthenticationContextClass::new(
-                self.config.required_acr.clone(),
-            ));
-        let (url, state, nonce) = auth.url();
+        let auth = self.provider.start(&self.config.required_acr)?;
         let browser = random_secret();
         sqlx::query("INSERT INTO admin_auth_flows(state_hash,browser_hash,nonce,pkce_verifier,expires_at,existing_session_hash,expected_principal) VALUES($1,$2,$3,$4,FLOOR(EXTRACT(EPOCH FROM clock_timestamp()))::bigint+300,$5,$6)")
-            .bind(hash_secret(state.secret())).bind(hash_secret(&browser)).bind(nonce.secret()).bind(verifier.secret())
+            .bind(hash_secret(&auth.state)).bind(hash_secret(&browser)).bind(&auth.nonce).bind(&auth.verifier)
             .bind(existing.map(|s|&s.token_hash)).bind(existing.map(|s|&s.view.principal_id)).execute(&self.pool).await?;
         Ok(LoginStart {
-            authorization_url: url.to_string(),
+            authorization_url: auth.authorization_url,
             browser_secret: browser,
         })
     }
@@ -201,42 +111,15 @@ impl AdminIdentity {
         // DELETE RETURNING is the one-time exchange barrier. Never retry an uncertain code exchange.
         let flow=sqlx::query("DELETE FROM admin_auth_flows WHERE state_hash=$1 AND browser_hash=$2 AND expires_at>FLOOR(EXTRACT(EPOCH FROM clock_timestamp()))::bigint RETURNING *")
             .bind(hash_secret(state)).bind(hash_secret(browser)).fetch_optional(&self.pool).await?.ok_or(AdminError::Unauthenticated)?;
-        let nonce = Nonce::new(flow.try_get("nonce")?);
-        let verifier = PkceCodeVerifier::new(flow.try_get("pkce_verifier")?);
-        let response = self
-            .client
-            .exchange_code(AuthorizationCode::new(code.to_owned()))
-            .map_err(|_| AdminError::Unavailable)?
-            .set_pkce_verifier(verifier)
-            .request_async(&ScopedHttp {
-                client: self.http.clone(),
-                origin: self.issuer_origin.clone(),
-            })
-            .await
-            .map_err(|_| AdminError::Unauthenticated)?;
-        let id = response.id_token().ok_or(AdminError::Unauthenticated)?;
-        let token_verifier = self.client.id_token_verifier();
-        let claims = id
-            .claims(&token_verifier, &nonce)
-            .map_err(|_| AdminError::Unauthenticated)?;
-        if let Some(expected) = claims.access_token_hash() {
-            let actual = AccessTokenHash::from_token(
-                response.access_token(),
-                id.signing_alg().map_err(|_| AdminError::Unauthenticated)?,
-                id.signing_key(&token_verifier)
-                    .map_err(|_| AdminError::Unauthenticated)?,
-            )
-            .map_err(|_| AdminError::Unauthenticated)?;
-            if &actual != expected {
-                return Err(AdminError::Unauthenticated);
-            }
-        }
-        if claims.auth_context_ref().map(|s| s.as_str()) != Some(self.config.required_acr.as_str())
-        {
+        let claims = self
+            .provider
+            .exchange(code, flow.try_get("pkce_verifier")?, flow.try_get("nonce")?)
+            .await?;
+        if claims.acr() != Some(self.config.required_acr.as_str()) {
             return Err(AdminError::StepUp);
         }
-        let auth_time = claims.auth_time().ok_or(AdminError::StepUp)?.timestamp();
-        let token_expires = claims.expiration().timestamp();
+        let auth_time = claims.auth_time().ok_or(AdminError::StepUp)?;
+        let token_expires = claims.expires_at();
         let mut tx = self.pool.begin().await?;
         let now: i64 =
             sqlx::query_scalar("SELECT FLOOR(EXTRACT(EPOCH FROM clock_timestamp()))::bigint")
@@ -246,7 +129,7 @@ impl AdminIdentity {
             return Err(AdminError::StepUp);
         }
         let principal=sqlx::query("SELECT principal_id FROM admin_principals WHERE issuer=$1 AND subject=$2 AND active FOR SHARE")
-            .bind(&self.config.issuer).bind(claims.subject().as_str()).fetch_optional(&mut *tx).await?.ok_or(AdminError::Forbidden)?;
+            .bind(&self.config.issuer).bind(claims.subject()).fetch_optional(&mut *tx).await?.ok_or(AdminError::Forbidden)?;
         let principal_id: String = principal.try_get("principal_id")?;
         let grant:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM admin_grants WHERE principal_id=$1 AND environment=$2 AND NOT revoked AND expires_at>$3)")
             .bind(&principal_id).bind(&self.config.environment).bind(now).fetch_one(&mut *tx).await?;
@@ -354,43 +237,17 @@ impl AdminIdentity {
         headers: &HeaderMap,
         session: &CurrentSession,
     ) -> Result<(), AdminError> {
-        let origin = headers
-            .get("origin")
-            .and_then(|v| v.to_str().ok())
-            .ok_or(AdminError::Csrf)?;
-        if origin != self.config.admin_origin.trim_end_matches('/') {
-            return Err(AdminError::Csrf);
-        }
-        let csrf = headers
-            .get("x-csrf-token")
-            .and_then(|v| v.to_str().ok())
-            .ok_or(AdminError::Csrf)?;
-        if hash_secret(csrf) != hash_secret(&session.view.csrf_token) {
-            return Err(AdminError::Csrf);
-        }
-        let key = headers
-            .get("idempotency-key")
-            .and_then(|v| v.to_str().ok())
-            .ok_or(AdminError::Invalid)?;
-        if !orange_protocol::valid_id(key) {
-            return Err(AdminError::Invalid);
-        }
-        Ok(())
+        crate::auth::check_write(headers, &self.config.admin_origin, &session.view.csrf_token)
+            .map_err(Into::into)
     }
     pub async fn revoke(
         &self,
         headers: &HeaderMap,
         session: &CurrentSession,
     ) -> Result<(), AdminError> {
-        self.check_write(headers, session)?;
-        let mut tx = self.pool.begin().await?;
-        sqlx::query("UPDATE admin_sessions SET revoked=TRUE WHERE token_hash=$1")
-            .bind(&session.token_hash)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query("INSERT INTO admin_audit(event_id,principal_id,event_type,occurred_at) VALUES($1,$2,'session.revoked',$3)")
-            .bind(uuid::Uuid::new_v4().to_string()).bind(&session.view.principal_id).bind(session.now).execute(&mut *tx).await?;
-        tx.commit().await?;
-        Ok(())
+        if hash_secret(&cookie(headers, SESSION_COOKIE)?) != session.token_hash {
+            return Err(AdminError::Forbidden);
+        }
+        self.revoke_self(headers).await
     }
 }

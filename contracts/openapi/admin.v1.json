@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Orange Admin API",
-    "version": "0.1.1",
+    "version": "0.1.2",
     "description": "Candidate contract. Development identity/session and scoped read-only endpoints are implemented; other operations remain design drafts. Separate admin origin, OIDC Authorization Code with PKCE, current permissions, scope, MFA and immutable action policy are required. No generic SQL/exec/set_balance APIs."
   },
   "servers": [
@@ -243,7 +243,11 @@
             }
           }
         },
-        "x-implementation-status": "development-candidate"
+        "x-implementation-status": "development-candidate",
+        "x-authentication-rules": [
+          "Matching own session cookie, configured Origin and CSRF; domain roles are not needed to reduce own access",
+          "Revocation is idempotent; no resource privileges are granted"
+        ]
       }
     },
     "/admin/v1/overview": {
@@ -5491,7 +5495,7 @@
             "required": true,
             "schema": {
               "type": "string",
-              "maxLength": 2048
+              "maxLength": 256
             }
           },
           {
@@ -5684,6 +5688,50 @@
           }
         },
         "x-implementation-status": "development-candidate"
+      }
+    },
+    "/admin/v1/session/revocation": {
+      "get": {
+        "operationId": "getAdminSessionRevocationContext",
+        "summary": "Get only own session CSRF for self-revocation after expiry or role removal",
+        "security": [
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "x-implementation-status": "development-candidate",
+        "responses": {
+          "200": {
+            "description": "Own session termination context; grants no resource permissions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionRevocationContext"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No revocable session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Identity storage unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
       }
     }
   },
@@ -8520,6 +8568,20 @@
         },
         "required": [
           "authorization_url"
+        ],
+        "additionalProperties": false
+      },
+      "SessionRevocationContext": {
+        "type": "object",
+        "properties": {
+          "csrf_token": {
+            "type": "string",
+            "minLength": 32,
+            "maxLength": 256
+          }
+        },
+        "required": [
+          "csrf_token"
         ],
         "additionalProperties": false
       }

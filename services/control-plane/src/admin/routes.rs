@@ -18,6 +18,7 @@ pub fn router(identity: AdminIdentity) -> Router {
         .route("/admin/v1/auth/callback", get(callback))
         .route("/admin/v1/auth/step-up", post(step_up))
         .route("/admin/v1/session", get(session).delete(logout))
+        .route("/admin/v1/session/revocation", get(revocation_context))
         .route("/admin/v1/overview", get(overview))
         .route("/admin/v1/actions", get(actions))
         .layer(DefaultBodyLimit::max(64 * 1024))
@@ -115,13 +116,18 @@ async fn logout(
     State(identity): State<Arc<AdminIdentity>>,
     headers: HeaderMap,
 ) -> Result<Response, AdminError> {
-    let current = identity.current(&headers).await?;
-    identity.revoke(&headers, &current).await?;
+    identity.revoke_self(&headers).await?;
     let mut response = StatusCode::NO_CONTENT.into_response();
     response
         .headers_mut()
         .append(header::SET_COOKIE, set_cookie(SESSION_COOKIE, "", 0)?);
     Ok(response)
+}
+async fn revocation_context(
+    State(identity): State<Arc<AdminIdentity>>,
+    headers: HeaderMap,
+) -> Result<Json<orange_protocol::user::SessionRevocationContext>, AdminError> {
+    Ok(Json(identity.revocation_context(&headers).await?))
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

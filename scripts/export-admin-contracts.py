@@ -21,5 +21,5 @@ for source, name in pairs:
     json.loads(data)
     shutil.copyfile(ROOT/source, target/name)
     hashes[name] = {'source': source, 'sha256': hashlib.sha256(data).hexdigest()}
-(target/'snapshot.json').write_text(json.dumps({'openapi_version': '0.1.1', 'files': hashes}, indent=2)+'\n')
+(target/'snapshot.json').write_text(json.dumps({'openapi_version': json.loads((ROOT/'contracts/openapi/admin.v1.json').read_text())['info']['version'], 'files': hashes}, indent=2)+'\n')
 print('Canonical Admin contracts exported with exact SHA-256; commit snapshot with consumer changes')

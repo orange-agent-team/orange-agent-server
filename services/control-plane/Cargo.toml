@@ -28,6 +28,10 @@ required-features = ["integration-tests"]
 name = "queue"
 required-features = ["integration-tests"]
 
+[[test]]
+name = "user_identity"
+required-features = ["integration-tests"]
+
 [dependencies]
 orange-domain.workspace = true
 orange-protocol.workspace = true

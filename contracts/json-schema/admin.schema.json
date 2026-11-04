@@ -2735,6 +2735,20 @@
         "authorization_url"
       ],
       "additionalProperties": false
+    },
+    "SessionRevocationContext": {
+      "type": "object",
+      "properties": {
+        "csrf_token": {
+          "type": "string",
+          "minLength": 32,
+          "maxLength": 256
+        }
+      },
+      "required": [
+        "csrf_token"
+      ],
+      "additionalProperties": false
     }
   },
   "$ref": "#/$defs/AdminActionCreate"

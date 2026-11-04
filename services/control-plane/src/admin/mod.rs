@@ -1,15 +1,14 @@
 pub mod identity;
 pub mod routes;
 
+pub use crate::auth::{hash_secret, random_secret};
 use axum::{
     Json,
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
-use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 pub const SESSION_COOKIE: &str = "__Host-orange-admin";
 pub const FLOW_COOKIE: &str = "__Host-orange-admin-flow";
@@ -30,6 +29,19 @@ pub enum AdminError {
     Unavailable,
     #[error("NOT_FOUND")]
     NotFound,
+}
+impl From<crate::auth::AuthError> for AdminError {
+    fn from(error: crate::auth::AuthError) -> Self {
+        use crate::auth::AuthError;
+        match error {
+            AuthError::Unauthenticated => Self::Unauthenticated,
+            AuthError::Forbidden => Self::Forbidden,
+            AuthError::Csrf => Self::Csrf,
+            AuthError::Context => Self::StepUp,
+            AuthError::Invalid => Self::Invalid,
+            AuthError::Unavailable => Self::Unavailable,
+        }
+    }
 }
 impl From<sqlx::Error> for AdminError {
     fn from(_: sqlx::Error) -> Self {
@@ -99,60 +111,18 @@ impl CurrentSession {
         }
     }
 }
-pub fn hash_secret(value: &str) -> String {
-    hex::encode(Sha256::digest(value.as_bytes()))
-}
-pub fn random_secret() -> String {
-    openidconnect::CsrfToken::new_random_len(32)
-        .secret()
-        .clone()
-}
 pub fn timestamp(seconds: i64) -> Result<String, AdminError> {
-    OffsetDateTime::from_unix_timestamp(seconds)
-        .map_err(|_| AdminError::Invalid)?
-        .format(&Rfc3339)
-        .map_err(|_| AdminError::Invalid)
+    crate::auth::timestamp(seconds).map_err(Into::into)
 }
 pub fn cookie(headers: &HeaderMap, name: &str) -> Result<String, AdminError> {
-    let mut found = None;
-    for header in headers.get_all("cookie") {
-        let text = header.to_str().map_err(|_| AdminError::Unauthenticated)?;
-        if text.len() > 8192 {
-            return Err(AdminError::Unauthenticated);
-        }
-        for item in text.split(';') {
-            if let Some((key, value)) = item.trim().split_once('=')
-                && key == name
-            {
-                if found.is_some()
-                    || value.len() < 32
-                    || value.len() > 256
-                    || !value
-                        .bytes()
-                        .all(|b| b.is_ascii_alphanumeric() || b"-_".contains(&b))
-                {
-                    return Err(AdminError::Unauthenticated);
-                }
-                found = Some(value.to_owned());
-            }
-        }
-    }
-    found.ok_or(AdminError::Unauthenticated)
+    crate::auth::cookie(headers, name).map_err(Into::into)
 }
 pub fn set_cookie(
     name: &str,
     value: &str,
     max_age: i64,
 ) -> Result<axum::http::HeaderValue, AdminError> {
-    if !value
-        .bytes()
-        .all(|b| b.is_ascii_alphanumeric() || b"-_".contains(&b))
-    {
-        return Err(AdminError::Invalid);
-    }
-    format!("{name}={value}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age={max_age}")
-        .parse()
-        .map_err(|_| AdminError::Invalid)
+    crate::auth::set_cookie(name, value, max_age).map_err(Into::into)
 }
 pub fn role_permissions() -> BTreeMap<String, BTreeSet<String>> {
     // Single source from the frozen E02 contract, not browser-supplied claims.

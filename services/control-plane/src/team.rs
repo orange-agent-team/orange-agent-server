@@ -32,8 +32,59 @@ impl TeamStore {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
+    pub(crate) async fn list_organizations_in(
+        tx: &mut Transaction<'_, Postgres>,
+        actor: &str,
+        after: &str,
+        limit: u16,
+    ) -> Result<orange_protocol::user::UserOrganizationList, TeamError> {
+        identifiers(&[actor])?;
+        if (!after.is_empty() && !valid_id(after)) || !(1..=100).contains(&limit) {
+            return Err(TeamError::Invalid);
+        }
+        user(tx, actor, false).await?;
+        let rows=sqlx::query("SELECT o.*,m.role,m.user_id AS member_user_id FROM organizations o JOIN memberships m USING(organization_id) JOIN owners w ON w.owner_id=o.organization_id WHERE m.user_id=$1 AND m.active AND w.state='active' AND o.organization_id>$2 ORDER BY o.organization_id LIMIT $3 FOR SHARE OF o,m,w")
+            .bind(actor).bind(after).bind(i64::from(limit)+1).fetch_all(&mut **tx).await?;
+        let more = rows.len() > usize::from(limit);
+        let mut data = Vec::new();
+        for row in rows.into_iter().take(usize::from(limit)) {
+            data.push(user_organization(&row)?);
+        }
+        let next_cursor = if more {
+            data.last().map(|v| v.organization_id.clone())
+        } else {
+            None
+        };
+        Ok(orange_protocol::user::UserOrganizationList {
+            user_id: actor.into(),
+            data,
+            next_cursor,
+        })
+    }
+    pub(crate) async fn organization_in(
+        tx: &mut Transaction<'_, Postgres>,
+        actor: &str,
+        organization: &str,
+    ) -> Result<orange_protocol::user::UserOrganization, TeamError> {
+        identifiers(&[actor, organization])?;
+        user(tx, actor, false).await?;
+        let row=sqlx::query("SELECT o.*,m.role,m.user_id AS member_user_id FROM organizations o JOIN memberships m USING(organization_id) JOIN owners w ON w.owner_id=o.organization_id WHERE o.organization_id=$1 AND m.user_id=$2 AND m.active AND w.state='active' FOR SHARE OF o,m,w")
+            .bind(organization).bind(actor).fetch_optional(&mut **tx).await?.ok_or(TeamError::NotFound)?;
+        user_organization(&row)
+    }
     pub async fn create_organization(
         &self,
+        actor: &str,
+        key: &str,
+        request: &CreateOrganization,
+    ) -> Result<OrganizationView, TeamError> {
+        let mut tx = self.pool.begin().await?;
+        let result = Self::create_organization_in(&mut tx, actor, key, request).await?;
+        tx.commit().await?;
+        Ok(result)
+    }
+    pub(crate) async fn create_organization_in(
+        tx: &mut Transaction<'_, Postgres>,
         actor: &str,
         key: &str,
         request: &CreateOrganization,
@@ -47,30 +98,27 @@ impl TeamStore {
             return Err(TeamError::Invalid);
         }
         let digest = request_digest("team.create", request).map_err(|_| TeamError::Invalid)?;
-        let mut tx = self.pool.begin().await?;
         // Serialize creation keys without upgrading a user lock before taking organization locks.
-        user(&mut tx, actor, false).await?;
+        user(tx, actor, false).await?;
         sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
             .bind(format!("orange.team.create:{actor}"))
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
         if let Some(value) =
-            prior::<OrganizationView>(&mut tx, actor, "personal", "team.create", key, &digest)
-                .await?
+            prior::<OrganizationView>(tx, actor, "personal", "team.create", key, &digest).await?
         {
-            organization_row(&mut tx, &value.organization_id, false).await?;
-            membership(&mut tx, &value.organization_id, actor).await?;
-            tx.commit().await?;
+            organization_row(tx, &value.organization_id, false).await?;
+            membership(tx, &value.organization_id, actor).await?;
             return Ok(value);
         }
         let id = Uuid::new_v4().to_string();
         sqlx::query("INSERT INTO owners(owner_id) VALUES($1)")
             .bind(&id)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
         sqlx::query("INSERT INTO wallets(owner_id) VALUES($1)")
             .bind(&id)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
         sqlx::query(
             "INSERT INTO organizations(organization_id,name,member_limit) VALUES($1,$2,$3)",
@@ -78,12 +126,12 @@ impl TeamStore {
         .bind(&id)
         .bind(&request.name)
         .bind(i32::from(request.member_limit))
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
         sqlx::query("INSERT INTO memberships(organization_id,user_id,role) VALUES($1,$2,'owner')")
             .bind(&id)
             .bind(actor)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
         let result = OrganizationView {
             organization_id: id.clone(),
@@ -91,18 +139,8 @@ impl TeamStore {
             member_limit: request.member_limit,
             policy_version: 1,
         };
-        record(
-            &mut tx,
-            actor,
-            "personal",
-            "team.create",
-            key,
-            &digest,
-            &result,
-        )
-        .await?;
-        audit(&mut tx, &id, actor, "organization.created", &id, &digest).await?;
-        tx.commit().await?;
+        record(tx, actor, "personal", "team.create", key, &digest, &result).await?;
+        audit(tx, &id, actor, "organization.created", &id, &digest).await?;
         Ok(result)
     }
     pub async fn set_membership(
@@ -407,6 +445,22 @@ fn identifiers(values: &[&str]) -> Result<(), TeamError> {
     } else {
         Err(TeamError::Invalid)
     }
+}
+fn user_organization(
+    row: &sqlx::postgres::PgRow,
+) -> Result<orange_protocol::user::UserOrganization, TeamError> {
+    Ok(orange_protocol::user::UserOrganization {
+        member_user_id: row.try_get("member_user_id")?,
+        organization_id: row.try_get("organization_id")?,
+        name: row.try_get("name")?,
+        role: row
+            .try_get::<String, _>("role")?
+            .parse()
+            .map_err(|_| TeamError::Forbidden)?,
+        member_limit: u16::try_from(row.try_get::<i32, _>("member_limit")?)
+            .map_err(|_| TeamError::Invalid)?,
+        policy_version: row.try_get::<i64, _>("policy_version")?.to_string(),
+    })
 }
 async fn user(
     tx: &mut Transaction<'_, Postgres>,
