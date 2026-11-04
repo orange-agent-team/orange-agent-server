@@ -1,0 +1,38 @@
+syntax = "proto3";
+package orange.host.v1;
+import "google/protobuf/timestamp.proto";
+
+// A cloud Host owns an execution lease, not a GPU or financial lease.
+service RunStore {
+  rpc Claim(ClaimRequest) returns (RunAuthority);
+  rpc Renew(RunAuthority) returns (RunAuthority);
+  rpc AppendIntent(IntentRequest) returns (OperationRecord);
+  rpc AcquireDispatch(DispatchRequest) returns (DispatchPermit);
+  rpc CommitResult(ResultRequest) returns (OperationRecord);
+}
+message ClaimRequest { string run_id = 1; string host_instance_id = 2; string command_id = 3; uint64 expected_run_version = 4; }
+message RunAuthority {
+  string run_id = 1; string host_instance_id = 2; uint64 run_epoch = 3;
+  uint64 run_version = 4; string owner_scope_id = 5; string root_budget_id = 6;
+  google.protobuf.Timestamp expires_at = 7;
+}
+message IntentRequest {
+  RunAuthority authority = 1; string operation_id = 2; string invocation_id = 3;
+  string response_commit_id = 4; string tool_name = 5; string tool_version = 6;
+  string argument_digest = 7; string capability_snapshot_id = 8;
+  string execution_environment_id = 9; string policy_version = 10;
+  string approval_id = 11;
+}
+message OperationRecord {
+  string operation_id = 1; string run_id = 2; uint64 version = 3;
+  enum State { STATE_UNSPECIFIED = 0; INTENDED = 1; DISPATCHING = 2; SUCCEEDED = 3; FAILED = 4; UNKNOWN = 5; }
+  State state = 4; string argument_digest = 5; string result_artifact_id = 6;
+}
+message DispatchRequest { RunAuthority authority = 1; string operation_id = 2; uint64 expected_version = 3; string argument_digest = 4; }
+// The service must commit the dispatch fact before returning. Missing/invalid
+// lease, response_commit, live permission or approval means no permit.
+message DispatchPermit { RunAuthority authority = 1; OperationRecord operation = 2; google.protobuf.Timestamp expires_at = 3; }
+message ResultRequest {
+  RunAuthority authority = 1; string operation_id = 2; uint64 expected_version = 3;
+  OperationRecord.State result_state = 4; string result_artifact_id = 5; string result_digest = 6;
+}

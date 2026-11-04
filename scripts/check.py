@@ -23,6 +23,9 @@ else:
     run('fmt', '--all', '--check')
     run('test', '--workspace', '--locked')
     run('clippy', '--workspace', '--all-targets', '--locked', '--', '-D', 'warnings')
+    if '--http' in sys.argv:
+        run('build', '--bin', 'orange-api', '--locked')
+        subprocess.run([sys.executable,str(ROOT/'scripts/http-smoke.py')],cwd=ROOT,env=environment,check=True)
     if '--postgres' in sys.argv:
         url = ROOT/'.local/database-url'
         if not environment.get('ORANGE_TEST_DATABASE_URL'):

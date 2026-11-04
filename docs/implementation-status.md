@@ -26,4 +26,8 @@ HTTP二进制orange-api还需显式ORANGE_ENV=development、DATABASE_URL及ORANG
 
 Homebrew在当前macOS上安装PostgreSQL时服务注册失败；使用实际安装二进制及补齐缺失的share/lib链接后，专用集群成功启动并完成真DB测试，没有注册系统启动服务。安装过程更换的OpenSSL默认链接已恢复为原OpenSSL3，PostgreSQL继续使用其版本化OpenSSL4依赖。
 
-Flutter官方归档清单返回404，官方GitHub稳定分支读取超时；Docker守护进程不可用。它们记录为环境阻塞，仅影响相应任务，不作为其他代码未实现的借口。没有生产服务、商户或真实GPU验证。
+Flutter官方归档清单返回404，官方GitHub稳定分支读取超时，仍为环境阻塞。原Docker.app缺少可执行文件；已安装Colima0.10.3并启动独立orange-agent profile（2 CPU/4 GiB、无主机目录挂载、不切换默认context）。实际Docker29.5.2/Linux检查通过；配置和socket由Colima保存在用户.colima目录，而非最初尝试设置的工作区COLIMA_HOME。
+
+Worker与云RunStore的Protobuf描述符已通过protoc36.2编译，但尚未实现RPC服务。`python3 scripts/check.py --http`会启动临时loopback API，用明确的测试身份/额度/Quote验证真实HTTP与PostgreSQL链路，然后退出该API进程；不能将其当作真实身份、报价引擎、模型或支付认证。
+
+没有生产服务、商户、真实GPU或完整G3/G4—G6验证。剩余工作在统一台账中保持PENDING，不因这几个切片通过而把原122父任务标完成。
