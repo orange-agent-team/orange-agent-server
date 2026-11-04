@@ -31,6 +31,12 @@ serde_jcs = "=0.2.0"
 libc = "=0.2.191"
 cap-std = "=4.0.3"
 cap-fs-ext = "=4.0.3"
+tonic = { version = "=0.14.9", features = ["tls-ring", "tls-connect-info"] }
+tonic-prost = "=0.14.9"
+tonic-prost-build = "=0.14.9"
+prost = "=0.14.4"
+prost-types = "=0.14.4"
+tokio-stream = { version = "=0.1.19", features = ["net"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

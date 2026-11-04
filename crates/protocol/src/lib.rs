@@ -1,6 +1,15 @@
 pub mod canonical;
 pub mod events;
 pub mod model;
+#[cfg(feature = "grpc")]
+pub mod grpc {
+    pub mod worker {
+        tonic::include_proto!("orange.worker.v1");
+    }
+    pub mod host {
+        tonic::include_proto!("orange.host.v1");
+    }
+}
 pub mod team;
 pub mod tools;
 pub mod user;

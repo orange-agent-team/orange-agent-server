@@ -13,7 +13,7 @@ message Lease {
   google.protobuf.Timestamp expires_at = 6;
 }
 message Hello { string node_id = 1; uint32 protocol_version = 2; string capabilities_digest = 3; }
-message Welcome { string session_id = 1; uint64 connection_epoch = 2; uint32 protocol_version = 3; }
+message Welcome { string session_id = 1; uint64 connection_epoch = 2; uint32 protocol_version = 3; google.protobuf.Timestamp expires_at = 4; }
 message Assignment {
   string command_id = 1; string payload_digest = 2; Lease lease = 3;
   string model_version_id = 4; string execution_profile_id = 5;
@@ -46,6 +46,8 @@ message CleanupReport {
   bool device_healthy = 8; string supervisor_instance_id = 9; string evidence_digest = 10;
 }
 message Heartbeat { string node_id = 1; uint64 connection_epoch = 2; string capability_snapshot_id = 3; }
+// Control-session liveness only. This does not renew any execution lease.
+message HeartbeatAck { string node_id = 1; uint64 connection_epoch = 2; string session_id = 3; google.protobuf.Timestamp expires_at = 4; }
 message ProtocolError { string code = 1; string request_id = 2; bool retry_same_command = 3; }
 message WorkerFrame {
   oneof body { Hello hello = 1; Acknowledge acknowledge = 2; Renew renew = 3;
@@ -54,5 +56,5 @@ message WorkerFrame {
 }
 message ServerFrame {
   oneof body { Welcome welcome = 1; Assignment assignment = 2; StartGrant start = 3;
-    Lease renewed = 4; ResumeGrant resume = 5; Cancel cancel = 6; ProtocolError error = 7; }
+    Lease renewed = 4; ResumeGrant resume = 5; Cancel cancel = 6; ProtocolError error = 7; HeartbeatAck heartbeat = 8; }
 }
