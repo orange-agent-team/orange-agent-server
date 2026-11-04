@@ -21,13 +21,13 @@ def digest(path):
             h.update(chunk)
     return h.hexdigest()
 
-def download():
+def download(source):
     rustup = shutil.which('rustup') or '/opt/homebrew/opt/rustup/bin/rustup'
     cargo = Path(subprocess.check_output([rustup, 'which', '--toolchain', 'stable', 'cargo'], text=True).strip())
     environment = os.environ.copy()
     environment['PATH'] = str(cargo.parent)+os.pathsep+environment.get('PATH', '')
     subprocess.run([str(cargo), 'build', '--bin', 'model-fetch', '--locked'], cwd=ROOT, env=environment, check=True)
-    subprocess.run([str(ROOT/'target/debug/model-fetch'), str(ROOT/'config/local-model.lock.json'), str(PRIVATE)],
+    subprocess.run([str(ROOT/'target/debug/model-fetch'), str(ROOT/'config/local-model.lock.json'), str(PRIVATE), '--source='+source],
                    cwd=ROOT, env=environment, check=True)
 
 def build(checkout, target):
@@ -98,11 +98,12 @@ def main():
     parser.add_argument('action', choices=['download', 'build'])
     parser.add_argument('--source-checkout', type=Path)
     parser.add_argument('--target', choices=['llama-server','llama-tokenize'], default='llama-server')
+    parser.add_argument('--download-source', choices=['huggingface','modelscope'], default='huggingface')
     args = parser.parse_args()
     PRIVATE.mkdir(parents=True, exist_ok=True, mode=0o700)
     with (PRIVATE/(args.action+'.lock')).open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        if args.action == 'download': download()
+        if args.action == 'download': download(args.download_source)
         else: build(args.source_checkout, args.target)
 if __name__ == '__main__':
     main()

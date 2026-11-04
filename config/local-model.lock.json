@@ -14,6 +14,18 @@
     "bytes": 491400032,
     "sha256": "74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db",
     "license": "Apache-2.0",
-    "source": "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF"
+    "source": "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF",
+    "official_alternates": {
+      "modelscope": {
+        "repository": "Qwen/Qwen2.5-0.5B-Instruct-GGUF",
+        "revision": "2e50b77b0eee3083842019e257b74854323d880a",
+        "bytes": 491400032,
+        "sha256": "74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db",
+        "source": "https://modelscope.cn/models/Qwen/Qwen2.5-0.5B-Instruct-GGUF",
+        "metadata_sha256": "77e404161c6829e3d7eb9a433b8c45de6e14faed1449cd87e1bb0e1fa6189858",
+        "verified_redirect_host": "cdn-lfs-cn-1.modelscope.cn",
+        "publisher_documentation": "https://qwen.readthedocs.io/en/v2.5/getting_started/quickstart.html"
+      }
+    }
   }
 }

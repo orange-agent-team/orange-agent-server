@@ -72,7 +72,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !matches!(client.input_tokens(&invalid).await, Err(ModelError::Limit)) {
         return Err("context overflow was not rejected".into());
     }
-    cancel_tx.send(true)?;
+    // The successful generation has already dropped its receiver. Persist the
+    // cancellation value before creating the next receiver; send() would fail
+    // with no listeners and would not establish this pre-dispatch test state.
+    cancel_tx.send_replace(true);
     if !matches!(
         client.generate(&request, cancel_tx.subscribe()).await,
         Err(ModelError::Cancelled)

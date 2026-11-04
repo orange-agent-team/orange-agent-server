@@ -172,6 +172,10 @@ impl ModelCache {
         let hosts = spec.allowed_hosts.clone();
         let client = Client::builder()
             .https_only(true)
+            .user_agent(concat!(
+                "orange-agent-artifact-cache/",
+                env!("CARGO_PKG_VERSION")
+            ))
             .referer(false)
             .no_gzip()
             .no_brotli()
@@ -181,6 +185,13 @@ impl ModelCache {
             .timeout(Duration::from_secs(600))
             .redirect(reqwest::redirect::Policy::custom(move |attempt| {
                 if attempt.previous().len() >= 5 || !allowed_url(attempt.url(), &hosts) {
+                    // Never print signed query strings or URL credentials.
+                    eprintln!(
+                        "artifact redirect denied scheme={} host={} hops={}",
+                        attempt.url().scheme(),
+                        attempt.url().host_str().unwrap_or("none"),
+                        attempt.previous().len()
+                    );
                     attempt.error("artifact redirect denied")
                 } else {
                     attempt.follow()
@@ -404,7 +415,40 @@ impl Transport for HttpTransport {
         if offset > 0 {
             request = request.header(reqwest::header::RANGE, format!("bytes={offset}-"));
         }
-        let response = request.send().await.map_err(network)?;
+        let mut response = request.send().await.map_err(network)?;
+        if response.status() == reqwest::StatusCode::FORBIDDEN {
+            let host = response.url().host_str().unwrap_or("none").to_owned();
+            let sample = tokio::time::timeout(Duration::from_secs(2), async {
+                let mut bytes = Vec::new();
+                while bytes.len() < 4096 {
+                    let Some(chunk) = response.chunk().await.map_err(network)? else {
+                        break;
+                    };
+                    bytes.extend_from_slice(&chunk[..chunk.len().min(4096 - bytes.len())]);
+                }
+                Ok::<_, CacheError>(bytes)
+            })
+            .await;
+            let code = if let Ok(Ok(bytes)) = sample {
+                let text = String::from_utf8_lossy(&bytes);
+                let candidate = text
+                    .split_once("<Code>")
+                    .and_then(|(_, tail)| tail.split_once("</Code>"))
+                    .map(|(code, _)| code);
+                match candidate {
+                    Some("AccessDenied") => "AccessDenied",
+                    Some("SignatureDoesNotMatch") => "SignatureDoesNotMatch",
+                    Some("ExpiredToken") => "ExpiredToken",
+                    Some("SecurityTokenExpired") => "SecurityTokenExpired",
+                    Some("RequestTimeTooSkewed") => "RequestTimeTooSkewed",
+                    _ => "Unclassified",
+                }
+            } else {
+                "Unavailable"
+            };
+            eprintln!("artifact HTTP403 host={host} public_error_code={code}");
+            return Err(CacheError::Http(403));
+        }
         Ok(DownloadResponse {
             status: response.status().as_u16(),
             length: response.content_length(),
