@@ -1,4 +1,6 @@
-//! Durable local operation boundary. Not yet a model loop or an OS sandbox.
+//! Durable local operation boundary and controlled, local-only model/tool host.
+pub mod engine;
+mod storage;
 pub mod workspace;
 use orange_domain::{ExecutionIdentity, validate_response};
 use orange_protocol::{valid_digest, valid_id};
@@ -55,22 +57,13 @@ pub struct Operation<'a> {
 impl Journal {
     /// Caller must supply its private application data directory, not an untrusted workspace path.
     pub fn open(path: &Path) -> Result<Self, JournalError> {
-        let parent = path.parent().ok_or(JournalError::Invalid)?.canonicalize()?;
-        let normalized = if path.exists() {
-            path.canonicalize()?
-        } else {
-            parent.join(path.file_name().ok_or(JournalError::Invalid)?)
-        };
-        let lock = File::options()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(normalized.with_extension("host-lock"))?;
-        lock.try_lock().map_err(|_| JournalError::Busy)?;
-        let connection = Connection::open(normalized)?;
+        let (normalized, lock) = storage::open_private(path)?;
+        let mut connection = Connection::open_with_flags(
+            normalized,
+            rusqlite::OpenFlags::default() | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
+        )?;
         let version: i64 = connection.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if !(0..=1).contains(&version) {
+        if !(0..=2).contains(&version) {
             return Err(JournalError::UnsupportedVersion);
         }
         if version == 0 {
@@ -79,7 +72,11 @@ impl Journal {
                 return Err(JournalError::UnsupportedVersion);
             }
         }
-        connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;
+        connection.execute_batch(
+            "PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;",
+        )?;
+        if version == 0 {
+            connection.execute_batch("
             BEGIN IMMEDIATE;
             CREATE TABLE IF NOT EXISTS runs(run_id TEXT PRIMARY KEY,owner TEXT NOT NULL,policy TEXT NOT NULL,active INTEGER NOT NULL CHECK(active IN(0,1)));
             CREATE TABLE IF NOT EXISTS responses(invocation TEXT PRIMARY KEY,run_id TEXT NOT NULL REFERENCES runs(run_id),attempt INTEGER NOT NULL,digest TEXT NOT NULL);
@@ -89,6 +86,17 @@ impl Journal {
             INSERT INTO events(run_id,operation_id,kind) SELECT run_id,operation_id,'operation.unknown' FROM operations WHERE state='dispatching';
             UPDATE operations SET state='unknown' WHERE state='dispatching';
             PRAGMA user_version=1;
+            COMMIT;")?;
+        }
+        if version < 2 {
+            storage::migrate_v2(&mut connection)?;
+        }
+        connection.execute_batch("BEGIN IMMEDIATE;
+            UPDATE runtime_host SET epoch=epoch+1 WHERE singleton=1;
+            INSERT INTO events(run_id,operation_id,kind) SELECT run_id,operation_id,'operation.unknown' FROM operations WHERE state='dispatching';
+            UPDATE operations SET state='unknown' WHERE state='dispatching';
+            UPDATE runtime_invocations SET state='unknown' WHERE state='dispatched';
+            UPDATE runtime_runs SET phase='recovery_required',failure='interrupted_dispatch' WHERE run_id IN(SELECT run_id FROM operations WHERE state='unknown' UNION SELECT run_id FROM runtime_invocations WHERE state='unknown');
             COMMIT;")?;
         Ok(Self {
             connection,
@@ -118,13 +126,28 @@ impl Journal {
         Ok(())
     }
     pub fn revoke_run(&self, owner: &str, run: &str) -> Result<(), JournalError> {
-        if self.connection.execute(
+        let tx = self.connection.unchecked_transaction()?;
+        if tx.execute(
             "UPDATE runs SET active=0 WHERE run_id=? AND owner=?",
             params![run, owner],
         )? != 1
         {
             return Err(JournalError::Revoked);
         }
+        tx.execute(
+            "UPDATE operations SET state='unknown' WHERE run_id=? AND state='dispatching'",
+            [run],
+        )?;
+        tx.execute(
+            "UPDATE runtime_invocations SET state='unknown' WHERE run_id=? AND state='dispatched'",
+            [run],
+        )?;
+        tx.execute("UPDATE runtime_runs SET phase='cancelled',failure='revoked' WHERE run_id=? AND phase!='completed'",[run])?;
+        tx.execute(
+            "INSERT INTO events(run_id,kind) VALUES(?,'run.revoked')",
+            [run],
+        )?;
+        tx.commit()?;
         Ok(())
     }
     /// Invoked only by the trusted model adapter after validating complete response/authority.
@@ -219,6 +242,14 @@ impl Journal {
             tx.commit()?;
             return Ok(());
         }
+        let unknown: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM operations WHERE run_id=? AND state='unknown')",
+            [op.run],
+            |r| r.get(0),
+        )?;
+        if unknown {
+            return Err(JournalError::AlreadyDispatched);
+        }
         tx.execute("INSERT INTO operations(operation_id,owner,run_id,invocation,argument_digest,tool_version,environment,policy,requires_approval,state) VALUES(?,?,?,?,?,?,?,?,?,'intended')",params![op.id,op.owner,op.run,op.invocation,op.argument_digest,op.tool_version,op.environment,op.policy_version,op.requires_approval])?;
         tx.execute(
             "INSERT INTO events(run_id,operation_id,kind) VALUES(?,?,'operation.intended')",
@@ -237,7 +268,7 @@ impl Journal {
         if !valid_id(actor) {
             return Err(JournalError::Invalid);
         }
-        let exists:bool=self.connection.query_row("SELECT EXISTS(SELECT 1 FROM operations WHERE operation_id=? AND owner=? AND run_id=? AND argument_digest=? AND environment=? AND policy=? AND state='intended')",params![op.id,op.owner,op.run,op.argument_digest,op.environment,op.policy_version],|r|r.get(0))?;
+        let exists:bool=self.connection.query_row("SELECT EXISTS(SELECT 1 FROM operations o JOIN runs r USING(run_id) WHERE operation_id=? AND o.owner=? AND o.run_id=? AND argument_digest=? AND environment=? AND o.policy=? AND state='intended' AND r.active=1)",params![op.id,op.owner,op.run,op.argument_digest,op.environment,op.policy_version],|r|r.get(0))?;
         if !exists {
             return Err(JournalError::ApprovalRequired);
         }
@@ -324,7 +355,7 @@ mod tests {
     }
     #[test]
     fn no_tool_dispatch_without_valid_response_approval_and_current_run() {
-        let dir = tempfile::tempdir().expect("temp");
+        let dir = storage::private_temp();
         let mut j = Journal::open(&dir.path().join("state.sqlite")).expect("open");
         j.register_run("alice", "run", "policy-v1").expect("run");
         let hash = "a".repeat(64);
@@ -369,7 +400,7 @@ mod tests {
     }
     #[test]
     fn crash_after_dispatch_is_unknown_and_never_replayed() {
-        let dir = tempfile::tempdir().expect("temp");
+        let dir = storage::private_temp();
         let file = dir.path().join("state.sqlite");
         let hash = "a".repeat(64);
         let op = operation(&hash);
@@ -406,7 +437,7 @@ mod tests {
     }
     #[test]
     fn intent_recovers_but_changed_parameters_do_not_inherit_approval() {
-        let dir = tempfile::tempdir().expect("temp");
+        let dir = storage::private_temp();
         let file = dir.path().join("state.sqlite");
         let hash = "a".repeat(64);
         let op = operation(&hash);

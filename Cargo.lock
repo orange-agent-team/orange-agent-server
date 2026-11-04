@@ -1548,6 +1548,7 @@ dependencies = [
  "hex",
  "libc",
  "orange-domain",
+ "orange-model-runtime",
  "orange-protocol",
  "rusqlite",
  "serde",

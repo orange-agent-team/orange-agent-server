@@ -7,7 +7,7 @@
 - orange-domain：整数金额、规范字符串、计价/费率、预算限额、取消/完成互斥、旧响应和GPU回收事实检查。
 - orange-protocol：严格DTO、JSON金额无损传输、请求内容摘要、调用purpose与输入校验。
 - orange-control-plane：真实PostgreSQL迁移、根预算、已存在Quote的原子提交/来源分桶冻结、同键/同Invocation去重、排队取消与原来源释放、平衡/不可变账本与outbox。
-- orange-agent-runtime：真实SQLite持久意图、响应提交屏障、批准绑定/到期/撤权、独占Host锁、重启后unknown禁止重放。
+- orange-agent-runtime：真实SQLite持久意图、响应与工具意图原子提交、批准绑定/到期/撤权、独占Host锁、重启后unknown禁止重放；受控本地模型/工具单步循环、上下文恢复、来源重新验证与schema 2迁移，见[Agent控制记录](agent-loop-implementation.md)。真实模型验收仍未通过。
 - 本地开发HTTP入口：预算/Job查询与创建、仅排队任务取消。只允许显式development和loopback；开发令牌不代表OIDC或生产身份。
 - orange-model-runtime：固定本机llama.cpp适配、受限SSE/工具参数装配、真实tokenizer接口、取消与上下文边界；17项Rust/SQLite/协议单元测试通过。CPU后端实际构建完成，模型下载因TLS/超时失败，真实推理尚未验证，详见[模型实施记录](local-model-implementation.md)。
 

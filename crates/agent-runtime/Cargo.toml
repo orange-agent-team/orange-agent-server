@@ -23,6 +23,7 @@ base64.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+orange-model-runtime = { path = "../model-runtime", version = "=0.1.0" }
 
 [lints]
 workspace = true

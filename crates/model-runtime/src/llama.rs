@@ -71,7 +71,15 @@ impl LlamaClient {
         if request.model_version != self.model {
             return Err(ModelError::Invalid);
         }
-        let mut body = json!({"model":self.model,"messages":request.messages,"max_tokens":request.max_output_tokens,
+        let messages: Vec<Value> = request.messages.iter().map(|message| {
+            let mut value=json!({"role":message.role,"content":message.content});
+            if let Some(id)=&message.tool_call_id {value["tool_call_id"]=json!(id);}
+            if !message.tool_calls.is_empty() {
+                value["tool_calls"]=Value::Array(message.tool_calls.iter().map(|call|json!({"id":call.id,"type":"function","function":{"name":call.name,"arguments":call.arguments.to_string()}})).collect());
+            }
+            value
+        }).collect();
+        let mut body = json!({"model":self.model,"messages":messages,"max_tokens":request.max_output_tokens,
             "n":1,"seed":42,"temperature":0,"stream":stream,"cache_prompt":false});
         if stream {
             body["stream_options"] = json!({"include_usage":true});
@@ -204,4 +212,57 @@ async fn bounded(mut response: Response) -> Result<Vec<u8>, ModelError> {
         bytes.extend_from_slice(&chunk);
     }
     Ok(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use orange_protocol::model::{Message, Role, ToolCall};
+    #[test]
+    fn internal_tool_calls_map_to_native_function_history() {
+        let client = LlamaClient::new(
+            "http://127.0.0.1:44099/",
+            "k".repeat(32),
+            "local-model".into(),
+            2048,
+        )
+        .expect("local client");
+        let request = GenerateRequest {
+            invocation_id: "inv".into(),
+            model_version: "local-model".into(),
+            max_output_tokens: 100,
+            tools: vec![],
+            messages: vec![
+                Message::plain(Role::User, "read".into()),
+                Message {
+                    role: Role::Assistant,
+                    content: "".into(),
+                    tool_calls: vec![ToolCall {
+                        id: "call-1".into(),
+                        name: "read_file".into(),
+                        arguments: json!({"path":"note.txt"}),
+                    }],
+                    tool_call_id: None,
+                },
+                Message {
+                    role: Role::Tool,
+                    content: "result".into(),
+                    tool_calls: vec![],
+                    tool_call_id: Some("call-1".into()),
+                },
+            ],
+        };
+        let body = client.request(&request, true).expect("body");
+        assert_eq!(
+            body["messages"][1]["tool_calls"][0],
+            json!({"id":"call-1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"note.txt\"}"}})
+        );
+        assert_eq!(body["messages"][2]["tool_call_id"], "call-1");
+        assert_eq!(body["messages"][2]["role"], "tool");
+        assert!(
+            body["messages"][1]["tool_calls"][0]
+                .get("arguments")
+                .is_none()
+        );
+    }
 }

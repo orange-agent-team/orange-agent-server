@@ -16,6 +16,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         messages: vec![Message {
             role: Role::User,
             content: "Reply with exactly the word Orange and nothing else.".into(),
+            tool_calls: vec![],
+            tool_call_id: None,
         }],
         tools: vec![],
         max_output_tokens: 64,
