@@ -8,6 +8,7 @@
 - orange-protocol：严格DTO、JSON金额无损传输、请求内容摘要、调用purpose与输入校验。
 - orange-control-plane：真实PostgreSQL迁移、根预算、已存在Quote的原子提交/来源分桶冻结、同键/同Invocation去重、排队取消与原来源释放、平衡/不可变账本与outbox。
 - orange-agent-runtime：真实SQLite持久意图、响应与工具意图原子提交、批准绑定/到期/撤权、独占Host锁、重启后unknown禁止重放；受控本地模型/工具单步循环、上下文恢复、来源重新验证与schema 2迁移，见[Agent控制记录](agent-loop-implementation.md)。真实模型验收仍未通过。
+- E03 schema3增加持久工作区授权、物理目录身份、关联Run撤销和无正文状态分页，见[工作区授权记录](workspace-consent-implementation.md)；桌面消费版本只有在新源码发行包固定导入后才更新。
 - orange-worker：新增E08核心工程及持久Broker仲裁、独立启动屏障、本地抢占、租约/世代与探针隔离边界，见[Broker实施记录](worker-broker-implementation.md)。设备/身份/云授权为明确替身测试，真实Windows IPC和GPU清理未认证。
 - E07 Worker Gateway：真实mTLS/gRPC身份、当前设备/用户/组织鉴权、PostgreSQL会话世代、心跳与撤销已形成切片，见[控制会话记录](worker-session-implementation.md)。测试证书由隔离CA预配置，公开enrollment及任务投递仍未完成。
 - 本地开发HTTP入口：预算/Job查询与创建、仅排队任务取消。只允许显式development和loopback；开发令牌不代表OIDC或生产身份。

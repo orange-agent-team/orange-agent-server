@@ -179,6 +179,10 @@ impl Journal {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let registered:Option<(String,bool)>=tx.query_row("SELECT workspace_id,active FROM local_workspaces WHERE owner=? AND environment=? AND policy=?",params![config.owner,config.environment,config.policy],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
+        if registered.as_ref().is_some_and(|(_, active)| !*active) {
+            return Err(JournalError::Revoked.into());
+        }
         let old: Option<String> = tx
             .query_row(
                 "SELECT config_digest FROM runtime_runs WHERE run_id=?",
@@ -197,11 +201,22 @@ impl Journal {
         if quarantine {
             return Err(EngineError::RecoveryRequired);
         }
+        if registered.is_some()
+            && crate::workspaces::quarantined(&tx, &config.owner, grant.resource_identity())?
+        {
+            return Err(EngineError::RecoveryRequired);
+        }
         tx.execute(
             "INSERT INTO runs(run_id,owner,policy,active) VALUES(?,?,?,1)",
             params![config.run_id, config.owner, config.policy],
         )?;
         tx.execute("INSERT INTO runtime_runs(run_id,config,config_digest,environment,messages,phase) VALUES(?,?,?,?,?,'ready')",params![config.run_id,config_json,config_digest,config.environment,encode(&messages)?])?;
+        if let Some((workspace, _)) = registered {
+            tx.execute(
+                "INSERT INTO run_workspaces(run_id,workspace_id) VALUES(?,?)",
+                params![config.run_id, workspace],
+            )?;
+        }
         tx.execute(
             "INSERT INTO events(run_id,kind) VALUES(?,'run.started')",
             [&config.run_id],
@@ -750,6 +765,7 @@ fn tool_error_code(error: &WorkspaceError) -> &'static str {
         WorkspaceError::Forbidden => "forbidden",
         WorkspaceError::Revoked => "revoked",
         WorkspaceError::EnvironmentChanged => "environment_changed",
+        WorkspaceError::PersistentIdentityUnavailable => "persistent_identity_unavailable",
         WorkspaceError::Limit => "limit",
         WorkspaceError::VersionChanged => "version_changed",
         WorkspaceError::SnapshotChanged => "snapshot_changed",

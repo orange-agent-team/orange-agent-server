@@ -37,6 +37,8 @@ pub enum WorkspaceError {
     Revoked,
     #[error("workspace environment or owner changed")]
     EnvironmentChanged,
+    #[error("filesystem lacks persistent directory generation identity")]
+    PersistentIdentityUnavailable,
     #[error("bounded filesystem limit exceeded")]
     Limit,
     #[error("file version changed")]
@@ -144,10 +146,22 @@ struct GrantInner {
     directory: Dir,
     owner: String,
     environment: String,
+    resource_identity: String,
+    persistent_identity: bool,
+    workspace_revocation: Option<Arc<AtomicBool>>,
     policy: String,
     revoked: AtomicBool,
     gate: Arc<RwLock<()>>,
     deadline: Duration,
+}
+impl GrantInner {
+    fn is_revoked(&self) -> bool {
+        self.revoked.load(Ordering::Acquire)
+            || self
+                .workspace_revocation
+                .as_ref()
+                .is_some_and(|flag| flag.load(Ordering::Acquire))
+    }
 }
 #[derive(Clone)]
 pub struct WorkspaceGrant {
@@ -197,13 +211,35 @@ impl WorkspaceGrant {
         root: &Path,
         private_roots: &[PathBuf],
     ) -> Result<Self, WorkspaceError> {
-        if ![owner, grant_id, policy].iter().all(|s| valid_id(s)) || private_roots.is_empty() {
+        Self::open_scoped(owner, grant_id, policy, root, private_roots, None)
+    }
+    pub(crate) fn open_scoped(
+        owner: &str,
+        grant_id: &str,
+        policy: &str,
+        root: &Path,
+        private_roots: &[PathBuf],
+        workspace_revocation: Option<Arc<AtomicBool>>,
+    ) -> Result<Self, WorkspaceError> {
+        if ![owner, grant_id, policy].iter().all(|s| valid_id(s))
+            || private_roots.is_empty()
+            || private_roots.len() > 64
+        {
             return Err(WorkspaceError::Invalid);
         }
         let root = root.canonicalize()?;
+        let directory = Dir::open_ambient_dir(&root, cap_std::ambient_authority())?;
+        let opened_identity = directory_identity(&directory)?;
         for private in private_roots {
             let private = private.canonicalize()?;
             if private.starts_with(&root) || root.starts_with(&private) {
+                return Err(WorkspaceError::Forbidden);
+            }
+            let private_directory = Dir::open_ambient_dir(&private, cap_std::ambient_authority())?;
+            let private_identity = directory_identity(&private_directory)?;
+            if ancestor_identity_matches(&private, opened_identity)?
+                || ancestor_identity_matches(&root, private_identity)?
+            {
                 return Err(WorkspaceError::Forbidden);
             }
         }
@@ -214,13 +250,19 @@ impl WorkspaceGrant {
         {
             return Err(WorkspaceError::Forbidden);
         }
-        let directory = Dir::open_ambient_dir(&root, cap_std::ambient_authority())?;
+        // Bind checks to the capability actually opened, not merely to a path
+        // that may have been swapped while checking private-root ancestry.
+        let current = Dir::open_ambient_dir(&root, cap_std::ambient_authority())?;
+        if directory_identity(&current)? != opened_identity {
+            return Err(WorkspaceError::EnvironmentChanged);
+        }
         let metadata = directory.try_clone()?.into_std_file().metadata()?;
         let created = metadata
             .created()
             .ok()
             .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
             .map(|d| d.as_nanos().to_string());
+        let persistent_identity = created.is_some();
         #[cfg(unix)]
         let object = {
             use std::os::unix::fs::MetadataExt;
@@ -228,6 +270,20 @@ impl WorkspaceGrant {
         };
         #[cfg(not(unix))]
         let object = String::from("creation-time-and-canonical-path");
+        #[cfg(unix)]
+        let resource_object = object.clone();
+        #[cfg(windows)]
+        let resource_object = {
+            let (volume, index) = directory_identity(&directory)?;
+            format!("windows-file-id:{volume}:{index}")
+        };
+        #[cfg(not(any(unix, windows)))]
+        return Err(WorkspaceError::Invalid);
+        let resource_identity = request_digest(
+            "workspace-resource-v1",
+            &(owner, &resource_object, &created),
+        )
+        .map_err(|_| WorkspaceError::Invalid)?;
         let environment = request_digest(
             "workspace-grant-v1",
             &(
@@ -245,6 +301,9 @@ impl WorkspaceGrant {
                 directory,
                 owner: owner.into(),
                 environment,
+                resource_identity,
+                persistent_identity,
+                workspace_revocation,
                 policy: policy.into(),
                 revoked: AtomicBool::new(false),
                 gate: Arc::new(RwLock::new(())),
@@ -255,6 +314,12 @@ impl WorkspaceGrant {
     pub fn environment(&self) -> &str {
         &self.inner.environment
     }
+    pub fn resource_identity(&self) -> &str {
+        &self.inner.resource_identity
+    }
+    pub fn has_persistent_identity(&self) -> bool {
+        self.inner.persistent_identity
+    }
     pub fn owner(&self) -> &str {
         &self.inner.owner
     }
@@ -262,7 +327,7 @@ impl WorkspaceGrant {
         &self.inner.policy
     }
     pub fn is_revoked(&self) -> bool {
-        self.inner.revoked.load(Ordering::Acquire)
+        self.inner.is_revoked()
     }
     /// Stop new leases immediately. The host must also persist its Run/grant revocation before acknowledging it.
     pub fn request_revoke(&self) {
@@ -336,7 +401,7 @@ impl WorkspaceGrant {
 }
 impl PreparedTool {
     pub fn is_authorized(&self) -> bool {
-        !self.permit.inner.revoked.load(Ordering::Acquire)
+        !self.permit.inner.is_revoked()
     }
     pub async fn execute(self) -> Result<ToolReceipt, WorkspaceError> {
         let Self {
@@ -351,7 +416,7 @@ impl PreparedTool {
         };
         let work = tokio::task::spawn_blocking(move || {
             let _read_slot = slot;
-            if permit.inner.revoked.load(Ordering::Acquire) {
+            if permit.inner.is_revoked() {
                 return Err(WorkspaceError::Revoked);
             }
             let result = match request {
@@ -362,7 +427,7 @@ impl PreparedTool {
                     list_directory(&permit.inner.directory, &permit.inner.environment, &args)?,
                 ),
             };
-            if permit.inner.revoked.load(Ordering::Acquire) {
+            if permit.inner.is_revoked() {
                 return Err(WorkspaceError::Revoked);
             }
             let model_text = model_view(&result)?;
@@ -431,6 +496,49 @@ fn component_allowed(name: &str) -> bool {
     }
     true
 }
+fn directory_identity(directory: &Dir) -> Result<(u64, u64), WorkspaceError> {
+    let metadata = directory.dir_metadata()?;
+    #[cfg(unix)]
+    {
+        use cap_fs_ext::OsMetadataExt;
+        if metadata.ino() == 0 {
+            return Err(WorkspaceError::EnvironmentChanged);
+        }
+        Ok((metadata.dev(), metadata.ino()))
+    }
+    #[cfg(windows)]
+    {
+        // cap-fs-ext exposes by-handle volume/file IDs on stable Rust. The std
+        // MetadataExt::file_index API is still nightly-only.
+        use cap_fs_ext::MetadataExt;
+        if metadata.ino() == 0 {
+            return Err(WorkspaceError::EnvironmentChanged);
+        }
+        Ok((metadata.dev(), metadata.ino()))
+    }
+    #[cfg(not(any(unix, windows)))]
+    Err(WorkspaceError::Invalid)
+}
+fn ancestor_identity_matches(path: &Path, identity: (u64, u64)) -> Result<bool, WorkspaceError> {
+    for ancestor in path.ancestors() {
+        #[cfg(unix)]
+        let actual = {
+            use std::os::unix::fs::MetadataExt;
+            let metadata = std::fs::metadata(ancestor)?;
+            (metadata.dev(), metadata.ino())
+        };
+        #[cfg(not(unix))]
+        let actual = directory_identity(&Dir::open_ambient_dir(
+            ancestor,
+            cap_std::ambient_authority(),
+        )?)?;
+        if actual == identity {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 fn components(path: &str, root_allowed: bool) -> Result<Vec<&str>, WorkspaceError> {
     if root_allowed && path == "." {
         return Ok(vec![]);

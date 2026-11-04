@@ -2,6 +2,7 @@
 pub mod engine;
 mod storage;
 pub mod workspace;
+pub mod workspaces;
 use orange_domain::{ExecutionIdentity, validate_response};
 use orange_protocol::{valid_digest, valid_id};
 use rusqlite::{Connection, OptionalExtension, params};
@@ -36,6 +37,9 @@ pub enum JournalError {
 pub struct Journal {
     connection: Connection,
     _host_lock: File,
+    private_root: std::path::PathBuf,
+    workspace_signals:
+        std::collections::HashMap<String, std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 pub struct ResponseAuthority {
     pub current: ExecutionIdentity,
@@ -59,11 +63,11 @@ impl Journal {
     pub fn open(path: &Path) -> Result<Self, JournalError> {
         let (normalized, lock) = storage::open_private(path)?;
         let mut connection = Connection::open_with_flags(
-            normalized,
+            &normalized,
             rusqlite::OpenFlags::default() | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
         )?;
         let version: i64 = connection.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if !(0..=2).contains(&version) {
+        if !(0..=3).contains(&version) {
             return Err(JournalError::UnsupportedVersion);
         }
         if version == 0 {
@@ -91,6 +95,12 @@ impl Journal {
         if version < 2 {
             storage::migrate_v2(&mut connection)?;
         }
+        if version < 3 {
+            let tx =
+                connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            tx.execute_batch(include_str!("schema_v3.sql"))?;
+            tx.commit()?;
+        }
         connection.execute_batch("BEGIN IMMEDIATE;
             UPDATE runtime_host SET epoch=epoch+1 WHERE singleton=1;
             INSERT INTO events(run_id,operation_id,kind) SELECT run_id,operation_id,'operation.unknown' FROM operations WHERE state='dispatching';
@@ -101,6 +111,8 @@ impl Journal {
         Ok(Self {
             connection,
             _host_lock: lock,
+            private_root: normalized.parent().ok_or(JournalError::Invalid)?.to_owned(),
+            workspace_signals: std::collections::HashMap::new(),
         })
     }
     pub fn register_run(&self, owner: &str, run: &str, policy: &str) -> Result<(), JournalError> {
