@@ -306,6 +306,21 @@ fn replaced_directory_does_not_inherit_previous_consent() {
         .expect("grant");
     std::fs::rename(&f.root, f.root.with_file_name("old-workspace")).expect("move");
     std::fs::create_dir(&f.root).expect("new object");
+    let private_area = f.private.with_file_name("another-private");
+    std::fs::create_dir(&private_area).expect("private area");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&private_area, std::fs::Permissions::from_mode(0o700))
+            .expect("mode");
+    }
+    assert!(
+        matches!(
+            j.reserve_private_directory(&private_area),
+            Err(WorkspaceStoreError::Conflict)
+        ),
+        "private registration must not overlook a replaced active root"
+    );
     assert!(matches!(
         j.open_workspace("alice", &workspace.workspace_id),
         Err(WorkspaceStoreError::Workspace(
@@ -432,4 +447,38 @@ fn macos_data_volume_alias_cannot_include_private_host_state() {
         j.authorize_workspace("alice", "alias-consent", &alias, "read-only-v1"),
         Err(WorkspaceStoreError::Workspace(WorkspaceError::Forbidden))
     ));
+}
+
+#[test]
+fn private_ipc_area_cannot_overlap_active_consent_or_be_granted_later() {
+    let f = Fixture::new();
+    let mut j = f.journal();
+    let workspace = f.authorize(&mut j);
+    let nested = f.root.join("private-model");
+    let safe = f.private.with_file_name("private-model");
+    for path in [&nested, &safe] {
+        std::fs::create_dir(path).expect("private area");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).expect("mode");
+        }
+    }
+    assert!(matches!(
+        j.reserve_private_directory(&nested),
+        Err(WorkspaceStoreError::Conflict)
+    ));
+    assert!(
+        j.workspace("alice", &workspace.workspace_id)
+            .expect("unchanged consent")
+            .active
+    );
+    j.reserve_private_directory(&safe)
+        .expect("reserve outside workspaces");
+    j.reserve_private_directory(&safe).expect("idempotent");
+    assert!(matches!(
+        j.authorize_workspace("alice", "private-ipc-consent", &safe, "read-only-v1"),
+        Err(WorkspaceStoreError::Workspace(WorkspaceError::Forbidden))
+    ));
+    assert!(j.open_workspace("alice", &workspace.workspace_id).is_ok());
 }

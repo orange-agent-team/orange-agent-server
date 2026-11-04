@@ -30,6 +30,8 @@ pub enum ProcessError {
     Integrity,
     #[error("model process did not become ready")]
     Startup,
+    #[error("model startup cancelled after confirmed cleanup")]
+    Cancelled,
     #[error("model process cleanup is not confirmed")]
     CleanupUnknown,
     #[error("runtime filesystem operation failed")]
@@ -68,6 +70,17 @@ pub struct ManagedCpuModel {
 }
 impl ManagedCpuModel {
     pub async fn launch(root: &Path, profile: CpuProfile) -> Result<Self, ProcessError> {
+        let (_keep, receiver) = tokio::sync::watch::channel(false);
+        Self::launch_with_cancel(root, profile, receiver).await
+    }
+    pub async fn launch_with_cancel(
+        root: &Path,
+        profile: CpuProfile,
+        mut cancellation: tokio::sync::watch::Receiver<bool>,
+    ) -> Result<Self, ProcessError> {
+        if *cancellation.borrow() || cancellation.has_changed().is_err() {
+            return Err(ProcessError::Cancelled);
+        }
         if !root.is_absolute()
             || !profile.executable.is_absolute()
             || !profile.model.is_absolute()
@@ -95,11 +108,17 @@ impl ManagedCpuModel {
         let lease = Arc::new(private_file(&root.join("engine.lease"), false)?);
         lease.try_lock().map_err(|_| ProcessError::Busy)?;
         let prior = root.join("process.json");
-        if prior.exists() {
+        if fs::symlink_metadata(&prior).is_ok() {
             let bytes = private_read(&prior, 16 * 1024)?;
             let record: ProcessRecord =
                 serde_json::from_slice(&bytes).map_err(|_| ProcessError::RecoveryRequired)?;
-            if record.phase != "stopped" {
+            if record.phase != "stopped"
+                || !record.cpu_only
+                || !valid_id(&record.instance_id)
+                || !valid_id(&record.model_version)
+                || !valid_digest(&record.executable_sha256)
+                || !valid_digest(&record.model_sha256)
+            {
                 return Err(ProcessError::RecoveryRequired);
             }
         }
@@ -124,11 +143,13 @@ impl ManagedCpuModel {
         })
         .await
         .map_err(|_| ProcessError::Integrity)??;
-        if let Ok(metadata) = fs::symlink_metadata(&socket) {
-            if !metadata.file_type().is_socket() {
-                return Err(ProcessError::Invalid);
-            }
-            fs::remove_file(&socket)?;
+        if *cancellation.borrow() || cancellation.has_changed().is_err() {
+            return Err(ProcessError::Cancelled);
+        }
+        if fs::symlink_metadata(&socket).is_ok() {
+            // A confirmed shutdown removes the socket before its stopped receipt.
+            // Any remaining endpoint is unresolved; never unlink a live listener.
+            return Err(ProcessError::RecoveryRequired);
         }
         let key =
             uuid::Uuid::new_v4().simple().to_string() + &uuid::Uuid::new_v4().simple().to_string();
@@ -164,6 +185,14 @@ impl ManagedCpuModel {
                 "--n-gpu-layers",
                 "0",
             ])
+            .args([
+                "--threads-http",
+                "2",
+                "--no-ui",
+                "--no-ui-mcp-proxy",
+                "--jinja",
+                "--no-context-shift",
+            ])
             .current_dir(&root)
             .env_clear()
             // The backend retains stdin; this inherited lease prevents another
@@ -193,7 +222,9 @@ impl ManagedCpuModel {
         };
         managed.record.pid = managed.child.id();
         save_record(&managed.root, &managed.record)?;
-        let ready = tokio::time::timeout(profile.startup_timeout, async {
+        let ready = tokio::select! {
+            _=cancellation.changed()=>None,
+            result=tokio::time::timeout(profile.startup_timeout, async {
             loop {
                 if managed.child.try_wait()?.is_some() {
                     return Err(ProcessError::Startup);
@@ -209,10 +240,14 @@ impl ManagedCpuModel {
                 }
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
-        })
-        .await;
+        })=>Some(result),
+        };
+        if ready.is_none() || *cancellation.borrow() || cancellation.has_changed().is_err() {
+            managed.shutdown().await?;
+            return Err(ProcessError::Cancelled);
+        }
         match ready {
-            Ok(Ok(client)) => {
+            Some(Ok(Ok(client))) => {
                 managed.client = Some(client);
                 managed.record.phase = "ready".into();
                 save_record(&managed.root, &managed.record)?;

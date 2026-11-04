@@ -38,6 +38,7 @@ pub struct Journal {
     connection: Connection,
     _host_lock: File,
     private_root: std::path::PathBuf,
+    extra_private_roots: Vec<std::path::PathBuf>,
     workspace_signals:
         std::collections::HashMap<String, std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
@@ -113,6 +114,7 @@ impl Journal {
             _host_lock: lock,
             private_root: normalized.parent().ok_or(JournalError::Invalid)?.to_owned(),
             workspace_signals: std::collections::HashMap::new(),
+            extra_private_roots: Vec::new(),
         })
     }
     pub fn register_run(&self, owner: &str, run: &str, policy: &str) -> Result<(), JournalError> {

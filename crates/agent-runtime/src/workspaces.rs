@@ -72,6 +72,71 @@ pub struct RunPage {
 }
 
 impl Journal {
+    fn protected_roots(&self) -> Vec<std::path::PathBuf> {
+        let mut roots = vec![self.private_root.clone()];
+        roots.extend(self.extra_private_roots.iter().cloned());
+        roots
+    }
+    /// Trusted Host startup hook for private IPC/cache areas. Register before
+    /// writing secrets or restoring workspace access. Never removes protection.
+    pub fn reserve_private_directory(&mut self, path: &Path) -> Result<(), WorkspaceStoreError> {
+        if path.is_symlink() {
+            return Err(WorkspaceStoreError::Invalid);
+        }
+        let path = path.canonicalize().map_err(WorkspaceError::Io)?;
+        let metadata = std::fs::metadata(&path).map_err(WorkspaceError::Io)?;
+        if !metadata.is_dir() {
+            return Err(WorkspaceStoreError::Invalid);
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            if metadata.mode() & 0o077 != 0 {
+                return Err(WorkspaceStoreError::Invalid);
+            }
+        }
+        let mut roots = self.protected_roots();
+        if roots.contains(&path) {
+            return Ok(());
+        }
+        if roots.len() >= 64 {
+            return Err(WorkspaceStoreError::Limit);
+        }
+        roots.push(path.clone());
+        let legacy_active:bool=self.connection.query_row("SELECT EXISTS(SELECT 1 FROM runtime_runs rr JOIN runs r USING(run_id) LEFT JOIN run_workspaces rw USING(run_id) WHERE rw.workspace_id IS NULL AND r.active=1 AND rr.phase IN('ready','model_pending','tools_pending','recovery_required'))",[],|r|r.get(0))?;
+        if legacy_active {
+            return Err(WorkspaceStoreError::RecoveryRequired);
+        }
+        let unresolved:bool=self.connection.query_row("SELECT EXISTS(SELECT 1 FROM operations WHERE state IN('unknown','dispatching') UNION SELECT 1 FROM runtime_invocations WHERE state IN('unknown','dispatched'))",[],|r|r.get(0))?;
+        if unresolved {
+            return Err(WorkspaceStoreError::RecoveryRequired);
+        }
+        let rows = {
+            let mut query=self.connection.prepare("SELECT owner,workspace_id,policy,canonical_path,environment,resource_identity FROM local_workspaces WHERE active=1")?;
+            query
+                .query_map([], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, String>(3)?,
+                        r.get::<_, String>(4)?,
+                        r.get::<_, String>(5)?,
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        for (owner, id, policy, root, environment, resource) in rows {
+            match WorkspaceGrant::open(&owner, &id, &policy, Path::new(&root), &roots) {
+                Ok(grant)
+                    if grant.environment() == environment
+                        && grant.resource_identity() == resource => {}
+                _ => return Err(WorkspaceStoreError::Conflict),
+            }
+        }
+        self.extra_private_roots.push(path);
+        Ok(())
+    }
     pub fn workspace(&self, owner: &str, id: &str) -> Result<WorkspaceView, WorkspaceStoreError> {
         if !valid_id(owner) || !valid_id(id) {
             return Err(WorkspaceStoreError::Invalid);
@@ -107,13 +172,7 @@ impl Journal {
             .filter(|s| s.len() <= 4096)
             .ok_or(WorkspaceStoreError::Invalid)?;
         let id = format!("workspace-{}", uuid::Uuid::new_v4());
-        let probe = WorkspaceGrant::open(
-            owner,
-            &id,
-            policy,
-            &canonical,
-            std::slice::from_ref(&self.private_root),
-        )?;
+        let probe = WorkspaceGrant::open(owner, &id, policy, &canonical, &self.protected_roots())?;
         if !probe.has_persistent_identity() {
             return Err(WorkspaceError::PersistentIdentityUnavailable.into());
         }
@@ -186,7 +245,7 @@ impl Journal {
             &view.workspace_id,
             &view.policy,
             Path::new(&view.canonical_path),
-            std::slice::from_ref(&self.private_root),
+            &self.protected_roots(),
         );
         match result {
             Ok(grant)
@@ -237,7 +296,7 @@ impl Journal {
             id,
             &view.policy,
             Path::new(&view.canonical_path),
-            std::slice::from_ref(&self.private_root),
+            &self.protected_roots(),
             Some(revoker.flag),
         )?;
         // Verify again after opening the capability: a path swap between the two

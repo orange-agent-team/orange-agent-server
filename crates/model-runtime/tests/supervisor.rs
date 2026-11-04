@@ -49,6 +49,14 @@ impl Fixture {
         serde_json::from_slice(&fs::read(self.root.join("process.json")).expect("record"))
             .expect("json")
     }
+    fn host_config(&self) -> PathBuf {
+        let profile = self.profile();
+        let path = self.root.join("host-profile.json");
+        let value = serde_json::json!({"protocol":1,"runtime_directory":self.root,"executable":profile.executable,"executable_sha256":profile.executable_sha256,"model":profile.model,"model_sha256":profile.model_sha256,"model_bytes":profile.model_bytes,"model_version":profile.model_version,"context_tokens":profile.context_tokens,"startup_timeout_seconds":5});
+        fs::write(&path, serde_json::to_vec(&value).expect("json")).expect("profile");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("private profile");
+        path
+    }
 }
 #[tokio::test]
 async fn owned_process_private_ipc_and_explicit_shutdown_release_lease() {
@@ -259,4 +267,178 @@ async fn live_status_observes_real_backend_exit_instead_of_cached_ready() {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     panic!("stale ready status");
+}
+
+#[tokio::test]
+async fn supervisor_control_eof_or_invalid_frame_stops_and_reaps_model() {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    for invalid in [false, true] {
+        let f = Fixture::new(b"GGUF-ready");
+        let profile = f.host_config();
+        let mut host = tokio::process::Command::new(env!("CARGO_BIN_EXE_orange-model-host"))
+            .arg(profile)
+            .env_clear()
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("host");
+        let mut lines = BufReader::new(host.stdout.take().expect("stdout")).lines();
+        let first = tokio::time::timeout(Duration::from_secs(10), lines.next_line())
+            .await
+            .expect("deadline")
+            .expect("read")
+            .expect("ready");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&first).expect("json")["record"]["phase"],
+            "ready"
+        );
+        if invalid {
+            host.stdin
+                .as_mut()
+                .expect("stdin")
+                .write_all(b"invalid-command\n")
+                .await
+                .expect("frame");
+        } else {
+            drop(host.stdin.take());
+        }
+        let status = tokio::time::timeout(Duration::from_secs(8), host.wait())
+            .await
+            .expect("host exit")
+            .expect("wait");
+        assert_eq!(status.success(), !invalid);
+        assert_eq!(f.record().phase, "stopped");
+        assert!(!f.root.join("api.key").exists());
+    }
+}
+#[tokio::test]
+async fn ui_process_crash_triggers_owned_supervisor_cleanup() {
+    use tokio::io::{AsyncBufReadExt, BufReader};
+    let f = Fixture::new(b"GGUF-ready");
+    let profile = f.host_config();
+    let mut ui = tokio::process::Command::new(&f.binary)
+        .arg("--fixture-ui")
+        .arg(env!("CARGO_BIN_EXE_orange-model-host"))
+        .arg(profile)
+        .env_clear()
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .expect("owned UI fixture");
+    let mut lines = BufReader::new(ui.stdout.take().expect("stdout")).lines();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(10), lines.next_line())
+            .await
+            .expect("deadline")
+            .expect("line")
+            .as_deref(),
+        Some("FIXTURE_UI_READY")
+    );
+    ui.kill().await.expect("kill owned UI fixture");
+    ui.wait().await.expect("reap UI");
+    for _ in 0..200 {
+        if f.record().phase == "stopped" {
+            assert!(!f.root.join("api.key").exists());
+            let mut next = ManagedCpuModel::launch(&f.root, f.profile())
+                .await
+                .expect("safe reuse after explicit helper receipt");
+            next.shutdown().await.expect("stop");
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("parent EOF did not stop supervised model");
+}
+
+#[tokio::test]
+async fn explicit_startup_cancel_waits_for_actual_child_exit() {
+    let f = Fixture::new(b"GGUF-loading");
+    let root = f.root.clone();
+    let profile = f.profile();
+    let (sender, receiver) = tokio::sync::watch::channel(false);
+    let task =
+        tokio::spawn(
+            async move { ManagedCpuModel::launch_with_cancel(&root, profile, receiver).await },
+        );
+    let mut dispatched = false;
+    for _ in 0..100 {
+        if let Ok(bytes) = fs::read(f.root.join("process.json"))
+            && let Ok(record) = serde_json::from_slice::<ProcessRecord>(&bytes)
+            && record.pid.is_some()
+        {
+            dispatched = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    sender.send(true).expect("cancel");
+    assert!(matches!(
+        task.await.expect("join"),
+        Err(ProcessError::Cancelled)
+    ));
+    assert!(dispatched);
+    assert_eq!(f.record().phase, "stopped");
+    assert!(!f.root.join("api.key").exists());
+}
+#[tokio::test]
+async fn supervisor_observes_parent_eof_while_model_is_still_loading() {
+    let f = Fixture::new(b"GGUF-loading");
+    let profile = f.host_config();
+    let mut host = tokio::process::Command::new(env!("CARGO_BIN_EXE_orange-model-host"))
+        .arg(profile)
+        .env_clear()
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .expect("host");
+    let mut dispatched = false;
+    for _ in 0..100 {
+        if let Ok(bytes) = fs::read(f.root.join("process.json"))
+            && let Ok(record) = serde_json::from_slice::<ProcessRecord>(&bytes)
+            && record.pid.is_some()
+        {
+            dispatched = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    drop(host.stdin.take());
+    let status = tokio::time::timeout(Duration::from_secs(5), host.wait())
+        .await
+        .expect("cleanup deadline")
+        .expect("wait");
+    assert!(dispatched);
+    assert!(status.success());
+    assert_eq!(f.record().phase, "stopped");
+    assert!(!f.root.join("engine.sock").exists());
+}
+
+#[tokio::test]
+async fn unexplained_socket_or_linked_record_never_gets_overwritten() {
+    use std::os::unix::{fs::symlink, net::UnixListener};
+    let f = Fixture::new(b"GGUF-ready");
+    let listener = UnixListener::bind(f.root.join("engine.sock")).expect("unexplained listener");
+    assert!(matches!(
+        ManagedCpuModel::launch(&f.root, f.profile()).await,
+        Err(ProcessError::RecoveryRequired)
+    ));
+    assert!(f.root.join("engine.sock").exists());
+    drop(listener);
+    fs::remove_file(f.root.join("engine.sock")).expect("remove fixture");
+    symlink(f.root.join("missing-state"), f.root.join("process.json")).expect("dangling record");
+    assert!(matches!(
+        ManagedCpuModel::launch(&f.root, f.profile()).await,
+        Err(ProcessError::Invalid)
+    ));
+    assert!(
+        fs::symlink_metadata(f.root.join("process.json"))
+            .expect("preserved link")
+            .file_type()
+            .is_symlink()
+    );
 }

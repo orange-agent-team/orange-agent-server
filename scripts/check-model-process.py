@@ -12,4 +12,4 @@ cargo=Path(subprocess.check_output([rustup,'which','--toolchain','stable','cargo
 environment=os.environ.copy();environment['PATH']=str(cargo.parent)+os.pathsep+environment.get('PATH','')
 subprocess.run([str(cargo),'test','-p','orange-model-runtime','--features','process-test-fixture','--test','supervisor','--locked'],cwd=ROOT,env=environment,check=True)
 subprocess.run([str(cargo),'clippy','-p','orange-model-runtime','--all-targets','--features','process-test-fixture','--locked','--','-D','warnings'],cwd=ROOT,env=environment,check=True)
-print('PASS actual Unix subprocess/IPC/integrity/cleanup and inherited lease after parent crash; backend/model fixtures only, no actual inference, automatic orphan recovery, Windows or GPU certificate')
+print('PASS actual Unix subprocess/IPC/integrity, startup cancellation, UI-parent EOF cleanup and inherited lease after supervisor crash; backend/model fixtures only, no actual inference, arbitrary orphan reconciliation, Windows or GPU certificate')

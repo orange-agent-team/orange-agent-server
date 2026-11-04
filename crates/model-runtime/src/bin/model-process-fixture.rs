@@ -7,16 +7,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         os::unix::net::UnixListener,
     };
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().is_some_and(|value| value == "--fixture-ui") {
+        return run_fixture_ui(&args[1..]);
+    }
     if args
         .first()
         .is_some_and(|value| value == "--fixture-parent")
     {
         return run_fixture_parent(&args[1..]);
     }
-    if !args.len().is_multiple_of(2) {
-        return Err("paired test arguments required".into());
+    let switches = [
+        "--no-ui",
+        "--no-ui-mcp-proxy",
+        "--jinja",
+        "--no-context-shift",
+    ];
+    let paired: Vec<_> = args
+        .iter()
+        .filter(|argument| !switches.contains(&argument.as_str()))
+        .collect();
+    if !paired.len().is_multiple_of(2)
+        || switches
+            .iter()
+            .any(|flag| !args.iter().any(|argument| argument == flag))
+    {
+        return Err("bounded profile switches required".into());
     }
-    let args: HashMap<&str, &str> = args
+    let args: HashMap<&str, &str> = paired
         .chunks_exact(2)
         .map(|pair| (pair[0].as_str(), pair[1].as_str()))
         .collect();
@@ -145,4 +162,33 @@ fn run_fixture_parent(args: &[String]) -> Result<(), Box<dyn std::error::Error>>
 fn main() {
     eprintln!("Unix-only test fixture");
     std::process::exit(2);
+}
+
+#[cfg(unix)]
+fn run_fixture_ui(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::Write;
+    use tokio::io::{AsyncBufReadExt, BufReader};
+    if args.len() != 2 {
+        return Err("fixture UI: host profile".into());
+    }
+    tokio::runtime::Runtime::new()?.block_on(async {
+        let mut host = tokio::process::Command::new(&args[0])
+            .arg(&args[1])
+            .env_clear()
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()?;
+        let _input = host.stdin.take().ok_or("control input")?;
+        let mut lines = BufReader::new(host.stdout.take().ok_or("control output")?).lines();
+        let ready = lines.next_line().await?.ok_or("host did not start")?;
+        let ready: serde_json::Value = serde_json::from_str(&ready)?;
+        if ready["record"]["phase"] != "ready" {
+            return Err("host not ready".into());
+        }
+        println!("FIXTURE_UI_READY");
+        std::io::stdout().flush()?;
+        std::future::pending::<()>().await;
+        Ok::<_, Box<dyn std::error::Error>>(())
+    })
 }
