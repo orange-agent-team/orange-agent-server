@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/domain", "crates/protocol", "crates/agent-runtime", "services/control-plane"]
+members = ["crates/domain", "crates/protocol", "crates/agent-runtime", "crates/model-runtime", "services/control-plane"]
 resolver = "2"
 
 [workspace.package]
@@ -26,6 +26,7 @@ tempfile = "=3.27.0"
 openidconnect = { version = "=4.1.0", default-features = false, features = ["reqwest", "rustls-tls"] }
 time = { version = "=0.3.47", features = ["formatting", "parsing"] }
 base64 = "=0.22.1"
+reqwest = { version = "=0.12.28", default-features = false, features = ["json", "rustls-tls"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

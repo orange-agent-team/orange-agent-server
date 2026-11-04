@@ -1488,6 +1488,18 @@ name = "orange-domain"
 version = "0.1.0"
 
 [[package]]
+name = "orange-model-runtime"
+version = "0.1.0"
+dependencies = [
+ "orange-protocol",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
 name = "orange-protocol"
 version = "0.1.0"
 dependencies = [

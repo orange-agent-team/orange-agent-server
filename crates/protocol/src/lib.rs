@@ -1,3 +1,5 @@
+pub mod model;
+
 use orange_domain::Credits;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
