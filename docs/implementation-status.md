@@ -10,7 +10,9 @@
 - orange-agent-runtime：真实SQLite持久意图、响应提交屏障、批准绑定/到期/撤权、独占Host锁、重启后unknown禁止重放。
 - 本地开发HTTP入口：预算/Job查询与创建、仅排队任务取消。只允许显式development和loopback；开发令牌不代表OIDC或生产身份。
 
-没有实现的部分仍PENDING：生产身份/团队、价格/模型注册到Quote的真实计价、模型执行、Job运行中取消/结算、Worker/实际GPU、完整工具/连接器、Web云Host、支付、Admin服务及G4—G6。当前HTTP不会伪造这些功能成功。
+Admin 已新增独立 OIDC/MFA、当前授权/会话、总览和操作列表后端；真实本地验证与限制见 [身份实施记录](admin-identity-implementation.md)。
+
+没有实现的部分仍PENDING：生产身份/团队、价格/模型注册到Quote的真实计价、模型执行、Job运行中取消/结算、Worker/实际GPU、完整工具/连接器、Web云Host、支付、Admin写操作/独立批准及G4—G6。当前HTTP不会伪造这些功能成功。
 
 ## 本机运行
 

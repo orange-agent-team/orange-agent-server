@@ -23,6 +23,9 @@ tower = { version = "=0.5.3", features = ["util"] }
 rusqlite = { version = "=0.39.0", features = ["bundled"] }
 thiserror = "=2.0.21"
 tempfile = "=3.27.0"
+openidconnect = { version = "=4.1.0", default-features = false, features = ["reqwest", "rustls-tls"] }
+time = { version = "=0.3.47", features = ["formatting", "parsing"] }
+base64 = "=0.22.1"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

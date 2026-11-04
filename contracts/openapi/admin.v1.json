@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Orange Admin API",
-    "version": "0.1.0",
-    "description": "Design draft, not deployed. Separate admin origin/session. Authenticated requests must additionally pass current permissions, scope, step-up and immutable action policy. No generic SQL/exec/set_balance APIs. Generic actions.* AND action-specific permissions are required. Approval needs approval_permission; current scope/MFA and different maker/checker are runtime checks."
+    "version": "0.1.1",
+    "description": "Candidate contract. Development identity/session and scoped read-only endpoints are implemented; other operations remain design drafts. Separate admin origin, OIDC Authorization Code with PKCE, current permissions, scope, MFA and immutable action policy are required. No generic SQL/exec/set_balance APIs."
   },
   "servers": [
     {
@@ -127,7 +127,8 @@
               }
             }
           }
-        }
+        },
+        "x-implementation-status": "development-candidate"
       },
       "delete": {
         "operationId": "revokeAdminSession",
@@ -241,7 +242,8 @@
               }
             }
           }
-        }
+        },
+        "x-implementation-status": "development-candidate"
       }
     },
     "/admin/v1/overview": {
@@ -369,7 +371,12 @@
               }
             }
           }
-        }
+        },
+        "x-implementation-status": "development-candidate",
+        "x-supported-development-scopes": [
+          "platform:platform",
+          "tenant:<owner_id>"
+        ]
       }
     },
     "/admin/v1/users": {
@@ -503,7 +510,8 @@
               }
             }
           }
-        }
+        },
+        "x-implementation-status": "planned"
       }
     },
     "/admin/v1/users/{user_id}": {
@@ -636,7 +644,8 @@
               }
             }
           }
-        }
+        },
+        "x-implementation-status": "planned"
       }
     },
     "/admin/v1/organizations": {
@@ -770,7 +779,8 @@
               }
             }
           }
-        }
+        },
+        "x-implementation-status": "planned"
       }
     },
     "/admin/v1/organizations/{organization_id}": {
@@ -903,7 +913,8 @@
               }
             }
           }
-        }
+        },
+        "x-implementation-status": "planned"
       }
     },
     "/admin/v1/runs": {
@@ -1037,7 +1048,8 @@
               }
             }
           }
-        }
+        },
+        "x-implementation-status": "planned"
       }
     },
     "/admin/v1/runs/{run_id}": {
@@ -1170,7 +1182,8 @@
               }
             }
           }
-        }
+        },
+        "x-implementation-status": "planned"
       }
     },
     "/admin/v1/workspaces": {
@@ -1304,7 +1317,8 @@
               }
             }
           }
-        }
+        },
+        "x-implementation-status": "planned"
       }
     },
     "/admin/v1/workspaces/{workspace_id}": {
@@ -1437,7 +1451,8 @@
               }
             }
           }
-        }
+        },
+        "x-implementation-status": "planned"
       }
     },
     "/admin/v1/nodes": {
@@ -1571,7 +1586,8 @@
               }
             }
           }
-        }
+        },
+        "x-implementation-status": "planned"
       }
     },
     "/admin/v1/nodes/{node_id}": {
@@ -1704,7 +1720,8 @@
               }
             }
           }
-        }
+        },
+        "x-implementation-status": "planned"
       }
     },
     "/admin/v1/models": {
@@ -1838,7 +1855,8 @@
               }
             }
           }
-        }
+        },
+        "x-implementation-status": "planned"
       }
     },
     "/admin/v1/models/{model_version_id}": {
@@ -1971,7 +1989,8 @@
               }
             }
           }
-        }
+        },
+        "x-implementation-status": "planned"
       }
     },
     "/admin/v1/payments": {
@@ -2105,7 +2124,8 @@
               }
             }
           }
-        }
+        },
+        "x-implementation-status": "planned"
       }
     },
     "/admin/v1/payments/{payment_order_id}": {
@@ -2238,7 +2258,8 @@
               }
             }
           }
-        }
+        },
+        "x-implementation-status": "planned"
       }
     },
     "/admin/v1/ledger/transactions": {
@@ -2372,7 +2393,8 @@
               }
             }
           }
-        }
+        },
+        "x-implementation-status": "planned"
       }
     },
     "/admin/v1/ledger/transactions/{transaction_id}": {
@@ -2505,7 +2527,8 @@
               }
             }
           }
-        }
+        },
+        "x-implementation-status": "planned"
       }
     },
     "/admin/v1/reconciliation-cases": {
@@ -2639,7 +2662,8 @@
               }
             }
           }
-        }
+        },
+        "x-implementation-status": "planned"
       }
     },
     "/admin/v1/reconciliation-cases/{case_id}": {
@@ -2772,7 +2796,8 @@
               }
             }
           }
-        }
+        },
+        "x-implementation-status": "planned"
       }
     },
     "/admin/v1/risk-cases": {
@@ -2906,7 +2931,8 @@
               }
             }
           }
-        }
+        },
+        "x-implementation-status": "planned"
       }
     },
     "/admin/v1/risk-cases/{case_id}": {
@@ -3039,7 +3065,8 @@
               }
             }
           }
-        }
+        },
+        "x-implementation-status": "planned"
       }
     },
     "/admin/v1/releases": {
@@ -3173,7 +3200,8 @@
               }
             }
           }
-        }
+        },
+        "x-implementation-status": "planned"
       }
     },
     "/admin/v1/releases/{release_manifest_id}": {
@@ -3306,7 +3334,8 @@
               }
             }
           }
-        }
+        },
+        "x-implementation-status": "planned"
       }
     },
     "/admin/v1/feature-flags": {
@@ -3440,7 +3469,8 @@
               }
             }
           }
-        }
+        },
+        "x-implementation-status": "planned"
       }
     },
     "/admin/v1/feature-flags/{feature_id}": {
@@ -3573,7 +3603,8 @@
               }
             }
           }
-        }
+        },
+        "x-implementation-status": "planned"
       }
     },
     "/admin/v1/audit-events": {
@@ -3707,7 +3738,8 @@
               }
             }
           }
-        }
+        },
+        "x-implementation-status": "planned"
       }
     },
     "/admin/v1/audit-events/{event_id}": {
@@ -3840,7 +3872,8 @@
               }
             }
           }
-        }
+        },
+        "x-implementation-status": "planned"
       }
     },
     "/admin/v1/actions": {
@@ -3974,7 +4007,12 @@
               }
             }
           }
-        }
+        },
+        "x-implementation-status": "development-candidate",
+        "x-supported-development-scopes": [
+          "platform:platform",
+          "tenant:<owner_id>"
+        ]
       },
       "post": {
         "operationId": "createAdminAction",
@@ -4217,7 +4255,8 @@
             "approval": "maker_checker",
             "approval_permission": "support.grant.approve"
           }
-        ]
+        ],
+        "x-implementation-status": "planned"
       }
     },
     "/admin/v1/actions/{action_id}": {
@@ -4344,7 +4383,8 @@
               }
             }
           }
-        }
+        },
+        "x-implementation-status": "planned"
       },
       "parameters": [
         {
@@ -4501,7 +4541,8 @@
               }
             }
           }
-        }
+        },
+        "x-implementation-status": "planned"
       },
       "parameters": [
         {
@@ -4658,7 +4699,8 @@
               }
             }
           }
-        }
+        },
+        "x-implementation-status": "planned"
       },
       "parameters": [
         {
@@ -4815,7 +4857,8 @@
               }
             }
           }
-        }
+        },
+        "x-implementation-status": "planned"
       },
       "parameters": [
         {
@@ -4962,7 +5005,8 @@
               }
             }
           }
-        }
+        },
+        "x-implementation-status": "planned"
       }
     },
     "/admin/v1/support-content": {
@@ -5095,7 +5139,8 @@
               }
             }
           }
-        }
+        },
+        "x-implementation-status": "planned"
       }
     },
     "/admin/v1/refunds": {
@@ -5229,7 +5274,8 @@
               }
             }
           }
-        }
+        },
+        "x-implementation-status": "planned"
       }
     },
     "/admin/v1/refunds/{refund_id}": {
@@ -5362,7 +5408,282 @@
               }
             }
           }
-        }
+        },
+        "x-implementation-status": "planned"
+      }
+    },
+    "/admin/v1/auth/start": {
+      "get": {
+        "operationId": "startAdminLogin",
+        "summary": "Start browser-bound OIDC authorization with nonce and S256 PKCE",
+        "security": [],
+        "responses": {
+          "303": {
+            "description": "Redirect to configured identity provider; one-time flow expires in 300 seconds",
+            "headers": {
+              "Location": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Configured provider URL or fixed /overview; never user-selected return URL"
+              },
+              "Set-Cookie": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "__Host- cookie; Secure, HttpOnly, SameSite=Lax, Path=/; no Domain"
+              }
+            }
+          },
+          "401": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "x-implementation-status": "development-candidate"
+      }
+    },
+    "/admin/v1/auth/callback": {
+      "get": {
+        "operationId": "completeAdminLogin",
+        "summary": "Consume state once, exchange code, validate issuer/audience/signature/nonce/expiry and configured MFA ACR",
+        "security": [],
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 2048
+            }
+          },
+          {
+            "name": "code",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          },
+          {
+            "name": "error",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 2048
+            }
+          },
+          {
+            "name": "iss",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 2048
+            }
+          },
+          {
+            "name": "session_state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 2048
+            }
+          }
+        ],
+        "x-authentication-rules": [
+          "Requires matching browser flow cookie and unexpired single-use state",
+          "Requires code and no provider error; no retry on uncertain code exchange",
+          "Requires pre-provisioned active issuer/subject and current environment grant; provider roles do not grant platform permissions",
+          "Step-up binds expected principal and prior session; successful step-up revokes prior session"
+        ],
+        "responses": {
+          "303": {
+            "description": "Authenticated admin session; redirect /overview",
+            "headers": {
+              "Location": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Configured provider URL or fixed /overview; never user-selected return URL"
+              },
+              "Set-Cookie": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "__Host- cookie; Secure, HttpOnly, SameSite=Lax, Path=/; no Domain"
+              }
+            }
+          },
+          "401": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "x-implementation-status": "development-candidate"
+      }
+    },
+    "/admin/v1/auth/step-up": {
+      "post": {
+        "operationId": "startAdminStepUp",
+        "summary": "Start fresh MFA for current principal; caller navigates returned configured authorization URL",
+        "security": [
+          {
+            "AdminSessionCookie": [],
+            "CsrfToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "x-idempotency": "No automatic retry. This issues a new one-time flow, not a domain action. Retrying may replace the browser flow cookie; only the matching flow can complete.",
+        "responses": {
+          "200": {
+            "description": "Fresh browser-bound flow created; old session remains valid until successful callback",
+            "headers": {
+              "Set-Cookie": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "__Host- cookie; Secure, HttpOnly, SameSite=Lax, Path=/; no Domain"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminAuthorizationRedirect"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "x-implementation-status": "development-candidate"
       }
     }
   },
@@ -8185,6 +8506,20 @@
         },
         "required": [
           "data"
+        ],
+        "additionalProperties": false
+      },
+      "AdminAuthorizationRedirect": {
+        "type": "object",
+        "properties": {
+          "authorization_url": {
+            "type": "string",
+            "format": "uri",
+            "maxLength": 8192
+          }
+        },
+        "required": [
+          "authorization_url"
         ],
         "additionalProperties": false
       }

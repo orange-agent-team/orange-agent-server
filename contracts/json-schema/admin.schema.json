@@ -2721,6 +2721,20 @@
         "data"
       ],
       "additionalProperties": false
+    },
+    "AdminAuthorizationRedirect": {
+      "type": "object",
+      "properties": {
+        "authorization_url": {
+          "type": "string",
+          "format": "uri",
+          "maxLength": 8192
+        }
+      },
+      "required": [
+        "authorization_url"
+      ],
+      "additionalProperties": false
     }
   },
   "$ref": "#/$defs/AdminActionCreate"
