@@ -238,6 +238,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         _ => return Err("unknown command".into()),
     };
+    let view = if view.final_text.is_some() || !view.pending.is_empty() {
+        journal
+            .agent_view_authorized(&config.run.owner, &config.run.run_id, &grant)
+            .await?
+    } else {
+        view
+    };
     println!("{}", serde_json::to_string_pretty(&view)?);
     Ok(())
 }

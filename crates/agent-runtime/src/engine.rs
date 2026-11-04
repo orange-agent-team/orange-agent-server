@@ -298,6 +298,44 @@ impl Journal {
             failure,
         })
     }
+    /// Content-bearing UI/recovery reads require a current workspace capability
+    /// and current source versions. Metadata-only run summaries remain separate.
+    pub async fn agent_view_authorized(
+        &self,
+        owner: &str,
+        run: &str,
+        grant: &WorkspaceGrant,
+    ) -> Result<RunView, EngineError> {
+        let stored = self.stored_run(owner, run)?;
+        check_grant(&stored.config, grant)?;
+        let view = self.agent_view(owner, run)?;
+        if view.final_text.is_some() || !view.pending.is_empty() {
+            let _leases = self.revalidate_sources(&stored.config, grant).await?;
+            check_grant(&stored.config, grant)?;
+            return self.agent_view(owner, run);
+        }
+        Ok(view)
+    }
+    /// Trusted hosts use this content-free configuration to select the exact
+    /// model/policy on recovery. It does not grant workspace or tool access.
+    pub fn agent_config(&self, owner: &str, run: &str) -> Result<RunConfig, EngineError> {
+        Ok(self.stored_run(owner, run)?.config)
+    }
+    pub fn agent_workspace_id(
+        &self,
+        owner: &str,
+        run: &str,
+    ) -> Result<Option<String>, EngineError> {
+        self.stored_run(owner, run)?;
+        Ok(self
+            .connection
+            .query_row(
+                "SELECT workspace_id FROM run_workspaces WHERE run_id=?",
+                [run],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
     /// Owner is authenticated by the host; the model never receives this method.
     pub fn approve_agent_tool(
         &self,
@@ -334,6 +372,12 @@ impl Journal {
             return Err(EngineError::Forbidden);
         }
         grant.request_revoke();
+        self.cancel_agent_run(owner, run)
+    }
+    /// Revoking an owned Run never requires fresh filesystem access. The host
+    /// must also signal any in-flight invocation before waiting for this writer.
+    pub fn cancel_agent_run(&mut self, owner: &str, run: &str) -> Result<RunView, EngineError> {
+        self.stored_run(owner, run)?;
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;

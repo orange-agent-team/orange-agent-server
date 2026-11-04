@@ -534,3 +534,64 @@ async fn revoked_completed_run_cannot_reexpose_final_text_and_config_cannot_rese
             .is_none()
     );
 }
+
+#[tokio::test]
+async fn authorized_recovery_view_refuses_deleted_or_changed_completed_sources() {
+    for delete in [false, true] {
+        let f = Fixture::new();
+        let mut j = f.open();
+        f.start(&mut j);
+        let model = ScriptedModel::new(vec![
+            tools(vec![call("read", "read_file", json!({"path":"note.txt"}))]),
+            final_response(),
+        ]);
+        let (_sender, rx) = watch::channel(false);
+        f.advance(&mut j, &model, rx.clone())
+            .await
+            .expect("proposal");
+        f.approve(&j);
+        f.advance(&mut j, &model, rx.clone()).await.expect("read");
+        f.advance(&mut j, &model, rx).await.expect("complete");
+        assert!(
+            j.agent_view_authorized("alice", "run-1", &f.grant)
+                .await
+                .expect("current sources")
+                .final_text
+                .is_some()
+        );
+        assert!(j.agent_config("other", "run-1").is_err());
+        assert!(j.agent_workspace_id("other", "run-1").is_err());
+        assert_eq!(
+            j.agent_config("alice", "run-1")
+                .expect("metadata")
+                .model_version,
+            f.config.model_version
+        );
+        drop(j);
+        if delete {
+            std::fs::remove_file(f.workspace.path().join("note.txt")).expect("delete");
+        } else {
+            std::fs::write(f.workspace.path().join("note.txt"), "changed").expect("replace");
+        }
+        let j = f.open();
+        assert!(
+            j.agent_view_authorized("alice", "run-1", &f.grant)
+                .await
+                .is_err(),
+            "reopening must not restore unavailable source text"
+        );
+        assert_eq!(
+            model.calls.load(Ordering::SeqCst),
+            2,
+            "view validation never reruns model"
+        );
+        drop(j);
+        let mut j = f.open();
+        assert!(j.cancel_agent_run("another-owner", "run-1").is_err());
+        let cancelled = j
+            .cancel_agent_run("alice", "run-1")
+            .expect("owner can stop without reopening deleted source");
+        assert_eq!(cancelled.phase, Phase::Cancelled);
+        assert!(cancelled.final_text.is_none());
+    }
+}
