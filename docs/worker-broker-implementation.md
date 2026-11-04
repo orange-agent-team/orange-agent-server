@@ -24,6 +24,8 @@ Broker 使用私有 SQLite/WAL/FULL 和独占文件锁，存储固定设备/审�
 
 `VerifiedCloudGrant::from_verified_start` 仅供完成 mTLS、当前云端 lease 与 StartGrant 校验的客户端适配器使用；该构造器本身不是 mTLS 或证书校验实现。`ResourceProbe` 仅由可信本机 OS 适配器实现，不能把不可信 JSON 反序列化为“设备已清理”。可信适配器尚未完成时不能注册供给。
 
+云许可还必须带原分配ACK所对应的完整Broker Grant，包括grant_id、device、broker_epoch、slot_generation、监督器、Remote模式与profile。ConfirmStart与Renew同时核对云lease绑定和本机grant绑定。回归测试曾复现“清理后用相同云lease的新预留复用旧StartGrant”被接受；现在旧许可无法启动或续约新槽持有者。真实云执行适配器仍须从持久ACK/StartGrant关联中取得该Grant，不能接受用户随意提供的grant参数。
+
 `set_remote_allowed` 和 `invalidate` 是可信宿主钩子；未来 IPC 必须分别绑定已登记用户和真实 OS 事件权限。Broker 不接受用户文件正文、任意 shell 命令或任意 PID 终止请求。
 
 2026-11-05补充：显式关闭贡献策略会在同一SQLite事务内关闭新供给、将当前已预留/运行远端grant置为draining并记录事件。旧预留不再能ConfirmStart，旧运行不能Renew，同一Acquire请求也不能取回已失效许可。重新启用贡献不会复活旧grant。本地Agent许可不受此操作影响。`draining_grants`仅向当前已认证监督器返回其自身待停止任务，不把读取列表当完成回执；仍需实际停止后通过Release探针。重复关闭不重复记录同一grant排空，写盘/审计失败使整个策略变更回滚并返回错误，调用者不能显示已关闭成功。
@@ -32,7 +34,7 @@ Broker 使用私有 SQLite/WAL/FULL 和独占文件锁，存储固定设备/审�
 
 `python3 scripts/check-broker.py` 运行实际临时 SQLite/文件锁与并发测试，覆盖单例、唯一获准者、幂等内容冲突、ACK 与启动分离、预留/运行抢占、旧世代拒绝、重启、保守期限、缺探针隔离、探针 Future 中断、私有路径/链接防护、休眠失效入口和不可变审计。
 
-当前14项测试还覆盖贡献撤销后的预留启动拒绝、运行续约拒绝、本地任务保留、监督器排空列表隔离、重新启用不恢复旧许可，以及审计故障时的事务回滚。没有新增真实GPU或OS身份认证声明。
+当前15项Broker测试还覆盖贡献撤销后的预留启动拒绝、运行续约拒绝、本地任务保留、监督器排空列表隔离、重新启用不恢复旧许可、旧云授权不能跨本机许可复用，以及审计故障时的事务回滚。Worker库另有3项NodeJournal测试，合计18项。没有新增真实GPU或OS身份认证声明。
 
 测试明确使用 OS 身份、云授权、设备探针替身。当前真实证据只有本机 Rust/SQLite/文件系统行为；Windows Named Pipe/DACL、SID/进程创建时间核验、Job Object/WSL 监督、NVML、GPU 型号映射、真实驱动重置和清理仍未认证。纯 CPU 任务不需要这个 GPU Broker。
 

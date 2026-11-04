@@ -99,6 +99,7 @@ async fn contribution_revocation_fences_reserved_grants_without_claiming_cleanup
     let grant = reserved(broker.acquire(&supervisor, &req).expect("reserve"));
     let cloud = VerifiedCloudGrant::from_verified_start(
         req.remote.clone().expect("remote"),
+        &grant,
         Instant::now(),
         Duration::from_secs(45),
     )
@@ -195,6 +196,7 @@ async fn contribution_revocation_drains_running_remote_and_preserves_local_work(
     let grant = reserved(broker.acquire(&remote, &req).expect("remote reserve"));
     let cloud = VerifiedCloudGrant::from_verified_start(
         req.remote.expect("remote"),
+        &grant,
         Instant::now(),
         Duration::from_secs(45),
     )
@@ -367,6 +369,7 @@ async fn remote_ack_does_not_start_and_local_preempts_unstarted_remote() {
     assert!(new.slot_generation > old.slot_generation);
     let cloud = VerifiedCloudGrant::from_verified_start(
         req.remote.expect("binding"),
+        &old,
         Instant::now(),
         Duration::from_secs(45),
     )
@@ -386,6 +389,7 @@ async fn running_remote_requires_actual_probe_boundary_before_local_reuse() {
     let old = reserved(broker.acquire(&remote, &req).expect("reserve"));
     let cloud = VerifiedCloudGrant::from_verified_start(
         req.remote.expect("binding"),
+        &old,
         Instant::now(),
         Duration::from_secs(45),
     )
@@ -540,14 +544,6 @@ async fn elapsed_lease_cannot_renew_or_release_without_cleanup() {
 #[tokio::test]
 async fn cloud_fences_and_conservative_send_time_cannot_be_extended_by_reception() {
     let binding = request("r", Holder::Remote).remote.expect("remote");
-    assert!(
-        VerifiedCloudGrant::from_verified_start(
-            binding.clone(),
-            Instant::now() - Duration::from_secs(45),
-            Duration::from_secs(45)
-        )
-        .is_err()
-    );
     let dir = directory();
     let mut broker = initialized(&dir).await;
     broker.set_remote_allowed(true).expect("policy");
@@ -560,17 +556,45 @@ async fn cloud_fences_and_conservative_send_time_cannot_be_extended_by_reception
             .expect("grant"),
     );
     let mut wrong = binding.clone();
+    assert!(
+        VerifiedCloudGrant::from_verified_start(
+            binding.clone(),
+            &grant,
+            Instant::now() - Duration::from_secs(45),
+            Duration::from_secs(45)
+        )
+        .is_err()
+    );
+    let mut local_ack = grant.clone();
+    local_ack.mode = Holder::Local;
+    assert!(matches!(
+        VerifiedCloudGrant::from_verified_start(
+            binding.clone(),
+            &local_ack,
+            Instant::now(),
+            Duration::from_secs(45)
+        ),
+        Err(BrokerError::Invalid)
+    ));
     wrong.connection_epoch += 1;
-    let bad =
-        VerifiedCloudGrant::from_verified_start(wrong, Instant::now(), Duration::from_secs(45))
-            .expect("mismatched");
+    let bad = VerifiedCloudGrant::from_verified_start(
+        wrong,
+        &grant,
+        Instant::now(),
+        Duration::from_secs(45),
+    )
+    .expect("mismatched");
     assert!(matches!(
         broker.confirm_start(&supervisor, &grant, Some(&bad)),
         Err(BrokerError::CloudGrantRequired)
     ));
-    let short =
-        VerifiedCloudGrant::from_verified_start(binding, Instant::now(), Duration::from_secs(5))
-            .expect("short");
+    let short = VerifiedCloudGrant::from_verified_start(
+        binding,
+        &grant,
+        Instant::now(),
+        Duration::from_secs(5),
+    )
+    .expect("short");
     broker
         .confirm_start(&supervisor, &grant, Some(&short))
         .expect("start");
@@ -585,6 +609,65 @@ async fn cloud_fences_and_conservative_send_time_cannot_be_extended_by_reception
         .expect("deadlines");
     assert_eq!(expires, remote);
     assert!(remote < 5000, "network response receipt adds no time");
+}
+
+#[tokio::test]
+async fn cloud_start_permission_cannot_authorize_a_reused_slot() {
+    let dir = directory();
+    let mut broker = initialized(&dir).await;
+    broker.set_remote_allowed(true).expect("enable");
+    let supervisor = broker
+        .register_supervisor(peer("remote-owner"))
+        .expect("supervisor");
+    let first_request = request("first-reservation", Holder::Remote);
+    let first = reserved(broker.acquire(&supervisor, &first_request).expect("first"));
+    let first_cloud = VerifiedCloudGrant::from_verified_start(
+        first_request.remote.expect("remote"),
+        &first,
+        Instant::now(),
+        Duration::from_secs(45),
+    )
+    .expect("verified original ACK fixture");
+    broker
+        .confirm_start(&supervisor, &first, Some(&first_cloud))
+        .expect("first start");
+    broker.begin_drain(&supervisor, &first).expect("drain");
+    broker
+        .release(&supervisor, &first, &GOOD)
+        .await
+        .expect("explicit cleanup probe fixture");
+    let second_request = request("second-reservation-same-cloud-lease", Holder::Remote);
+    let second = reserved(
+        broker
+            .acquire(&supervisor, &second_request)
+            .expect("new local reservation"),
+    );
+    assert_ne!(first.grant_id, second.grant_id);
+    assert!(second.slot_generation > first.slot_generation);
+    assert!(
+        matches!(
+            broker.confirm_start(&supervisor, &second, Some(&first_cloud)),
+            Err(BrokerError::CloudGrantRequired)
+        ),
+        "a verified cloud grant for the original ACK must not authorize a different local grant"
+    );
+    let second_cloud = VerifiedCloudGrant::from_verified_start(
+        second_request.remote.expect("remote"),
+        &second,
+        Instant::now(),
+        Duration::from_secs(45),
+    )
+    .expect("separately verified new ACK fixture");
+    broker
+        .confirm_start(&supervisor, &second, Some(&second_cloud))
+        .expect("new exact grant");
+    assert!(
+        matches!(
+            broker.renew(&supervisor, &second, Some(&first_cloud)),
+            Err(BrokerError::CloudGrantRequired)
+        ),
+        "old cloud permission cannot renew a reused local slot"
+    );
 }
 #[tokio::test]
 async fn authentication_profiles_and_future_storage_fail_closed() {

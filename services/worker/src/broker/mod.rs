@@ -130,20 +130,35 @@ impl RemoteBinding {
     }
 }
 /// This value is created by the authenticated cloud-client adapter after lease
-/// verification. Duration is the conservative remaining interval measured from
+/// verification, including the exact local grant recorded in the acknowledged
+/// assignment. A lease alone must not authorize a later reservation of the slot.
+/// Duration is the conservative remaining interval measured from
 /// monotonic_send, not remote wall time or response receive time.
 pub struct VerifiedCloudGrant {
     binding: RemoteBinding,
+    acknowledged_grant: Grant,
     stop_at: Instant,
 }
 impl VerifiedCloudGrant {
     pub fn from_verified_start(
         binding: RemoteBinding,
+        acknowledged_grant: &Grant,
         monotonic_send: Instant,
         granted: Duration,
     ) -> Result<Self, BrokerError> {
         binding.validate()?;
-        if granted <= Duration::from_secs(1)
+        if acknowledged_grant.mode != Holder::Remote
+            || acknowledged_grant.broker_epoch <= 0
+            || acknowledged_grant.slot_generation <= 0
+            || ![
+                &acknowledged_grant.grant_id,
+                &acknowledged_grant.device_id,
+                &acknowledged_grant.supervisor_instance,
+                &acknowledged_grant.profile_id,
+            ]
+            .iter()
+            .all(|value| valid_id(value))
+            || granted <= Duration::from_secs(1)
             || granted > Duration::from_secs(45)
             || monotonic_send > Instant::now()
         {
@@ -155,7 +170,11 @@ impl VerifiedCloudGrant {
         if stop_at <= Instant::now() {
             return Err(BrokerError::Stale);
         }
-        Ok(Self { binding, stop_at })
+        Ok(Self {
+            binding,
+            acknowledged_grant: acknowledged_grant.clone(),
+            stop_at,
+        })
     }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -660,12 +679,13 @@ impl Broker {
         let remote_deadline = match (grant.mode, cloud) {
             (Holder::Local, None) => None,
             (Holder::Remote, Some(cloud)) => {
-                if binding
-                    .as_deref()
-                    .map(decode::<RemoteBinding>)
-                    .transpose()?
-                    .as_ref()
-                    != Some(&cloud.binding)
+                if &cloud.acknowledged_grant != grant
+                    || binding
+                        .as_deref()
+                        .map(decode::<RemoteBinding>)
+                        .transpose()?
+                        .as_ref()
+                        != Some(&cloud.binding)
                     || cloud.stop_at <= Instant::now()
                 {
                     return Err(BrokerError::CloudGrantRequired);
@@ -725,12 +745,13 @@ impl Broker {
             (Holder::Local, None) => None,
             (Holder::Remote, None) => old_remote,
             (Holder::Remote, Some(cloud)) => {
-                if binding
-                    .as_deref()
-                    .map(decode::<RemoteBinding>)
-                    .transpose()?
-                    .as_ref()
-                    != Some(&cloud.binding)
+                if &cloud.acknowledged_grant != grant
+                    || binding
+                        .as_deref()
+                        .map(decode::<RemoteBinding>)
+                        .transpose()?
+                        .as_ref()
+                        != Some(&cloud.binding)
                     || cloud.stop_at <= Instant::now()
                 {
                     return Err(BrokerError::CloudGrantRequired);

@@ -27,8 +27,8 @@ NodeJournal使用私有目录、独占锁、SQLite WAL/FULL、不可变intent与
 
 ## 实际验证与限制
 
-`python3 scripts/check-node-commands.py` 运行9项协议、17项Worker库（14 Broker+3命令日志）、18项真实mTLS/PostgreSQL集成测试及启用集成测试的Clippy。覆盖旧客户端不收新命令、未知能力拒绝、真实E08客户端落盘、连接世代/策略代隔离、重复回执、不同摘要/receipt_id拒绝、回执丢失不重放、加速超时、凭据撤销和不可变证据。加速超时使用明确数据库时钟夹具，不称为长期运行观察。
+`python3 scripts/check-node-commands.py` 运行9项协议、18项Worker库（15 Broker+3命令日志）、18项真实mTLS/PostgreSQL集成测试及启用集成测试的Clippy。覆盖旧客户端不收新命令、未知能力拒绝、真实E08客户端落盘、连接世代/策略代隔离、重复回执、不同摘要/receipt_id拒绝、回执丢失不重放、加速超时、凭据撤销和不可变证据。加速超时使用明确数据库时钟夹具，不称为长期运行观察。
 
 证书和已接受Admin意图是隔离夹具；TLS传输、数据库、SQLite日志是真实实现。Admin的HTTP/MFA生产者在独立切片中验证，本次不把它称为完整Admin→设备清理端到端。Windows/GPU、公共enrollment、密钥保护和生产网络仍未认证。
 
-下一步：由可信Worker Host核对当前策略后调用Broker停止远端供给，绑定本机监督器与实际清理探针；为unknown提供原命令/收据核对路径。恢复必须有可验证的资源状态，不能直接信任NodeReceipt、远端布尔值或health_report_id字符串。模型任务的StartGrant还必须与获准Broker grant及slot generation逐一绑定，避免复用旧云授权。
+下一步：由可信Worker Host核对当前策略后调用Broker停止远端供给，绑定本机监督器与实际清理探针；为unknown提供原命令/收据核对路径。恢复必须有可验证的资源状态，不能直接信任NodeReceipt、远端布尔值或health_report_id字符串。Broker内核已补StartGrant与获准本机grant/slot generation的精确绑定；真实模型任务适配器和持久ACK关联仍待实现。
