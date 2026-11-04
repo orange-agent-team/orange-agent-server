@@ -1,4 +1,5 @@
 //! Authenticated control liveness. A connected session is never an execution lease.
+use crate::broker::{AppliedNodePolicy, Broker, BrokerError};
 use crate::node_journal::{NodeJournal, ReceivedNodeIntent};
 use orange_protocol::node_control::{NodeStopIntent, StopKind};
 use orange_protocol::{
@@ -50,6 +51,31 @@ pub struct ControlConnection {
     stop_at: Instant,
     active: bool,
     node_control_version: u32,
+    observed_policy_generation: u64,
+}
+/// Short-lived, nonserializable authorization borrowing its live control session.
+/// Acquiring it performs network I/O without holding a Broker lock. Applying it
+/// changes only persistent remote policy; resource cleanup remains separate.
+pub struct AuthorizedNodeStop<'a> {
+    connection: &'a mut ControlConnection,
+    received: ReceivedNodeIntent,
+    deadline: Instant,
+}
+impl AuthorizedNodeStop<'_> {
+    pub fn apply(self, broker: &mut Broker) -> Result<AppliedNodePolicy, ControlError> {
+        if !self.connection.is_current_locally() || Instant::now() >= self.deadline {
+            return Err(ControlError::Stale);
+        }
+        broker
+            .apply_verified_node_stop(&self.received, self.deadline)
+            .map_err(|error| match error {
+                BrokerError::Unauthorized => ControlError::Unauthorized,
+                BrokerError::Stale | BrokerError::Conflict | BrokerError::RecoveryRequired => {
+                    ControlError::Stale
+                }
+                _ => ControlError::Unavailable,
+            })
+    }
 }
 impl ControlConnection {
     pub async fn connect(config: ControlConfig) -> Result<Self, ControlError> {
@@ -59,10 +85,23 @@ impl ControlConnection {
         config: ControlConfig,
         journal: &mut NodeJournal,
     ) -> Result<Self, ControlError> {
+        Self::connect_journal(config, journal, 1).await
+    }
+    pub async fn connect_node_policy(
+        config: ControlConfig,
+        journal: &mut NodeJournal,
+    ) -> Result<Self, ControlError> {
+        Self::connect_journal(config, journal, 2).await
+    }
+    async fn connect_journal(
+        config: ControlConfig,
+        journal: &mut NodeJournal,
+        version: u32,
+    ) -> Result<Self, ControlError> {
         if config.node_id != journal.node_id() {
             return Err(ControlError::Invalid);
         }
-        let connection = Self::connect_mode(config, 1).await?;
+        let connection = Self::connect_mode(config, version).await?;
         journal
             .bind(connection.identity())
             .map_err(|_| ControlError::Unavailable)?;
@@ -168,6 +207,9 @@ impl ControlConnection {
         if welcome.node_control_version != node_control_version {
             return Err(ControlError::Unsupported);
         }
+        if node_control_version == 2 && welcome.node_policy_generation > i64::MAX as u64 {
+            return Err(ControlError::Protocol);
+        }
         // Protocol v1 control sessions have 45s TTL. Subtract transport latency
         // by starting from send time, and retain a one-second safety margin.
         let stop_at = sent + Duration::from_secs(44);
@@ -185,6 +227,7 @@ impl ControlConnection {
             stop_at,
             active: true,
             node_control_version,
+            observed_policy_generation: welcome.node_policy_generation,
         })
     }
     pub fn identity(&self) -> &ControlIdentity {
@@ -211,11 +254,39 @@ impl ControlConnection {
         capability_snapshot: &str,
         journal: &mut NodeJournal,
     ) -> Result<Vec<ReceivedNodeIntent>, ControlError> {
-        if self.node_control_version != 1 || journal.node_id() != self.identity.node_id {
+        if !matches!(self.node_control_version, 1 | 2) || journal.node_id() != self.identity.node_id
+        {
             return Err(ControlError::Unsupported);
         }
         self.heartbeat_inner(capability_snapshot, Some(journal))
             .await
+    }
+    pub async fn authorize_node_stop<'a>(
+        &'a mut self,
+        capability_snapshot: &str,
+        journal: &mut NodeJournal,
+        command: &str,
+    ) -> Result<AuthorizedNodeStop<'a>, ControlError> {
+        if self.node_control_version != 2 {
+            return Err(ControlError::Unsupported);
+        }
+        if !valid_id(command) {
+            return Err(ControlError::Invalid);
+        }
+        self.heartbeat_node_control(capability_snapshot, journal)
+            .await?;
+        let received = journal
+            .current_receipt(&self.identity, command)
+            .map_err(|_| ControlError::Stale)?;
+        if received.intent.generation().map(|g| g as u64) != Some(self.observed_policy_generation) {
+            return Err(ControlError::Stale);
+        }
+        let deadline = self.stop_at.min(Instant::now() + Duration::from_secs(5));
+        Ok(AuthorizedNodeStop {
+            connection: self,
+            received,
+            deadline,
+        })
     }
     async fn heartbeat_inner(
         &mut self,
@@ -253,12 +324,14 @@ impl ControlConnection {
                     .map_err(status)?
                     .ok_or(ControlError::Unavailable)?;
                 if let Some(server_frame::Body::NodeCommand(command)) = &frame.body {
-                    if self.node_control_version != 1
+                    if !matches!(self.node_control_version, 1 | 2)
                         || received.len() >= 8
                         || command.node_id != self.identity.node_id
                         || command.session_id != self.identity.session_id
                         || command.connection_epoch != self.identity.connection_epoch
                         || Instant::now() >= deadline
+                        || (self.node_control_version == 2
+                            && command.policy_generation < self.observed_policy_generation)
                     {
                         return Err(ControlError::Protocol);
                     }
@@ -280,6 +353,9 @@ impl ControlConnection {
                         .map_err(|_| ControlError::Unavailable)?;
                     if Instant::now() >= deadline {
                         return Err(ControlError::Stale);
+                    }
+                    if self.node_control_version == 2 {
+                        self.observed_policy_generation = command.policy_generation;
                     }
                     self.sender
                         .send(worker::WorkerFrame {
@@ -309,6 +385,14 @@ impl ControlConnection {
                         .is_none_or(|t| t.seconds <= 0 || !(0..1_000_000_000).contains(&t.nanos))
                 {
                     return Err(ControlError::Protocol);
+                }
+                if self.node_control_version == 2 {
+                    if ack.node_policy_generation > i64::MAX as u64
+                        || ack.node_policy_generation < self.observed_policy_generation
+                    {
+                        return Err(ControlError::Stale);
+                    }
+                    self.observed_policy_generation = ack.node_policy_generation;
                 }
                 return Ok(received);
             }

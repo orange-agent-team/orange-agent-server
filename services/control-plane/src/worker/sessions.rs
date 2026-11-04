@@ -22,6 +22,7 @@ pub struct DeviceSession {
     pub certificate_sha256: String,
     pub expires_at_unix: i64,
     pub node_control_version: u32,
+    pub node_policy_generation: u64,
 }
 #[derive(Clone)]
 pub struct WorkerSessionStore {
@@ -46,7 +47,7 @@ impl WorkerSessionStore {
         if !valid_id(node)
             || !valid_digest(fingerprint)
             || !valid_digest(capabilities)
-            || node_control_version > 1
+            || node_control_version > 2
         {
             return Err(SessionError::Invalid);
         }
@@ -55,6 +56,11 @@ impl WorkerSessionStore {
         let id = Uuid::new_v4().to_string();
         let row=sqlx::query("INSERT INTO worker_sessions(node_id,gateway_instance_id,connection_epoch,session_id,certificate_sha256,capabilities_digest,last_seen_at,expires_at,node_control_version) VALUES($1,$2,1,$3,$4,$5,clock_timestamp(),clock_timestamp()+interval '45 seconds',$6) ON CONFLICT(node_id) DO UPDATE SET gateway_instance_id=excluded.gateway_instance_id,connection_epoch=worker_sessions.connection_epoch+1,session_id=excluded.session_id,certificate_sha256=excluded.certificate_sha256,capabilities_digest=excluded.capabilities_digest,reported_capability_snapshot_id=NULL,last_seen_at=excluded.last_seen_at,expires_at=excluded.expires_at,node_control_version=excluded.node_control_version RETURNING connection_epoch,floor(extract(epoch FROM expires_at))::bigint AS expires")
             .bind(node).bind(&self.gateway).bind(&id).bind(fingerprint).bind(capabilities).bind(node_control_version as i32).fetch_one(&mut *tx).await?;
+        let policy_generation: i64 =
+            sqlx::query_scalar("SELECT policy_generation FROM nodes WHERE node_id=$1")
+                .bind(node)
+                .fetch_one(&mut *tx)
+                .await?;
         let session = DeviceSession {
             node_id: node.into(),
             gateway_instance_id: self.gateway.clone(),
@@ -63,6 +69,7 @@ impl WorkerSessionStore {
             certificate_sha256: fingerprint.into(),
             expires_at_unix: row.try_get("expires")?,
             node_control_version,
+            node_policy_generation: policy_generation as u64,
         };
         sqlx::query("UPDATE nodes SET state=CASE WHEN state='offline' THEN 'online' ELSE state END,version=version+1 WHERE node_id=$1").bind(node).execute(&mut *tx).await?;
         audit(&mut tx, &session, "session.claimed").await?;
@@ -105,6 +112,12 @@ impl WorkerSessionStore {
         let expires:i64=sqlx::query_scalar("UPDATE worker_sessions SET last_seen_at=clock_timestamp(),expires_at=clock_timestamp()+interval '45 seconds',reported_capability_snapshot_id=$2 WHERE node_id=$1 RETURNING floor(extract(epoch FROM expires_at))::bigint").bind(node).bind(snapshot).fetch_one(&mut *tx).await?;
         let mut renewed = session.clone();
         renewed.expires_at_unix = expires;
+        let policy_generation: i64 =
+            sqlx::query_scalar("SELECT policy_generation FROM nodes WHERE node_id=$1")
+                .bind(node)
+                .fetch_one(&mut *tx)
+                .await?;
+        renewed.node_policy_generation = policy_generation as u64;
         finish(tx, &renewed).await?;
         Ok(renewed)
     }

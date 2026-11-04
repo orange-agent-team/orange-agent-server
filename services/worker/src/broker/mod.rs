@@ -1,6 +1,8 @@
 //! Persistent arbitration core for trusted OS/transport adapters. This module
 //! does not authenticate Named Pipe peers or certify GPU cleanup by itself.
+mod node_policy;
 pub(crate) mod storage;
+pub use node_policy::{AppliedNodePolicy, NodePolicyView};
 use orange_protocol::{request_digest, valid_digest, valid_id};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
@@ -30,6 +32,8 @@ pub enum BrokerError {
     RecoveryRequired,
     #[error("remote contribution is disabled")]
     RemoteDisabled,
+    #[error("platform node policy blocks remote contribution")]
+    PlatformBlocked,
     #[error("verified matching cloud StartGrant required")]
     CloudGrantRequired,
     #[error("device remains occupied or quarantined")]
@@ -294,7 +298,7 @@ impl Broker {
         }
         let (mut connection, lock) = storage::open(path)?;
         let version: i64 = connection.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if !(0..=1).contains(&version) {
+        if !(0..=2).contains(&version) {
             return Err(BrokerError::StoragePolicy);
         }
         let config_digest = digest("broker-config-v1", &config)?;
@@ -340,6 +344,9 @@ impl Broker {
             )?;
             tx.execute("UPDATE slots SET state='reconciling',epoch=(SELECT epoch FROM broker_meta),generation=generation+1,reason='broker_restart'",[])?;
             tx.execute("UPDATE grants SET state='quarantined' WHERE state IN('reserved','running','draining')",[])?;
+        }
+        if version <= 1 {
+            tx.execute_batch(include_str!("schema-v2.sql"))?;
         }
         let epoch: i64 = tx.query_row("SELECT epoch FROM broker_meta", [], |r| r.get(0))?;
         tx.execute(
@@ -447,6 +454,19 @@ impl Broker {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if allowed {
+            let (node, blocked): (Option<String>, bool) = tx.query_row(
+                "SELECT enrolled_node_id,platform_blocked FROM broker_meta WHERE singleton=1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?;
+            if node.is_none() {
+                return Err(BrokerError::RemoteDisabled);
+            }
+            if blocked {
+                return Err(BrokerError::PlatformBlocked);
+            }
+        }
         let previous: bool = tx.query_row(
             "SELECT remote_allowed FROM broker_meta WHERE singleton=1",
             [],
@@ -559,7 +579,16 @@ impl Broker {
         }
         match (request.mode, &request.remote) {
             (Holder::Local, None) => {}
-            (Holder::Remote, Some(remote)) => remote.validate()?,
+            (Holder::Remote, Some(remote)) => {
+                remote.validate()?;
+                let policy = self.node_policy()?;
+                if policy.enrolled_node_id.as_deref() != Some(remote.node_id.as_str()) {
+                    return Err(BrokerError::Unauthorized);
+                }
+                if policy.platform_blocked {
+                    return Err(BrokerError::PlatformBlocked);
+                }
+            }
             _ => return Err(BrokerError::Invalid),
         }
         let hash = digest("broker-acquire-v1", request)?;

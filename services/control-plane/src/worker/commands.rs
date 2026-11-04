@@ -69,7 +69,7 @@ impl WorkerSessionStore {
         &self,
         s: &DeviceSession,
     ) -> Result<Option<worker::NodeCommand>, SessionError> {
-        if s.node_control_version != 1 {
+        if !matches!(s.node_control_version, 1 | 2) {
             return Ok(None);
         }
         let mut tx = self.pool.begin().await?;
@@ -160,7 +160,7 @@ impl WorkerSessionStore {
         s: &DeviceSession,
         receipt: &worker::NodeReceipt,
     ) -> Result<(), SessionError> {
-        if s.node_control_version != 1
+        if !matches!(s.node_control_version, 1 | 2)
             || receipt.node_id != s.node_id
             || receipt.session_id != s.session_id
             || i64::try_from(receipt.connection_epoch).ok() != Some(s.connection_epoch)

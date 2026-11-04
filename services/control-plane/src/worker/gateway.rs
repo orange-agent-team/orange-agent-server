@@ -88,6 +88,7 @@ fn welcome(s: &DeviceSession) -> worker::ServerFrame {
             protocol_version: 1,
             expires_at: timestamp(s.expires_at_unix),
             node_control_version: s.node_control_version,
+            node_policy_generation: s.node_policy_generation,
         })),
     }
 }
@@ -124,7 +125,7 @@ impl WorkerGateway for Gateway {
         let Some(worker_frame::Body::Hello(hello)) = first.body else {
             return Err(Status::invalid_argument("first frame must be Hello"));
         };
-        if hello.protocol_version != 1 || hello.node_control_version > 1 {
+        if hello.protocol_version != 1 || hello.node_control_version > 2 {
             return Err(Status::failed_precondition("unsupported protocol version"));
         }
         let session = tokio::time::timeout(
@@ -229,6 +230,7 @@ async fn handle(
                     connection_epoch: session.connection_epoch as u64,
                     session_id: session.session_id.clone(),
                     expires_at: timestamp(session.expires_at_unix),
+                    node_policy_generation: session.node_policy_generation,
                 })),
             }))
         }

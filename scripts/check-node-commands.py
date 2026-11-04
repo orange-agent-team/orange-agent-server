@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Negotiated control receipt: actual SQLite, PostgreSQL and mTLS; no cleanup claim."""
+"""Negotiated receipt and current-policy authorization; no process/GPU cleanup claim."""
 import os
 from pathlib import Path
 import shutil
@@ -15,4 +15,4 @@ for command in [
     [str(cargo),'clippy','-p','orange-worker','-p','orange-control-plane','--all-targets','--features','integration-tests','--locked','--','-D','warnings'],
 ]:
     subprocess.run(command,cwd=ROOT,env=env,check=True)
-print('PASS negotiated real mTLS/PostgreSQL/SQLite node receipt and stale/unknown boundaries; explicit accepted-Admin-intent and certificate fixtures, no Broker apply, process/GPU cleanup, node resume or executed model Job')
+print('PASS real mTLS/PostgreSQL/SQLite node receipt and fresh-generation Broker policy commit; explicit accepted-Admin-intent, certificate, OS/probe/cloud-execution fixtures; no supervised process/GPU cleanup, node resume or executed model Job')

@@ -54,6 +54,295 @@ fn reserved(result: AcquireResult) -> Grant {
         other => panic!("expected reserved, got {other:?}"),
     }
 }
+fn received_stop(generation: u64) -> crate::node_journal::ReceivedNodeIntent {
+    let intent = orange_protocol::node_control::NodeStopIntent {
+        command_id: format!("node-stop-{generation}"),
+        action_id: format!("node-action-{generation}"),
+        node_id: "node".into(),
+        policy_generation: generation.to_string(),
+        kind: orange_protocol::node_control::StopKind::Drain,
+    };
+    let payload_digest = intent.digest().expect("digest");
+    crate::node_journal::ReceivedNodeIntent {
+        intent,
+        payload_digest,
+        receipt_id: format!("receipt-{generation}"),
+    }
+}
+
+#[tokio::test]
+async fn enrollment_binding_and_platform_stop_are_distinct_from_user_consent() {
+    let dir = directory();
+    let path = dir.path().join("broker.sqlite");
+    let mut broker = Broker::open(&path, config()).expect("open");
+    assert!(matches!(
+        broker.set_remote_allowed(true),
+        Err(BrokerError::RemoteDisabled)
+    ));
+    broker
+        .bind_enrolled_node("node")
+        .expect("trusted enrollment fixture");
+    broker.bind_enrolled_node("node").expect("same binding");
+    assert!(matches!(
+        broker.bind_enrolled_node("another-node"),
+        Err(BrokerError::Conflict)
+    ));
+    broker
+        .reconcile("GPU-test-device-identity", &GOOD)
+        .await
+        .expect("probe fixture");
+    broker
+        .set_remote_allowed(true)
+        .expect("local contribution consent");
+    let remote = broker.register_supervisor(peer("remote")).expect("peer");
+    let mut foreign = request("foreign-node", Holder::Remote);
+    foreign.remote.as_mut().expect("remote").node_id = "another-node".into();
+    assert!(matches!(
+        broker.acquire(&remote, &foreign),
+        Err(BrokerError::Unauthorized)
+    ));
+    let receipt = received_stop(1);
+    let applied = broker
+        .apply_verified_node_stop(&receipt, Instant::now() + Duration::from_secs(5))
+        .expect("verified transport fixture");
+    assert_eq!(applied.policy_generation, "1");
+    assert_eq!(
+        applied,
+        broker
+            .apply_verified_node_stop(&receipt, Instant::now() + Duration::from_secs(5))
+            .expect("same policy replay")
+    );
+    assert!(matches!(
+        broker.set_remote_allowed(true),
+        Err(BrokerError::PlatformBlocked)
+    ));
+    assert!(matches!(
+        broker.acquire(&remote, &request("new-remote", Holder::Remote)),
+        Err(BrokerError::PlatformBlocked)
+    ));
+    assert!(
+        broker
+            .connection
+            .execute("DELETE FROM node_policy_commands", [])
+            .is_err()
+    );
+    let count: i64 = broker
+        .connection
+        .query_row(
+            "SELECT count(*) FROM broker_events WHERE kind='node.policy_applied'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("audit");
+    assert_eq!(count, 1);
+    drop(broker);
+    let mut restarted = Broker::open(&path, config()).expect("restart");
+    assert!(restarted.node_policy().expect("policy").platform_blocked);
+    assert_eq!(
+        restarted
+            .applied_node_policy(&receipt.intent.command_id)
+            .expect("durable outcome"),
+        Some(applied)
+    );
+    assert!(matches!(
+        restarted.set_remote_allowed(true),
+        Err(BrokerError::PlatformBlocked)
+    ));
+    assert_eq!(
+        restarted
+            .slot("GPU-test-device-identity")
+            .expect("requires actual cleanup")
+            .state,
+        "reconciling"
+    );
+}
+
+#[tokio::test]
+async fn platform_stop_drains_remote_and_preserves_running_local_grant() {
+    let dir = directory();
+    let mut configuration = config();
+    configuration.devices.push("local-device".into());
+    let mut broker =
+        Broker::open(&dir.path().join("broker.sqlite"), configuration.clone()).expect("open");
+    broker
+        .bind_enrolled_node("node")
+        .expect("trusted enrollment");
+    for device in &configuration.devices {
+        broker
+            .reconcile(device, &GOOD)
+            .await
+            .expect("probe fixture");
+    }
+    let local = broker.register_supervisor(peer("local")).expect("local");
+    let remote = broker.register_supervisor(peer("remote")).expect("remote");
+    let mut request_local = request("local", Holder::Local);
+    request_local.device_id = "local-device".into();
+    let local_grant = reserved(
+        broker
+            .acquire(&local, &request_local)
+            .expect("local reserve"),
+    );
+    broker
+        .confirm_start(&local, &local_grant, None)
+        .expect("local start");
+    broker.set_remote_allowed(true).expect("local consent");
+    let request_remote = request("remote", Holder::Remote);
+    let remote_grant = reserved(
+        broker
+            .acquire(&remote, &request_remote)
+            .expect("remote reserve"),
+    );
+    let cloud = VerifiedCloudGrant::from_verified_start(
+        request_remote.remote.expect("remote"),
+        &remote_grant,
+        Instant::now(),
+        Duration::from_secs(45),
+    )
+    .expect("exact ACK fixture");
+    broker
+        .confirm_start(&remote, &remote_grant, Some(&cloud))
+        .expect("remote start");
+    broker
+        .apply_verified_node_stop(&received_stop(1), Instant::now() + Duration::from_secs(5))
+        .expect("verified stop fixture");
+    assert_eq!(
+        broker.draining_grants(&remote).expect("remote drains"),
+        vec![remote_grant.clone()]
+    );
+    assert!(matches!(
+        broker.renew(&remote, &remote_grant, None),
+        Err(BrokerError::Stale)
+    ));
+    broker
+        .renew(&local, &local_grant, None)
+        .expect("local remains authorized");
+    assert_eq!(
+        broker
+            .slot(&local_grant.device_id)
+            .expect("local slot")
+            .state,
+        "running_local"
+    );
+    assert_eq!(
+        broker
+            .slot(&remote_grant.device_id)
+            .expect("not cleanup")
+            .state,
+        "draining"
+    );
+}
+
+#[tokio::test]
+async fn node_policy_fences_identity_order_deadline_and_storage_failure() {
+    let dir = directory();
+    let mut broker = initialized(&dir).await;
+    broker.set_remote_allowed(true).expect("consent");
+    let expired = received_stop(1);
+    assert!(matches!(
+        broker.apply_verified_node_stop(&expired, Instant::now() - Duration::from_secs(1)),
+        Err(BrokerError::Stale)
+    ));
+    broker.connection.execute_batch("CREATE TEMP TRIGGER policy_write_fault BEFORE INSERT ON node_policy_commands BEGIN SELECT RAISE(ABORT,'test disk failure'); END;").expect("fault fixture");
+    assert!(
+        broker
+            .apply_verified_node_stop(&received_stop(1), Instant::now() + Duration::from_secs(5))
+            .is_err()
+    );
+    assert!(!broker.node_policy().expect("rollback").platform_blocked);
+    assert_eq!(
+        broker.node_policy().expect("generation").policy_generation,
+        "0"
+    );
+    let allowed: bool = broker
+        .connection
+        .query_row("SELECT remote_allowed FROM broker_meta", [], |r| r.get(0))
+        .expect("consent unchanged");
+    assert!(allowed);
+    broker
+        .connection
+        .execute_batch("DROP TRIGGER policy_write_fault;")
+        .expect("remove fixture");
+    let newer = received_stop(2);
+    broker
+        .apply_verified_node_stop(&newer, Instant::now() + Duration::from_secs(5))
+        .expect("current");
+    assert!(matches!(
+        broker.apply_verified_node_stop(&received_stop(1), Instant::now() + Duration::from_secs(5)),
+        Err(BrokerError::Stale)
+    ));
+    let mut conflict = newer.clone();
+    conflict.receipt_id = "another-receipt".into();
+    assert!(matches!(
+        broker.apply_verified_node_stop(&conflict, Instant::now() + Duration::from_secs(5)),
+        Err(BrokerError::Conflict)
+    ));
+    let mut foreign = received_stop(3);
+    foreign.intent.node_id = "other-node".into();
+    foreign.payload_digest = foreign.intent.digest().expect("digest");
+    assert!(matches!(
+        broker.apply_verified_node_stop(&foreign, Instant::now() + Duration::from_secs(5)),
+        Err(BrokerError::Unauthorized)
+    ));
+    assert_eq!(
+        broker
+            .node_policy()
+            .expect("not overwritten")
+            .policy_generation,
+        "2"
+    );
+}
+
+#[test]
+fn broker_v1_migration_preserves_remote_history_and_requires_matching_enrollment() {
+    let dir = directory();
+    let path = dir.path().join("broker.sqlite");
+    let configuration = config();
+    let (db, lock) = storage::open(&path).expect("private legacy fixture");
+    db.execute_batch(include_str!("schema.sql"))
+        .expect("exact v1 schema");
+    db.execute(
+        "INSERT INTO broker_meta(singleton,epoch,config_digest,owner) VALUES(1,1,?,?)",
+        params![
+            digest("broker-config-v1", &configuration).expect("config digest"),
+            configuration.owner_identity
+        ],
+    )
+    .expect("legacy config");
+    db.execute("INSERT INTO supervisors(instance_id,owner,process_identity,nonce,epoch,credential_digest) VALUES('legacy-supervisor',?,'legacy-process-start','legacy-nonce',1,?)",params![configuration.owner_identity,"a".repeat(64)]).expect("legacy supervisor");
+    let mut remote = request("legacy", Holder::Remote).remote.expect("remote");
+    remote.node_id = "legacy-node".into();
+    db.execute("INSERT INTO grants(grant_id,device_id,epoch,generation,supervisor,mode,profile_id,remote_binding,state,expires_ms) VALUES('legacy-grant',?,1,1,'legacy-supervisor','remote',?,?,'reserved',15000)",params![configuration.devices[0],configuration.approved_profiles[0].id,json(&remote).expect("binding")]).expect("legacy grant");
+    db.execute("INSERT INTO slots(device_id,state,epoch,generation,grant_id) VALUES(?,'reserved_remote',1,1,'legacy-grant')",[&configuration.devices[0]]).expect("legacy slot");
+    drop(db);
+    drop(lock);
+    let mut migrated = Broker::open(&path, configuration.clone()).expect("v1 to v2");
+    assert!(matches!(
+        migrated.bind_enrolled_node("wrong-node"),
+        Err(BrokerError::Conflict)
+    ));
+    migrated
+        .bind_enrolled_node("legacy-node")
+        .expect("matching history");
+    assert_eq!(
+        migrated
+            .slot(&configuration.devices[0])
+            .expect("no assumed cleanup")
+            .state,
+        "reconciling"
+    );
+    let version: i64 = migrated
+        .connection
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .expect("version");
+    assert_eq!(version, 2);
+    assert_eq!(
+        migrated
+            .grant("legacy-grant")
+            .expect("grant retained")
+            .grant_id,
+        "legacy-grant"
+    );
+}
 /// Explicit device probe substitute. Proves core transition logic only.
 struct Probe {
     healthy: bool,
@@ -172,6 +461,9 @@ async fn contribution_revocation_drains_running_remote_and_preserves_local_work(
     configuration.devices.push("second-device".into());
     let mut broker =
         Broker::open(&dir.path().join("broker.sqlite"), configuration.clone()).expect("open");
+    broker
+        .bind_enrolled_node("node")
+        .expect("trusted enrollment fixture");
     for device in &configuration.devices {
         broker.reconcile(device, &GOOD).await.expect("test probe");
     }
@@ -298,6 +590,9 @@ async fn contribution_revocation_rolls_back_if_durable_evidence_cannot_commit() 
 }
 async fn initialized(dir: &tempfile::TempDir) -> Broker {
     let mut broker = Broker::open(&dir.path().join("broker.sqlite"), config()).expect("open");
+    broker
+        .bind_enrolled_node("node")
+        .expect("trusted enrollment fixture");
     broker
         .reconcile("GPU-test-device-identity", &GOOD)
         .await
@@ -693,7 +988,7 @@ async fn authentication_profiles_and_future_storage_fail_closed() {
     drop(broker);
     let path = dir.path().join("broker.sqlite");
     let db = Connection::open(&path).expect("db");
-    db.execute_batch("PRAGMA wal_checkpoint(TRUNCATE); PRAGMA user_version=2;")
+    db.execute_batch("PRAGMA wal_checkpoint(TRUNCATE); PRAGMA user_version=999;")
         .expect("future");
     drop(db);
     let bytes = std::fs::read(&path).expect("bytes");

@@ -18,7 +18,7 @@
 
 ## 设备效果不混同于控制面效果
 
-排空/隔离执行会原子改变节点控制状态、增加节点版本和独立策略generation、插入唯一的 `admin_node_commands`，并将动作置为 `executing`。后续[命令接收切片](node-command-implementation.md)已接通协商传输、持久接收回执及超时unknown；命令received仍不代表设备停止。本机应用消费者、GPU/进程排空证据与unknown核对操作尚未接通，不声称资源可复用。
+排空/隔离执行会原子改变节点控制状态、增加节点版本和独立策略generation、插入唯一的 `admin_node_commands`，并将动作置为 `executing`。后续[命令接收](node-command-implementation.md)与[本机策略授权](node-policy-implementation.md)已接通传输、持久收据和库级Broker策略提交。常驻消费者、GPU/进程排空证据与unknown核对操作尚未接通；received或本机策略已提交都不代表资源可复用。
 
 恢复申请和独立审批可以保存；恢复执行在完整重新鉴权后返回 `SERVICE_UNAVAILABLE`。单独的 health_report_id 字符串不是可信回收证明。下一切片需要把命令 ID、节点连接世代、Broker 世代、租约及实际清理探针绑定后再开放恢复。
 

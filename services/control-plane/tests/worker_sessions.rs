@@ -1,3 +1,5 @@
+#[path = "worker_sessions/policy_cases.rs"]
+mod policy_cases;
 use orange_control_plane::{
     store::Store,
     worker::{
@@ -508,7 +510,7 @@ async fn duplicate_node_receipt_has_one_audit_effect_and_cannot_change_receipt_i
     let mut client = server.client(Some(&d.certificate)).await.expect("TLS");
     let mut unsupported = node_hello(&d.node);
     if let Some(worker_frame::Body::Hello(value)) = &mut unsupported.body {
-        value.node_control_version = 2;
+        value.node_control_version = 99;
     }
     assert_eq!(
         control(&mut client, unsupported)
@@ -704,6 +706,12 @@ async fn node_commands_require_negotiation_and_real_local_receipt_is_not_cleanup
     let received = collect_intent(&mut client, &mut local).await;
     assert_eq!(received.intent.command_id, command);
     assert_eq!(received.intent.policy_generation, "1");
+    assert!(matches!(
+        client
+            .authorize_node_stop("receipt-only-version", &mut local, &command)
+            .await,
+        Err(orange_worker::control::ControlError::Unsupported)
+    ));
     wait_state(&d, &command, "received").await;
     let status: String =
         sqlx::query_scalar("SELECT document->>'state' FROM admin_actions WHERE action_id=$1")

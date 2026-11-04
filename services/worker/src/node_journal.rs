@@ -85,6 +85,31 @@ impl NodeJournal {
     pub fn node_id(&self) -> &str {
         &self.node_id
     }
+    pub fn latest_received(&self) -> Result<Option<ReceivedNodeIntent>, JournalError> {
+        let id: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT command_id FROM node_intents ORDER BY policy_generation DESC LIMIT 1",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+        id.map(|id| self.received(&id))
+            .transpose()
+            .map(Option::flatten)
+    }
+    pub(crate) fn current_receipt(
+        &self,
+        identity: &ControlIdentity,
+        command: &str,
+    ) -> Result<ReceivedNodeIntent, JournalError> {
+        let row:Option<(i64,String)>=self.connection.query_row("SELECT i.connection_epoch,i.session_id FROM node_intents i JOIN node_receiver r ON r.singleton=1 WHERE i.command_id=? AND i.policy_generation=r.policy_generation AND r.node_id=? AND r.connection_epoch=? AND r.session_id=?",params![command,identity.node_id,i64::try_from(identity.connection_epoch).map_err(|_|JournalError::Invalid)?,identity.session_id],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
+        let (epoch, session) = row.ok_or(JournalError::Stale)?;
+        if epoch as u64 != identity.connection_epoch || session != identity.session_id {
+            return Err(JournalError::Stale);
+        }
+        self.received(command)?.ok_or(JournalError::Stale)
+    }
     /// Only the in-crate mTLS control adapter can bind a current connection. Public
     /// callers cannot acknowledge arbitrary deserialized commands through this API.
     pub(crate) fn bind(&mut self, identity: &ControlIdentity) -> Result<(), JournalError> {

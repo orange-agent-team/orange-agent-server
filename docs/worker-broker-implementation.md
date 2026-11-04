@@ -4,7 +4,7 @@
 
 ## 已实现的执行边界
 
-Broker 使用私有 SQLite/WAL/FULL 和独占文件锁，存储固定设备/审核 profile 配置摘要、监督器身份、命令、grant、slot 与不可变审计事件。一个本地实例持有数据库；并发请求经过同一状态机，只有一个有效槽许可。配置变化被拒绝，不能静默丢弃旧任务后换一套配置启动。
+Broker使用私有SQLite/WAL/FULL和独占文件锁，存储固定设备/审核profile、监督器身份、命令、grant、slot与不可变审计。schema2另保存固定node绑定和平台策略阻止，参见[本机策略接线](node-policy-implementation.md)。一个实例持有数据库；配置变化被拒绝，不能丢弃旧任务后换配置启动。
 
 首次启动及重启均进入 `reconciling`。重启递增 broker epoch 和 slot generation，撤销远程供给开关，将仍未清理的 grant 隔离。已有监督器句柄不能沿用；真实 OS 连接重新认证后才可登记。世代溢出明确拒绝，不回绕。
 
@@ -34,8 +34,8 @@ Broker 使用私有 SQLite/WAL/FULL 和独占文件锁，存储固定设备/审�
 
 `python3 scripts/check-broker.py` 运行实际临时 SQLite/文件锁与并发测试，覆盖单例、唯一获准者、幂等内容冲突、ACK 与启动分离、预留/运行抢占、旧世代拒绝、重启、保守期限、缺探针隔离、探针 Future 中断、私有路径/链接防护、休眠失效入口和不可变审计。
 
-当前15项Broker测试还覆盖贡献撤销后的预留启动拒绝、运行续约拒绝、本地任务保留、监督器排空列表隔离、重新启用不恢复旧许可、旧云授权不能跨本机许可复用，以及审计故障时的事务回滚。Worker库另有3项NodeJournal测试，合计18项。没有新增真实GPU或OS身份认证声明。
+当前19项Broker测试还覆盖贡献撤销、旧云授权跨许可拒绝、节点绑定、平台阻止跨重启保留、本地任务保留、schema1迁移、期限及审计故障回滚。Worker库另有3项NodeJournal测试，合计22项。没有新增真实GPU或OS身份认证声明。
 
 测试明确使用 OS 身份、云授权、设备探针替身。当前真实证据只有本机 Rust/SQLite/文件系统行为；Windows Named Pipe/DACL、SID/进程创建时间核验、Job Object/WSL 监督、NVML、GPU 型号映射、真实驱动重置和清理仍未认证。纯 CPU 任务不需要这个 GPU Broker。
 
-实际mTLS控制会话/世代已实现，见[会话实现](worker-session-implementation.md)。后续实现包括公开注册/CSR、云端命令投递和Worker命令日志、两阶段用户态监督器、平台安全IPC、真实设备探针、贡献策略接线，以及恢复后的配置/profile升级。Admin节点命令尚未接入本机撤销钩子；Broker库和目录存在不代表E08整个工程完成。
+实际mTLS控制会话/世代、节点命令/接收日志和版本2本机策略授权已实现。后续仍需公开注册/CSR、常驻Worker Host、两阶段用户态监督器、平台安全IPC、真实设备探针、原命令核对及恢复后的配置/profile升级。库级策略接线不代表E08整个工程或实际设备清理完成。

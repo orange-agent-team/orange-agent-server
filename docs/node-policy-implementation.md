@@ -1,0 +1,27 @@
+# 当前节点策略到本机Broker的接线
+
+2026-11-05。这个切片实现“当前平台策略可靠地写入本机Broker”，没有把它扩大为实际模型进程已退出或GPU已回收。
+
+## 两层授权
+
+`node_control_version=2`在Welcome和HeartbeatAck中返回数据库当前policy_generation。版本0仍为纯控制心跳，版本1仍只接收命令；版本1不能调用本机策略授权接口。旧Gateway明确拒绝版本2，Worker不会静默降级后继续应用策略。PostgreSQL迁移0013只扩展已支持能力枚举，既有迁移保持原字节。
+
+`authorize_node_stop`先完成一次真实心跳，重新校验证书、node/owner/组织与当前连接，取得当前策略generation；随后核对同一连接世代实际收到的持久命令。只有命令generation与当前云端generation一致才能返回授权对象。过期收据、重连前收据或仅收到但已被新策略替代的记录不能自动执行。
+
+授权对象不支持序列化，借用其仍存活的控制连接，最多保留五秒且不能跨过控制会话本地停止期限。申请授权时不持有Broker锁；取得授权后才执行同步本机事务，提交前再次检查期限，避免网络等待阻塞本地资源仲裁。收到回执本身不构成这个授权。
+
+## 本机持久策略
+
+Broker SQLite升级为schema2，新增固定enrolled_node_id、策略generation、platform_blocked和不可变应用结果。schema1日志和grant历史保留；旧远端历史属于其他node时禁止绑定。首次绑定由可信注册/启动适配器完成，本切片不提供公开注册或任意重绑定接口。
+
+启用远端共享需要已绑定node且平台未阻止；RemoteBinding必须属于该node。平台stop事务会关闭远端贡献，将当前预留/运行远端grant置为draining，持久设置platform_blocked并记录原command/digest/receipt、application_id和Broker epoch。重复同一策略只返回原结果，旧generation、同ID不同内容或不同receipt拒绝。写盘/审计失败整体回滚。
+
+本地Agent的运行/预留许可保持不变。用户重新打开共享开关不能清除platform_blocked。重启保留平台阻止，同时仍按原规则把未清理资源置为reconciling；没有任何分支直接变成idle。平台恢复接口尚未开放，需要独立批准与可信清理证据。
+
+`applied_node_policy`只读取历史应用记录，不能作为新的执行授权。旧连接收据及跨进程恢复仍需独立核对流程，不自动重放未知效果。本机应用结果尚未自动报告为云端最终完成，AdminAction仍保持executing。
+
+## 验证
+
+`python3 scripts/check-node-commands.py`覆盖9项协议、22项Worker库（19 Broker+3命令日志）、21项真实mTLS/PostgreSQL测试与严格Clippy。新增用例实际连接Gateway：版本2当前策略可写入Broker；凭据在收据后撤销则本机效果为零；云端generation更新后，旧收据不能应用，新策略才可提交。库测试验证schema1迁移、节点绑定、平台阻止跨重启保留、本地许可保留、期限与事务回滚。
+
+OS身份、设备探针、云模型执行ACK与已接受Admin意图是明确夹具；TLS、PostgreSQL、SQLite及策略事务是真实实现。测试只建立Broker状态，不运行模型或真实GPU。后续仍需Worker Host常驻循环、真实OS认证/监督器、排空进程与设备探针、原命令核对、最终回执及恢复。不能把这个切片标作完整E08或生产供给已完成。
