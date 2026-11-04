@@ -1,0 +1,46 @@
+use serde::{Deserialize, Serialize};
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReadFileArgs {
+    pub path: String,
+    pub start_byte: Option<u64>,
+    pub max_bytes: Option<u32>,
+    pub start_line: Option<u32>,
+    pub end_line: Option<u32>,
+    pub expected_sha256: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ListDirectoryArgs {
+    pub path: String,
+    pub cursor: Option<String>,
+    pub limit: Option<u16>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReadFileResult {
+    pub path: String,
+    pub sha256: String,
+    pub total_bytes: String,
+    pub start_byte: String,
+    pub end_byte: String,
+    pub content: String,
+    pub truncated: bool,
+    pub next_byte: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DirectoryEntry {
+    pub name: String,
+    pub kind: String,
+    pub bytes: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ListDirectoryResult {
+    pub path: String,
+    pub snapshot_digest: String,
+    pub entries: Vec<DirectoryEntry>,
+    pub next_cursor: Option<String>,
+    pub omitted_unsupported: bool,
+}

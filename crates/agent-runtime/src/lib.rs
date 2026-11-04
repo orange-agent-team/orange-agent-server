@@ -1,4 +1,5 @@
 //! Durable local operation boundary. Not yet a model loop or an OS sandbox.
+pub mod workspace;
 use orange_domain::{ExecutionIdentity, validate_response};
 use orange_protocol::{valid_digest, valid_id};
 use rusqlite::{Connection, OptionalExtension, params};

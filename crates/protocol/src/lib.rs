@@ -2,6 +2,7 @@ pub mod canonical;
 pub mod events;
 pub mod model;
 pub mod team;
+pub mod tools;
 pub mod user;
 
 use orange_domain::Credits;
