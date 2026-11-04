@@ -7,9 +7,8 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import shutil
 import tarfile
-import time
-import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
 PRIVATE = ROOT/'.local/model-runtime'
@@ -23,40 +22,13 @@ def digest(path):
     return h.hexdigest()
 
 def download():
-    model = LOCK['model']
-    destination = PRIVATE/(model['sha256']+'.gguf')
-    if destination.exists() and destination.stat().st_size == model['bytes'] and digest(destination) == model['sha256']:
-        print('Pinned model already verified', flush=True)
-        return
-    url = 'https://huggingface.co/'+model['repository']+'/resolve/'+model['revision']+'/'+model['file']
-    temporary = destination.with_suffix('.part')
-    for attempt in range(3):
-        try:
-            with urllib.request.urlopen(url, timeout=30) as response, temporary.open('wb') as file:
-                total, h = 0, hashlib.sha256()
-                while True:
-                    block = response.read(1024*1024)
-                    if not block:
-                        break
-                    total += len(block)
-                    if total > model['bytes']:
-                        raise ValueError('Model larger than pinned manifest')
-                    file.write(block)
-                    h.update(block)
-                file.flush()
-                os.fsync(file.fileno())
-            if total != model['bytes'] or h.hexdigest() != model['sha256']:
-                raise ValueError('Model size/digest mismatch; not activated')
-            os.replace(temporary, destination)
-            print('Official model downloaded and SHA-256 verified:', total, 'bytes', flush=True)
-            return
-        except (OSError, ValueError) as error:
-            temporary.unlink(missing_ok=True)
-            print('Transfer failure class:', type(error).__name__, flush=True)
-            if attempt == 2:
-                raise SystemExit('Official model download failed after three attempts; no mirror fallback')
-            print('Official model transfer failed; bounded retry', attempt+1, flush=True)
-            time.sleep(2**attempt)
+    rustup = shutil.which('rustup') or '/opt/homebrew/opt/rustup/bin/rustup'
+    cargo = Path(subprocess.check_output([rustup, 'which', '--toolchain', 'stable', 'cargo'], text=True).strip())
+    environment = os.environ.copy()
+    environment['PATH'] = str(cargo.parent)+os.pathsep+environment.get('PATH', '')
+    subprocess.run([str(cargo), 'build', '--bin', 'model-fetch', '--locked'], cwd=ROOT, env=environment, check=True)
+    subprocess.run([str(ROOT/'target/debug/model-fetch'), str(ROOT/'config/local-model.lock.json'), str(PRIVATE)],
+                   cwd=ROOT, env=environment, check=True)
 
 def build(checkout, target):
     if checkout is None:

@@ -27,3 +27,5 @@ python3 scripts/check-local-model.py
 参考[固定 llama.cpp 服务协议](https://github.com/ggml-org/llama.cpp/blob/b74298c109c107494b792c30af4bb8fa0ce1eb2f/tools/server/README.md)和[官方 Qwen 模型](https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/tree/9217f5db79a29953eb74d5343926648285ec7e67)。是否实测通过，以执行台账 MODEL-LOCAL-001 的具体证据为准。
 
 补充：已有源码词表可独立构建`llama-tokenize`，现已用它完成[DR-01候选投影与七组固定计量样例](structured-output-metering.md)。这不依赖权重下载，不改变完整模型推理仍未验证的状态；独立词表和生产模型的匹配尚待核对。
+
+下载路径已更新为[受控Rust缓存管理](model-cache-implementation.md)，增加断点续传、私有路径、配额及取消时文件锁保护。真实网络仍超时，不能把缓存单元测试等同于已取得模型。

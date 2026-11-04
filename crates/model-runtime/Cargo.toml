@@ -13,6 +13,12 @@ serde_json.workspace = true
 thiserror.workspace = true
 reqwest.workspace = true
 tokio.workspace = true
+sha2.workspace = true
+hex.workspace = true
+libc.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [lints]
 workspace = true
