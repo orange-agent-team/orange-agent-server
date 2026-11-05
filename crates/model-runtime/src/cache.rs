@@ -216,8 +216,7 @@ impl ModelCache {
             return Ok(artifact(&ready, spec, true));
         }
         // Serialize quota reservations for this cache. Ready immutable files remain readable concurrently.
-        let lock = Arc::new(private_file(&self.root.join(".model-cache-lock"), true)?);
-        lock.try_lock().map_err(|_| CacheError::LockUnavailable)?;
+        let lock = cache_lease(&self.root.join(".model-cache-lock"))?;
         if exists(&ready)? {
             verify(&ready, spec).await?;
             return Ok(artifact(&ready, spec, true));
@@ -308,6 +307,22 @@ fn artifact(path: &Path, spec: &ArtifactSpec, cached: bool) -> VerifiedArtifact 
         bytes: spec.bytes,
         cached,
     }
+}
+struct CacheLease {
+    file: File,
+}
+impl Drop for CacheLease {
+    fn drop(&mut self) {
+        // Only the final real cache writer owns this Drop. Explicit unlock
+        // prevents an incidental dup/fork descriptor from extending a completed
+        // cache lease. Model execution leases intentionally have other semantics.
+        let _ = self.file.unlock();
+    }
+}
+fn cache_lease(path: &Path) -> Result<Arc<CacheLease>, CacheError> {
+    let file = private_file(path, true)?;
+    file.try_lock().map_err(|_| CacheError::LockUnavailable)?;
+    Ok(Arc::new(CacheLease { file }))
 }
 fn exists(path: &Path) -> Result<bool, CacheError> {
     match fs::symlink_metadata(path) {
@@ -482,7 +497,7 @@ async fn transfer_once<T: Transport>(
     transport: &T,
     spec: &ArtifactSpec,
     path: &Path,
-    lock: Arc<File>,
+    lock: Arc<CacheLease>,
 ) -> Result<(), CacheError> {
     let original = private_file(path, true)?;
     let mut length = original.metadata()?.len();
@@ -565,7 +580,7 @@ async fn transfer_once<T: Transport>(
 // A dropped async caller must not release the cache lease while a blocking write still owns the file.
 async fn disk_io<R: Send + 'static>(
     file: Arc<Mutex<File>>,
-    lock: Arc<File>,
+    lock: Arc<CacheLease>,
     operation: impl FnOnce(&mut File) -> io::Result<R> + Send + 'static,
 ) -> Result<R, CacheError> {
     tokio::task::spawn_blocking(move || {
@@ -584,6 +599,29 @@ async fn disk_io<R: Send + 'static>(
 mod tests {
     use super::*;
     use std::{collections::VecDeque, sync::Mutex};
+    #[test]
+    fn completed_cache_lease_does_not_follow_unrelated_duplicate_descriptors() {
+        let directory = tempfile::tempdir().expect("directory");
+        let _cache = cache(directory.path(), 1024);
+        let path = directory.path().join(".model-cache-lock");
+        let lease = cache_lease(&path).expect("lease");
+        // Models descriptor inheritance/duplication independently of Rust lease
+        // owners. This handle never writes cache data and must not extend it.
+        let duplicate = lease.file.try_clone().expect("duplicate descriptor");
+        let writer = lease.clone();
+        drop(lease);
+        let contender = private_file(&path, true).expect("contender");
+        assert!(
+            contender.try_lock().is_err(),
+            "actual writer still owns the lease"
+        );
+        drop(writer);
+        assert!(
+            contender.try_lock().is_ok(),
+            "no actual writer remains; incidental duplicate must not hold cache lease"
+        );
+        drop(duplicate);
+    }
     struct Script {
         offset: u64,
         status: u16,
@@ -858,8 +896,7 @@ mod tests {
         let directory = tempfile::tempdir().expect("directory");
         let _cache = cache(directory.path(), 1024);
         let lock_path = directory.path().join(".model-cache-lock");
-        let lock = Arc::new(private_file(&lock_path, true).expect("lock"));
-        lock.try_lock().expect("lease");
+        let lock = cache_lease(&lock_path).expect("lease");
         let target = directory.path().join("io-fixture");
         let file = Arc::new(Mutex::new(private_file(&target, true).expect("file")));
         let (started, started_rx) = tokio::sync::oneshot::channel();

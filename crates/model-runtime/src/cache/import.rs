@@ -49,8 +49,7 @@ impl ModelCache {
         if original.metadata()?.len() != spec.bytes {
             return Err(CacheError::Integrity);
         }
-        let lock = Arc::new(private_file(&self.root.join(".model-cache-lock"), true)?);
-        lock.try_lock().map_err(|_| CacheError::LockUnavailable)?;
+        let lock = cache_lease(&self.root.join(".model-cache-lock"))?;
         if exists(&ready)? {
             verify(&ready, spec).await?;
             check_cancel(&cancel)?;
