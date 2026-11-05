@@ -1665,6 +1665,7 @@ dependencies = [
  "orange-domain",
  "orange-protocol",
  "orange-worker",
+ "prost",
  "prost-types",
  "serde",
  "serde_json",

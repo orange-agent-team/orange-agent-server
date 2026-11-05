@@ -88,6 +88,7 @@ fn welcome(s: &DeviceSession) -> worker::ServerFrame {
             protocol_version: 1,
             expires_at: timestamp(s.expires_at_unix),
             node_control_version: s.node_control_version,
+            execution_control_version: s.execution_control_version,
             node_policy_generation: s.node_policy_generation,
         })),
     }
@@ -125,7 +126,10 @@ impl WorkerGateway for Gateway {
         let Some(worker_frame::Body::Hello(hello)) = first.body else {
             return Err(Status::invalid_argument("first frame must be Hello"));
         };
-        if hello.protocol_version != 1 || hello.node_control_version > 2 {
+        if hello.protocol_version != 1
+            || hello.node_control_version > 2
+            || hello.execution_control_version > 1
+        {
             return Err(Status::failed_precondition("unsupported protocol version"));
         }
         let session = tokio::time::timeout(
@@ -135,6 +139,7 @@ impl WorkerGateway for Gateway {
                 &fingerprint,
                 &hello.capabilities_digest,
                 hello.node_control_version,
+                hello.execution_control_version,
             ),
         )
         .await
@@ -158,10 +163,14 @@ impl WorkerGateway for Gateway {
                     _=interval.tick()=>{
                         let operation=async {
                             store.check(&session).await?;
-                            store.next_node_command(&session).await
+                            if let Some(command) = store.next_node_command(&session).await? {
+                                Ok(Some(worker::ServerFrame { body: Some(server_frame::Body::NodeCommand(command)) }))
+                            } else {
+                                store.next_execution(&session).await.map(|assignment| assignment.map(|value| worker::ServerFrame {body:Some(server_frame::Body::Assignment(value))}))
+                            }
                         };
                         match tokio::time::timeout(Duration::from_secs(5),operation).await{
-                            Ok(result)=>result.map(|command|command.map(|command|worker::ServerFrame {body:Some(server_frame::Body::NodeCommand(command))})).map_err(status),Err(_)=>Err(Status::unavailable("authoritative store timeout")),
+                            Ok(result)=>result.map_err(status),Err(_)=>Err(Status::unavailable("authoritative store timeout")),
                         }
                     }
                     frame=stream.message()=>{
@@ -207,6 +216,15 @@ async fn handle(
     frame: worker::WorkerFrame,
 ) -> Result<Option<worker::ServerFrame>, Status> {
     match frame.body {
+        Some(worker_frame::Body::Acknowledge(ack)) => {
+            let grant = store
+                .acknowledge_execution(session, &ack)
+                .await
+                .map_err(status)?;
+            Ok(grant.map(|value| worker::ServerFrame {
+                body: Some(server_frame::Body::Start(value)),
+            }))
+        }
         Some(worker_frame::Body::NodeReceipt(receipt)) => {
             store
                 .receive_node_receipt(session, &receipt)

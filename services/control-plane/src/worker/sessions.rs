@@ -22,6 +22,7 @@ pub struct DeviceSession {
     pub certificate_sha256: String,
     pub expires_at_unix: i64,
     pub node_control_version: u32,
+    pub execution_control_version: u32,
     pub node_policy_generation: u64,
 }
 #[derive(Clone)]
@@ -43,19 +44,21 @@ impl WorkerSessionStore {
         fingerprint: &str,
         capabilities: &str,
         node_control_version: u32,
+        execution_control_version: u32,
     ) -> Result<DeviceSession, SessionError> {
         if !valid_id(node)
             || !valid_digest(fingerprint)
             || !valid_digest(capabilities)
             || node_control_version > 2
+            || execution_control_version > 1
         {
             return Err(SessionError::Invalid);
         }
         let mut tx = self.pool.begin().await?;
         authorize(&mut tx, node, fingerprint).await?;
         let id = Uuid::new_v4().to_string();
-        let row=sqlx::query("INSERT INTO worker_sessions(node_id,gateway_instance_id,connection_epoch,session_id,certificate_sha256,capabilities_digest,last_seen_at,expires_at,node_control_version) VALUES($1,$2,1,$3,$4,$5,clock_timestamp(),clock_timestamp()+interval '45 seconds',$6) ON CONFLICT(node_id) DO UPDATE SET gateway_instance_id=excluded.gateway_instance_id,connection_epoch=worker_sessions.connection_epoch+1,session_id=excluded.session_id,certificate_sha256=excluded.certificate_sha256,capabilities_digest=excluded.capabilities_digest,reported_capability_snapshot_id=NULL,last_seen_at=excluded.last_seen_at,expires_at=excluded.expires_at,node_control_version=excluded.node_control_version RETURNING connection_epoch,floor(extract(epoch FROM expires_at))::bigint AS expires")
-            .bind(node).bind(&self.gateway).bind(&id).bind(fingerprint).bind(capabilities).bind(node_control_version as i32).fetch_one(&mut *tx).await?;
+        let row=sqlx::query("INSERT INTO worker_sessions(node_id,gateway_instance_id,connection_epoch,session_id,certificate_sha256,capabilities_digest,last_seen_at,expires_at,node_control_version,execution_control_version) VALUES($1,$2,1,$3,$4,$5,clock_timestamp(),clock_timestamp()+interval '45 seconds',$6,$7) ON CONFLICT(node_id) DO UPDATE SET gateway_instance_id=excluded.gateway_instance_id,connection_epoch=worker_sessions.connection_epoch+1,session_id=excluded.session_id,certificate_sha256=excluded.certificate_sha256,capabilities_digest=excluded.capabilities_digest,reported_capability_snapshot_id=NULL,last_seen_at=excluded.last_seen_at,expires_at=excluded.expires_at,node_control_version=excluded.node_control_version,execution_control_version=excluded.execution_control_version RETURNING connection_epoch,floor(extract(epoch FROM expires_at))::bigint AS expires")
+            .bind(node).bind(&self.gateway).bind(&id).bind(fingerprint).bind(capabilities).bind(node_control_version as i32).bind(execution_control_version as i32).fetch_one(&mut *tx).await?;
         let policy_generation: i64 =
             sqlx::query_scalar("SELECT policy_generation FROM nodes WHERE node_id=$1")
                 .bind(node)
@@ -69,6 +72,7 @@ impl WorkerSessionStore {
             certificate_sha256: fingerprint.into(),
             expires_at_unix: row.try_get("expires")?,
             node_control_version,
+            execution_control_version,
             node_policy_generation: policy_generation as u64,
         };
         sqlx::query("UPDATE nodes SET state=CASE WHEN state='offline' THEN 'online' ELSE state END,version=version+1 WHERE node_id=$1").bind(node).execute(&mut *tx).await?;
@@ -134,6 +138,7 @@ impl WorkerSessionStore {
             audit(&mut tx, session, "session.disconnected").await?;
         }
         super::commands::abandon_dispatched(&mut tx, session).await?;
+        super::execution::abandon_session(&mut tx, session).await?;
         tx.commit().await?;
         Ok(())
     }
@@ -157,7 +162,7 @@ async fn current(
     tx: &mut Transaction<'_, Postgres>,
     s: &DeviceSession,
 ) -> Result<(), SessionError> {
-    let valid:Option<i64>=sqlx::query_scalar("SELECT connection_epoch FROM worker_sessions WHERE node_id=$1 AND gateway_instance_id=$2 AND connection_epoch=$3 AND session_id=$4 AND certificate_sha256=$5 AND node_control_version=$6 AND expires_at>clock_timestamp() FOR UPDATE").bind(&s.node_id).bind(&s.gateway_instance_id).bind(s.connection_epoch).bind(&s.session_id).bind(&s.certificate_sha256).bind(s.node_control_version as i32).fetch_optional(&mut **tx).await?;
+    let valid:Option<i64>=sqlx::query_scalar("SELECT connection_epoch FROM worker_sessions WHERE node_id=$1 AND gateway_instance_id=$2 AND connection_epoch=$3 AND session_id=$4 AND certificate_sha256=$5 AND node_control_version=$6 AND execution_control_version=$7 AND expires_at>clock_timestamp() FOR UPDATE").bind(&s.node_id).bind(&s.gateway_instance_id).bind(s.connection_epoch).bind(&s.session_id).bind(&s.certificate_sha256).bind(s.node_control_version as i32).bind(s.execution_control_version as i32).fetch_optional(&mut **tx).await?;
     if valid.is_none() {
         return Err(SessionError::Stale);
     }

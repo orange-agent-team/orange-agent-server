@@ -1,3 +1,5 @@
+#[path = "worker_sessions/execution_cases.rs"]
+mod execution_cases;
 #[path = "worker_sessions/policy_cases.rs"]
 mod policy_cases;
 use orange_control_plane::{
@@ -125,6 +127,7 @@ fn hello(node: &str) -> worker::WorkerFrame {
             protocol_version: 1,
             capabilities_digest: "a".repeat(64),
             node_control_version: 0,
+            execution_control_version: 0,
         })),
     }
 }

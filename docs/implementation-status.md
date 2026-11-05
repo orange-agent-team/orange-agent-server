@@ -1,6 +1,19 @@
 # 实施状态与本机验证
 
-日期：2026-11-04。这是G0/P1/P2/P3的局部实现，**不是完整G3或G6候选版**。
+日期：2026-11-05。四仓库G0—G6仍在实施，**不是完整G3或G6候选版**。准确源码/测试状态以`services_plan/execution/`台账为准。
+
+## 最新增量（优先于下方早期记录）
+
+- 已新增[E07执行许可屏障](worker-execution-barrier.md)：显式能力协商、持久分配、精确ACK/StartGrant绑定、取消竞争、断流unknown和持久Job事件/outbox。手动32项实际mTLS/PostgreSQL回归通过，包含11项新的执行屏障测试；协议新增2项负例/摘要测试，Rust格式与Clippy通过。修复后的统一源码回归已全部通过，EXECUTION-GRANT-001已单独记DONE，原父任务仍未整体完成。
+- E08默认客户端继续执行能力0。审核/Quote调度写入、执行日志与模型Host、输入对象、renew/resume、结果/清理/结算仍未完成，不以测试ACK或running状态当真实推理成功。
+- 固定Qwen完整权重已取得；实际CPU模型→批准→真实文件→结果→恢复已通过，见[真实模型验收](real-model-agent-acceptance.md)。原模型下载阻塞是历史情况。
+- 桌面已有固定Runtime版本、实际Flutter/FRB/SQLite、受管模型导入/启动/停止和产品按钮验收；桌面仍消费376f883源码包，服务端本轮改动不会隐式进入桌面。
+- Admin独立身份/MFA及三类节点意图、独立批准、审计、真实控制命令/回执/本机停止策略已完成局部切片，见[Admin动作](admin-actions-implementation.md)、[节点策略](node-policy-implementation.md)。其他Admin动作及设备恢复仍未完成。
+- Flutter/macOS与专用Colima运行环境已可用。Windows/NVIDIA、多卡、多域、长期观察与生产认证尚无完整证据；其余工具/连接器、云Host和G4—G6仍有实现工作。
+
+## 早期基础切片记录
+
+以下保留初始实施时的环境与范围记录；其中“未通过/未实现”应结合上面的新增切片及具体实现文档判断，不代表当前全部能力。
 
 ## 已实现
 

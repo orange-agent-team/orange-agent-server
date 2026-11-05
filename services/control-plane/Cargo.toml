@@ -58,6 +58,7 @@ thiserror.workspace = true
 tonic.workspace = true
 tokio-stream.workspace = true
 prost-types.workspace = true
+prost.workspace = true
 libc.workspace = true
 
 [dev-dependencies]

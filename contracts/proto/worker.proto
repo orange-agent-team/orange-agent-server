@@ -12,14 +12,19 @@ message Lease {
   uint64 fencing_token = 5;
   google.protobuf.Timestamp expires_at = 6;
 }
-message Hello { string node_id = 1; uint32 protocol_version = 2; string capabilities_digest = 3; uint32 node_control_version = 4; }
+message Hello { string node_id = 1; uint32 protocol_version = 2; string capabilities_digest = 3; uint32 node_control_version = 4; uint32 execution_control_version = 5; }
 // Protocol v1 control-session TTL is 45 seconds; it is not an execution lease.
-message Welcome { string session_id = 1; uint64 connection_epoch = 2; uint32 protocol_version = 3; google.protobuf.Timestamp expires_at = 4; uint32 node_control_version = 5; uint64 node_policy_generation = 6; }
+message Welcome { string session_id = 1; uint64 connection_epoch = 2; uint32 protocol_version = 3; google.protobuf.Timestamp expires_at = 4; uint32 node_control_version = 5; uint64 node_policy_generation = 6; uint32 execution_control_version = 7; }
+// Execution capability1 is independent of node-control capability. Zero/old
+// clients never receive assignments. Version1 grants are immutable, <=45s,
+// ACK within10s, and do not imply renew/resume/result/cleanup support.
 message Assignment {
   string command_id = 1; string payload_digest = 2; Lease lease = 3;
   string model_version_id = 4; string execution_profile_id = 5;
   string request_projection_digest = 6; repeated string input_artifact_ids = 7;
   google.protobuf.Timestamp job_deadline = 8;
+  string node_id = 9; string session_id = 10; uint64 node_policy_generation = 11;
+  string model_sha256 = 12; string execution_profile_digest = 13;
 }
 enum AckResult { ACK_UNSPECIFIED = 0; ACCEPTED = 1; RESOURCE_REJECTED = 2; PROTOCOL_REJECTED = 3; }
 message Acknowledge {
@@ -28,7 +33,9 @@ message Acknowledge {
   string broker_grant_id = 6; uint64 broker_epoch = 7; uint64 slot_generation = 8;
 }
 // An ACK is not a start permission; both cloud grant and local ConfirmStart are required.
-message StartGrant { string command_id = 1; Lease lease = 2; }
+message StartGrant { string command_id = 1; Lease lease = 2; string payload_digest = 3;
+  string execution_journal_id = 4; string broker_grant_id = 5;
+  uint64 broker_epoch = 6; uint64 slot_generation = 7; }
 message Renew { Lease lease = 1; string supervisor_instance_id = 2; }
 message ResumeRequest { Lease previous_lease = 1; string execution_journal_id = 2; string supervisor_instance_id = 3; }
 message ResumeGrant { Lease lease = 1; string execution_journal_id = 2; }

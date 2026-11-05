@@ -22,7 +22,7 @@ with tempfile.TemporaryDirectory(prefix='orange-worker-mtls-') as directory:
         subprocess.run([openssl,*arguments],cwd=private,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,check=True)
     for ca in ['ca','other-ca']:
         command('req','-x509','-newkey','ec','-pkeyopt','ec_paramgen_curve:P-256','-nodes','-batch','-days','1','-subj','/CN=Orange-'+ca,'-keyout',ca+'.key','-out',ca+'.pem','-addext','basicConstraints=critical,CA:TRUE','-addext','keyUsage=critical,keyCertSign,cRLSign')
-    for name in ['server','client-a','client-b','client-c','client-d','client-e','client-f','client-g','client-h','client-i','client-j','client-k','client-l','client-m','client-n','client-o','client-p','client-q','client-r','client-s','client-t','client-u','client-v','unregistered','wrong-ca']:
+    for name in ['server','client-a','client-b','client-c','client-d','client-e','client-f','client-g','client-h','client-i','client-j','client-k','client-l','client-m','client-n','client-o','client-p','client-q','client-r','client-s','client-t','client-u','client-v','client-w','client-x','client-y','client-z','client-aa','client-ab','client-ac','client-ad','client-ae','client-af','client-ag','client-ah','unregistered','wrong-ca']:
         command('req','-new','-newkey','ec','-pkeyopt','ec_paramgen_curve:P-256','-nodes','-batch','-subj','/CN=orange-'+name,'-keyout',name+'.key','-out',name+'.csr')
         extensions='basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage='+('serverAuth' if name=='server' else 'clientAuth')+'\n'
         if name=='server':extensions+='subjectAltName=DNS:localhost,IP:127.0.0.1\n'
@@ -34,4 +34,4 @@ with tempfile.TemporaryDirectory(prefix='orange-worker-mtls-') as directory:
     environment['ORANGE_WORKER_TLS_DIR']=str(private)
     subprocess.run([str(cargo),'test','-p','orange-control-plane','--features','integration-tests','--test','worker_sessions','--locked'],cwd=ROOT,env=environment,check=True)
     subprocess.run([str(cargo),'build','-p','orange-control-plane','--bin','orange-worker-gateway','--locked'],cwd=ROOT,env=environment,check=True)
-print('PASS real localhost mTLS/gRPC/PostgreSQL identity, revocation and session epochs; test CA/dev certificate provisioning, no public enrollment or executed Job')
+print('PASS real localhost mTLS/gRPC/PostgreSQL sessions and execution grant barrier; test CA, reviewed plans and Worker/Broker ACK fixtures, no public enrollment, physical Job execution, cleanup or settlement')

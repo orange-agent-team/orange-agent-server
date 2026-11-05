@@ -174,6 +174,7 @@ impl ControlConnection {
                     protocol_version: 1,
                     capabilities_digest: capabilities,
                     node_control_version,
+                    execution_control_version: 0,
                 })),
             })
             .await
@@ -204,7 +205,9 @@ impl ControlConnection {
         {
             return Err(ControlError::Protocol);
         }
-        if welcome.node_control_version != node_control_version {
+        if welcome.node_control_version != node_control_version
+            || welcome.execution_control_version != 0
+        {
             return Err(ControlError::Unsupported);
         }
         if node_control_version == 2 && welcome.node_policy_generation > i64::MAX as u64 {
