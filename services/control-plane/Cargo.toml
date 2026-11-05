@@ -62,6 +62,7 @@ prost.workspace = true
 libc.workspace = true
 
 [dev-dependencies]
+rusqlite.workspace = true
 tower.workspace = true
 orange-worker = { path = "../worker", version = "=0.1.0" }
 

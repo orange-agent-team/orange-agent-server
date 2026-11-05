@@ -220,7 +220,7 @@ impl WorkerSessionStore {
         s: &DeviceSession,
         ack: &worker::Acknowledge,
     ) -> Result<Option<worker::StartGrant>, SessionError> {
-        if s.execution_control_version != 1 {
+        if !matches!(s.execution_control_version, 1 | 2) {
             return Err(SessionError::Invalid);
         }
         let lease = ack.lease.as_ref().ok_or(SessionError::Invalid)?;
@@ -250,6 +250,20 @@ impl WorkerSessionStore {
         }
         let digest = acknowledge_digest(ack, &a).ok_or(SessionError::Invalid)?;
         let previous: Option<String> = row.try_get("ack_digest")?;
+        let start_budget: Option<i64> = if ack.result == worker::AckResult::Accepted as i32 {
+            if previous.is_some() {
+                row.try_get("start_budget_ms")?
+            } else {
+                let remaining: i64 = sqlx::query_scalar("SELECT floor(extract(epoch FROM (lease_expires_at-clock_timestamp()))*1000)::bigint FROM worker_execution_attempts WHERE attempt_id=$1")
+                    .bind(&lease.attempt_id).fetch_one(&mut *tx).await?;
+                if !(1001..=45000).contains(&remaining) {
+                    return Err(SessionError::Stale);
+                }
+                Some(remaining)
+            }
+        } else {
+            None
+        };
         let state: String = row.try_get("state")?;
         let accepted = ack.result == worker::AckResult::Accepted as i32;
         if let Some(previous) = previous {
@@ -265,10 +279,10 @@ impl WorkerSessionStore {
             if state != "offered" || job_state != "queued" || !row.try_get::<bool, _>("ack_live")? {
                 return Err(SessionError::Stale);
             }
-            sqlx::query("UPDATE worker_execution_attempts SET state=$2,ack_digest=$3,execution_journal_id=$4,broker_grant_id=$5,broker_epoch=$6,slot_generation=$7 WHERE attempt_id=$1")
+            sqlx::query("UPDATE worker_execution_attempts SET state=$2,ack_digest=$3,execution_journal_id=$4,broker_grant_id=$5,broker_epoch=$6,slot_generation=$7,start_budget_ms=$8 WHERE attempt_id=$1")
                 .bind(&lease.attempt_id).bind(if accepted {"started"} else {"rejected"}).bind(&digest)
                 .bind(accepted.then_some(&ack.execution_journal_id)).bind(accepted.then_some(&ack.broker_grant_id))
-                .bind(accepted.then_some(ack.broker_epoch as i64)).bind(accepted.then_some(ack.slot_generation as i64)).execute(&mut *tx).await?;
+                .bind(accepted.then_some(ack.broker_epoch as i64)).bind(accepted.then_some(ack.slot_generation as i64)).bind(start_budget).execute(&mut *tx).await?;
             if accepted {
                 let owner: String = sqlx::query_scalar(
                     "UPDATE jobs SET execution_state='running' WHERE job_id=$1 RETURNING owner_id",
@@ -300,6 +314,9 @@ impl WorkerSessionStore {
         if !live {
             return Err(SessionError::Stale);
         }
+        if accepted && start_budget.is_none() {
+            return Err(SessionError::Stale);
+        }
         finish(tx, s).await?;
         Ok(accepted.then(|| worker::StartGrant {
             command_id: ack.command_id.clone(),
@@ -309,6 +326,7 @@ impl WorkerSessionStore {
             broker_grant_id: ack.broker_grant_id.clone(),
             broker_epoch: ack.broker_epoch,
             slot_generation: ack.slot_generation,
+            start_budget_ms: start_budget.unwrap_or(0) as u64,
         }))
     }
 }

@@ -128,7 +128,7 @@ impl WorkerGateway for Gateway {
         };
         if hello.protocol_version != 1
             || hello.node_control_version > 2
-            || hello.execution_control_version > 1
+            || hello.execution_control_version > 2
         {
             return Err(Status::failed_precondition("unsupported protocol version"));
         }

@@ -3,3 +3,5 @@
 pub mod broker;
 pub mod control;
 pub mod node_journal;
+
+pub mod execution_journal;

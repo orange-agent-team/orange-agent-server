@@ -1,6 +1,8 @@
 //! Authenticated control liveness. A connected session is never an execution lease.
+mod execution;
 use crate::broker::{AppliedNodePolicy, Broker, BrokerError};
 use crate::node_journal::{NodeJournal, ReceivedNodeIntent};
+pub use execution::{AuthorizedExecution, ExecutionPoll, StartedExecution};
 use orange_protocol::node_control::{NodeStopIntent, StopKind};
 use orange_protocol::{
     grpc::worker::{self, server_frame, worker_frame, worker_gateway_client::WorkerGatewayClient},
@@ -52,6 +54,8 @@ pub struct ControlConnection {
     active: bool,
     node_control_version: u32,
     observed_policy_generation: u64,
+    execution_control_version: u32,
+    offered: Option<worker::Assignment>,
 }
 /// Short-lived, nonserializable authorization borrowing its live control session.
 /// Acquiring it performs network I/O without holding a Broker lock. Applying it
@@ -79,7 +83,7 @@ impl AuthorizedNodeStop<'_> {
 }
 impl ControlConnection {
     pub async fn connect(config: ControlConfig) -> Result<Self, ControlError> {
-        Self::connect_mode(config, 0).await
+        Self::connect_mode(config, 0, 0).await
     }
     pub async fn connect_node_control(
         config: ControlConfig,
@@ -101,7 +105,7 @@ impl ControlConnection {
         if config.node_id != journal.node_id() {
             return Err(ControlError::Invalid);
         }
-        let connection = Self::connect_mode(config, version).await?;
+        let connection = Self::connect_mode(config, version, 0).await?;
         journal
             .bind(connection.identity())
             .map_err(|_| ControlError::Unavailable)?;
@@ -110,6 +114,7 @@ impl ControlConnection {
     async fn connect_mode(
         config: ControlConfig,
         node_control_version: u32,
+        execution_control_version: u32,
     ) -> Result<Self, ControlError> {
         if !valid_id(&config.node_id)
             || !valid_digest(&config.capabilities_digest)
@@ -153,6 +158,7 @@ impl ControlConnection {
             config.node_id,
             config.capabilities_digest,
             node_control_version,
+            execution_control_version,
         )
         .await
     }
@@ -161,6 +167,7 @@ impl ControlConnection {
         node: String,
         capabilities: String,
         node_control_version: u32,
+        execution_control_version: u32,
     ) -> Result<Self, ControlError> {
         let mut client = WorkerGatewayClient::new(channel)
             .max_decoding_message_size(64 * 1024)
@@ -174,7 +181,7 @@ impl ControlConnection {
                     protocol_version: 1,
                     capabilities_digest: capabilities,
                     node_control_version,
-                    execution_control_version: 0,
+                    execution_control_version,
                 })),
             })
             .await
@@ -206,7 +213,7 @@ impl ControlConnection {
             return Err(ControlError::Protocol);
         }
         if welcome.node_control_version != node_control_version
-            || welcome.execution_control_version != 0
+            || welcome.execution_control_version != execution_control_version
         {
             return Err(ControlError::Unsupported);
         }
@@ -231,6 +238,8 @@ impl ControlConnection {
             active: true,
             node_control_version,
             observed_policy_generation: welcome.node_policy_generation,
+            execution_control_version,
+            offered: None,
         })
     }
     pub fn identity(&self) -> &ControlIdentity {
@@ -319,13 +328,34 @@ impl ControlConnection {
                 .await
                 .map_err(|_| ControlError::Unavailable)?;
             let mut received = Vec::new();
+            let mut frames = 0;
             loop {
+                frames += 1;
+                if frames > 16 {
+                    return Err(ControlError::Protocol);
+                }
                 let frame = self
                     .stream
                     .message()
                     .await
                     .map_err(status)?
                     .ok_or(ControlError::Unavailable)?;
+                if let Some(server_frame::Body::Assignment(a)) = &frame.body {
+                    if self.execution_control_version != 2
+                        || a.node_id != self.identity.node_id
+                        || a.session_id != self.identity.session_id
+                        || a.lease
+                            .as_ref()
+                            .is_none_or(|l| l.connection_epoch != self.identity.connection_epoch)
+                        || orange_protocol::execution::assignment_digest(a).as_deref()
+                            != Some(a.payload_digest.as_str())
+                        || self.offered.as_ref().is_some_and(|prior| prior != a)
+                    {
+                        return Err(ControlError::Protocol);
+                    }
+                    self.offered = Some(a.clone());
+                    continue;
+                }
                 if let Some(server_frame::Body::NodeCommand(command)) = &frame.body {
                     if !matches!(self.node_control_version, 1 | 2)
                         || received.len() >= 8

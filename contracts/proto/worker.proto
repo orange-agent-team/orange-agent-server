@@ -18,6 +18,8 @@ message Welcome { string session_id = 1; uint64 connection_epoch = 2; uint32 pro
 // Execution capability1 is independent of node-control capability. Zero/old
 // clients never receive assignments. Version1 grants are immutable, <=45s,
 // ACK within10s, and do not imply renew/resume/result/cleanup support.
+// Capability2 additionally requires immutable first-ACK start_budget_ms and a
+// receiver retaining that exact send's monotonic anchor. Node policy uses v2.
 message Assignment {
   string command_id = 1; string payload_digest = 2; Lease lease = 3;
   string model_version_id = 4; string execution_profile_id = 5;
@@ -35,7 +37,10 @@ message Acknowledge {
 // An ACK is not a start permission; both cloud grant and local ConfirmStart are required.
 message StartGrant { string command_id = 1; Lease lease = 2; string payload_digest = 3;
   string execution_journal_id = 4; string broker_grant_id = 5;
-  uint64 broker_epoch = 6; uint64 slot_generation = 7; }
+  uint64 broker_epoch = 6; uint64 slot_generation = 7;
+  // Immutable budget from FIRST accepted ACK. Anchor to its original monotonic
+  // send, subtract a safety margin, never reset on replay/reconnect. Capability2.
+  uint64 start_budget_ms = 8; }
 message Renew { Lease lease = 1; string supervisor_instance_id = 2; }
 message ResumeRequest { Lease previous_lease = 1; string execution_journal_id = 2; string supervisor_instance_id = 3; }
 message ResumeGrant { Lease lease = 1; string execution_journal_id = 2; }

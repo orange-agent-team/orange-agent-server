@@ -1,6 +1,6 @@
 use super::*;
 
-struct PolicyProbeFixture;
+pub(super) struct PolicyProbeFixture;
 impl orange_worker::broker::ResourceProbe for PolicyProbeFixture {
     fn inspect<'a>(
         &'a self,

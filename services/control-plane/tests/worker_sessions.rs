@@ -2,6 +2,8 @@
 mod execution_cases;
 #[path = "worker_sessions/policy_cases.rs"]
 mod policy_cases;
+#[path = "worker_sessions/receiver_cases.rs"]
+mod receiver_cases;
 use orange_control_plane::{
     store::Store,
     worker::{

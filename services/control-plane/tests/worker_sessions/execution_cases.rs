@@ -3,7 +3,7 @@
 use super::*;
 use orange_protocol::{CreateBudget, InvocationPurpose, SubmitJob, execution::assignment_digest};
 use sqlx::Row;
-async fn queued(d: &Device) -> String {
+pub(super) async fn queued(d: &Device) -> String {
     sqlx::query("INSERT INTO wallets(owner_id,gift) VALUES($1,1000)")
         .bind(&d.owner)
         .execute(d.store.pool())
@@ -174,6 +174,10 @@ async fn execution_assignment_replay_and_exact_ack_grant_are_durable() {
     let receipt = ack(&a);
     send(&sender, &receipt).await;
     let grant = start(&mut stream).await;
+    assert!(
+        (1001..44_000).contains(&grant.start_budget_ms),
+        "waiting for the retransmitted offer consumes the original lease budget"
+    );
     assert_eq!(grant.lease, receipt.lease);
     assert_eq!(grant.broker_grant_id, receipt.broker_grant_id);
     assert_eq!(grant.slot_generation, 7);
@@ -207,7 +211,7 @@ async fn execution_legacy_capability_is_opt_out_and_queue_cancel_wins_before_sta
     let server = Running::start(&d.store).await;
     let mut client = server.client(Some(&d.certificate)).await.expect("client");
     assert!(
-        control(&mut client, execution_hello(&d.node, 2))
+        control(&mut client, execution_hello(&d.node, 3))
             .await
             .is_err()
     );

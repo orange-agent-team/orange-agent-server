@@ -4,6 +4,8 @@
 
 ## 最新增量（优先于下方早期记录）
 
+- E08新增[持久接收与本机启动屏障](worker-execution-receiver.md)：显式能力2、WAL/FULL执行日志、准确Broker许可、首次ACK单调锚点、不可延长预算及新鲜确认。39项真实控制测试、25项本机Broker/日志测试和Rust/Clippy通过；跨提交期限负例先红后绿，修复后的统一源码回归已全部刷新，EXECUTION-RECEIVER-001单独记DONE；实际模型进程/输入对象/续期/清理/结算仍未实现。迁移0015已应用并冻结。
+
 - 已新增[E07执行许可屏障](worker-execution-barrier.md)：显式能力协商、持久分配、精确ACK/StartGrant绑定、取消竞争、断流unknown和持久Job事件/outbox。手动32项实际mTLS/PostgreSQL回归通过，包含11项新的执行屏障测试；协议新增2项负例/摘要测试，Rust格式与Clippy通过。修复后的统一源码回归已全部通过，EXECUTION-GRANT-001已单独记DONE，原父任务仍未整体完成。
 - E08默认客户端继续执行能力0。审核/Quote调度写入、执行日志与模型Host、输入对象、renew/resume、结果/清理/结算仍未完成，不以测试ACK或running状态当真实推理成功。
 - 固定Qwen完整权重已取得；实际CPU模型→批准→真实文件→结果→恢复已通过，见[真实模型验收](real-model-agent-acceptance.md)。原模型下载阻塞是历史情况。

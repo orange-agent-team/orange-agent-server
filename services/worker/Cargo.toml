@@ -16,9 +16,11 @@ tokio.workspace = true
 uuid.workspace = true
 libc.workspace = true
 tonic.workspace = true
+prost.workspace = true
 tokio-stream.workspace = true
 
 [dev-dependencies]
+prost-types.workspace = true
 tempfile.workspace = true
 
 [lints]

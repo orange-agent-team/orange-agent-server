@@ -686,6 +686,51 @@ impl Broker {
         tx.commit()?;
         Ok(result)
     }
+    /// Called only after authenticated transport validation, before recording ACK.
+    /// Local approval binds both content hashes, not an attacker-selected alias.
+    pub(crate) fn reserve_assignment(
+        &mut self,
+        supervisor: &Supervisor,
+        device: &str,
+        assignment: &orange_protocol::grpc::worker::Assignment,
+    ) -> Result<Grant, BrokerError> {
+        if !self.config.approved_profiles.iter().any(|p| {
+            p.id == assignment.execution_profile_id
+                && p.model_sha256 == assignment.model_sha256
+                && p.execution_digest == assignment.execution_profile_digest
+        }) {
+            return Err(BrokerError::Invalid);
+        }
+        let policy = self.node_policy()?;
+        if policy.enrolled_node_id.as_deref() != Some(assignment.node_id.as_str())
+            || policy.policy_generation != assignment.node_policy_generation.to_string()
+            || policy.platform_blocked
+        {
+            return Err(BrokerError::PlatformBlocked);
+        }
+        let lease = assignment.lease.as_ref().ok_or(BrokerError::Invalid)?;
+        let result = self.acquire(
+            supervisor,
+            &AcquireRequest {
+                request_id: assignment.command_id.clone(),
+                device_id: device.into(),
+                mode: Holder::Remote,
+                profile_id: assignment.execution_profile_id.clone(),
+                remote: Some(RemoteBinding {
+                    node_id: assignment.node_id.clone(),
+                    attempt_id: lease.attempt_id.clone(),
+                    lease_id: lease.lease_id.clone(),
+                    connection_epoch: lease.connection_epoch,
+                    fencing_token: lease.fencing_token,
+                }),
+            },
+        )?;
+        match result {
+            AcquireResult::Reserved { grant } => Ok(grant),
+            AcquireResult::RecoveryRequired => Err(BrokerError::RecoveryRequired),
+            _ => Err(BrokerError::Occupied),
+        }
+    }
     pub fn confirm_start(
         &mut self,
         supervisor: &Supervisor,

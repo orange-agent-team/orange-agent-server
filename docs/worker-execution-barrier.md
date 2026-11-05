@@ -1,6 +1,6 @@
 # Worker 云端分配与启动屏障（能力版本1）
 
-本切片为E07的真实PostgreSQL/mTLS执行许可实现，尚不是端到端推理、设备回收或计费结算。E08生产客户端目前明确协商`execution_control_version=0`；测试使用显式Worker ACK替身协商1。禁止把测试客户端作为运行真实模型的Host发布。
+本切片为E07的真实PostgreSQL/mTLS执行许可实现，尚不是端到端推理、设备回收或计费结算。默认E08控制入口仍协商能力0；后续已新增显式能力2的真实接收器和本机启动屏障，见[接收器记录](worker-execution-receiver.md)。原能力1测试仍使用显式ACK替身，不作为模型Host发布。
 
 ## 数据来源与权限
 
@@ -21,7 +21,7 @@
 7. `cancel_queued`与StartGrant竞争同一Job锁：取消先提交则不发许可，零扣费释放原来源；许可先提交则排队取消拒绝，保留冻结，等待将来的运行中取消/清理/结算流程。
 8. 断流、旧会话、策略变化或期限丢失转为unknown，保留节点占用和资金责任。即使没有收到StartGrant回包，也不能自动重派或假定设备空闲。重连不恢复旧许可。
 
-只有云端StartGrant和本机Broker ConfirmStart同时有效才能启动模型。本切片尚未把E08持久执行日志、接收/发ACK、保守单调时钟、ConfirmStart及实际模型监督器连到该协议；继续保持能力0，不能靠改一个版本数字启用。
+只有云端StartGrant和本机Broker ConfirmStart同时有效才能启动模型。E08持久日志、接收/ACK、保守时钟和ConfirmStart已由显式能力2入口连接，详见接收器记录；实际模型监督器仍待连接，不能把本机running状态当作真实模型执行。
 
 ## 可复现验证
 
@@ -37,7 +37,7 @@ python3 scripts/check-worker-session.py
 
 ## 后续实现顺序
 
-1. E08持久执行日志/原命令查询、Broker grant绑定、单调期限及capability1受控接收器；以真实SQLite/Broker加显式设备探针验证ACK之前落盘、无Start不得启动。
+1. E08能力2持久接收与启动屏障已实现；继续资源拒绝ACK、常驻Host撤权/断流处理及原命令核对，不重放unknown。
 2. 审核配置与Quote/调度生产写入、输入对象归属/摘要/短期交付授权、每租户限流、公平调度；不接受Worker自述的模型或价格。
 3. 实际CPU受管模型/执行监督器，租约续期与旧连接输出拒绝、同Attempt恢复、运行中取消及所有任务退出后的清理证据。
 4. 响应提交、DR-01计量、实际扣费/原来源释放和供应方收入事务，恢复unknown且不重复副作用；GPU/跨OS另做真实认证。

@@ -50,7 +50,7 @@ impl WorkerSessionStore {
             || !valid_digest(fingerprint)
             || !valid_digest(capabilities)
             || node_control_version > 2
-            || execution_control_version > 1
+            || execution_control_version > 2
         {
             return Err(SessionError::Invalid);
         }
