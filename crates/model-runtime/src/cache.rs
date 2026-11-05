@@ -11,9 +11,12 @@ use std::{
     time::Duration,
 };
 use tokio::io::AsyncReadExt;
+mod import;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CacheError {
+    #[error("artifact import cancelled before publication")]
+    Cancelled,
     #[error("invalid artifact descriptor")]
     Invalid,
     #[error("cache path must be a private regular-file namespace")]
@@ -286,7 +289,9 @@ impl ModelCache {
             let Some((digest, extension)) = name.rsplit_once('.') else {
                 continue;
             };
-            if orange_protocol::valid_digest(digest) && ["gguf", "part"].contains(&extension) {
+            if orange_protocol::valid_digest(digest)
+                && ["gguf", "part", "import"].contains(&extension)
+            {
                 let file = private_file(&entry.path(), false)?;
                 total = total
                     .checked_add(file.metadata()?.len())
@@ -321,7 +326,9 @@ fn private_file(path: &Path, create: bool) -> Result<File, CacheError> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+        options
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
     }
     #[cfg(windows)]
     {
