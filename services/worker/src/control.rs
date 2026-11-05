@@ -1,5 +1,6 @@
 //! Authenticated control liveness. A connected session is never an execution lease.
 mod execution;
+mod rejections;
 use crate::broker::{AppliedNodePolicy, Broker, BrokerError};
 use crate::node_journal::{NodeJournal, ReceivedNodeIntent};
 pub use execution::{AuthorizedExecution, ExecutionPoll, StartedExecution};
@@ -8,6 +9,7 @@ use orange_protocol::{
     grpc::worker::{self, server_frame, worker_frame, worker_gateway_client::WorkerGatewayClient},
     valid_digest, valid_id,
 };
+pub use rejections::ExecutionPreparation;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -55,6 +57,7 @@ pub struct ControlConnection {
     node_control_version: u32,
     observed_policy_generation: u64,
     execution_control_version: u32,
+    rejection_receipts_version: u32,
     offered: Option<worker::Assignment>,
 }
 /// Short-lived, nonserializable authorization borrowing its live control session.
@@ -83,7 +86,7 @@ impl AuthorizedNodeStop<'_> {
 }
 impl ControlConnection {
     pub async fn connect(config: ControlConfig) -> Result<Self, ControlError> {
-        Self::connect_mode(config, 0, 0).await
+        Self::connect_mode(config, 0, 0, 0).await
     }
     pub async fn connect_node_control(
         config: ControlConfig,
@@ -105,7 +108,7 @@ impl ControlConnection {
         if config.node_id != journal.node_id() {
             return Err(ControlError::Invalid);
         }
-        let connection = Self::connect_mode(config, version, 0).await?;
+        let connection = Self::connect_mode(config, version, 0, 0).await?;
         journal
             .bind(connection.identity())
             .map_err(|_| ControlError::Unavailable)?;
@@ -115,6 +118,7 @@ impl ControlConnection {
         config: ControlConfig,
         node_control_version: u32,
         execution_control_version: u32,
+        rejection_receipts_version: u32,
     ) -> Result<Self, ControlError> {
         if !valid_id(&config.node_id)
             || !valid_digest(&config.capabilities_digest)
@@ -159,6 +163,7 @@ impl ControlConnection {
             config.capabilities_digest,
             node_control_version,
             execution_control_version,
+            rejection_receipts_version,
         )
         .await
     }
@@ -168,6 +173,7 @@ impl ControlConnection {
         capabilities: String,
         node_control_version: u32,
         execution_control_version: u32,
+        rejection_receipts_version: u32,
     ) -> Result<Self, ControlError> {
         let mut client = WorkerGatewayClient::new(channel)
             .max_decoding_message_size(64 * 1024)
@@ -182,6 +188,7 @@ impl ControlConnection {
                     capabilities_digest: capabilities,
                     node_control_version,
                     execution_control_version,
+                    rejection_receipts_version,
                 })),
             })
             .await
@@ -214,6 +221,7 @@ impl ControlConnection {
         }
         if welcome.node_control_version != node_control_version
             || welcome.execution_control_version != execution_control_version
+            || welcome.rejection_receipts_version != rejection_receipts_version
         {
             return Err(ControlError::Unsupported);
         }
@@ -239,8 +247,25 @@ impl ControlConnection {
             node_control_version,
             observed_policy_generation: welcome.node_policy_generation,
             execution_control_version,
+            rejection_receipts_version,
             offered: None,
         })
+    }
+    fn cache_assignment(&mut self, a: &worker::Assignment) -> Result<(), ControlError> {
+        if self.execution_control_version != 2
+            || a.node_id != self.identity.node_id
+            || a.session_id != self.identity.session_id
+            || a.lease
+                .as_ref()
+                .is_none_or(|l| l.connection_epoch != self.identity.connection_epoch)
+            || orange_protocol::execution::assignment_digest(a).as_deref()
+                != Some(a.payload_digest.as_str())
+            || self.offered.as_ref().is_some_and(|prior| prior != a)
+        {
+            return Err(ControlError::Protocol);
+        }
+        self.offered = Some(a.clone());
+        Ok(())
     }
     pub fn identity(&self) -> &ControlIdentity {
         &self.identity
@@ -341,19 +366,7 @@ impl ControlConnection {
                     .map_err(status)?
                     .ok_or(ControlError::Unavailable)?;
                 if let Some(server_frame::Body::Assignment(a)) = &frame.body {
-                    if self.execution_control_version != 2
-                        || a.node_id != self.identity.node_id
-                        || a.session_id != self.identity.session_id
-                        || a.lease
-                            .as_ref()
-                            .is_none_or(|l| l.connection_epoch != self.identity.connection_epoch)
-                        || orange_protocol::execution::assignment_digest(a).as_deref()
-                            != Some(a.payload_digest.as_str())
-                        || self.offered.as_ref().is_some_and(|prior| prior != a)
-                    {
-                        return Err(ControlError::Protocol);
-                    }
-                    self.offered = Some(a.clone());
+                    self.cache_assignment(a)?;
                     continue;
                 }
                 if let Some(server_frame::Body::NodeCommand(command)) = &frame.body {

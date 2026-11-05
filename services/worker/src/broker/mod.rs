@@ -18,6 +18,8 @@ use std::{
 pub enum BrokerError {
     #[error("invalid broker command or configuration")]
     Invalid,
+    #[error("assigned model/profile does not match local approval")]
+    ProfileRejected,
     #[error("another broker owns this data directory")]
     Busy,
     #[error("unsupported or nonprivate broker storage")]
@@ -694,19 +696,23 @@ impl Broker {
         device: &str,
         assignment: &orange_protocol::grpc::worker::Assignment,
     ) -> Result<Grant, BrokerError> {
+        self.authenticate(supervisor)?;
+        let policy = self.node_policy()?;
+        if policy.enrolled_node_id.as_deref() != Some(assignment.node_id.as_str()) {
+            return Err(BrokerError::Unauthorized);
+        }
+        if policy.policy_generation != assignment.node_policy_generation.to_string() {
+            return Err(BrokerError::Stale);
+        }
+        if policy.platform_blocked {
+            return Err(BrokerError::PlatformBlocked);
+        }
         if !self.config.approved_profiles.iter().any(|p| {
             p.id == assignment.execution_profile_id
                 && p.model_sha256 == assignment.model_sha256
                 && p.execution_digest == assignment.execution_profile_digest
         }) {
-            return Err(BrokerError::Invalid);
-        }
-        let policy = self.node_policy()?;
-        if policy.enrolled_node_id.as_deref() != Some(assignment.node_id.as_str())
-            || policy.policy_generation != assignment.node_policy_generation.to_string()
-            || policy.platform_blocked
-        {
-            return Err(BrokerError::PlatformBlocked);
+            return Err(BrokerError::ProfileRejected);
         }
         let lease = assignment.lease.as_ref().ok_or(BrokerError::Invalid)?;
         let result = self.acquire(

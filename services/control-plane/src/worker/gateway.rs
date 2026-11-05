@@ -89,6 +89,7 @@ fn welcome(s: &DeviceSession) -> worker::ServerFrame {
             expires_at: timestamp(s.expires_at_unix),
             node_control_version: s.node_control_version,
             execution_control_version: s.execution_control_version,
+            rejection_receipts_version: s.rejection_receipts_version,
             node_policy_generation: s.node_policy_generation,
         })),
     }
@@ -129,6 +130,7 @@ impl WorkerGateway for Gateway {
         if hello.protocol_version != 1
             || hello.node_control_version > 2
             || hello.execution_control_version > 2
+            || hello.rejection_receipts_version > 1
         {
             return Err(Status::failed_precondition("unsupported protocol version"));
         }
@@ -140,6 +142,7 @@ impl WorkerGateway for Gateway {
                 &hello.capabilities_digest,
                 hello.node_control_version,
                 hello.execution_control_version,
+                hello.rejection_receipts_version,
             ),
         )
         .await
@@ -216,14 +219,21 @@ async fn handle(
     frame: worker::WorkerFrame,
 ) -> Result<Option<worker::ServerFrame>, Status> {
     match frame.body {
+        Some(worker_frame::Body::RejectionQuery(query)) => {
+            let receipt = store
+                .query_rejection(session, &query)
+                .await
+                .map_err(status)?;
+            Ok(Some(worker::ServerFrame {
+                body: Some(server_frame::Body::RejectionReceipt(receipt)),
+            }))
+        }
         Some(worker_frame::Body::Acknowledge(ack)) => {
             let grant = store
                 .acknowledge_execution(session, &ack)
                 .await
                 .map_err(status)?;
-            Ok(grant.map(|value| worker::ServerFrame {
-                body: Some(server_frame::Body::Start(value)),
-            }))
+            Ok(grant.map(|value| worker::ServerFrame { body: Some(value) }))
         }
         Some(worker_frame::Body::NodeReceipt(receipt)) => {
             store

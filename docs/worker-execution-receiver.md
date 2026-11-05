@@ -9,7 +9,7 @@
 1. `poll_execution`用有界心跳交换接收Assignment和节点命令。校验节点/会话/世代、规范摘要、策略世代；节点命令仍按既有WAL/FULL回执流程处理。最多16个帧，超时或异常后连接不可继续用作授权。
 2. Assignment先写ExecutionJournal。零输入对象限制保留；对象交付和ACL未接通前，不能接受任意artifact ID或运行真实请求。
 3. `reserve_execution`同步调用Broker，不在网络等待中持有Broker借用或事务。必须匹配本机批准的profile ID、模型SHA256、执行配置摘要、已登记节点、当前策略和用户共享开关。
-4. Broker真实grant先提交，再在ExecutionJournal记录同一个grant/epoch/slot generation。缺任一提交，不产生accepted ACK。资源繁忙/配置不符目前明确返回错误，不伪造资源拒绝成功或自动释放占用；完整负ACK工作流待补。
+4. Broker真实grant先提交，再在ExecutionJournal记录同一个grant/epoch/slot generation。缺任一提交，不产生accepted ACK。原入口资源繁忙/配置不符保持错误；新增显式拒绝能力入口可持久负ACK并取得回执，详见[拒绝回执](worker-rejection-receipts.md)，不自动释放占用。
 5. `authorize_execution`先将日志推进ack_sent，再记录第一次发送ACK的单调时钟。不可重新调用来重建时钟起点；中断/丢弃Future会使连接失效，日志保留不确定边界。
 6. StartGrant须逐字段匹配原ACK、Lease和本机grant，并提供1001—45000ms预算。再完成一次实时心跳/策略核对，返回借用当前连接的不可序列化AuthorizedExecution；确认窗口最多5秒。
 7. `confirm`先持久写start_claimed，再调用Broker ConfirmStart，最后写running。两份持久状态提交后再次检查确认期限和运行期限，防止磁盘等待跨过授权期限。任一步失败不返回StartedExecution；Broker已确认而日志提交失败时进入draining，不能把资源变为idle。
@@ -48,9 +48,11 @@ python3 scripts/check.py
 
 ## 下一步
 
-- 完成资源/协议拒绝ACK、断开/撤权的常驻排空以及原命令核对。
+- 资源/协议拒绝ACK及拒绝历史查询已有独立切片；继续断开/撤权的常驻排空和正向未知命令核对。
 - 实现真实输入对象所有权/摘要/交付授权、审核目录与Quote/调度写入；当前零artifact限制不能用于假装完成输入传输。
 - 接入实际CPU模型监督器、Broker监督续期、云执行租约续期/恢复和有界取消。保持公共Worker只做审核推理，完整Web Agent在私有隔离云工作区运行。
 - 结果提交屏障、DR-01计量、物理清理证明、账本结算与异常恢复；之后才扩展GPU、目标OS、多卡和后继阶段。当前仍有实现工作，不能全登记为外部阻塞。
 
 代码复核新增的真实SQLite写锁跨期负例先红后绿：旧逻辑发出过期启动凭据，增加提交后期限检查后39项全部通过。证据见services_plan/execution/evidence/execution-receiver-deadline-review.json，断言未弱化。Host还需接入真实睡眠/唤醒、设备变化与进程生命周期失效通知；现有Broker失效钩子不代表OS监控已经部署。
+
+后续增量：ExecutionJournal schema2、可选rejection_receipts_version1及负ACK恢复见拒绝回执记录。当前网络回归47项、本机Broker/日志28项；0016已应用，旧版本记录见原时点证据。

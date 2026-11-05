@@ -1,5 +1,7 @@
 //! Real E08 client/Gateway/PG and private SQLite/Broker. OS identity and device
 //! cleanup probes are fixtures; no model process or GPU certification here.
+#[path = "receiver_cases/rejections.rs"]
+mod rejection_cases;
 use super::*;
 use orange_worker::{
     broker::*,
@@ -20,6 +22,13 @@ struct ReceiverFixture {
     connection: ControlConnection,
 }
 async fn setup(certificate: &str, matching_profile: bool) -> ReceiverFixture {
+    setup_mode(certificate, matching_profile, false).await
+}
+async fn setup_mode(
+    certificate: &str,
+    matching_profile: bool,
+    rejection_receipts: bool,
+) -> ReceiverFixture {
     let d = device(certificate).await;
     let job = super::execution_cases::queued(&d).await;
     let profile:String=sqlx::query_scalar("SELECT p.execution_profile_id FROM jobs j JOIN quote_execution_plans p USING(quote_id) WHERE j.job_id=$1").bind(&job).fetch_one(d.store.pool()).await.expect("profile fixture");
@@ -65,12 +74,17 @@ async fn setup(certificate: &str, matching_profile: bool) -> ReceiverFixture {
     let mut journal =
         ExecutionJournal::open(&journal_path, d.node.clone()).expect("execution journal");
     let server = Running::start(&d.store).await;
-    let connection = ControlConnection::connect_execution(
-        worker_config(&server, &d),
-        &mut node_journal,
-        &mut journal,
-    )
-    .await
+    let config = worker_config(&server, &d);
+    let connection = if rejection_receipts {
+        ControlConnection::connect_execution_with_rejections(
+            config,
+            &mut node_journal,
+            &mut journal,
+        )
+        .await
+    } else {
+        ControlConnection::connect_execution(config, &mut node_journal, &mut journal).await
+    }
     .expect("actual client execution capability2");
     ReceiverFixture {
         d,

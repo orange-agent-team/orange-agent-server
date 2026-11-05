@@ -1,5 +1,6 @@
 //! Durable E08 command identity. Public inspection is not execution authority.
 //! Only the authenticated in-crate control adapter can mutate this journal.
+mod rejections;
 use crate::{
     broker::{BrokerError, Grant, Holder, storage},
     control::ControlIdentity,
@@ -10,6 +11,7 @@ use orange_protocol::{
     valid_id,
 };
 use prost::Message;
+pub use rejections::{RejectionKind, RejectionView};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use std::{fs::File, path::Path};
 #[derive(Debug, thiserror::Error)]
@@ -31,6 +33,7 @@ pub struct ExecutionRecord {
     pub journal_id: String,
     pub state: String,
     pub grant: Option<Grant>,
+    pub rejection: Option<RejectionView>,
     pub(crate) assignment: worker::Assignment,
 }
 pub struct ExecutionJournal {
@@ -50,7 +53,7 @@ impl ExecutionJournal {
         }
         let (mut connection, lock) = storage::open(path)?;
         let version: i64 = connection.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if !(0..=1).contains(&version) {
+        if !(0..=2).contains(&version) {
             return Err(ExecutionJournalError::Format);
         }
         if version == 0 {
@@ -76,6 +79,9 @@ impl ExecutionJournal {
             // No wall-clock reconstruction of a previous process's monotonic
             // anchors, no effect replay even if a StartGrant had been recorded.
             tx.execute("UPDATE execution_commands SET state='unknown' WHERE state NOT IN ('unknown','rejected')",[])?;
+        }
+        if version < 2 {
+            tx.execute_batch(include_str!("execution_schema_v2.sql"))?;
         }
         tx.commit()?;
         Ok(Self {
@@ -104,11 +110,18 @@ impl ExecutionJournal {
             let grant: Option<Grant> = grant
                 .map(|s| serde_json::from_str(&s).map_err(|_| ExecutionJournalError::Format))
                 .transpose()?;
+            let rejection = self.rejection_view(command, &a)?;
+            if (state == "rejected") != rejection.is_some()
+                || (rejection.is_some() && grant.is_some())
+            {
+                return Err(ExecutionJournalError::Format);
+            }
             Ok(ExecutionRecord {
                 command_id: command.into(),
                 journal_id,
                 state,
                 grant,
+                rejection,
                 assignment: a,
             })
         })
@@ -469,6 +482,129 @@ mod tests {
                 .expect("record")
                 .state,
             "unknown"
+        );
+    }
+    #[test]
+    fn negative_decision_and_cloud_receipt_survive_restart_without_start_permission() {
+        let d = private();
+        let path = d.path().join("execution.sqlite");
+        let mut j = ExecutionJournal::open(&path, "node".into()).expect("open");
+        j.bind(&identity(1)).expect("bind");
+        let a = assignment();
+        j.receive(&identity(1), &a).expect("receive");
+        let view = j
+            .reject(&identity(1), &a.command_id, RejectionKind::Resource)
+            .expect("persist negative");
+        assert!(view.receipt_id.is_none());
+        assert!(j.reserve(&identity(1), &a.command_id, &grant()).is_err());
+        assert!(j.send_ack(&identity(1), &a.command_id).is_err());
+        let ack = j
+            .rejected_ack(&identity(1), &a.command_id)
+            .expect("original negative");
+        assert_eq!(ack.result, worker::AckResult::ResourceRejected as i32);
+        assert!(ack.broker_grant_id.is_empty());
+        drop(j);
+        let mut j = ExecutionJournal::open(&path, "node".into()).expect("restart");
+        j.bind(&identity(2)).expect("new current transport fixture");
+        assert_eq!(
+            j.rejected_ack(&identity(2), &a.command_id)
+                .expect("old command evidence"),
+            ack
+        );
+        let receipt = worker::RejectionReceipt {
+            command_id: ack.command_id.clone(),
+            payload_digest: ack.payload_digest.clone(),
+            lease: ack.lease.clone(),
+            result: ack.result,
+            receipt_id: "server-receipt-fixture".into(),
+        };
+        let mut wrong = receipt.clone();
+        wrong.result = worker::AckResult::ProtocolRejected as i32;
+        assert!(
+            j.confirm_rejection(&identity(2), &a.command_id, &wrong)
+                .is_err()
+        );
+        let confirmed = j
+            .confirm_rejection(&identity(2), &a.command_id, &receipt)
+            .expect("exact receipt");
+        assert_eq!(
+            confirmed.receipt_id.as_deref(),
+            Some("server-receipt-fixture")
+        );
+        assert_eq!(
+            j.confirm_rejection(&identity(2), &a.command_id, &receipt)
+                .expect("idempotent receipt"),
+            confirmed
+        );
+        wrong = receipt;
+        wrong.receipt_id = "different-receipt".into();
+        assert!(
+            j.confirm_rejection(&identity(2), &a.command_id, &wrong)
+                .is_err()
+        );
+        assert!(
+            j.connection
+                .execute("DELETE FROM execution_rejections", [])
+                .is_err()
+        );
+        assert!(j.send_ack(&identity(2), &a.command_id).is_err());
+    }
+    #[test]
+    fn negative_write_failure_keeps_command_undecided_and_cannot_emit_ack() {
+        let d = private();
+        let mut j = ExecutionJournal::open(&d.path().join("execution.sqlite"), "node".into())
+            .expect("open");
+        j.bind(&identity(1)).expect("bind");
+        let a = assignment();
+        j.receive(&identity(1), &a).expect("receive");
+        j.connection.execute_batch("CREATE TEMP TRIGGER rejection_fault BEFORE INSERT ON execution_rejections BEGIN SELECT RAISE(ABORT,'explicit disk fault'); END;").expect("fault");
+        assert!(
+            j.reject(&identity(1), &a.command_id, RejectionKind::Protocol)
+                .is_err()
+        );
+        assert!(j.rejected_ack(&identity(1), &a.command_id).is_err());
+        assert_eq!(
+            j.record(&a.command_id)
+                .expect("read")
+                .expect("record")
+                .state,
+            "received"
+        );
+        j.connection
+            .execute_batch("DROP TRIGGER rejection_fault;")
+            .expect("repair fixture");
+        j.reserve(&identity(1), &a.command_id, &grant())
+            .expect("positive reservation fixture");
+        assert!(
+            j.reject(&identity(1), &a.command_id, RejectionKind::Resource)
+                .is_err(),
+            "cannot change a potentially reserved command into ordinary rejection"
+        );
+    }
+    #[test]
+    fn journal_v1_upgrade_retains_prior_grant_and_never_invents_rejection() {
+        let d = private();
+        let path = d.path().join("execution.sqlite");
+        let (connection, lock) = storage::open(&path).expect("old private file");
+        connection
+            .execute_batch(include_str!("execution_schema.sql"))
+            .expect("actual committed v1 schema");
+        connection.execute("INSERT INTO execution_receiver(singleton,node_id,session_id,connection_epoch) VALUES(1,'node','session-1',1)",[]).expect("meta");
+        let a = assignment();
+        connection.execute("INSERT INTO execution_commands(command_id,attempt_id,journal_id,assignment,grant_json,state) VALUES('command','attempt','original-journal',?,?,'reserved')",params![a.encode_to_vec(),serde_json::to_string(&grant()).expect("grant")]).expect("history");
+        drop(connection);
+        drop(lock);
+        let j = ExecutionJournal::open(&path, "node".into()).expect("upgrade");
+        let record = j.record("command").expect("read").expect("history");
+        assert_eq!(record.state, "unknown");
+        assert_eq!(record.grant, Some(grant()));
+        assert_eq!(record.journal_id, "original-journal");
+        assert!(record.rejection.is_none());
+        assert_eq!(
+            j.connection
+                .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                .expect("version"),
+            2
         );
     }
 }

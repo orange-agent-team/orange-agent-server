@@ -130,6 +130,7 @@ fn hello(node: &str) -> worker::WorkerFrame {
             capabilities_digest: "a".repeat(64),
             node_control_version: 0,
             execution_control_version: 0,
+            rejection_receipts_version: 0,
         })),
     }
 }

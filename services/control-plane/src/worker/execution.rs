@@ -18,7 +18,7 @@ fn id() -> String {
 fn timestamp(seconds: i64) -> Option<prost_types::Timestamp> {
     Some(prost_types::Timestamp { seconds, nanos: 0 })
 }
-async fn event(tx: &mut Tx<'_>, attempt: &str, kind: &str) -> Result<(), SessionError> {
+pub(super) async fn event(tx: &mut Tx<'_>, attempt: &str, kind: &str) -> Result<(), SessionError> {
     sqlx::query("INSERT INTO worker_execution_events(event_id,attempt_id,kind) VALUES($1,$2,$3)")
         .bind(id())
         .bind(attempt)
@@ -39,7 +39,7 @@ pub(super) async fn abandon_session(
     }
     Ok(())
 }
-fn decode(row: &sqlx::postgres::PgRow) -> Result<worker::Assignment, SessionError> {
+pub(super) fn decode(row: &sqlx::postgres::PgRow) -> Result<worker::Assignment, SessionError> {
     let bytes: Vec<u8> = row.try_get("assignment")?;
     let a = worker::Assignment::decode(bytes.as_slice()).map_err(|_| SessionError::Invalid)?;
     if assignment_digest(&a).as_deref() != Some(a.payload_digest.as_str())
@@ -219,7 +219,7 @@ impl WorkerSessionStore {
         &self,
         s: &DeviceSession,
         ack: &worker::Acknowledge,
-    ) -> Result<Option<worker::StartGrant>, SessionError> {
+    ) -> Result<Option<worker::server_frame::Body>, SessionError> {
         if !matches!(s.execution_control_version, 1 | 2) {
             return Err(SessionError::Invalid);
         }
@@ -291,6 +291,13 @@ impl WorkerSessionStore {
                 .fetch_one(&mut *tx)
                 .await?;
                 crate::events::append(&mut tx, &owner, &job, "job.start_granted", &digest).await?;
+            } else {
+                let owner: String = sqlx::query_scalar("SELECT owner_id FROM jobs WHERE job_id=$1")
+                    .bind(&job)
+                    .fetch_one(&mut *tx)
+                    .await?;
+                crate::events::append(&mut tx, &owner, &job, "job.assignment_rejected", &digest)
+                    .await?;
             }
             event(
                 &mut tx,
@@ -317,16 +324,30 @@ impl WorkerSessionStore {
         if accepted && start_budget.is_none() {
             return Err(SessionError::Stale);
         }
+        let receipt = if accepted {
+            None
+        } else {
+            Some(super::rejections::receipt_in(&mut tx, s, ack).await?)
+        };
         finish(tx, s).await?;
-        Ok(accepted.then(|| worker::StartGrant {
-            command_id: ack.command_id.clone(),
-            lease: ack.lease.clone(),
-            payload_digest: ack.payload_digest.clone(),
-            execution_journal_id: ack.execution_journal_id.clone(),
-            broker_grant_id: ack.broker_grant_id.clone(),
-            broker_epoch: ack.broker_epoch,
-            slot_generation: ack.slot_generation,
-            start_budget_ms: start_budget.unwrap_or(0) as u64,
-        }))
+        if !accepted {
+            return Ok(if s.rejection_receipts_version == 1 {
+                receipt.map(worker::server_frame::Body::RejectionReceipt)
+            } else {
+                None
+            });
+        }
+        Ok(Some(worker::server_frame::Body::Start(
+            worker::StartGrant {
+                command_id: ack.command_id.clone(),
+                lease: ack.lease.clone(),
+                payload_digest: ack.payload_digest.clone(),
+                execution_journal_id: ack.execution_journal_id.clone(),
+                broker_grant_id: ack.broker_grant_id.clone(),
+                broker_epoch: ack.broker_epoch,
+                slot_generation: ack.slot_generation,
+                start_budget_ms: start_budget.unwrap_or(0) as u64,
+            },
+        )))
     }
 }

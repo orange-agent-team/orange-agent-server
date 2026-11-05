@@ -4,6 +4,8 @@
 
 ## 最新增量（优先于下方早期记录）
 
+- E07/E08新增[拒绝持久回执与历史查询](worker-rejection-receipts.md)：独立可选能力、本机决定/云确认分离、当前节点认证、精确原ACK、schema1升级、旧PG事实补录及事件幂等。47项真实控制测试、28项本机测试、Rust/集成特性Clippy和相关统一源码回归全部通过，REJECTION-RECEIPT-001单独记DONE。拒绝不代表退款、设备释放、实际模型执行或自动重派。0016已应用并冻结。
+
 - E08新增[持久接收与本机启动屏障](worker-execution-receiver.md)：显式能力2、WAL/FULL执行日志、准确Broker许可、首次ACK单调锚点、不可延长预算及新鲜确认。39项真实控制测试、25项本机Broker/日志测试和Rust/Clippy通过；跨提交期限负例先红后绿，修复后的统一源码回归已全部刷新，EXECUTION-RECEIVER-001单独记DONE；实际模型进程/输入对象/续期/清理/结算仍未实现。迁移0015已应用并冻结。
 
 - 已新增[E07执行许可屏障](worker-execution-barrier.md)：显式能力协商、持久分配、精确ACK/StartGrant绑定、取消竞争、断流unknown和持久Job事件/outbox。手动32项实际mTLS/PostgreSQL回归通过，包含11项新的执行屏障测试；协议新增2项负例/摘要测试，Rust格式与Clippy通过。修复后的统一源码回归已全部通过，EXECUTION-GRANT-001已单独记DONE，原父任务仍未整体完成。
