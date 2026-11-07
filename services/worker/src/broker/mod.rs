@@ -941,21 +941,23 @@ impl Broker {
         };
         // Persist quarantine before starting an interruptible probe. Dropping the
         // future cannot leave an idle slot or a completed release record.
-        let tx = self
-            .connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        tx.execute(
-            "UPDATE slots SET state='quarantined',reason='probe_pending' WHERE device_id=?",
-            [device],
-        )?;
-        if let Some(grant) = &slot.grant {
+        {
+            let tx = self
+                .connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)?;
             tx.execute(
-                "UPDATE grants SET state='quarantined' WHERE grant_id=?",
-                [&grant.grant_id],
+                "UPDATE slots SET state='quarantined',reason='probe_pending' WHERE device_id=?",
+                [device],
             )?;
+            if let Some(grant) = &slot.grant {
+                tx.execute(
+                    "UPDATE grants SET state='quarantined' WHERE grant_id=?",
+                    [&grant.grant_id],
+                )?;
+            }
+            tx.execute("INSERT INTO broker_events(device_id,grant_id,kind,details) VALUES(?,?,'probe.started',?)",params![device,slot.grant.as_ref().map(|g|&g.grant_id),challenge.nonce])?;
+            tx.commit()?;
         }
-        tx.execute("INSERT INTO broker_events(device_id,grant_id,kind,details) VALUES(?,?,'probe.started',?)",params![device,slot.grant.as_ref().map(|g|&g.grant_id),challenge.nonce])?;
-        tx.commit()?;
         let observation =
             tokio::time::timeout(Duration::from_secs(5), probe.inspect(&challenge)).await;
         let observation = match observation {

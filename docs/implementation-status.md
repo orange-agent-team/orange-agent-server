@@ -4,6 +4,8 @@
 
 ## 最新增量（优先于下方早期记录）
 
+- 新增[受管 CPU 单任务执行](worker-cpu-execution.md)：真实输入→启动许可→固定模型生成，独立心跳/当前授权和 Broker 监督，显式取消/源对象删除/Handle 丢弃后的实际进程退出。4 项真实模型路径、29 项本机 Broker/日志测试、51 项既有控制测试和全部相关统一回归均已通过；WORKER-CPU-001 已单独记 DONE。SQLite schema3 保存唯一实例和恢复 unknown，不重放效果。当前候选未提交、云 Job 未结算，尚无云续期、常驻服务、OS 崩溃自动恢复或 GPU 认证。
+
 - 新增[用户输入绑定与Worker租约读取](worker-input-delivery.md)：用户Job发起归属、显式团队预算授权、不可变输入/pin、当前权限与原请求投影校验、协商的mTLS分块读取、只读Gateway与客户端完整性校验。51项Worker及16项对象测试通过，相关统一源码回归全部刷新，WORKER-INPUT-001单独记DONE。0020已应用；当前只有文本GenerateRequest输入交付，没有模型执行/输出/结算认证。
 
 - 新增[私有输入对象存储](artifact-storage-implementation.md)：OpenDAL0.59.5、实际字节上传/校验/发布、当前会话与独立ACL、权限版本隔离、不可变版本、HTTP接口及引用保护回收。14项真实PG/文件系统/HTTP测试、实际开发二进制探测及全部相关源码回归通过，ARTIFACT-STORE-001单独记DONE。0017—0019已应用并冻结；Worker输入授权、推理输出与结算仍待接线。

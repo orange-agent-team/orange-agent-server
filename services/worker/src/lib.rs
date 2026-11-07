@@ -5,3 +5,6 @@ pub mod control;
 pub mod node_journal;
 
 pub mod execution_journal;
+
+#[cfg(unix)]
+pub mod cpu;

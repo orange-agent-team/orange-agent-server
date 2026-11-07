@@ -14,7 +14,7 @@ impl ControlConnection {
     /// method neither launches an engine nor renews any execution authority.
     pub async fn fetch_model_input(
         &mut self,
-        journal: &ExecutionJournal,
+        journal: &mut ExecutionJournal,
         started: &StartedExecution,
         command: &str,
     ) -> Result<orange_protocol::model::GenerateRequest, ControlError> {
@@ -98,5 +98,51 @@ impl ControlConnection {
         }
         self.active = true;
         Ok(request)
+    }
+}
+
+impl ControlConnection {
+    /// Current cloud execution/data authority only; it does not renew a lease or
+    /// certify local resource ownership. The execution owner must supervise that.
+    pub(crate) async fn check_cpu_authority(
+        &mut self,
+        record: &crate::execution_journal::ExecutionRecord,
+    ) -> Result<(), ControlError> {
+        if self.input_artifacts_version != 1 || !self.is_current_locally() {
+            return Err(ControlError::Stale);
+        }
+        if record.state != "running"
+            || record.assignment.session_id != self.identity.session_id
+            || record.assignment.input_artifacts.len() != 1
+        {
+            return Err(ControlError::Stale);
+        }
+        let input = &record.assignment.input_artifacts[0];
+        let deadline = self.stop_at.min(Instant::now() + Duration::from_secs(5));
+        self.active = false;
+        let reply = tokio::time::timeout_at(
+            tokio::time::Instant::from_std(deadline),
+            self.input_client.read_input(worker::InputReadRequest {
+                session_id: self.identity.session_id.clone(),
+                lease: record.assignment.lease.clone(),
+                artifact_id: input.artifact_id.clone(),
+                version_id: input.version_id.clone(),
+                offset: 0,
+                max_bytes: 1,
+            }),
+        )
+        .await
+        .map_err(|_| ControlError::Unavailable)?
+        .map_err(status)?
+        .into_inner();
+        if reply.artifact.as_ref() != Some(input)
+            || reply.offset != 0
+            || reply.data.len() != 1
+            || Instant::now() >= deadline
+        {
+            return Err(ControlError::Stale);
+        }
+        self.active = true;
+        Ok(())
     }
 }

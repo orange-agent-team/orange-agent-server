@@ -7,6 +7,7 @@ publish.workspace = true
 
 [dependencies]
 orange-domain.workspace = true
+orange-model-runtime.workspace = true
 orange-protocol = { workspace = true, features = ["grpc"] }
 rusqlite.workspace = true
 serde.workspace = true

@@ -7,6 +7,7 @@ publish.workspace = true
 
 [features]
 integration-tests = []
+real-worker-tests = ["integration-tests"]
 
 [[test]]
 name = "postgres"
@@ -63,6 +64,7 @@ opendal.workspace = true
 libc.workspace = true
 
 [dev-dependencies]
+orange-model-runtime.workspace = true
 reqwest.workspace = true
 tempfile.workspace = true
 rusqlite.workspace = true

@@ -1,5 +1,8 @@
 //! Real customer input files and provider mTLS delivery. Prices, enrollment,
 //! user sessions and OS/device probes are explicit fixtures; no model is run.
+#[cfg(feature = "real-worker-tests")]
+#[path = "inputs/cpu_cases.rs"]
+mod cpu_cases;
 use super::*;
 use orange_control_plane::{
     artifacts::{ArtifactActor, ArtifactReader, ArtifactStore},
@@ -33,11 +36,29 @@ struct InputFixture {
     upload: CreateUpload,
     version: String,
     profile: String,
+    model_sha: String,
+    execution_digest: String,
     request: GenerateRequest,
     headers: axum::http::HeaderMap,
     identity: UserIdentity,
 }
 async fn setup(cert: &str) -> InputFixture {
+    setup_model(
+        cert,
+        &"b".repeat(64),
+        &"c".repeat(64),
+        "private-input-fixture ".repeat(2500),
+        32,
+    )
+    .await
+}
+async fn setup_model(
+    cert: &str,
+    model_sha: &str,
+    execution_digest: &str,
+    prompt: String,
+    max_output_tokens: u32,
+) -> InputFixture {
     let d = device(cert).await;
     let pool = d.store.pool();
     let owner = Uuid::new_v4().to_string();
@@ -92,12 +113,9 @@ async fn setup(cert: &str) -> InputFixture {
     let request = GenerateRequest {
         invocation_id: Uuid::new_v4().to_string(),
         model_version: "model-test".into(),
-        messages: vec![Message::plain(
-            Role::User,
-            "private-input-fixture ".repeat(2500),
-        )],
+        messages: vec![Message::plain(Role::User, prompt)],
         tools: vec![],
-        max_output_tokens: 32,
+        max_output_tokens,
     };
     let bytes = serde_json::to_vec(&request).expect("input");
     let upload = CreateUpload {
@@ -135,7 +153,7 @@ async fn setup(cert: &str) -> InputFixture {
     let profile = Uuid::new_v4().to_string();
     let projection = request_digest("model-request-v1", &request).expect("projection");
     sqlx::query("INSERT INTO quotes(quote_id,owner_id,root_budget_id,invocation_id,projection_digest,price_version,max_amount,expires_at) VALUES($1,$2,$3,$4,$5,'input-fixture',100,clock_timestamp()+interval '1 hour')").bind(&quote).bind(&owner).bind(&budget.root_budget_id).bind(&request.invocation_id).bind(&projection).execute(pool).await.expect("price/quote fixture");
-    sqlx::query("INSERT INTO reviewed_execution_profiles(execution_profile_id,model_version_id,model_sha256,execution_profile_digest) VALUES($1,'model-test',$2,$3)").bind(&profile).bind("b".repeat(64)).bind("c".repeat(64)).execute(pool).await.expect("reviewed fixture");
+    sqlx::query("INSERT INTO reviewed_execution_profiles(execution_profile_id,model_version_id,model_sha256,execution_profile_digest) VALUES($1,'model-test',$2,$3)").bind(&profile).bind(model_sha).bind(execution_digest).execute(pool).await.expect("reviewed fixture");
     sqlx::query("INSERT INTO quote_execution_plans(quote_id,target_node_id,execution_profile_id,request_projection_digest,job_deadline) VALUES($1,$2,$3,$4,date_trunc('second',clock_timestamp()+interval '1 hour'))").bind(&quote).bind(&d.node).bind(&profile).bind(&projection).execute(pool).await.expect("scheduler fixture");
     let submit = SubmitJob {
         root_budget_id: budget.root_budget_id,
@@ -176,6 +194,8 @@ async fn setup(cert: &str) -> InputFixture {
         upload,
         version: v.version_id,
         profile,
+        model_sha: model_sha.into(),
+        execution_digest: execution_digest.into(),
         request,
         headers,
         identity,
@@ -276,8 +296,8 @@ async fn broker(f: &InputFixture) -> (Broker, Supervisor) {
             devices: vec!["cpu".into()],
             approved_profiles: vec![ApprovedProfile {
                 id: f.profile.clone(),
-                model_sha256: "b".repeat(64),
-                execution_digest: "c".repeat(64),
+                model_sha256: f.model_sha.clone(),
+                execution_digest: f.execution_digest.clone(),
             }],
         },
     )
@@ -359,7 +379,7 @@ async fn exact_customer_input_requires_start_and_rechecks_deletion_on_real_mtls(
         .confirm(&mut journal, &mut broker, &supervisor)
         .expect("confirm");
     let fetched = connection
-        .fetch_model_input(&journal, &started, &record.command_id)
+        .fetch_model_input(&mut journal, &started, &record.command_id)
         .await
         .expect("actual multi-chunk bytes, no user cookie sent to provider");
     assert_eq!(
@@ -470,7 +490,7 @@ async fn current_requester_revocation_and_superseded_epoch_stop_input_delivery()
         .expect("requester revocation fixture");
     assert!(
         connection
-            .fetch_model_input(&journal, &started, &record.command_id)
+            .fetch_model_input(&mut journal, &started, &record.command_id)
             .await
             .is_err()
     );
@@ -582,7 +602,7 @@ async fn changed_projection_and_other_provider_cannot_inherit_input_authority() 
         .await
         .expect("browser logout fixture");
     connection
-        .fetch_model_input(&journal, &started, &record.command_id)
+        .fetch_model_input(&mut journal, &started, &record.command_id)
         .await
         .expect("bounded Job authority independent of browser cookie");
     let a = assignment(&f).await;

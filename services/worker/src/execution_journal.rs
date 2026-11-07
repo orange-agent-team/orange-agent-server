@@ -1,5 +1,7 @@
 //! Durable E08 command identity. Public inspection is not execution authority.
 //! Only the authenticated in-crate control adapter can mutate this journal.
+#[cfg(unix)]
+mod cpu;
 mod rejections;
 use crate::{
     broker::{BrokerError, Grant, Holder, storage},
@@ -53,7 +55,7 @@ impl ExecutionJournal {
         }
         let (mut connection, lock) = storage::open(path)?;
         let version: i64 = connection.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if !(0..=2).contains(&version) {
+        if !(0..=3).contains(&version) {
             return Err(ExecutionJournalError::Format);
         }
         if version == 0 {
@@ -83,6 +85,10 @@ impl ExecutionJournal {
         if version < 2 {
             tx.execute_batch(include_str!("execution_schema_v2.sql"))?;
         }
+        if version < 3 {
+            tx.execute_batch(include_str!("execution_schema_v3.sql"))?;
+        }
+        tx.execute("UPDATE cpu_runs SET phase='cleanup_unknown',error_code='OWNER_RESTARTED' WHERE phase IN ('starting','generating')",[])?;
         tx.commit()?;
         Ok(Self {
             connection,
@@ -604,7 +610,83 @@ mod tests {
             j.connection
                 .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                 .expect("version"),
-            2
+            3
         );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn cpu_effect_is_unique_and_restart_preserves_unknown_cleanup() {
+        let d = private();
+        let root = private();
+        let other_root = private();
+        let path = d.path().join("execution.sqlite");
+        let mut j = ExecutionJournal::open(&path, "node".into()).expect("open");
+        j.bind_cpu_root(root.path()).expect("first binding");
+        j.bind_cpu_root(root.path()).expect("same physical root");
+        assert!(j.bind_cpu_root(other_root.path()).is_err());
+        assert!(
+            j.connection
+                .execute("DELETE FROM cpu_runtime_binding", [])
+                .is_err()
+        );
+        j.bind(&identity(1)).expect("identity fixture");
+        let a = assignment();
+        j.receive(&identity(1), &a).expect("receive");
+        assert!(
+            j.begin_cpu(
+                &identity(1),
+                "command",
+                "instance",
+                &a.request_projection_digest,
+                &a.execution_profile_digest
+            )
+            .is_err()
+        );
+        j.reserve(&identity(1), "command", &grant())
+            .expect("reserve fixture");
+        let ack = j.send_ack(&identity(1), "command").expect("ack");
+        j.claim_start(&identity(1), "command", &start(&ack))
+            .expect("claim");
+        j.running("command").expect("running");
+        j.begin_cpu(
+            &identity(1),
+            "command",
+            "instance",
+            &a.request_projection_digest,
+            &a.execution_profile_digest,
+        )
+        .expect("before effect");
+        assert!(
+            j.begin_cpu(
+                &identity(1),
+                "command",
+                "other",
+                &a.request_projection_digest,
+                &a.execution_profile_digest
+            )
+            .is_err()
+        );
+        j.cpu_phase("command", "generating").expect("generating");
+        drop(j);
+        let mut j = ExecutionJournal::open(&path, "node".into()).expect("restart");
+        let state: (String, String, bool) = j.connection.query_row("SELECT phase,error_code,cleanup_confirmed FROM cpu_runs WHERE command_id='command'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).expect("persisted uncertainty");
+        assert_eq!(
+            state,
+            ("cleanup_unknown".into(), "OWNER_RESTARTED".into(), false)
+        );
+        assert!(
+            j.finish_cpu(
+                "command",
+                "computed_unsubmitted",
+                Some(&"d".repeat(64)),
+                Some(&"e".repeat(64)),
+                None
+            )
+            .is_err()
+        );
+        assert!(j.connection.execute("DELETE FROM cpu_runs", []).is_err());
+        assert!(j.bind_cpu_root(other_root.path()).is_err());
+        j.bind_cpu_root(root.path())
+            .expect("original root retained");
     }
 }

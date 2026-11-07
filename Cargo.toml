@@ -11,6 +11,7 @@ publish = false
 [workspace.dependencies]
 orange-domain = { path = "crates/domain" }
 orange-protocol = { path = "crates/protocol" }
+orange-model-runtime = { path = "crates/model-runtime", version = "=0.1.0" }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = { version = "=1.0.154", features = ["float_roundtrip"] }
 axum = "=0.8.9"
