@@ -4,6 +4,8 @@
 
 ## 最新增量（优先于下方早期记录）
 
+- [实际网页模型验收](web-model-acceptance.md)已通过：真实Chrome连接API/Worker/固定CPU模型与独立Counter，核对计量、一次平衡结算、CPU关闭及源删除后拒读/清屏；会话/价格/准入为明确夹具。与正式Web22客户端/4浏览器替身、严格Clippy和全部关联回归分别留证。完整Web Agent、支付及未接受提交的确定性撤回不因此完成。
+
 - [当前用户任务查询](user-job-queries.md)已通过统一回归：只返回原提交者的有界任务列表，并按Invocation只读核对原Job和quote_id，不新增输入绑定或执行。PG0027增加游标索引并已冻结；同组织其他管理员、未知参数、源删除和撤权边界通过。USER-JOB-QUERY-001单独DONE，模型任务界面尚在独立准备目录。
 
 - 已实现并完成统一回归：[当前用户取消](user-job-cancellation.md)与[个人账户API](personal-account-api.md)。取消运行中Job保留原冻结额，实际退出/清理后才终结；迟到取消保留已交付结果与收费。个人钱包/预算只归当前会话的个人owner，预算创建不增加余额。正式源码4项取消协议、2项实际模型、3项个人账户测试、严格Clippy及全部关联回归通过，USER-JOB-CANCEL-001与PERSONAL-ACCOUNT-001单独记DONE。一次清理脚本环境键错误已修复并保留失败/复验记录。完整Web任务页面、组织预算治理和支付未因此完成。

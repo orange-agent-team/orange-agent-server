@@ -23,7 +23,9 @@ with tempfile.TemporaryDirectory(prefix='oa-worker-profile-') as directory:
     profile.write_text(json.dumps({'executable':str(backend),'executable_sha256':build['executable_sha256'],'model':str(model),'model_sha256':lock['model']['sha256'],'model_bytes':lock['model']['bytes']}));profile.chmod(0o600)
     env=os.environ.copy();env['ORANGE_REAL_WORKER_PROFILE']=str(profile)
     subprocess.run([os.sys.executable,str(ROOT/'scripts/check-worker-session.py')],cwd=ROOT,env=env,check=True)
-if os.environ.get('ORANGE_CANCEL_REAL_TESTS'):
+if os.environ.get('ORANGE_WEB_COMPUTE_TESTS'):
+    print('PASS actual Chrome/User API/Worker/fixed model/counter/PG settlement and cleanup, with post-deletion content denial; identity/price/enrollment fixtures, no real payment certification')
+elif os.environ.get('ORANGE_CANCEL_REAL_TESTS'):
     print('PASS actual current-user HTTP cancellation, owned CPU exit, independent cleanup/hold release, and preserved delivered settlement after late cancel; identity/admission fixtures, no GPU or payment certification')
 elif os.environ.get('ORANGE_CLEANUP_REAL_TESTS'):
     print('PASS actual CPU cloud cleanup, second priced Job, undelivered release, original receipt recovery and derivative reclaim; enrollment/price/profile admission fixtures, no GPU/TEE or real payment certification')

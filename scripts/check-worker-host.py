@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 ROOT=Path(__file__).resolve().parents[1]
 env=os.environ.copy()
+env.pop('ORANGE_WEB_COMPUTE_TESTS',None)
 env['ORANGE_WORKER_HOST_TESTS']='1'
 subprocess.run([os.sys.executable,'scripts/check-real-worker.py'],cwd=ROOT,env=env,check=True)
 subprocess.run([os.sys.executable,'scripts/check-broker.py'],cwd=ROOT,env=env,check=True)

@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 ROOT=Path(__file__).resolve().parents[1]
 env=os.environ.copy()
+env.pop('ORANGE_WEB_COMPUTE_TESTS',None)
 env.pop('ORANGE_REAL_WORKER_PROFILE',None)
 env['ORANGE_WORKER_OUTPUT_TESTS']='1'
 subprocess.run([os.sys.executable,'scripts/check-artifact-contract.py'],cwd=ROOT,env=env,check=True)

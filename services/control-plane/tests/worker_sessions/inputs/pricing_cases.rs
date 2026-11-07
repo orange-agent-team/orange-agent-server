@@ -3,6 +3,9 @@
 use super::*;
 use orange_model_runtime::meter_service::TrustedMeter;
 use orange_protocol::pricing::{CreateTextQuote, TextQuoteView};
+#[cfg(feature = "web-compute-tests")]
+#[path = "browser_cases.rs"]
+mod browser_cases;
 #[path = "cancel_real.rs"]
 mod cancel_real;
 #[path = "cleanup_real.rs"]
