@@ -1,6 +1,29 @@
 //! Actual PG/HTTP barrier races. Identity/quote/enrollment are fixtures.
 use super::*;
 use orange_control_plane::store::StoreError;
+type AdvisoryTag = (i64, i64, i16);
+async fn held_tag(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> AdvisoryTag {
+    let tags: Vec<AdvisoryTag> = sqlx::query_as("SELECT classid::bigint,objid::bigint,objsubid FROM pg_locks WHERE pid=pg_backend_pid() AND locktype='advisory' AND granted")
+        .fetch_all(&mut **tx).await.expect("held transaction lock identity");
+    assert_eq!(tags.len(), 1, "fixture holds exactly one advisory lock");
+    tags[0]
+}
+async fn waiter_count(pool: &sqlx::PgPool, tag: AdvisoryTag) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM pg_locks WHERE database=(SELECT oid FROM pg_database WHERE datname=current_database()) AND locktype='advisory' AND classid::bigint=$1 AND objid::bigint=$2 AND objsubid=$3 AND NOT granted")
+        .bind(tag.0).bind(tag.1).bind(tag.2).fetch_one(pool).await.expect("waiters for this exact lock")
+}
+async fn waiters(pool: &sqlx::PgPool, tag: AdvisoryTag, count: i64) {
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if waiter_count(pool, tag).await == count {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("required snapshots queued behind this exact transaction lock");
+}
 async fn pending(f: &InputFixture) -> SubmitJob {
     f.d.store
         .cancel_for_user(&f.actor, &f.owner, &f.job, "retire-initial")
@@ -307,6 +330,28 @@ async fn submit_snapshot_started_before_waited_barrier_cannot_miss_the_barrier()
         .execute(&mut *guard)
         .await
         .expect("block both actual operations");
+    let tag = held_tag(&mut guard).await;
+    // A waiter for another Invocation must not satisfy our ordering witness.
+    // The full control suite runs independent barrier tests concurrently.
+    let unrelated_key = format!("unrelated-withdrawal-fixture-{}", Uuid::new_v4());
+    let mut unrelated_guard = f.d.store.pool().begin().await.expect("unrelated guard");
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
+        .bind(&unrelated_key)
+        .execute(&mut *unrelated_guard)
+        .await
+        .expect("unrelated lock");
+    let unrelated_tag = held_tag(&mut unrelated_guard).await;
+    assert_ne!(tag, unrelated_tag);
+    let unrelated_pool = f.d.store.pool().clone();
+    let unrelated_waiter = tokio::spawn(async move {
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
+            .bind(unrelated_key)
+            .execute(&unrelated_pool)
+            .await
+            .expect("unrelated waiter");
+    });
+    waiters(f.d.store.pool(), unrelated_tag, 1).await;
+    assert_eq!(waiter_count(f.d.store.pool(), tag).await, 0);
     let store = f.d.store.clone();
     let actor = f.actor.clone();
     let owner = f.owner.clone();
@@ -316,10 +361,7 @@ async fn submit_snapshot_started_before_waited_barrier_cannot_miss_the_barrier()
             .withdraw_invocation(&actor, &owner, "ordered-stop", &stop_request)
             .await
     });
-    async fn waiters(pool: &sqlx::PgPool, count: i64) {
-        tokio::time::timeout(Duration::from_secs(2),async{loop{let waiting:i64=sqlx::query_scalar("SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a USING(pid) WHERE a.datname=current_database() AND l.locktype='advisory' AND NOT l.granted").fetch_one(pool).await.expect("actual lock waiters");if waiting>=count{break;}tokio::time::sleep(Duration::from_millis(10)).await;}}).await.expect("queued behind the same transaction lock");
-    }
-    waiters(f.d.store.pool(), 1).await;
+    waiters(f.d.store.pool(), tag, 1).await;
     let store = f.d.store.clone();
     let actor = f.actor.clone();
     let owner = f.owner.clone();
@@ -328,7 +370,7 @@ async fn submit_snapshot_started_before_waited_barrier_cannot_miss_the_barrier()
             .submit_for_user(&actor, &owner, "old-snapshot-submit", &request)
             .await
     });
-    waiters(f.d.store.pool(), 2).await;
+    waiters(f.d.store.pool(), tag, 2).await;
     guard
         .commit()
         .await
@@ -351,6 +393,11 @@ async fn submit_snapshot_started_before_waited_barrier_cannot_miss_the_barrier()
             .await
             .expect("no hidden reservation");
     assert_eq!(balance, (1000, 0));
+    unrelated_guard
+        .commit()
+        .await
+        .expect("release only fixture decoy");
+    unrelated_waiter.await.expect("decoy completed");
     f.objects.drain().await.expect("drain");
 }
 
@@ -369,6 +416,7 @@ async fn two_waiting_identical_withdrawals_return_the_same_original_receipt() {
         .execute(&mut *guard)
         .await
         .expect("hold");
+    let tag = held_tag(&mut guard).await;
     let mut tasks = Vec::new();
     for _ in 0..2 {
         let store = f.d.store.clone();
@@ -381,7 +429,7 @@ async fn two_waiting_identical_withdrawals_return_the_same_original_receipt() {
                 .await
         }));
     }
-    tokio::time::timeout(Duration::from_secs(2),async{loop{let waiting:i64=sqlx::query_scalar("SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a USING(pid) WHERE a.datname=current_database() AND l.locktype='advisory' AND NOT l.granted").fetch_one(f.d.store.pool()).await.expect("waiters");if waiting==2{break;}tokio::time::sleep(Duration::from_millis(10)).await;}}).await.expect("both snapshots waiting");
+    waiters(f.d.store.pool(), tag, 2).await;
     guard.commit().await.expect("release");
     let first = tasks
         .remove(0)
