@@ -7,7 +7,17 @@ impl ControlConnection {
         node: &mut NodeJournal,
         journal: &mut ExecutionJournal,
     ) -> Result<Self, ControlError> {
-        Self::connect_execution_mode(config, node, journal, 1, 1, 0, 0).await
+        Self::connect_execution_mode(
+            config,
+            node,
+            journal,
+            ControlVersions {
+                rejection_receipts_version: 1,
+                input_artifacts_version: 1,
+                ..ControlVersions::default()
+            },
+        )
+        .await
     }
     /// Return a model request only after full bytes/hash/projection validation.
     /// The caller must keep supervising the Broker and control connection; this

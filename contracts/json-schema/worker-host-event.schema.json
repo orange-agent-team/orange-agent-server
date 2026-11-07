@@ -25,7 +25,9 @@
         "unsubmitted_output_discarded",
         "stopped",
         "response_committed",
-        "response_commit_recovered"
+        "response_commit_recovered",
+        "cloud_cleanup_confirmed",
+        "output_unconfirmed"
       ]
     },
     "command_id": {

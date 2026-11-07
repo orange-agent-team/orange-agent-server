@@ -183,6 +183,15 @@ impl ArtifactStore {
                 Err(_) => failed += 1,
             }
         }
+        let terminal:Vec<String>=sqlx::query_scalar("SELECT c.job_id FROM worker_cpu_cleanup_receipts c JOIN jobs j USING(job_id) JOIN job_inputs i USING(job_id) JOIN artifacts a ON a.artifact_id=i.artifact_id WHERE a.root_id=$1 AND ((j.settlement_state='pending' AND j.execution_state IN('failed','cancelled')) OR (j.settlement_state='settled' AND EXISTS(SELECT 1 FROM artifact_pins p WHERE p.reference_id='job-input:'||j.job_id OR p.reference_id='job-output:'||j.job_id))) ORDER BY c.created_at LIMIT $2").bind(&self.inner.objects.root_id).bind(i64::from(limit)).fetch_all(&self.inner.pool).await?;
+        for job in terminal {
+            if crate::store_cleanup::finalize(&self.inner.pool, &job)
+                .await
+                .is_err()
+            {
+                failed += 1;
+            }
+        }
         Ok((settled, failed))
     }
 }

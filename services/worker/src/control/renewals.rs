@@ -26,7 +26,18 @@ impl ControlConnection {
         node: &mut NodeJournal,
         journal: &mut ExecutionJournal,
     ) -> Result<Self, ControlError> {
-        Self::connect_execution_mode(config, node, journal, 1, 1, 1, 0).await
+        Self::connect_execution_mode(
+            config,
+            node,
+            journal,
+            ControlVersions {
+                rejection_receipts_version: 1,
+                input_artifacts_version: 1,
+                renewal_version: 1,
+                ..ControlVersions::default()
+            },
+        )
+        .await
     }
     pub fn supports_renewal(&self) -> bool {
         self.renewal_version == 1

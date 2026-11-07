@@ -1,3 +1,4 @@
+mod cleanup;
 mod commands;
 pub(crate) mod execution;
 pub mod gateway;

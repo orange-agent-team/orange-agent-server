@@ -41,9 +41,26 @@ impl ArtifactStore {
             )
             .await?;
         }
+        let derived=sqlx::query("SELECT a.*,i.artifact_id AS source_id FROM worker_output_uploads w JOIN job_inputs i USING(job_id) JOIN artifacts source ON source.artifact_id=i.artifact_id JOIN artifacts a ON a.artifact_id=w.artifact_id WHERE a.root_id=$1 AND a.state!='deleted' AND source.state='deleted' ORDER BY a.created_at LIMIT $2 FOR UPDATE OF a SKIP LOCKED").bind(&self.inner.objects.root_id).bind(i64::from(limit)).fetch_all(&mut *tx).await?;
+        for row in &derived {
+            let artifact: String = row.try_get("artifact_id")?;
+            sqlx::query("UPDATE artifacts SET state='deleted',deleted_at=clock_timestamp() WHERE artifact_id=$1").bind(&artifact).execute(&mut *tx).await?;
+            sqlx::query("INSERT INTO artifact_derivative_deletions(artifact_id,source_artifact_id) VALUES($1,$2)").bind(&artifact).bind(row.try_get::<String,_>("source_id")?).execute(&mut *tx).await?;
+            if let Some(resource) = row.try_get::<Option<String>, _>("resource_id")? {
+                sqlx::query("UPDATE team_resources SET deleted=TRUE,acl_version=acl_version+1 WHERE resource_id=$1").bind(resource).execute(&mut *tx).await?;
+            }
+            crate::events::append(
+                &mut tx,
+                &row.try_get::<String, _>("owner_id")?,
+                &artifact,
+                "artifact.source_deleted",
+                &row.try_get::<String, _>("version_id")?,
+            )
+            .await?;
+        }
         sqlx::query("UPDATE artifact_capacity SET records=records-$2 WHERE root_id=$1")
             .bind(&self.inner.objects.root_id)
-            .bind(expired.len() as i64)
+            .bind((expired.len() + derived.len()) as i64)
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;

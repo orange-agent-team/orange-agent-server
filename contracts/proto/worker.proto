@@ -3,7 +3,7 @@ package orange.worker.v1;
 import "google/protobuf/timestamp.proto";
 
 // Transport peer identity comes from mTLS, never from node_id alone.
-service WorkerGateway { rpc Control(stream WorkerFrame) returns (stream ServerFrame); rpc ReadInput(InputReadRequest) returns (InputReadReply); rpc RenewExecution(ExecutionRenewalRequest) returns (ExecutionRenewalReply); rpc CommitOutput(stream OutputFrame) returns (OutputReceipt); rpc QueryOutput(OutputQuery) returns (OutputReceipt); }
+service WorkerGateway { rpc Control(stream WorkerFrame) returns (stream ServerFrame); rpc ReadInput(InputReadRequest) returns (InputReadReply); rpc RenewExecution(ExecutionRenewalRequest) returns (ExecutionRenewalReply); rpc CommitOutput(stream OutputFrame) returns (OutputReceipt); rpc QueryOutput(OutputQuery) returns (OutputReceipt); rpc ConfirmCpuCleanup(CpuCleanupRequest) returns (CpuCleanupReceipt); }
 message Lease {
   string lease_id = 1;
   string job_id = 2;
@@ -12,9 +12,9 @@ message Lease {
   uint64 fencing_token = 5;
   google.protobuf.Timestamp expires_at = 6;
 }
-message Hello { string node_id = 1; uint32 protocol_version = 2; string capabilities_digest = 3; uint32 node_control_version = 4; uint32 execution_control_version = 5; uint32 rejection_receipts_version = 6; uint32 input_artifacts_version = 7; uint32 renewal_version = 8; uint32 output_version = 9; }
+message Hello { string node_id = 1; uint32 protocol_version = 2; string capabilities_digest = 3; uint32 node_control_version = 4; uint32 execution_control_version = 5; uint32 rejection_receipts_version = 6; uint32 input_artifacts_version = 7; uint32 renewal_version = 8; uint32 output_version = 9; uint32 cpu_cleanup_version = 10; }
 // Protocol v1 control-session TTL is 45 seconds; it is not an execution lease.
-message Welcome { string session_id = 1; uint64 connection_epoch = 2; uint32 protocol_version = 3; google.protobuf.Timestamp expires_at = 4; uint32 node_control_version = 5; uint64 node_policy_generation = 6; uint32 execution_control_version = 7; uint32 rejection_receipts_version = 8; uint32 input_artifacts_version = 9; uint32 renewal_version = 10; uint32 output_version = 11; }
+message Welcome { string session_id = 1; uint64 connection_epoch = 2; uint32 protocol_version = 3; google.protobuf.Timestamp expires_at = 4; uint32 node_control_version = 5; uint64 node_policy_generation = 6; uint32 execution_control_version = 7; uint32 rejection_receipts_version = 8; uint32 input_artifacts_version = 9; uint32 renewal_version = 10; uint32 output_version = 11; uint32 cpu_cleanup_version = 12; }
 // Execution capability1 is independent of node-control capability. Zero/old
 // clients never receive assignments. Version1 grants are immutable, <=45s,
 // ACK within10s, and do not imply renew/resume/result/cleanup support.
@@ -127,3 +127,8 @@ message OutputFrame { oneof body { OutputHeader header=1; OutputData data=2; } }
 message OutputReceipt { string commit_id=1; string job_id=2; string upload_id=3; InputArtifact artifact=4; string response_digest=5; string header_digest=6; }
 // Historical query under a current output-capable session, not lease renewal.
 message OutputQuery { string session_id=1; OutputHeader original=2; }
+
+// Independently negotiated CPU-only cleanup. Historical original ACK/Lease is
+// binding evidence, never renewed execution authority. No GPU release implied.
+message CpuCleanupRequest { string session_id=1; Acknowledge accepted=2; bytes evidence_json=3; string outcome=4; string request_digest=5; }
+message CpuCleanupReceipt { string receipt_id=1; string command_id=2; string attempt_id=3; string job_id=4; string request_digest=5; string outcome=6; string response_commit_id=7; }

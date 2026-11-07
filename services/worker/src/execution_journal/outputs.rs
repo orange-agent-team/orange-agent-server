@@ -41,7 +41,7 @@ impl ExecutionJournal {
         .transpose()
     }
     pub fn unresolved_outputs(&self) -> Result<Vec<String>, ExecutionJournalError> {
-        let mut statement=self.connection.prepare("SELECT command_id FROM execution_outputs WHERE state!='confirmed' ORDER BY command_id LIMIT 16")?;
+        let mut statement=self.connection.prepare("SELECT command_id FROM execution_outputs o WHERE state!='confirmed' AND NOT EXISTS(SELECT 1 FROM cpu_cleanup_facts c WHERE c.command_id=o.command_id AND c.receipt IS NOT NULL) ORDER BY command_id LIMIT 16")?;
         Ok(statement
             .query_map([], |r| r.get(0))?
             .collect::<Result<Vec<_>, _>>()?)

@@ -3,6 +3,8 @@
 use super::*;
 use orange_model_runtime::meter_service::TrustedMeter;
 use orange_protocol::pricing::{CreateTextQuote, TextQuoteView};
+#[path = "cleanup_real.rs"]
+mod cleanup_real;
 struct Case {
     f: InputFixture,
     meter: TrustedMeter,
@@ -67,6 +69,7 @@ async fn setup_priced(cert: &str) -> Case {
     let d = meter.descriptor();
     sqlx::query("INSERT INTO trusted_meter_profiles(profile_digest,descriptor) VALUES($1,$2) ON CONFLICT(profile_digest) DO NOTHING").bind(&d.profile_digest).bind(serde_json::to_value(d).expect("descriptor")).execute(f.d.store.pool()).await.expect("explicit supported profile admission fixture");
     let price = Uuid::new_v4().to_string();
+    sqlx::query("INSERT INTO reviewed_cpu_profiles(execution_profile_id,executable_sha256,model_bytes,context_tokens,startup_timeout_ms) VALUES($1,$2,$3,$4,$5)").bind(&f.profile).bind(&p.executable_sha256).bind(p.model_bytes as i64).bind(p.context_tokens as i32).bind(p.startup_timeout.as_millis() as i64).execute(f.d.store.pool()).await.expect("explicit CPU profile admission fixture");
     sqlx::query("INSERT INTO text_prices(price_version,node_id,execution_profile_id,meter_profile_digest,input_price,output_price,output_limit,fee_bps) VALUES($1,$2,$3,$4,2000,6000,128,2000)").bind(&price).bind(&f.d.node).bind(&f.profile).bind(&d.profile_digest).execute(f.d.store.pool()).await.expect("development price admission fixture");
     Case {
         f,

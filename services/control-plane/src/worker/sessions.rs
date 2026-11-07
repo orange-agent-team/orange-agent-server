@@ -27,6 +27,7 @@ pub struct DeviceSession {
     pub input_artifacts_version: u32,
     pub renewal_version: u32,
     pub output_version: u32,
+    pub cpu_cleanup_version: u32,
     pub node_policy_generation: u64,
 }
 #[derive(Clone)]
@@ -55,6 +56,7 @@ impl WorkerSessionStore {
         let input_artifacts_version = hello.input_artifacts_version;
         let renewal_version = hello.renewal_version;
         let output_version = hello.output_version;
+        let cpu_cleanup_version = hello.cpu_cleanup_version;
         if hello.protocol_version != 1 {
             return Err(SessionError::Invalid);
         }
@@ -67,6 +69,9 @@ impl WorkerSessionStore {
             || input_artifacts_version > 1
             || renewal_version > 1
             || output_version > 1
+            || cpu_cleanup_version > 1
+            || (cpu_cleanup_version == 1
+                && (execution_control_version != 2 || node_control_version != 2))
             || (output_version == 1 && (renewal_version != 1 || input_artifacts_version != 1))
             || (renewal_version == 1 && input_artifacts_version != 1)
             || (input_artifacts_version == 1
@@ -79,8 +84,8 @@ impl WorkerSessionStore {
         let mut tx = self.pool.begin().await?;
         authorize(&mut tx, node, fingerprint).await?;
         let id = Uuid::new_v4().to_string();
-        let row=sqlx::query("INSERT INTO worker_sessions(node_id,gateway_instance_id,connection_epoch,session_id,certificate_sha256,capabilities_digest,last_seen_at,expires_at,node_control_version,execution_control_version,rejection_receipts_version,input_artifacts_version,renewal_version,output_version) VALUES($1,$2,1,$3,$4,$5,clock_timestamp(),clock_timestamp()+interval '45 seconds',$6,$7,$8,$9,$10,$11) ON CONFLICT(node_id) DO UPDATE SET gateway_instance_id=excluded.gateway_instance_id,connection_epoch=worker_sessions.connection_epoch+1,session_id=excluded.session_id,certificate_sha256=excluded.certificate_sha256,capabilities_digest=excluded.capabilities_digest,reported_capability_snapshot_id=NULL,last_seen_at=excluded.last_seen_at,expires_at=excluded.expires_at,node_control_version=excluded.node_control_version,execution_control_version=excluded.execution_control_version,rejection_receipts_version=excluded.rejection_receipts_version,input_artifacts_version=excluded.input_artifacts_version,renewal_version=excluded.renewal_version,output_version=excluded.output_version RETURNING connection_epoch,floor(extract(epoch FROM expires_at))::bigint AS expires")
-            .bind(node).bind(&self.gateway).bind(&id).bind(fingerprint).bind(capabilities).bind(node_control_version as i32).bind(execution_control_version as i32).bind(rejection_receipts_version as i32).bind(input_artifacts_version as i32).bind(renewal_version as i32).bind(output_version as i32).fetch_one(&mut *tx).await?;
+        let row=sqlx::query("INSERT INTO worker_sessions(node_id,gateway_instance_id,connection_epoch,session_id,certificate_sha256,capabilities_digest,last_seen_at,expires_at,node_control_version,execution_control_version,rejection_receipts_version,input_artifacts_version,renewal_version,output_version,cpu_cleanup_version) VALUES($1,$2,1,$3,$4,$5,clock_timestamp(),clock_timestamp()+interval '45 seconds',$6,$7,$8,$9,$10,$11,$12) ON CONFLICT(node_id) DO UPDATE SET gateway_instance_id=excluded.gateway_instance_id,connection_epoch=worker_sessions.connection_epoch+1,session_id=excluded.session_id,certificate_sha256=excluded.certificate_sha256,capabilities_digest=excluded.capabilities_digest,reported_capability_snapshot_id=NULL,last_seen_at=excluded.last_seen_at,expires_at=excluded.expires_at,node_control_version=excluded.node_control_version,execution_control_version=excluded.execution_control_version,rejection_receipts_version=excluded.rejection_receipts_version,input_artifacts_version=excluded.input_artifacts_version,renewal_version=excluded.renewal_version,output_version=excluded.output_version,cpu_cleanup_version=excluded.cpu_cleanup_version RETURNING connection_epoch,floor(extract(epoch FROM expires_at))::bigint AS expires")
+            .bind(node).bind(&self.gateway).bind(&id).bind(fingerprint).bind(capabilities).bind(node_control_version as i32).bind(execution_control_version as i32).bind(rejection_receipts_version as i32).bind(input_artifacts_version as i32).bind(renewal_version as i32).bind(output_version as i32).bind(cpu_cleanup_version as i32).fetch_one(&mut *tx).await?;
         let policy_generation: i64 =
             sqlx::query_scalar("SELECT policy_generation FROM nodes WHERE node_id=$1")
                 .bind(node)
@@ -99,6 +104,7 @@ impl WorkerSessionStore {
             input_artifacts_version,
             renewal_version,
             output_version,
+            cpu_cleanup_version,
             node_policy_generation: policy_generation as u64,
         };
         sqlx::query("UPDATE nodes SET state=CASE WHEN state='offline' THEN 'online' ELSE state END,version=version+1 WHERE node_id=$1").bind(node).execute(&mut *tx).await?;
@@ -194,7 +200,7 @@ async fn current(
     tx: &mut Transaction<'_, Postgres>,
     s: &DeviceSession,
 ) -> Result<(), SessionError> {
-    let valid:Option<i64>=sqlx::query_scalar("SELECT connection_epoch FROM worker_sessions WHERE node_id=$1 AND gateway_instance_id=$2 AND connection_epoch=$3 AND session_id=$4 AND certificate_sha256=$5 AND node_control_version=$6 AND execution_control_version=$7 AND rejection_receipts_version=$8 AND input_artifacts_version=$9 AND renewal_version=$10 AND output_version=$11 AND expires_at>clock_timestamp() FOR UPDATE").bind(&s.node_id).bind(&s.gateway_instance_id).bind(s.connection_epoch).bind(&s.session_id).bind(&s.certificate_sha256).bind(s.node_control_version as i32).bind(s.execution_control_version as i32).bind(s.rejection_receipts_version as i32).bind(s.input_artifacts_version as i32).bind(s.renewal_version as i32).bind(s.output_version as i32).fetch_optional(&mut **tx).await?;
+    let valid:Option<i64>=sqlx::query_scalar("SELECT connection_epoch FROM worker_sessions WHERE node_id=$1 AND gateway_instance_id=$2 AND connection_epoch=$3 AND session_id=$4 AND certificate_sha256=$5 AND node_control_version=$6 AND execution_control_version=$7 AND rejection_receipts_version=$8 AND input_artifacts_version=$9 AND renewal_version=$10 AND output_version=$11 AND cpu_cleanup_version=$12 AND expires_at>clock_timestamp() FOR UPDATE").bind(&s.node_id).bind(&s.gateway_instance_id).bind(s.connection_epoch).bind(&s.session_id).bind(&s.certificate_sha256).bind(s.node_control_version as i32).bind(s.execution_control_version as i32).bind(s.rejection_receipts_version as i32).bind(s.input_artifacts_version as i32).bind(s.renewal_version as i32).bind(s.output_version as i32).bind(s.cpu_cleanup_version as i32).fetch_optional(&mut **tx).await?;
     if valid.is_none() {
         return Err(SessionError::Stale);
     }

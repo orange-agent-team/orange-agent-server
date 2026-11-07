@@ -35,7 +35,19 @@ impl ControlConnection {
         node: &mut NodeJournal,
         journal: &mut ExecutionJournal,
     ) -> Result<Self, ControlError> {
-        Self::connect_execution_mode(config, node, journal, 1, 1, 1, 1).await
+        Self::connect_execution_mode(
+            config,
+            node,
+            journal,
+            ControlVersions {
+                rejection_receipts_version: 1,
+                input_artifacts_version: 1,
+                renewal_version: 1,
+                output_version: 1,
+                ..ControlVersions::default()
+            },
+        )
+        .await
     }
     pub fn supports_output(&self) -> bool {
         self.output_version == 1

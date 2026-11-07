@@ -493,6 +493,10 @@ async fn run(
         cleanup_digest.as_deref(),
         error_code,
     )?;
+    if let (Some(process), Some(digest)) = (cleanup, cleanup_digest.as_deref()) {
+        r.journal
+            .record_cpu_cleanup(&spec.command_id, &grant, process, digest)?;
+    }
     let _ = progress.send(CpuPhase::Finished);
     Ok(CpuWorkerExit {
         report: CpuRunReport {

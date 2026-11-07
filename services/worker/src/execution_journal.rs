@@ -1,5 +1,6 @@
 //! Durable E08 command identity. Public inspection is not execution authority.
 //! Only the authenticated in-crate control adapter can mutate this journal.
+mod cleanup;
 #[cfg(unix)]
 mod cpu;
 mod outputs;
@@ -57,7 +58,7 @@ impl ExecutionJournal {
         }
         let (mut connection, lock) = storage::open(path)?;
         let version: i64 = connection.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if !(0..=5).contains(&version) {
+        if !(0..=6).contains(&version) {
             return Err(ExecutionJournalError::Format);
         }
         if version == 0 {
@@ -95,6 +96,9 @@ impl ExecutionJournal {
         }
         if version < 5 {
             tx.execute_batch(include_str!("execution_schema_v5.sql"))?;
+        }
+        if version < 6 {
+            tx.execute_batch(include_str!("execution_schema_v6.sql"))?;
         }
         tx.execute(
             "UPDATE execution_outputs SET state='unknown' WHERE state='prepared'",
@@ -626,7 +630,7 @@ mod tests {
             j.connection
                 .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                 .expect("version"),
-            5
+            6
         );
     }
     #[cfg(unix)]
@@ -766,6 +770,74 @@ mod tests {
                 }
             )
             .is_err()
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn cleanup_request_keeps_first_outcome_even_if_output_receipt_recovers_later() {
+        let d = private();
+        let path = d.path().join("execution.sqlite");
+        let mut j = ExecutionJournal::open(&path, "node".into()).expect("open");
+        j.bind(&identity(1)).expect("identity");
+        let a = assignment();
+        j.receive(&identity(1), &a).expect("receive");
+        j.reserve(&identity(1), "command", &grant())
+            .expect("reserve");
+        let ack = j.send_ack(&identity(1), "command").expect("ack");
+        j.claim_start(&identity(1), "command", &start(&ack))
+            .expect("start");
+        j.running("command").expect("running");
+        j.begin_cpu(
+            &identity(1),
+            "command",
+            "instance",
+            &a.request_projection_digest,
+            &a.execution_profile_digest,
+        )
+        .expect("run fixture");
+        let process = orange_model_runtime::supervisor::ProcessRecord {
+            instance_id: "instance".into(),
+            model_version: a.model_version_id.clone(),
+            executable_sha256: "d".repeat(64),
+            model_sha256: a.model_sha256.clone(),
+            phase: "stopped".into(),
+            pid: None,
+            exit_code: Some(0),
+            cpu_only: true,
+        };
+        let digest = orange_protocol::request_digest(
+            "worker.cpu.cleanup.v1",
+            &serde_json::json!({"grant":grant(),"process":process,"tasks_joined":true}),
+        )
+        .expect("fixture digest");
+        j.finish_cpu(
+            "command",
+            "computed_unsubmitted",
+            Some(&"e".repeat(64)),
+            Some(&digest),
+            None,
+        )
+        .expect("completed fixture");
+        j.record_cpu_cleanup("command", &grant(), &process, &digest)
+            .expect("persistent fixture fact");
+        let first = j
+            .cleanup_request("command", "session-1")
+            .expect("original request");
+        assert_eq!(first.outcome, "delivery_unknown");
+        j.connection.execute("INSERT INTO execution_outputs(command_id,header,header_digest,state,receipt) VALUES('command',X'00',?,'confirmed',X'01')",["e".repeat(64)]).expect("explicit later output receipt state fixture");
+        let second = j
+            .cleanup_request("command", "session-2")
+            .expect("replay after receipt recovery");
+        assert_eq!(second.outcome, first.outcome);
+        assert_eq!(second.request_digest, first.request_digest);
+        assert_eq!(second.session_id, "session-2");
+        assert!(
+            j.connection
+                .execute(
+                    "UPDATE cpu_cleanup_facts SET request_digest=? WHERE command_id='command'",
+                    ["f".repeat(64)]
+                )
+                .is_err()
         );
     }
 }

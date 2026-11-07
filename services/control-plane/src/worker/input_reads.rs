@@ -7,10 +7,21 @@ impl WorkerSessionStore {
         fingerprint: &str,
         session: &str,
     ) -> Result<DeviceSession, SessionError> {
+        let session = self.current_peer(fingerprint, session).await?;
+        if session.input_artifacts_version != 1 {
+            return Err(SessionError::Unauthorized);
+        }
+        Ok(session)
+    }
+    pub(crate) async fn current_peer(
+        &self,
+        fingerprint: &str,
+        session: &str,
+    ) -> Result<DeviceSession, SessionError> {
         if !orange_protocol::valid_id(session) {
             return Err(SessionError::Invalid);
         }
-        let row=sqlx::query("SELECT *,floor(extract(epoch FROM expires_at))::bigint AS expires FROM worker_sessions WHERE certificate_sha256=$1 AND session_id=$2 AND input_artifacts_version=1").bind(fingerprint).bind(session).fetch_optional(&self.pool).await?.ok_or(SessionError::Unauthorized)?;
+        let row=sqlx::query("SELECT *,floor(extract(epoch FROM expires_at))::bigint AS expires FROM worker_sessions WHERE certificate_sha256=$1 AND session_id=$2").bind(fingerprint).bind(session).fetch_optional(&self.pool).await?.ok_or(SessionError::Unauthorized)?;
         let s = DeviceSession {
             node_id: row.try_get("node_id")?,
             gateway_instance_id: row.try_get("gateway_instance_id")?,
@@ -21,9 +32,10 @@ impl WorkerSessionStore {
             node_control_version: row.try_get::<i32, _>("node_control_version")? as u32,
             execution_control_version: row.try_get::<i32, _>("execution_control_version")? as u32,
             rejection_receipts_version: row.try_get::<i32, _>("rejection_receipts_version")? as u32,
-            input_artifacts_version: 1,
+            input_artifacts_version: row.try_get::<i32, _>("input_artifacts_version")? as u32,
             renewal_version: row.try_get::<i32, _>("renewal_version")? as u32,
             output_version: row.try_get::<i32, _>("output_version")? as u32,
+            cpu_cleanup_version: row.try_get::<i32, _>("cpu_cleanup_version")? as u32,
             node_policy_generation: 0,
         };
         let mut tx = self.pool.begin().await?;

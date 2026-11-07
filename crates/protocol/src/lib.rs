@@ -1,5 +1,7 @@
 pub mod artifacts;
 pub mod canonical;
+#[cfg(feature = "grpc")]
+pub mod cleanup;
 pub mod events;
 #[cfg(feature = "grpc")]
 pub mod execution;

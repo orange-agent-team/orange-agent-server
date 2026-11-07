@@ -163,6 +163,7 @@ fn welcome(s: &DeviceSession) -> worker::ServerFrame {
             input_artifacts_version: s.input_artifacts_version,
             renewal_version: s.renewal_version,
             output_version: s.output_version,
+            cpu_cleanup_version: s.cpu_cleanup_version,
             node_policy_generation: s.node_policy_generation,
         })),
     }
@@ -170,6 +171,44 @@ fn welcome(s: &DeviceSession) -> worker::ServerFrame {
 #[tonic::async_trait]
 impl WorkerGateway for Gateway {
     type ControlStream = ReceiverStream<Result<worker::ServerFrame, Status>>;
+    async fn confirm_cpu_cleanup(
+        &self,
+        request: Request<worker::CpuCleanupRequest>,
+    ) -> Result<Response<worker::CpuCleanupReceipt>, Status> {
+        let _permit = self
+            .input_slots
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| Status::resource_exhausted("cleanup request limit"))?;
+        if *self.shutdown.borrow() {
+            return Err(Status::unavailable("gateway stopping"));
+        }
+        let peer = fingerprint(&request)?;
+        let body = request.into_inner();
+        let result = tokio::time::timeout(Duration::from_secs(8), async {
+            let session = self
+                .store
+                .current_peer(&peer, &body.session_id)
+                .await
+                .map_err(status)?;
+            self.store
+                .confirm_cpu_cleanup(&session, &body)
+                .await
+                .map_err(status)
+        })
+        .await
+        .map_err(|_| Status::deadline_exceeded("cleanup confirmation deadline"))??;
+        if let Some(writer) = &self.writer {
+            writer
+                .settle_committed(&result.job_id)
+                .await
+                .map_err(output_error)?;
+        }
+        crate::store_cleanup::finalize(&self.store.pool, &result.job_id)
+            .await
+            .map_err(|_| Status::unavailable("cleanup financial finalization pending"))?;
+        Ok(Response::new(result))
+    }
     async fn commit_output(
         &self,
         request: Request<Streaming<worker::OutputFrame>>,
@@ -373,6 +412,7 @@ impl WorkerGateway for Gateway {
             || hello.input_artifacts_version > 1
             || hello.renewal_version > 1
             || hello.output_version > 1
+            || hello.cpu_cleanup_version > 1
             || (hello.output_version == 1 && self.writer.is_none())
             || (hello.input_artifacts_version == 1 && self.artifacts.is_none())
         {

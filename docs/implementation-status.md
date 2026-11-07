@@ -4,6 +4,8 @@
 
 ## 最新增量（优先于下方早期记录）
 
+- 新增[云端CPU清理与终态](cpu-cleanup-lifecycle.md)：原执行/实例的持久退出事实、独立清理能力、审核CPU配置、幂等云回执和attempt关闭；真实第二个有价任务已执行。未交付任务释放原冻结额而不伪造usage，终态pin精确释放，源删除后的派生对象保留其他消费者引用并最终实际回收。针对性验证通过，最终统一状态以CPU-CLEANUP-001为准；不代表GPU/TEE或生产准入认证。
+
 - 新增[可信文本计量与开发积分结算](trusted-text-pricing.md)：服务端拥有固定模型Counter、离线有界工具schema校验、当前会话报价API、不可变价格/输入快照、发布前可信usage fact及原子开发账本。7项真实计量/结算专项、严格Clippy及全部关联回归通过，TRUSTED-PRICING-001已单独记DONE；包含伪造usage拒用、超限、价格撤销、事务故障/并发恢复及实际多进程闭环。0024已应用；生产价格治理、真实资金、云端cleanup与更多支持组合仍未完成。
 
 - 新增[Worker响应交付](worker-output-delivery.md)：独立mTLS输出能力、有界真实字节、不可变精确版本与ResponseCommit、当前用户/源ACL读取、重复去重和仅查询恢复。实际Worker默认要求输出能力，User API可与Gateway共享单writer；13项输出专项、71项真实控制、5项实际进程/交付、8项真实CPU及全部关联回归通过。0022—0023已应用，执行日志schema5；WORKER-OUTPUT-001已单独记DONE，并修复新增迁移的编译跟踪。Job执行成功不等于账本结算或云端资源回收，后两者仍未完成。

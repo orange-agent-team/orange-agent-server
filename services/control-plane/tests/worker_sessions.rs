@@ -162,6 +162,7 @@ fn hello(node: &str) -> worker::WorkerFrame {
             input_artifacts_version: 0,
             renewal_version: 0,
             output_version: 0,
+            cpu_cleanup_version: 0,
         })),
     }
 }

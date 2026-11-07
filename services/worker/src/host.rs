@@ -63,6 +63,41 @@ fn emit(sender: &mpsc::Sender<HostEvent>, value: HostEvent) {
     // Durable execution/Broker journals, not this best-effort stream, are truth.
     let _ = sender.try_send(value);
 }
+async fn flush_cleanups(
+    resources: &mut CpuResources,
+    config: &WorkerConfig,
+    capabilities: &str,
+    events: &mpsc::Sender<HostEvent>,
+) -> Result<(), HostError> {
+    if !config.confirm_cleanup {
+        return Ok(());
+    }
+    for command in resources.journal.pending_cleanups()? {
+        if !resources.connection.is_current_locally() {
+            let fresh = ControlConnection::connect_managed_cpu(
+                config.control(capabilities)?,
+                &mut resources.node_journal,
+                &mut resources.journal,
+                config.commit_outputs,
+            )
+            .await?;
+            std::mem::replace(&mut resources.connection, fresh).close();
+        }
+        resources
+            .connection
+            .confirm_cpu_cleanup(&mut resources.journal, &command)
+            .await?;
+        emit(
+            events,
+            HostEvent {
+                command_id: Some(command),
+                cleanup_confirmed: true,
+                ..event("cloud_cleanup_confirmed")
+            },
+        );
+    }
+    Ok(())
+}
 struct EmptyCpuAdmission {
     root: PathBuf,
 }
@@ -169,7 +204,15 @@ pub async fn run(
     if *stop.borrow() {
         return Ok(());
     }
-    let connection = if config.commit_outputs {
+    let connection = if config.confirm_cleanup {
+        ControlConnection::connect_managed_cpu(
+            config.control(&capabilities)?,
+            &mut node,
+            &mut journal,
+            config.commit_outputs,
+        )
+        .await?
+    } else if config.commit_outputs {
         ControlConnection::connect_output_execution(
             config.control(&capabilities)?,
             &mut node,
@@ -192,19 +235,36 @@ pub async fn run(
         supervisor,
     };
     for command in resources.journal.unresolved_outputs()? {
-        resources
+        match resources
             .connection
             .query_output(&mut resources.journal, &command)
-            .await?;
-        emit(
-            &events,
-            HostEvent {
-                command_id: Some(command),
-                outcome: Some("response_committed".into()),
-                ..event("response_commit_recovered")
-            },
-        );
+            .await
+        {
+            Ok(_) => emit(
+                &events,
+                HostEvent {
+                    command_id: Some(command),
+                    outcome: Some("response_committed".into()),
+                    ..event("response_commit_recovered")
+                },
+            ),
+            Err(error) => {
+                if !config.confirm_cleanup
+                    || !resources.journal.pending_cleanups()?.contains(&command)
+                {
+                    return Err(error.into());
+                }
+                emit(
+                    &events,
+                    HostEvent {
+                        command_id: Some(command),
+                        ..event("output_unconfirmed")
+                    },
+                );
+            }
+        }
     }
+    flush_cleanups(&mut resources, &config, &capabilities, &events).await?;
     emit(&events, event("ready"));
     // Preserve an unsubmitted candidate only in this owner's memory. Until the
     // output protocol is implemented it cannot start another model or report
@@ -276,30 +336,48 @@ pub async fn run(
             if pending_output.is_some() {
                 if config.commit_outputs {
                     let response = pending_output.as_ref().ok_or(HostError::Configuration)?;
-                    resources
+                    let result = resources
                         .connection
                         .commit_output(&mut resources.journal, &exit.report.command_id, response)
-                        .await?;
+                        .await;
                     pending_output = None;
-                    emit(
-                        &events,
-                        HostEvent {
-                            command_id: Some(exit.report.command_id),
-                            outcome: Some("response_committed".into()),
-                            cleanup_confirmed: true,
-                            ..event("response_committed")
-                        },
-                    );
+                    match result {
+                        Ok(_) => emit(
+                            &events,
+                            HostEvent {
+                                command_id: Some(exit.report.command_id.clone()),
+                                outcome: Some("response_committed".into()),
+                                cleanup_confirmed: true,
+                                ..event("response_committed")
+                            },
+                        ),
+                        Err(error) => {
+                            if !config.confirm_cleanup {
+                                return Err(error.into());
+                            }
+                            emit(
+                                &events,
+                                HostEvent {
+                                    command_id: Some(exit.report.command_id.clone()),
+                                    ..event("output_unconfirmed")
+                                },
+                            );
+                        }
+                    }
                 } else {
                     emit(&events, event("pending_output_commit"));
                 }
             }
+        }
+        if pending_output.is_none() {
+            flush_cleanups(&mut resources, &config, &capabilities, &events).await?;
         }
         tokio::select! {_=stop.changed()=>break,_=tokio::time::sleep(Duration::from_secs(1))=>{}}
     }
     if pending_output.take().is_some() {
         emit(&events, event("unsubmitted_output_discarded"));
     }
+    flush_cleanups(&mut resources, &config, &capabilities, &events).await?;
     resources.connection.close();
     emit(&events, event("stopped"));
     Ok(())

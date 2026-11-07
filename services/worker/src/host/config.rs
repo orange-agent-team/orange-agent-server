@@ -21,6 +21,8 @@ pub struct WorkerConfig {
     pub allow_remote_contribution: bool,
     #[serde(default = "default_output")]
     pub commit_outputs: bool,
+    #[serde(default = "default_output")]
+    pub confirm_cleanup: bool,
     pub profile_id: String,
     pub profile: ProfileConfig,
 }

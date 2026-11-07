@@ -6,5 +6,6 @@ pub mod http;
 pub mod meter_bootstrap;
 pub mod queue;
 pub mod store;
+mod store_cleanup;
 pub mod team;
 pub mod worker;
