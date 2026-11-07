@@ -9,6 +9,7 @@ publish.workspace = true
 integration-tests = []
 real-worker-tests = ["integration-tests"]
 web-compute-tests = ["real-worker-tests"]
+queue-expiry-tests = ["integration-tests"]
 
 [[test]]
 name = "postgres"

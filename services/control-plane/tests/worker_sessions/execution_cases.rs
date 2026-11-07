@@ -4,8 +4,19 @@ use super::*;
 use orange_protocol::{CreateBudget, InvocationPurpose, SubmitJob, execution::assignment_digest};
 use sqlx::Row;
 pub(super) async fn queued(d: &Device) -> String {
-    sqlx::query("INSERT INTO wallets(owner_id,gift) VALUES($1,1000)")
+    queued_with_deadline(d, 3600).await
+}
+pub(super) async fn queued_with_deadline(d: &Device, seconds: i64) -> String {
+    queued_with_balances(d, seconds, [1000, 0, 0]).await
+}
+pub(super) async fn queued_with_balances(d: &Device, seconds: i64, balances: [i64; 3]) -> String {
+    assert!((1..=3600).contains(&seconds));
+    assert!(balances.iter().all(|amount| *amount >= 0));
+    sqlx::query("INSERT INTO wallets(owner_id,gift,earned,purchased) VALUES($1,$2,$3,$4)")
         .bind(&d.owner)
+        .bind(balances[0])
+        .bind(balances[1])
+        .bind(balances[2])
         .execute(d.store.pool())
         .await
         .expect("development credits");
@@ -26,7 +37,7 @@ pub(super) async fn queued(d: &Device) -> String {
     let profile = Uuid::new_v4().to_string();
     sqlx::query("INSERT INTO quotes(quote_id,owner_id,root_budget_id,invocation_id,projection_digest,price_version,max_amount,expires_at) VALUES($1,$2,$3,$4,$5,'execution-test',100,clock_timestamp()+interval '1 hour')").bind(&quote).bind(&d.owner).bind(&root.root_budget_id).bind(&invocation).bind("a".repeat(64)).execute(d.store.pool()).await.expect("quote fixture");
     sqlx::query("INSERT INTO reviewed_execution_profiles(execution_profile_id,model_version_id,model_sha256,execution_profile_digest) VALUES($1,'model-test',$2,$3)").bind(&profile).bind("b".repeat(64)).bind("c".repeat(64)).execute(d.store.pool()).await.expect("reviewed profile fixture");
-    sqlx::query("INSERT INTO quote_execution_plans(quote_id,target_node_id,execution_profile_id,request_projection_digest,job_deadline) VALUES($1,$2,$3,$4,date_trunc('second',clock_timestamp()+interval '1 hour'))").bind(&quote).bind(&d.node).bind(&profile).bind("a".repeat(64)).execute(d.store.pool()).await.expect("trusted scheduler fixture");
+    sqlx::query("INSERT INTO quote_execution_plans(quote_id,target_node_id,execution_profile_id,request_projection_digest,job_deadline) VALUES($1,$2,$3,$4,date_trunc('second',clock_timestamp()+make_interval(secs=>$5)))").bind(&quote).bind(&d.node).bind(&profile).bind("a".repeat(64)).bind(seconds as f64).execute(d.store.pool()).await.expect("trusted scheduler fixture");
     d.store
         .submit(
             &d.owner,
@@ -43,14 +54,14 @@ pub(super) async fn queued(d: &Device) -> String {
         .expect("real reservation")
         .job_id
 }
-fn execution_hello(node: &str, version: u32) -> worker::WorkerFrame {
+pub(super) fn execution_hello(node: &str, version: u32) -> worker::WorkerFrame {
     let mut frame = hello(node);
     if let Some(worker_frame::Body::Hello(h)) = &mut frame.body {
         h.execution_control_version = version;
     }
     frame
 }
-async fn assignment(stream: &mut Streaming<worker::ServerFrame>) -> worker::Assignment {
+pub(super) async fn assignment(stream: &mut Streaming<worker::ServerFrame>) -> worker::Assignment {
     let frame = tokio::time::timeout(Duration::from_secs(5), stream.message())
         .await
         .expect("assignment deadline")
@@ -65,7 +76,7 @@ async fn assignment(stream: &mut Streaming<worker::ServerFrame>) -> worker::Assi
     );
     a
 }
-fn ack(a: &worker::Assignment) -> worker::Acknowledge {
+pub(super) fn ack(a: &worker::Assignment) -> worker::Acknowledge {
     worker::Acknowledge {
         command_id: a.command_id.clone(),
         payload_digest: a.payload_digest.clone(),
@@ -77,7 +88,7 @@ fn ack(a: &worker::Assignment) -> worker::Acknowledge {
         slot_generation: 7,
     }
 }
-async fn send(sender: &mpsc::Sender<worker::WorkerFrame>, ack: &worker::Acknowledge) {
+pub(super) async fn send(sender: &mpsc::Sender<worker::WorkerFrame>, ack: &worker::Acknowledge) {
     sender
         .send(worker::WorkerFrame {
             body: Some(worker_frame::Body::Acknowledge(ack.clone())),
@@ -85,7 +96,7 @@ async fn send(sender: &mpsc::Sender<worker::WorkerFrame>, ack: &worker::Acknowle
         .await
         .expect("send ack fixture");
 }
-async fn start(stream: &mut Streaming<worker::ServerFrame>) -> worker::StartGrant {
+pub(super) async fn start(stream: &mut Streaming<worker::ServerFrame>) -> worker::StartGrant {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             match stream
@@ -104,7 +115,7 @@ async fn start(stream: &mut Streaming<worker::ServerFrame>) -> worker::StartGran
     .await
     .expect("start deadline")
 }
-async fn refused(stream: &mut Streaming<worker::ServerFrame>) {
+pub(super) async fn refused(stream: &mut Streaming<worker::ServerFrame>) {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             match stream.message().await {

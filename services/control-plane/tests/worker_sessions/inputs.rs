@@ -11,6 +11,9 @@ mod cpu_cases;
 mod job_queries;
 #[path = "inputs/output_cases.rs"]
 mod output_cases;
+#[cfg(feature = "queue-expiry-tests")]
+#[path = "inputs/queue_expiry.rs"]
+mod queue_expiry;
 #[path = "inputs/renewal_cases.rs"]
 mod renewal_cases;
 #[path = "inputs/withdrawals.rs"]
@@ -109,6 +112,39 @@ async fn setup_model_meter(
     organization: bool,
     meter: Option<orange_model_runtime::meter_service::TrustedMeter>,
 ) -> InputFixture {
+    setup_input_case(
+        cert,
+        model_sha,
+        execution_digest,
+        prompt,
+        max_output_tokens,
+        InputAdmission {
+            organization,
+            meter,
+            deadline_seconds: 3600,
+        },
+    )
+    .await
+}
+struct InputAdmission {
+    organization: bool,
+    meter: Option<orange_model_runtime::meter_service::TrustedMeter>,
+    deadline_seconds: i64,
+}
+async fn setup_input_case(
+    cert: &str,
+    model_sha: &str,
+    execution_digest: &str,
+    prompt: String,
+    max_output_tokens: u32,
+    admission: InputAdmission,
+) -> InputFixture {
+    let InputAdmission {
+        organization,
+        meter,
+        deadline_seconds,
+    } = admission;
+    assert!((1..=3600).contains(&deadline_seconds));
     let d = device(cert).await;
     let pool = d.store.pool();
     let owner = Uuid::new_v4().to_string();
@@ -240,7 +276,7 @@ async fn setup_model_meter(
     let projection = request_digest("model-request-v1", &request).expect("projection");
     sqlx::query("INSERT INTO quotes(quote_id,owner_id,root_budget_id,invocation_id,projection_digest,price_version,max_amount,expires_at) VALUES($1,$2,$3,$4,$5,'input-fixture',100,clock_timestamp()+interval '1 hour')").bind(&quote).bind(&owner).bind(&budget.root_budget_id).bind(&request.invocation_id).bind(&projection).execute(pool).await.expect("price/quote fixture");
     sqlx::query("INSERT INTO reviewed_execution_profiles(execution_profile_id,model_version_id,model_sha256,execution_profile_digest) VALUES($1,'model-test',$2,$3)").bind(&profile).bind(model_sha).bind(execution_digest).execute(pool).await.expect("reviewed fixture");
-    sqlx::query("INSERT INTO quote_execution_plans(quote_id,target_node_id,execution_profile_id,request_projection_digest,job_deadline) VALUES($1,$2,$3,$4,date_trunc('second',clock_timestamp()+interval '1 hour'))").bind(&quote).bind(&d.node).bind(&profile).bind(&projection).execute(pool).await.expect("scheduler fixture");
+    sqlx::query("INSERT INTO quote_execution_plans(quote_id,target_node_id,execution_profile_id,request_projection_digest,job_deadline) VALUES($1,$2,$3,$4,date_trunc('second',clock_timestamp()+make_interval(secs=>$5)))").bind(&quote).bind(&d.node).bind(&profile).bind(&projection).bind(deadline_seconds as f64).execute(pool).await.expect("scheduler fixture");
     let submit = SubmitJob {
         root_budget_id: budget.root_budget_id,
         invocation_id: request.invocation_id.clone(),

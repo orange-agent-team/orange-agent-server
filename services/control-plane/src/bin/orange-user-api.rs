@@ -112,6 +112,22 @@ async fn serve(
     } else {
         None
     };
+    let mut expiry_stopped = stop.subscribe();
+    let expiry_store = store.clone();
+    let queue_expiry = tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut cursor = orange_control_plane::store::QueueExpiryCursor::default();
+        loop {
+            tokio::select! {
+                _=expiry_stopped.changed()=>break,
+                _=tick.tick()=>{
+                    let result=tokio::select!{_=expiry_stopped.changed()=>break,result=expiry_store.expire_queued_ready(&mut cursor,100)=>result};
+                    if !matches!(result,Ok((_,0))){eprintln!("Queue expiration remains unresolved; no execution cleanup is inferred");}
+                }
+            }
+        }
+    });
     let maintenance=artifacts.clone().map(|objects| tokio::spawn(async move {
         let mut tick=tokio::time::interval(std::time::Duration::from_secs(60));
         loop {tokio::select! {
@@ -144,6 +160,7 @@ async fn serve(
     } else {
         None
     };
+    queue_expiry.await?;
     if let Some(task) = maintenance {
         task.await?;
     }

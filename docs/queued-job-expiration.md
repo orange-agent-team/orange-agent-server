@@ -1,0 +1,15 @@
+# Queued Job expiration
+
+The control plane can finalize a Job whose trusted execution-plan deadline has passed while it remains queued/pending. It locks budget, original wallet and Job, rechecks the immutable quote/plan binding and refuses any response commit, usage fact, start budget, Broker grant or start-granted event. Running/unknown execution is not a queue refund.
+
+The original gift/earned/purchased held buckets return in one balanced immutable release transaction. The Job becomes failed/settled with charge0 and an immutable job_queue_expirations receipt containing its original deadline and transaction. No zero usage is invented, and no Worker attempt is marked closed or free. An offered/unknown slot still needs its independent rejection or cleanup evidence. Late ACK cannot authorize this terminal Job.
+
+Only the exact Job input pin is removed; independent references remain. Restricted users/owners do not lose their previously held credits. Invalid quote bindings and evidence conflicts are reported as unresolved, not silently refunded. Missing plans have no authoritative deadline and remain outside this path.
+
+User queue cancellation uses the same guarded financial release implementation. Existing current-user authority and cancellation semantics remain intact. Expiration has no HTTP mutation endpoint and obtains no caller-supplied time, state or refund amount.
+
+User API maintenance runs this service-owned scan independently of the optional artifact writer. It starts immediately, repeats every60 seconds with at most100 candidates per tick, reports unresolved decisions and is joined during shutdown. A service-owned keyset cursor advances past failed candidates and wraps after an empty batch, so persistent failures cannot monopolize every batch. Cursor loss on restart is safe because decisions are revalidated transactionally. Missed ticks are skipped instead of replayed in a burst. Each transaction is atomic and retried only on bounded serialization/deadlock failures.
+
+PG0029 bytes are frozen from isolated preparation. The formal acceptance command creates a uniquely named local PostgreSQL database, runs the real migrations and service there, then drops only that database after the owned test process exits and no connections remain. Historical shared development fixtures cannot control the first maintenance batch; deployment migration remains a separate real check. Seven real PG/protocol/service tests cover actual deadlines, three source buckets, once-only concurrent release, restricted owner, reference safety, late ACK refusal, accepted-grant integrity faults, ledger failure rollback, user-cancel competition and actual API maintenance without storage and bounded scan fairness/retry after fault repair. Identity/price/ACKs are fixtures; this does not certify a physical model/GPU or production SLA.
+
+Original five financial regression cases and all-feature Clippy also passed in the isolated checkout. Source integration is present; formal related regressions and deployment evidence remain required before DONE.

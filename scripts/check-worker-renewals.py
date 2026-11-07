@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 env = os.environ.copy()
 env.pop('ORANGE_WEB_COMPUTE_TESTS',None)
 env.pop('ORANGE_WITHDRAW_TESTS',None)
+env.pop('ORANGE_QUEUE_EXPIRY_TESTS',None)
 env.pop('ORANGE_REAL_WORKER_PROFILE', None)
 env['ORANGE_WORKER_RENEWAL_TESTS'] = '1'
 subprocess.run([os.sys.executable, 'scripts/check-worker-session.py'], cwd=ROOT, env=env, check=True)

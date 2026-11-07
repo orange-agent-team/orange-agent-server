@@ -1,9 +1,11 @@
+mod queue_expiry;
 mod user_account;
 mod withdrawal;
 use orange_domain::{Budget, Credits};
 use orange_protocol::{
     BudgetView, CreateBudget, JobView, Money, SubmitJob, request_digest, valid_digest, valid_id,
 };
+pub use queue_expiry::QueueExpiryCursor;
 use sqlx::{PgPool, Postgres, Row, Transaction, postgres::PgPoolOptions};
 use uuid::Uuid;
 
@@ -455,41 +457,9 @@ impl Store {
         if current.execution_state != "queued" || current.settlement_state != "pending" {
             return Err(StoreError::InvalidTransition);
         }
-        let next = budget_model(&root)?
-            .settle(current.reserved.0, Credits::ZERO)
-            .map_err(|_| StoreError::Budget)?;
-        let held: [i64; 3] = [
-            row.try_get("held_gift")?,
-            row.try_get("held_earned")?,
-            row.try_get("held_purchased")?,
-        ];
-        sqlx::query("UPDATE wallets SET gift=gift+$2,earned=earned+$3,purchased=purchased+$4,reserved_gift=reserved_gift-$2,reserved_earned=reserved_earned-$3,reserved_purchased=reserved_purchased-$4 WHERE owner_id=$1")
-            .bind(owner).bind(held[0]).bind(held[1]).bind(held[2]).execute(&mut *tx).await?;
-        sqlx::query("UPDATE budget_roots SET reserved=$2 WHERE root_budget_id=$1")
-            .bind(&root_id)
-            .bind(next.reserved.units())
-            .execute(&mut *tx)
+        queue_expiry::release_queue(&mut tx, &root, &row, queue_expiry::QueueEnd::Cancelled)
             .await?;
-        let mut entries = Vec::new();
-        for (bucket, amount) in ["gift", "earned", "purchased"].iter().zip(held) {
-            entries.push((format!("{owner}:{bucket}:reserved"), -amount));
-            entries.push((format!("{owner}:{bucket}:available"), amount));
-        }
-        ledger(&mut tx, owner, &format!("release:{id}"), entries).await?;
         record_key(&mut tx, owner, &operation, key, &digest, id).await?;
-        sqlx::query("UPDATE jobs SET execution_state='cancelled',settlement_state='settled',charge=0 WHERE job_id=$1")
-            .bind(id).execute(&mut *tx).await?;
-        // Only queued cancellation can release this input pin here. Unknown or
-        // running attempts need their separate response/cleanup lifecycle.
-        sqlx::query("DELETE FROM artifact_pins WHERE reference_id=$1 AND artifact_id IN (SELECT artifact_id FROM job_inputs WHERE job_id=$2)").bind(format!("job-input:{id}")).bind(id).execute(&mut *tx).await?;
-        emit(
-            &mut tx,
-            owner,
-            id,
-            "job.cancelled",
-            "zero_charge_queue_cancel",
-        )
-        .await?;
         let view = job_in_tx(&mut tx, owner, id).await?;
         finish_submit(tx, actor).await?;
         Ok(view)
