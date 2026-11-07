@@ -23,6 +23,7 @@ build_env={**os.environ,'PATH':str(Path(args.node).parent)+os.pathsep+os.environ
 subprocess.run([args.node,web/'scripts/check.mjs'],cwd=web,env=build_env,check=True)
 subprocess.run([sys.executable,web/'scripts/local-tls.py'],cwd=web,check=True)
 env=os.environ.copy()
+env.pop('ORANGE_WITHDRAW_TESTS',None)
 for flag in ['ORANGE_REAL_WORKER_PROFILE','ORANGE_WORKER_HOST_TESTS','ORANGE_PRICED_WORKER_TESTS','ORANGE_WORKER_OUTPUT_TESTS','ORANGE_WORKER_RENEWAL_TESTS','ORANGE_CLEANUP_PROTOCOL_TESTS','ORANGE_CLEANUP_REAL_TESTS','ORANGE_CANCEL_PROTOCOL_TESTS','ORANGE_CANCEL_REAL_TESTS','ORANGE_JOB_QUERY_TESTS','ORANGE_WEB_COMPUTE_TESTS']:
     env.pop(flag,None)
 evidence=Path(tempfile.mkdtemp(prefix='web-compute-',dir=ROOT/'.local'));evidence.chmod(0o700)

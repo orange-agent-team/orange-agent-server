@@ -270,6 +270,9 @@ impl HttpError {
                 "IDEMPOTENCY_CONFLICT",
                 "query_original",
             ),
+            StoreError::InvocationWithdrawn => {
+                (StatusCode::CONFLICT, "INVOCATION_WITHDRAWN", "never")
+            }
             StoreError::Budget => (StatusCode::CONFLICT, "BUDGET_EXCEEDED", "never"),
             StoreError::Balance => (StatusCode::CONFLICT, "INSUFFICIENT_BALANCE", "never"),
             StoreError::QuoteExpired => (StatusCode::CONFLICT, "QUOTE_EXPIRED", "never"),

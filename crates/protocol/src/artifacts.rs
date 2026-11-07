@@ -127,3 +127,16 @@ pub struct UserJobLookup {
     pub quote_id: String,
     pub job: crate::JobView,
 }
+
+/// A prevented submission has no Job, reservation or resource-cleanup claim.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InvocationWithdrawal {
+    pub owner_id: String,
+    pub user_id: String,
+    pub invocation_id: String,
+    pub quote_id: String,
+    pub prevented: bool,
+    pub receipt_id: Option<String>,
+    pub job: Option<crate::JobView>,
+}

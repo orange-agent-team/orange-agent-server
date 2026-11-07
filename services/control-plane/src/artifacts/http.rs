@@ -42,6 +42,10 @@ pub fn router(identity: UserIdentity, store: ArtifactStore) -> Router {
         )
         .route("/api/v1/owners/{owner}/jobs/{job}", get(job_status))
         .route(
+            "/api/v1/owners/{owner}/invocations/{invocation}/withdraw",
+            axum::routing::post(withdraw_invocation),
+        )
+        .route(
             "/api/v1/owners/{owner}/jobs/by-invocation/{invocation}",
             get(job_lookup),
         )
@@ -315,6 +319,9 @@ async fn submit_job(
         .submit_job(&actor, &owner, key, &request)
         .await
         .map_err(|e| match e {
+            crate::store::StoreError::InvocationWithdrawn => {
+                Error(StatusCode::CONFLICT, "INVOCATION_WITHDRAWN")
+            }
             crate::store::StoreError::Forbidden => Error(StatusCode::FORBIDDEN, "FORBIDDEN"),
             crate::store::StoreError::NotFound => Error(StatusCode::NOT_FOUND, "NOT_FOUND"),
             crate::store::StoreError::Database(_) | crate::store::StoreError::Migration(_) => {
@@ -438,4 +445,36 @@ async fn job_list(
         )
         .await?;
     Ok(private(Json(result).into_response()))
+}
+
+async fn withdraw_invocation(
+    State(api): State<Api>,
+    Path((owner, invocation)): Path<(String, String)>,
+    headers: HeaderMap,
+    body: Result<Json<orange_protocol::SubmitJob>, axum::extract::rejection::JsonRejection>,
+) -> Result<Response, Error> {
+    let actor = api.identity.artifact_actor(&headers, true).await?;
+    let Json(request) = body.map_err(|_| ArtifactError::Invalid)?;
+    if request.invocation_id != invocation {
+        return Err(ArtifactError::Invalid.into());
+    }
+    let key = headers
+        .get("idempotency-key")
+        .and_then(|v| v.to_str().ok())
+        .ok_or(ArtifactError::Invalid)?;
+    let receipt = crate::store::Store::from_pool(api.store.inner.pool.clone())
+        .withdraw_invocation(&actor, &owner, key, &request)
+        .await
+        .map_err(|e| match e {
+            crate::store::StoreError::Forbidden => Error(StatusCode::FORBIDDEN, "FORBIDDEN"),
+            crate::store::StoreError::NotFound => Error(StatusCode::NOT_FOUND, "NOT_FOUND"),
+            crate::store::StoreError::Invalid => {
+                Error(StatusCode::UNPROCESSABLE_ENTITY, "VALIDATION_ERROR")
+            }
+            crate::store::StoreError::Database(_) | crate::store::StoreError::Migration(_) => {
+                Error(StatusCode::SERVICE_UNAVAILABLE, "SERVICE_UNAVAILABLE")
+            }
+            _ => Error(StatusCode::CONFLICT, "WITHDRAWAL_REJECTED"),
+        })?;
+    Ok(private(Json(receipt).into_response()))
 }

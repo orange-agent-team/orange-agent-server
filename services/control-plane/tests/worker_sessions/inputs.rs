@@ -13,6 +13,8 @@ mod job_queries;
 mod output_cases;
 #[path = "inputs/renewal_cases.rs"]
 mod renewal_cases;
+#[path = "inputs/withdrawals.rs"]
+mod withdrawals;
 use super::*;
 use orange_control_plane::{
     artifacts::{ArtifactActor, ArtifactReader, ArtifactStore},

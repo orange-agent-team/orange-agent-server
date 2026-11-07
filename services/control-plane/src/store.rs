@@ -1,4 +1,5 @@
 mod user_account;
+mod withdrawal;
 use orange_domain::{Budget, Credits};
 use orange_protocol::{
     BudgetView, CreateBudget, JobView, Money, SubmitJob, request_digest, valid_digest, valid_id,
@@ -17,6 +18,7 @@ pub enum StoreError {
     QuoteExpired,
     QuoteMismatch,
     InvalidTransition,
+    InvocationWithdrawn,
     Database(sqlx::Error),
     Migration(sqlx::migrate::MigrateError),
 }
@@ -209,6 +211,7 @@ impl Store {
                 .map_err(artifact_error)?;
         }
         authorize(&mut tx, owner).await?;
+        withdrawal::submission_lock(&mut tx, owner, &req.invocation_id).await?;
         // Lock root before wallet on every path. PostgreSQL, not client memory, arbitrates.
         let root = sqlx::query(
             "SELECT * FROM budget_roots WHERE root_budget_id=$1 AND owner_id=$2 FOR UPDATE",
@@ -255,6 +258,7 @@ impl Store {
             finish_submit(tx, actor).await?;
             return Ok(view);
         }
+        withdrawal::check_not_withdrawn(&mut tx, owner, actor, &req.invocation_id).await?;
         let invalid_price:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM quote_metering m JOIN text_prices p USING(price_version) JOIN trusted_meter_profiles mp ON mp.profile_digest=m.meter_profile_digest WHERE m.quote_id=$1 AND (NOT p.enabled OR NOT mp.enabled))").bind(&req.quote_id).fetch_one(&mut *tx).await?;
         if invalid_price {
             return Err(StoreError::QuoteMismatch);
