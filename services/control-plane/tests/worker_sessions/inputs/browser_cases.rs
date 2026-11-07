@@ -180,6 +180,28 @@ async fn actual_browser_quote_model_settlement_cleanup_and_deleted_content() {
     .expect("JSON");
     let job = observation["job_id"].as_str().expect("job");
     assert_eq!(observation["content_denied_after_deletion"], true);
+    assert_eq!(observation["late_withdrawal_preserved"], true);
+    let prevented = observation["prevented_invocation"]
+        .as_str()
+        .expect("prevented original Invocation");
+    let prevented_jobs: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM jobs WHERE owner_id=$1 AND invocation_id=$2")
+            .bind(&c.f.owner)
+            .bind(prevented)
+            .fetch_one(c.f.d.store.pool())
+            .await
+            .expect("no accepted stopped Job");
+    assert_eq!(prevented_jobs, 0);
+    let barrier: String = sqlx::query_scalar(
+        "SELECT receipt_id FROM invocation_withdrawals WHERE owner_id=$1 AND user_id=$2 AND invocation_id=$3",
+    )
+    .bind(&c.f.owner)
+    .bind(&c.f.user)
+    .bind(prevented)
+    .fetch_one(c.f.d.store.pool())
+    .await
+    .expect("actual prevention receipt");
+    assert_eq!(observation["withdrawal_receipt"], barrier);
     host::event(&mut events, "cloud_cleanup_confirmed").await;
     let result = c.f.d.store.job(&c.f.owner, job).await.expect("actual Job");
     assert_eq!(result.execution_state, "succeeded");
