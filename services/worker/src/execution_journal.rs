@@ -3,6 +3,7 @@
 #[cfg(unix)]
 mod cpu;
 mod rejections;
+mod renewals;
 use crate::{
     broker::{BrokerError, Grant, Holder, storage},
     control::ControlIdentity,
@@ -55,7 +56,7 @@ impl ExecutionJournal {
         }
         let (mut connection, lock) = storage::open(path)?;
         let version: i64 = connection.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if !(0..=3).contains(&version) {
+        if !(0..=4).contains(&version) {
             return Err(ExecutionJournalError::Format);
         }
         if version == 0 {
@@ -88,6 +89,13 @@ impl ExecutionJournal {
         if version < 3 {
             tx.execute_batch(include_str!("execution_schema_v3.sql"))?;
         }
+        if version < 4 {
+            tx.execute_batch(include_str!("execution_schema_v4.sql"))?;
+        }
+        tx.execute(
+            "UPDATE execution_renewals SET state='unknown' WHERE state='pending'",
+            [],
+        )?;
         tx.execute("UPDATE cpu_runs SET phase='cleanup_unknown',error_code='OWNER_RESTARTED' WHERE phase IN ('starting','generating')",[])?;
         tx.commit()?;
         Ok(Self {
@@ -610,7 +618,7 @@ mod tests {
             j.connection
                 .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                 .expect("version"),
-            3
+            4
         );
     }
     #[cfg(unix)]
@@ -688,5 +696,68 @@ mod tests {
         assert!(j.bind_cpu_root(other_root.path()).is_err());
         j.bind_cpu_root(root.path())
             .expect("original root retained");
+    }
+    #[test]
+    fn pending_renewal_survives_restart_as_unknown_and_cannot_be_reanchored() {
+        let d = private();
+        let path = d.path().join("execution.sqlite");
+        let mut j = ExecutionJournal::open(&path, "node".into()).expect("open");
+        j.bind(&identity(1)).expect("identity");
+        let a = assignment();
+        j.receive(&identity(1), &a).expect("receive");
+        j.reserve(&identity(1), "command", &grant())
+            .expect("reserve");
+        let ack = j.send_ack(&identity(1), "command").expect("ack");
+        j.claim_start(&identity(1), "command", &start(&ack))
+            .expect("start");
+        j.running("command").expect("running");
+        let request = worker::ExecutionRenewalRequest {
+            session_id: "session-1".into(),
+            request_id: "renewal-request".into(),
+            sequence: 1,
+            accepted: Some(ack),
+            supervisor_instance_id: "supervisor".into(),
+        };
+        let digest = orange_protocol::execution::renewal_digest(&request, &a).expect("digest");
+        assert_eq!(j.next_renewal(&identity(1), "command").expect("first"), 1);
+        j.begin_renewal("command", &request, &digest)
+            .expect("durable before send");
+        assert!(j.next_renewal(&identity(1), "command").is_err());
+        drop(j);
+        let mut j = ExecutionJournal::open(&path, "node".into()).expect("restart");
+        j.bind(&identity(2)).expect("fresh connection");
+        let state: String = j
+            .connection
+            .query_row(
+                "SELECT state FROM execution_renewals WHERE request_id='renewal-request'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("state");
+        assert_eq!(state, "unknown");
+        assert!(j.next_renewal(&identity(2), "command").is_err());
+        assert!(
+            j.connection
+                .execute("DELETE FROM execution_renewals", [])
+                .is_err()
+        );
+        assert!(
+            j.connection
+                .execute("UPDATE execution_renewals SET state='pending'", [])
+                .is_err()
+        );
+        assert!(
+            j.confirm_renewal(
+                &request,
+                &worker::ExecutionRenewalReply {
+                    request_id: request.request_id.clone(),
+                    sequence: 1,
+                    request_digest: digest,
+                    budget_ms: 45000,
+                    expires_at: Some(prost_types_fixture(2_000_000_060))
+                }
+            )
+            .is_err()
+        );
     }
 }

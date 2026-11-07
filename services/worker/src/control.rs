@@ -2,6 +2,7 @@
 mod execution;
 mod inputs;
 mod rejections;
+mod renewals;
 use crate::broker::{AppliedNodePolicy, Broker, BrokerError};
 use crate::node_journal::{NodeJournal, ReceivedNodeIntent};
 pub use execution::{AuthorizedExecution, ExecutionPoll, StartedExecution};
@@ -11,6 +12,7 @@ use orange_protocol::{
     valid_digest, valid_id,
 };
 pub use rejections::ExecutionPreparation;
+pub use renewals::{PendingRenewal, VerifiedRenewal};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -49,6 +51,13 @@ pub struct ControlIdentity {
     pub session_id: String,
     pub connection_epoch: u64,
 }
+struct ControlVersions {
+    node_control_version: u32,
+    execution_control_version: u32,
+    rejection_receipts_version: u32,
+    input_artifacts_version: u32,
+    renewal_version: u32,
+}
 pub struct ControlConnection {
     identity: ControlIdentity,
     sender: mpsc::Sender<worker::WorkerFrame>,
@@ -60,6 +69,7 @@ pub struct ControlConnection {
     execution_control_version: u32,
     rejection_receipts_version: u32,
     input_artifacts_version: u32,
+    renewal_version: u32,
     input_client: WorkerGatewayClient<Channel>,
     offered: Option<worker::Assignment>,
 }
@@ -89,7 +99,7 @@ impl AuthorizedNodeStop<'_> {
 }
 impl ControlConnection {
     pub async fn connect(config: ControlConfig) -> Result<Self, ControlError> {
-        Self::connect_mode(config, 0, 0, 0, 0).await
+        Self::connect_mode(config, 0, 0, 0, 0, 0).await
     }
     pub async fn connect_node_control(
         config: ControlConfig,
@@ -111,7 +121,7 @@ impl ControlConnection {
         if config.node_id != journal.node_id() {
             return Err(ControlError::Invalid);
         }
-        let connection = Self::connect_mode(config, version, 0, 0, 0).await?;
+        let connection = Self::connect_mode(config, version, 0, 0, 0, 0).await?;
         journal
             .bind(connection.identity())
             .map_err(|_| ControlError::Unavailable)?;
@@ -123,6 +133,7 @@ impl ControlConnection {
         execution_control_version: u32,
         rejection_receipts_version: u32,
         input_artifacts_version: u32,
+        renewal_version: u32,
     ) -> Result<Self, ControlError> {
         if !valid_id(&config.node_id)
             || !valid_digest(&config.capabilities_digest)
@@ -165,10 +176,13 @@ impl ControlConnection {
             channel,
             config.node_id,
             config.capabilities_digest,
-            node_control_version,
-            execution_control_version,
-            rejection_receipts_version,
-            input_artifacts_version,
+            ControlVersions {
+                node_control_version,
+                execution_control_version,
+                rejection_receipts_version,
+                input_artifacts_version,
+                renewal_version,
+            },
         )
         .await
     }
@@ -176,11 +190,15 @@ impl ControlConnection {
         channel: Channel,
         node: String,
         capabilities: String,
-        node_control_version: u32,
-        execution_control_version: u32,
-        rejection_receipts_version: u32,
-        input_artifacts_version: u32,
+        versions: ControlVersions,
     ) -> Result<Self, ControlError> {
+        let ControlVersions {
+            node_control_version,
+            execution_control_version,
+            rejection_receipts_version,
+            input_artifacts_version,
+            renewal_version,
+        } = versions;
         let mut client = WorkerGatewayClient::new(channel)
             .max_decoding_message_size(64 * 1024)
             .max_encoding_message_size(64 * 1024);
@@ -196,6 +214,7 @@ impl ControlConnection {
                     execution_control_version,
                     rejection_receipts_version,
                     input_artifacts_version,
+                    renewal_version,
                 })),
             })
             .await
@@ -230,6 +249,7 @@ impl ControlConnection {
             || welcome.execution_control_version != execution_control_version
             || welcome.rejection_receipts_version != rejection_receipts_version
             || welcome.input_artifacts_version != input_artifacts_version
+            || welcome.renewal_version != renewal_version
         {
             return Err(ControlError::Unsupported);
         }
@@ -257,6 +277,7 @@ impl ControlConnection {
             execution_control_version,
             rejection_receipts_version,
             input_artifacts_version,
+            renewal_version,
             input_client: client,
             offered: None,
         })

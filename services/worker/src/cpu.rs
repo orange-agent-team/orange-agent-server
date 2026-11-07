@@ -2,7 +2,9 @@
 //! unsubmitted candidate; no cloud success, settlement or GPU-cleanup claim.
 use crate::{
     broker::*,
-    control::{ControlConnection, ControlError, ExecutionPreparation},
+    control::{
+        ControlConnection, ControlError, ExecutionPreparation, PendingRenewal, VerifiedRenewal,
+    },
     execution_journal::{ExecutionJournal, ExecutionJournalError, ExecutionRecord, RejectionKind},
     node_journal::NodeJournal,
 };
@@ -63,6 +65,7 @@ pub struct CpuRunReport {
     pub cleanup_confirmed: bool,
     pub authority_checks: u64,
     pub supervision_renewals: u64,
+    pub cloud_renewals: u64,
     pub cloud_completion: String,
     pub error_code: Option<String>,
 }
@@ -174,13 +177,28 @@ async fn authority_cycle(
     record: &ExecutionRecord,
     snapshot: &str,
     not_before: Instant,
-) -> Result<Vec<crate::node_journal::ReceivedNodeIntent>, ControlError> {
+    renewal: Option<PendingRenewal>,
+) -> Result<
+    (
+        Vec<crate::node_journal::ReceivedNodeIntent>,
+        Option<VerifiedRenewal>,
+    ),
+    ControlError,
+> {
     tokio::time::sleep_until(tokio::time::Instant::from_std(not_before)).await;
     let intents = connection.heartbeat_node_control(snapshot, node).await?;
     if intents.is_empty() {
         connection.check_cpu_authority(record).await?;
     }
-    Ok(intents)
+    let renewed = if intents.is_empty() {
+        match renewal {
+            Some(pending) => Some(connection.renew_execution(pending).await?),
+            None => None,
+        }
+    } else {
+        None
+    };
+    Ok((intents, renewed))
 }
 async fn run(
     mut r: CpuResources,
@@ -232,6 +250,7 @@ async fn run(
                     cleanup_confirmed: false,
                     authority_checks: 0,
                     supervision_renewals: 0,
+                    cloud_renewals: 0,
                     cloud_completion: "not_started".into(),
                     error_code: None,
                 },
@@ -295,6 +314,8 @@ async fn run(
     local_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut completed: Option<(EngineResult, Instant)> = None;
     let mut checks = 0;
+    let mut cloud_renewals = 0;
+    let mut next_renewal = Instant::now();
     let mut renewals = 0;
     let mut authority_lost = false;
     let mut requested_cancel = false;
@@ -302,35 +323,63 @@ async fn run(
     let mut generating = false;
     'owner: loop {
         let cycle_started = next_check;
-        let cycle = authority_cycle(
-            &mut r.connection,
-            &mut r.node_journal,
-            &record,
-            &spec.capability_snapshot,
-            next_check,
-        );
-        tokio::pin!(cycle);
-        let network = loop {
-            tokio::select! {
-                biased;
-                _=user_cancel.changed()=>{requested_cancel=true;let _=cancel.send(true);break 'owner;}
-                _=local_tick.tick()=>{
-                    if *user_cancel.borrow(){requested_cancel=true;break 'owner;}
-                    if r.broker.renew(&r.supervisor,&grant,None).is_err(){authority_lost=true;let _=cancel.send(true);break 'owner;}
-                    renewals+=1;
+        let pending = if r.connection.supports_renewal() && Instant::now() >= next_renewal {
+            match r
+                .connection
+                .prepare_renewal(&mut r.journal, &spec.command_id)
+            {
+                Ok(pending) => Some(pending),
+                Err(_) => {
+                    authority_lost = true;
+                    break 'owner;
                 }
-                value=readiness.recv(),if !generating=>{
-                    if value.is_some(){if r.journal.cpu_phase(&spec.command_id,"generating").is_err(){authority_lost=true;let _=cancel.send(true);break 'owner;}let _=progress.send(CpuPhase::Generating);}generating=true;
+            }
+        } else {
+            None
+        };
+        let network = {
+            let cycle = authority_cycle(
+                &mut r.connection,
+                &mut r.node_journal,
+                &record,
+                &spec.capability_snapshot,
+                next_check,
+                pending,
+            );
+            tokio::pin!(cycle);
+            loop {
+                tokio::select! {
+                    biased;
+                    _=user_cancel.changed()=>{requested_cancel=true;let _=cancel.send(true);break 'owner;}
+                    _=local_tick.tick()=>{
+                        if *user_cancel.borrow(){requested_cancel=true;break 'owner;}
+                        if r.broker.renew(&r.supervisor,&grant,None).is_err(){authority_lost=true;let _=cancel.send(true);break 'owner;}
+                        renewals+=1;
+                    }
+                    value=readiness.recv(),if !generating=>{
+                        if value.is_some(){if r.journal.cpu_phase(&spec.command_id,"generating").is_err(){authority_lost=true;let _=cancel.send(true);break 'owner;}let _=progress.send(CpuPhase::Generating);}generating=true;
+                    }
+                    result=&mut task,if completed.is_none()=>{
+                        match result {Ok(result)=>completed=Some((result,Instant::now())),Err(_)=>{completed=Some((EngineResult{response:None,stopped:None,cancelled:true,error:Some("MODEL_TASK_FAILED")},Instant::now()));authority_lost=true;let _=cancel.send(true);break 'owner;}}
+                    }
+                    result=&mut cycle=>break result,
                 }
-                result=&mut task,if completed.is_none()=>{
-                    match result {Ok(result)=>completed=Some((result,Instant::now())),Err(_)=>{completed=Some((EngineResult{response:None,stopped:None,cancelled:true,error:Some("MODEL_TASK_FAILED")},Instant::now()));authority_lost=true;let _=cancel.send(true);break 'owner;}}
-                }
-                result=&mut cycle=>break result,
             }
         };
         match network {
-            Ok(intents) if intents.is_empty() => {
+            Ok((intents, renewed)) if intents.is_empty() => {
                 checks += 1;
+                if let Some(renewed) = renewed {
+                    if r.connection
+                        .confirm_renewal(&mut r.journal, &mut r.broker, &r.supervisor, renewed)
+                        .is_err()
+                    {
+                        authority_lost = true;
+                        break;
+                    }
+                    cloud_renewals += 1;
+                    next_renewal = Instant::now() + Duration::from_secs(10);
+                }
             }
             Ok(_) => {
                 authority_lost = true;
@@ -432,6 +481,7 @@ async fn run(
             cleanup_confirmed: cleanup_digest.is_some(),
             authority_checks: checks,
             supervision_renewals: renewals,
+            cloud_renewals,
             cloud_completion: "pending_output_commit".into(),
             error_code: error_code.map(str::to_owned),
         },

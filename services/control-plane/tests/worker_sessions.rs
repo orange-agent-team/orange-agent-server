@@ -146,6 +146,7 @@ fn hello(node: &str) -> worker::WorkerFrame {
             execution_control_version: 0,
             rejection_receipts_version: 0,
             input_artifacts_version: 0,
+            renewal_version: 0,
         })),
     }
 }

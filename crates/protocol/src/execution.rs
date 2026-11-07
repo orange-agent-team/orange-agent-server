@@ -6,6 +6,29 @@ use serde_json::json;
 fn positive(value: u64) -> bool {
     value > 0 && value <= i64::MAX as u64
 }
+pub fn renewal_digest(
+    r: &worker::ExecutionRenewalRequest,
+    a: &worker::Assignment,
+) -> Option<String> {
+    let ack = r.accepted.as_ref()?;
+    if r.session_id != a.session_id
+        || !valid_id(&r.request_id)
+        || !valid_id(&r.supervisor_instance_id)
+        || !positive(r.sequence)
+        || ack.result != worker::AckResult::Accepted as i32
+    {
+        return None;
+    }
+    let accepted = acknowledge_digest(ack, a)?;
+    request_digest(
+        "worker.execution.renewal.v1",
+        &json!({
+            "session_id":r.session_id,"request_id":r.request_id,"sequence":r.sequence.to_string(),
+            "accepted_digest":accepted,"supervisor_instance_id":r.supervisor_instance_id
+        }),
+    )
+    .ok()
+}
 pub fn seconds(value: &Option<prost_types::Timestamp>) -> Option<i64> {
     value
         .as_ref()
@@ -241,5 +264,42 @@ mod tests {
         b.input_artifacts[0].size_bytes = 262145;
         assert!(assignment_digest(&b).is_none());
         assert_eq!(assignment_digest(&a).expect("unchanged legacy"), legacy);
+    }
+    #[test]
+    fn renewal_identity_binds_large_sequence_supervisor_and_exact_accepted_ack() {
+        let a = assignment();
+        let mut r = worker::ExecutionRenewalRequest {
+            session_id: a.session_id.clone(),
+            request_id: "renewal".into(),
+            sequence: 9_007_199_254_740_993,
+            supervisor_instance_id: "supervisor".into(),
+            accepted: Some(worker::Acknowledge {
+                command_id: a.command_id.clone(),
+                payload_digest: a.payload_digest.clone(),
+                lease: a.lease.clone(),
+                result: worker::AckResult::Accepted as i32,
+                execution_journal_id: "journal".into(),
+                broker_grant_id: "grant".into(),
+                broker_epoch: 1,
+                slot_generation: 1,
+            }),
+        };
+        let first = renewal_digest(&r, &a).expect("canonical digest");
+        r.sequence += 1;
+        assert_ne!(renewal_digest(&r, &a).expect("next"), first);
+        r.sequence -= 1;
+        r.supervisor_instance_id = "another".into();
+        assert_ne!(renewal_digest(&r, &a).expect("other"), first);
+        r.session_id = "another-session".into();
+        assert!(renewal_digest(&r, &a).is_none());
+        r.session_id = a.session_id.clone();
+        r.accepted
+            .as_mut()
+            .expect("ack")
+            .lease
+            .as_mut()
+            .expect("lease")
+            .fencing_token += 1;
+        assert!(renewal_digest(&r, &a).is_none());
     }
 }

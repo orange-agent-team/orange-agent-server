@@ -16,7 +16,7 @@ impl ControlConnection {
         node_journal: &mut NodeJournal,
         journal: &mut ExecutionJournal,
     ) -> Result<Self, ControlError> {
-        Self::connect_execution_mode(config, node_journal, journal, 1, 0).await
+        Self::connect_execution_mode(config, node_journal, journal, 1, 0, 0).await
     }
     /// Only known pre-reservation refusals become durable negative decisions.
     /// I/O or unknown Broker errors are not reclassified as safe rejection.

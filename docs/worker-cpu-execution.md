@@ -1,5 +1,7 @@
 # 受管 CPU Worker 单任务执行
 
+后继更新：已增加可选、独立协商的 [请求绑定云续期](worker-execution-renewal.md) 及 SQLite schema4。以下记录初始 CPU 所有者的边界；新客户端通过 `connect_renewable_execution` 开启续期，旧客户端仍受原租约限制。当前真实模型验收增加至5项，包含保持实际进程48秒后跨原期限生成；输出和结算仍未实现。
+
 本切片连接真实用户输入对象、mTLS Assignment、Broker 启动许可和现有 E04 `ManagedCpuModel`。入口为 Unix 平台的 `orange_worker::cpu::spawn_cpu(CpuResources, CpuExecutionSpec)`；仍不是常驻安装服务或完整 Job 交付链。
 
 ## 所有权与执行

@@ -22,6 +22,7 @@ impl WorkerSessionStore {
             execution_control_version: row.try_get::<i32, _>("execution_control_version")? as u32,
             rejection_receipts_version: row.try_get::<i32, _>("rejection_receipts_version")? as u32,
             input_artifacts_version: 1,
+            renewal_version: row.try_get::<i32, _>("renewal_version")? as u32,
             node_policy_generation: 0,
         };
         let mut tx = self.pool.begin().await?;

@@ -1,8 +1,10 @@
 //! Real customer input files and provider mTLS delivery. Prices, enrollment,
 //! user sessions and OS/device probes are explicit fixtures; no model is run.
-#[cfg(feature = "real-worker-tests")]
+#[cfg(all(unix, feature = "real-worker-tests"))]
 #[path = "inputs/cpu_cases.rs"]
 mod cpu_cases;
+#[path = "inputs/renewal_cases.rs"]
+mod renewal_cases;
 use super::*;
 use orange_control_plane::{
     artifacts::{ArtifactActor, ArtifactReader, ArtifactStore},
@@ -254,6 +256,18 @@ async fn receiver(
     ExecutionJournal,
     ExecutionRecord,
 ) {
+    receiver_mode(f, server, false).await
+}
+async fn receiver_mode(
+    f: &InputFixture,
+    server: &Running,
+    renewal: bool,
+) -> (
+    ControlConnection,
+    NodeJournal,
+    ExecutionJournal,
+    ExecutionRecord,
+) {
     let base = PathBuf::from(std::env::var("ORANGE_WORKER_TLS_DIR").expect("root"));
     let mut node = NodeJournal::open(
         &base.join(format!("node-{}.sqlite", Uuid::new_v4())),
@@ -265,12 +279,12 @@ async fn receiver(
         f.d.node.clone(),
     )
     .expect("journal");
-    let mut connection = ControlConnection::connect_execution_with_inputs(
-        worker_config(server, &f.d),
-        &mut node,
-        &mut journal,
-    )
-    .await
+    let config = worker_config(server, &f.d);
+    let mut connection = if renewal {
+        ControlConnection::connect_renewable_execution(config, &mut node, &mut journal).await
+    } else {
+        ControlConnection::connect_execution_with_inputs(config, &mut node, &mut journal).await
+    }
     .expect("negotiated input");
     let record = tokio::time::timeout(Duration::from_secs(5), async {
         loop {

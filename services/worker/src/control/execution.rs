@@ -108,7 +108,7 @@ impl ControlConnection {
         node_journal: &mut NodeJournal,
         execution_journal: &mut ExecutionJournal,
     ) -> Result<Self, ControlError> {
-        Self::connect_execution_mode(config, node_journal, execution_journal, 0, 0).await
+        Self::connect_execution_mode(config, node_journal, execution_journal, 0, 0, 0).await
     }
     pub(super) async fn connect_execution_mode(
         config: ControlConfig,
@@ -116,6 +116,7 @@ impl ControlConnection {
         execution_journal: &mut ExecutionJournal,
         rejection_receipts_version: u32,
         input_artifacts_version: u32,
+        renewal_version: u32,
     ) -> Result<Self, ControlError> {
         if config.node_id != node_journal.node_id() || config.node_id != execution_journal.node_id()
         {
@@ -127,6 +128,7 @@ impl ControlConnection {
             2,
             rejection_receipts_version,
             input_artifacts_version,
+            renewal_version,
         )
         .await?;
         node_journal

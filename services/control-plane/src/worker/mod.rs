@@ -6,3 +6,4 @@ pub(crate) mod sessions;
 pub use sessions::{DeviceSession, SessionError, WorkerSessionStore};
 
 mod rejections;
+mod renewals;

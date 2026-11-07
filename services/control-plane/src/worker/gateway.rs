@@ -83,6 +83,17 @@ pub async fn serve_with_artifacts(
 fn timestamp(seconds: i64) -> Option<prost_types::Timestamp> {
     Some(prost_types::Timestamp { seconds, nanos: 0 })
 }
+fn fingerprint<T>(request: &Request<T>) -> Result<String, Status> {
+    let certs = request
+        .extensions()
+        .get::<TlsConnectInfo<TcpConnectInfo>>()
+        .and_then(TlsConnectInfo::peer_certs)
+        .ok_or_else(|| Status::unauthenticated("verified peer required"))?;
+    let leaf = certs
+        .first()
+        .ok_or_else(|| Status::unauthenticated("verified leaf required"))?;
+    Ok(hex::encode(Sha256::digest(leaf.as_ref())))
+}
 fn status(error: SessionError) -> Status {
     match error {
         SessionError::Invalid => Status::invalid_argument("invalid worker control message"),
@@ -104,6 +115,7 @@ fn welcome(s: &DeviceSession) -> worker::ServerFrame {
             execution_control_version: s.execution_control_version,
             rejection_receipts_version: s.rejection_receipts_version,
             input_artifacts_version: s.input_artifacts_version,
+            renewal_version: s.renewal_version,
             node_policy_generation: s.node_policy_generation,
         })),
     }
@@ -111,6 +123,36 @@ fn welcome(s: &DeviceSession) -> worker::ServerFrame {
 #[tonic::async_trait]
 impl WorkerGateway for Gateway {
     type ControlStream = ReceiverStream<Result<worker::ServerFrame, Status>>;
+    async fn renew_execution(
+        &self,
+        request: Request<worker::ExecutionRenewalRequest>,
+    ) -> Result<Response<worker::ExecutionRenewalReply>, Status> {
+        if *self.shutdown.borrow() {
+            return Err(Status::unavailable("gateway stopping"));
+        }
+        let _permit = self
+            .input_slots
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| Status::resource_exhausted("execution request limit"))?;
+        let peer = fingerprint(&request)?;
+        let body = request.into_inner();
+        let operation = async {
+            let session = self
+                .store
+                .input_peer(&peer, &body.session_id)
+                .await
+                .map_err(status)?;
+            self.store
+                .renew_execution(&session, &body)
+                .await
+                .map_err(status)
+        };
+        let result = tokio::time::timeout(Duration::from_secs(5), operation)
+            .await
+            .map_err(|_| Status::deadline_exceeded("renewal deadline"))??;
+        Ok(Response::new(result))
+    }
     async fn read_input(
         &self,
         request: Request<worker::InputReadRequest>,
@@ -199,6 +241,7 @@ impl WorkerGateway for Gateway {
             || hello.execution_control_version > 2
             || hello.rejection_receipts_version > 1
             || hello.input_artifacts_version > 1
+            || hello.renewal_version > 1
             || (hello.input_artifacts_version == 1 && self.artifacts.is_none())
         {
             return Err(Status::failed_precondition("unsupported protocol version"));

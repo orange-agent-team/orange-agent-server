@@ -64,7 +64,7 @@ async fn actual_worker_model_uses_bound_input_and_confirms_owned_cpu_exit() {
     .await;
     bind(&f).await;
     let server = Running::start_with_input(&f.d.store, Some(f.objects.reader())).await;
-    let (connection, node, journal, record) = receiver(&f, &server).await;
+    let (connection, node, journal, record) = receiver_mode(&f, &server, true).await;
     let (broker, supervisor) = broker(&f).await;
     let root = runtime();
     let resources = CpuResources {
@@ -94,6 +94,7 @@ async fn actual_worker_model_uses_bound_input_and_confirms_owned_cpu_exit() {
     assert_eq!(exit.report.outcome, "computed_unsubmitted");
     assert!(exit.report.cleanup_confirmed);
     assert!(exit.report.authority_checks >= 1);
+    assert!(exit.report.cloud_renewals >= 1);
     assert!(exit.report.supervision_renewals >= 1);
     let candidate = exit.report.response.as_ref().expect("actual candidate");
     assert!(!candidate.text.trim().is_empty());
@@ -142,7 +143,7 @@ async fn actual_worker_cancel_keeps_supervision_and_never_returns_a_candidate() 
     .await;
     bind(&f).await;
     let server = Running::start_with_input(&f.d.store, Some(f.objects.reader())).await;
-    let (connection, node, journal, record) = receiver(&f, &server).await;
+    let (connection, node, journal, record) = receiver_mode(&f, &server, true).await;
     let (broker, supervisor) = broker(&f).await;
     let root = runtime();
     let mut handle = spawn_cpu(
@@ -206,7 +207,7 @@ async fn actual_worker_revocation_discards_output_and_joins_the_engine() {
     .await;
     bind(&f).await;
     let server = Running::start_with_input(&f.d.store, Some(f.objects.reader())).await;
-    let (connection, node_journal, journal, record) = receiver(&f, &server).await;
+    let (connection, node_journal, journal, record) = receiver_mode(&f, &server, true).await;
     let (broker, supervisor) = broker(&f).await;
     let root = runtime();
     let mut handle = spawn_cpu(
@@ -263,7 +264,7 @@ async fn dropped_handle_still_joins_model_and_persists_cleanup() {
     .await;
     bind(&f).await;
     let server = Running::start_with_input(&f.d.store, Some(f.objects.reader())).await;
-    let (connection, node_journal, journal, record) = receiver(&f, &server).await;
+    let (connection, node_journal, journal, record) = receiver_mode(&f, &server, true).await;
     let (broker, supervisor) = broker(&f).await;
     let root = runtime();
     let mut handle = spawn_cpu(
@@ -320,6 +321,119 @@ async fn dropped_handle_still_joins_model_and_persists_cleanup() {
     let job = f.d.store.job(&f.owner, &f.job).await.expect("job");
     assert_eq!(job.settlement_state, "pending");
     assert!(job.charge.is_none());
+    server.stop().await;
+    f.objects.drain().await.expect("drain");
+}
+
+#[tokio::test]
+async fn actual_owned_model_remains_authorized_beyond_original_lease_then_generates() {
+    // The real engine is deliberately held idle while renewal/supervision run;
+    // this is a lease-duration test, not a long-generation throughput claim.
+    let p = profile();
+    let digest = cpu_profile_digest(&p).expect("digest");
+    let f = setup_model(
+        "client-bn",
+        &p.model_sha256,
+        &digest,
+        "Say hello briefly.".into(),
+        64,
+    )
+    .await;
+    bind(&f).await;
+    let server = Running::start_with_input(&f.d.store, Some(f.objects.reader())).await;
+    let (mut c, mut n, mut j, record) = receiver_mode(&f, &server, true).await;
+    let (mut b, s) = broker(&f).await;
+    let grant = c
+        .reserve_execution(&mut j, &mut b, &s, "cpu", &record.command_id)
+        .expect("reserve");
+    let started = c
+        .authorize_execution(&mut j, &mut n, "long-cpu", &record.command_id)
+        .await
+        .expect("cloud start")
+        .confirm(&mut j, &mut b, &s)
+        .expect("start");
+    let request = c
+        .fetch_model_input(&mut j, &started, &record.command_id)
+        .await
+        .expect("actual input");
+    let original = assignment(&f)
+        .await
+        .lease
+        .expect("lease")
+        .expires_at
+        .expect("expires")
+        .seconds;
+    let root = runtime();
+    let (_cancel, receiver) = tokio::sync::watch::channel(false);
+    let mut model = orange_model_runtime::supervisor::ManagedCpuModel::launch_from_host(
+        root.path(),
+        p,
+        receiver.clone(),
+        Some(Uuid::new_v4().to_string()),
+    )
+    .await
+    .expect("actual owned engine");
+    let until = tokio::time::Instant::now() + Duration::from_secs(48);
+    let mut next = tokio::time::Instant::now();
+    let mut renewals = 0;
+    while tokio::time::Instant::now() < until {
+        b.renew(&s, &grant, None).expect("local supervision");
+        assert!(
+            c.heartbeat_node_control("long-cpu", &mut n)
+                .await
+                .expect("heartbeat")
+                .is_empty()
+        );
+        if tokio::time::Instant::now() >= next {
+            let pending = c
+                .prepare_renewal(&mut j, &record.command_id)
+                .expect("prepare");
+            let reply = c.renew_execution(pending).await.expect("live renewal");
+            c.confirm_renewal(&mut j, &mut b, &s, reply)
+                .expect("Broker renewal");
+            renewals += 1;
+            next = tokio::time::Instant::now() + Duration::from_secs(10);
+        }
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+    let now: i64 =
+        sqlx::query_scalar("SELECT floor(extract(epoch FROM clock_timestamp()))::bigint")
+            .fetch_one(f.d.store.pool())
+            .await
+            .expect("actual clock");
+    assert!(
+        now > original,
+        "must exceed original immutable lease expiry"
+    );
+    assert!(renewals >= 4);
+    b.renew(&s, &grant, None)
+        .expect("not expired locally after original lease");
+    let result = model
+        .client()
+        .expect("ready")
+        .generate(&request, receiver)
+        .await;
+    model
+        .shutdown()
+        .await
+        .expect("owned exit even if generation failed");
+    assert_eq!(model.record().phase, "stopped");
+    let result = result.expect("actual post-original-deadline generation");
+    assert!(!result.text.trim().is_empty());
+    let lease = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(root.path().join("engine.lease"))
+        .expect("lease");
+    lease
+        .try_lock()
+        .expect("actual exit released inherited lease");
+    b.begin_drain(&s, &grant)
+        .expect("no substitute cleanup certificate");
+    let job = f.d.store.job(&f.owner, &f.job).await.expect("job");
+    assert_eq!(job.settlement_state, "pending");
+    assert!(job.charge.is_none());
+    c.close();
     server.stop().await;
     f.objects.drain().await.expect("drain");
 }

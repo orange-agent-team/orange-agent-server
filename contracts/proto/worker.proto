@@ -3,7 +3,7 @@ package orange.worker.v1;
 import "google/protobuf/timestamp.proto";
 
 // Transport peer identity comes from mTLS, never from node_id alone.
-service WorkerGateway { rpc Control(stream WorkerFrame) returns (stream ServerFrame); rpc ReadInput(InputReadRequest) returns (InputReadReply); }
+service WorkerGateway { rpc Control(stream WorkerFrame) returns (stream ServerFrame); rpc ReadInput(InputReadRequest) returns (InputReadReply); rpc RenewExecution(ExecutionRenewalRequest) returns (ExecutionRenewalReply); }
 message Lease {
   string lease_id = 1;
   string job_id = 2;
@@ -12,9 +12,9 @@ message Lease {
   uint64 fencing_token = 5;
   google.protobuf.Timestamp expires_at = 6;
 }
-message Hello { string node_id = 1; uint32 protocol_version = 2; string capabilities_digest = 3; uint32 node_control_version = 4; uint32 execution_control_version = 5; uint32 rejection_receipts_version = 6; uint32 input_artifacts_version = 7; }
+message Hello { string node_id = 1; uint32 protocol_version = 2; string capabilities_digest = 3; uint32 node_control_version = 4; uint32 execution_control_version = 5; uint32 rejection_receipts_version = 6; uint32 input_artifacts_version = 7; uint32 renewal_version = 8; }
 // Protocol v1 control-session TTL is 45 seconds; it is not an execution lease.
-message Welcome { string session_id = 1; uint64 connection_epoch = 2; uint32 protocol_version = 3; google.protobuf.Timestamp expires_at = 4; uint32 node_control_version = 5; uint64 node_policy_generation = 6; uint32 execution_control_version = 7; uint32 rejection_receipts_version = 8; uint32 input_artifacts_version = 9; }
+message Welcome { string session_id = 1; uint64 connection_epoch = 2; uint32 protocol_version = 3; google.protobuf.Timestamp expires_at = 4; uint32 node_control_version = 5; uint64 node_policy_generation = 6; uint32 execution_control_version = 7; uint32 rejection_receipts_version = 8; uint32 input_artifacts_version = 9; uint32 renewal_version = 10; }
 // Execution capability1 is independent of node-control capability. Zero/old
 // clients never receive assignments. Version1 grants are immutable, <=45s,
 // ACK within10s, and do not imply renew/resume/result/cleanup support.
@@ -104,3 +104,16 @@ message ServerFrame {
 message InputArtifact { string artifact_id=1; string version_id=2; string sha256=3; uint64 size_bytes=4; string media_type=5; }
 message InputReadRequest { string session_id=1; Lease lease=2; string artifact_id=3; string version_id=4; uint64 offset=5; uint32 max_bytes=6; }
 message InputReadReply { InputArtifact artifact=1; uint64 offset=2; bytes data=3; bool eof=4; }
+
+// Independently negotiated renewal_version1. Original Assignment/Lease remains
+// immutable. Never interpret the legacy Renew/renewed stream draft as permission.
+message ExecutionRenewalRequest {
+ string session_id=1; string request_id=2; uint64 sequence=3;
+ Acknowledge accepted=4; string supervisor_instance_id=5;
+}
+// Budget belongs to FIRST request receipt; client anchors to original send,
+// subtracts one second, and never recreates that anchor after restart/replay.
+message ExecutionRenewalReply {
+ string request_id=1; uint64 sequence=2; string request_digest=3;
+ uint64 budget_ms=4; google.protobuf.Timestamp expires_at=5;
+}
