@@ -51,6 +51,11 @@ pub struct CpuProfile {
     pub context_tokens: u32,
     pub startup_timeout: Duration,
 }
+impl CpuProfile {
+    pub fn execution_digest(&self) -> Result<String, crate::ModelError> {
+        orange_protocol::request_digest("orange-owned-cpu-v1",&serde_json::json!({"backend_sha256":self.executable_sha256,"model_sha256":self.model_sha256,"model_bytes":self.model_bytes.to_string(),"model_version":self.model_version,"context_tokens":self.context_tokens,"startup_timeout_ms":self.startup_timeout.as_millis().to_string(),"gpu_layers":0,"parallel":1,"threads":2})).map_err(|_|crate::ModelError::Invalid)
+    }
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProcessRecord {

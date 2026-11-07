@@ -81,6 +81,26 @@ async fn setup_model_scope(
     max_output_tokens: u32,
     organization: bool,
 ) -> InputFixture {
+    setup_model_meter(
+        cert,
+        model_sha,
+        execution_digest,
+        prompt,
+        max_output_tokens,
+        organization,
+        None,
+    )
+    .await
+}
+async fn setup_model_meter(
+    cert: &str,
+    model_sha: &str,
+    execution_digest: &str,
+    prompt: String,
+    max_output_tokens: u32,
+    organization: bool,
+    meter: Option<orange_model_runtime::meter_service::TrustedMeter>,
+) -> InputFixture {
     let d = device(cert).await;
     let pool = d.store.pool();
     let owner = Uuid::new_v4().to_string();
@@ -154,9 +174,10 @@ async fn setup_model_scope(
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).expect("private");
     }
-    let objects = ArtifactStore::open_local(pool.clone(), &root, 1024 * 1024, 100)
-        .await
-        .expect("real objects");
+    let objects =
+        ArtifactStore::open_local_with_meter(pool.clone(), &root, 1024 * 1024, 100, meter)
+            .await
+            .expect("real objects");
     let request = GenerateRequest {
         invocation_id: Uuid::new_v4().to_string(),
         model_version: "model-test".into(),

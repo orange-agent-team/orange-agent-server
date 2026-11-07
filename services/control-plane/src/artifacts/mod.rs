@@ -6,6 +6,8 @@ pub mod http;
 pub(crate) mod inputs;
 mod maintenance;
 mod outputs;
+mod pricing;
+mod settlement;
 mod storage;
 mod transfer;
 pub use delivery::ArtifactReader;
@@ -44,6 +46,10 @@ pub enum ArtifactError {
     Busy,
     #[error("artifact storage quota exceeded")]
     Capacity,
+    #[error("quote exceeds the available root budget")]
+    Budget,
+    #[error("approved pricing or trusted metering is unavailable")]
+    PricingUnavailable,
     #[error("artifact content or version failed integrity validation")]
     Integrity,
     #[error("artifact deadline expired")]
@@ -92,6 +98,7 @@ struct Inner {
     pending: Arc<Semaphore>,
     closed: AtomicBool,
     tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
+    meter: Option<orange_model_runtime::meter_service::TrustedMeter>,
 }
 /// A current authorization revision, not a reusable delivery capability.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -130,6 +137,15 @@ impl ArtifactStore {
         byte_limit: u64,
         record_limit: u32,
     ) -> Result<Self, ArtifactError> {
+        Self::open_local_with_meter(pool, root, byte_limit, record_limit, None).await
+    }
+    pub async fn open_local_with_meter(
+        pool: PgPool,
+        root: &Path,
+        byte_limit: u64,
+        record_limit: u32,
+        meter: Option<orange_model_runtime::meter_service::TrustedMeter>,
+    ) -> Result<Self, ArtifactError> {
         if byte_limit == 0 || byte_limit > i64::MAX as u64 || record_limit == 0 {
             return Err(ArtifactError::Invalid);
         }
@@ -148,6 +164,7 @@ impl ArtifactStore {
                 pending: Arc::new(Semaphore::new(8)),
                 closed: AtomicBool::new(false),
                 tasks: Mutex::new(Vec::new()),
+                meter,
             }),
         })
     }

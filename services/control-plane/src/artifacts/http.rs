@@ -19,6 +19,11 @@ struct Api {
 }
 pub fn router(identity: UserIdentity, store: ArtifactStore) -> Router {
     Router::new()
+        .route("/api/v1/text-prices", get(prices))
+        .route(
+            "/api/v1/owners/{owner}/text-quotes",
+            axum::routing::post(text_quote),
+        )
         .route(
             "/api/v1/owners/{owner}/uploads",
             axum::routing::post(create),
@@ -49,6 +54,30 @@ pub fn router(identity: UserIdentity, store: ArtifactStore) -> Router {
         })
 }
 struct Error(StatusCode, &'static str);
+async fn prices(State(api): State<Api>, headers: HeaderMap) -> Result<Response, Error> {
+    let actor = api.identity.artifact_actor(&headers, false).await?;
+    Ok(private(
+        Json(api.store.prices(&actor).await?).into_response(),
+    ))
+}
+async fn text_quote(
+    State(api): State<Api>,
+    Path(owner): Path<String>,
+    headers: HeaderMap,
+    body: Result<
+        Json<orange_protocol::pricing::CreateTextQuote>,
+        axum::extract::rejection::JsonRejection,
+    >,
+) -> Result<Response, Error> {
+    let Json(request) = body.map_err(|_| ArtifactError::Invalid)?;
+    original_key(&headers, &request.request_id)?;
+    let actor = api.identity.artifact_actor(&headers, true).await?;
+    let quote = api
+        .store
+        .create_text_quote(&actor, &owner, &request)
+        .await?;
+    Ok(private((StatusCode::CREATED, Json(quote)).into_response()))
+}
 async fn job_result(
     State(api): State<Api>,
     Path((owner, job)): Path<(String, String)>,
@@ -74,6 +103,10 @@ impl From<ArtifactError> for Error {
             ArtifactError::NotReady => Self(StatusCode::CONFLICT, "ARTIFACT_NOT_READY"),
             ArtifactError::Busy => Self(StatusCode::CONFLICT, "TRANSFER_BUSY"),
             ArtifactError::Capacity => Self(StatusCode::INSUFFICIENT_STORAGE, "STORAGE_CAPACITY"),
+            ArtifactError::Budget => Self(StatusCode::CONFLICT, "BUDGET_EXCEEDED"),
+            ArtifactError::PricingUnavailable => {
+                Self(StatusCode::SERVICE_UNAVAILABLE, "PRICING_UNAVAILABLE")
+            }
             ArtifactError::Expired => Self(StatusCode::REQUEST_TIMEOUT, "TRANSFER_EXPIRED"),
             _ => Self(StatusCode::SERVICE_UNAVAILABLE, "SERVICE_UNAVAILABLE"),
         }

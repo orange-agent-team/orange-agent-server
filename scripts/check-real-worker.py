@@ -23,7 +23,9 @@ with tempfile.TemporaryDirectory(prefix='oa-worker-profile-') as directory:
     profile.write_text(json.dumps({'executable':str(backend),'executable_sha256':build['executable_sha256'],'model':str(model),'model_sha256':lock['model']['sha256'],'model_bytes':lock['model']['bytes']}));profile.chmod(0o600)
     env=os.environ.copy();env['ORANGE_REAL_WORKER_PROFILE']=str(profile)
     subprocess.run([os.sys.executable,str(ROOT/'scripts/check-worker-session.py')],cwd=ROOT,env=env,check=True)
-if os.environ.get('ORANGE_WORKER_HOST_TESTS'):
+if os.environ.get('ORANGE_PRICED_WORKER_TESTS'):
+    print('PASS actual server-owned fixed model counting, quote snapshots and development-credit settlement; candidate/admission fixtures except explicit full-process case, no external payments or cloud resource cleanup')
+elif os.environ.get('ORANGE_WORKER_HOST_TESTS'):
     print('PASS actual Worker/User API/Gateway processes and pinned model output delivery/recovery; identity/enrollment/catalog/price fixtures; no settlement, cloud resource release or production certification')
 else:
     print('PASS real pinned CPU Worker inference/cancellation and owned process exit via actual objects/mTLS/PG; catalog/price/initial OS/device admission fixtures, no cloud output commit, GPU or settlement certification')

@@ -13,7 +13,7 @@ fn configuration(
 ) -> PathBuf {
     configuration_port(f, server.port, p, root)
 }
-fn configuration_port(
+pub(super) fn configuration_port(
     f: &InputFixture,
     port: u16,
     p: &CpuProfile,
@@ -26,7 +26,7 @@ fn configuration_port(
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("private");
     path
 }
-fn start(path: &std::path::Path) -> (Child, Lines) {
+pub(super) fn start(path: &std::path::Path) -> (Child, Lines) {
     let mut child =
         Command::new(std::env::var("ORANGE_WORKER_BINARY").expect("actual built Worker"))
             .arg(path)
@@ -40,7 +40,7 @@ fn start(path: &std::path::Path) -> (Child, Lines) {
     let lines = BufReader::new(child.stdout.take().expect("stdout")).lines();
     (child, lines)
 }
-async fn event(lines: &mut Lines, state: &str) -> serde_json::Value {
+pub(super) async fn event(lines: &mut Lines, state: &str) -> serde_json::Value {
     tokio::time::timeout(Duration::from_secs(40), async {
         loop {
             let line = lines.next_line().await.expect("read").expect("live worker");
@@ -57,7 +57,7 @@ async fn event(lines: &mut Lines, state: &str) -> serde_json::Value {
     .await
     .expect("event deadline")
 }
-async fn terminate(child: &mut Child) {
+pub(super) async fn terminate(child: &mut Child) {
     // This is the sole owner of an unreaped direct Child, not PID recovery. If
     // it exits after try_wait(None), the unreaped PID cannot be reused before
     // our wait. No scanned/stored PID or unrelated process is signalled.
@@ -90,7 +90,7 @@ async fn ready_model(root: &std::path::Path) {
     .await
     .expect("actual backend ready");
 }
-fn stopped(root: &std::path::Path) {
+pub(super) fn stopped(root: &std::path::Path) {
     let value: serde_json::Value =
         serde_json::from_slice(&std::fs::read(root.join("model/process.json")).expect("record"))
             .expect("json");
@@ -187,7 +187,7 @@ async fn actual_worker_binary_keeps_candidate_unsubmitted_and_logs_no_body() {
     f.objects.drain().await.expect("drain");
 }
 
-fn enable_outputs(path: &std::path::Path) {
+pub(super) fn enable_outputs(path: &std::path::Path) {
     let mut value: serde_json::Value =
         serde_json::from_slice(&std::fs::read(path).expect("config")).expect("JSON");
     value["commit_outputs"] = serde_json::json!(true);

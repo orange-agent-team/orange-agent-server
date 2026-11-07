@@ -62,6 +62,19 @@ pub(crate) fn decode(row: &sqlx::postgres::PgRow) -> Result<worker::Assignment, 
 }
 /// Root-before-Job agrees with reservation/cancellation; never takes wallet locks.
 pub(crate) async fn job_authority(tx: &mut Tx<'_>, job: &str) -> Result<String, SessionError> {
+    job_authority_mode(tx, job, false).await
+}
+pub(crate) async fn output_job_authority(
+    tx: &mut Tx<'_>,
+    job: &str,
+) -> Result<String, SessionError> {
+    job_authority_mode(tx, job, true).await
+}
+async fn job_authority_mode(
+    tx: &mut Tx<'_>,
+    job: &str,
+    committed_replay: bool,
+) -> Result<String, SessionError> {
     let row =
         sqlx::query("SELECT owner_id,root_budget_id,submitting_user_id FROM jobs WHERE job_id=$1")
             .bind(job)
@@ -101,7 +114,18 @@ pub(crate) async fn job_authority(tx: &mut Tx<'_>, job: &str) -> Result<String, 
             .fetch_one(&mut **tx)
             .await?;
     if row.try_get::<String, _>("settlement_state")? != "pending" {
-        return Err(SessionError::Stale);
+        let committed: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM job_response_commits WHERE job_id=$1)")
+                .bind(job)
+                .fetch_one(&mut **tx)
+                .await?;
+        if !committed_replay
+            || !committed
+            || row.try_get::<String, _>("settlement_state")? != "settled"
+            || row.try_get::<String, _>("execution_state")? != "succeeded"
+        {
+            return Err(SessionError::Stale);
+        }
     }
     Ok(row.try_get("execution_state")?)
 }
@@ -110,7 +134,7 @@ pub(crate) async fn eligible_plan(
     job: &str,
     node: &str,
 ) -> Result<sqlx::postgres::PgRow, SessionError> {
-    let row = sqlx::query("SELECT p.*,j.root_budget_id,j.invocation_id,j.purpose,j.request_digest,r.model_version_id,r.model_sha256,r.execution_profile_digest,floor(extract(epoch FROM p.job_deadline))::bigint AS deadline FROM jobs j JOIN quotes q USING(quote_id) JOIN quote_execution_plans p USING(quote_id) JOIN reviewed_execution_profiles r USING(execution_profile_id) WHERE j.job_id=$1 AND p.target_node_id=$2 AND q.owner_id=j.owner_id AND q.root_budget_id=j.root_budget_id AND q.invocation_id=j.invocation_id AND q.max_amount=j.reserved AND p.request_projection_digest=q.projection_digest AND r.enabled AND p.job_deadline>clock_timestamp()+interval '1 second' FOR SHARE OF r")
+    let row = sqlx::query("SELECT p.*,j.root_budget_id,j.invocation_id,j.purpose,j.request_digest,r.model_version_id,r.model_sha256,r.execution_profile_digest,floor(extract(epoch FROM p.job_deadline))::bigint AS deadline FROM jobs j JOIN quotes q USING(quote_id) JOIN quote_execution_plans p USING(quote_id) JOIN reviewed_execution_profiles r USING(execution_profile_id) WHERE j.job_id=$1 AND p.target_node_id=$2 AND q.owner_id=j.owner_id AND q.root_budget_id=j.root_budget_id AND q.invocation_id=j.invocation_id AND q.max_amount=j.reserved AND p.request_projection_digest=q.projection_digest AND r.enabled AND NOT EXISTS(SELECT 1 FROM quote_metering qm JOIN text_prices tp ON tp.price_version=qm.price_version JOIN trusted_meter_profiles mp ON mp.profile_digest=qm.meter_profile_digest WHERE qm.quote_id=j.quote_id AND (NOT tp.enabled OR NOT mp.enabled OR qm.price_version<>q.price_version OR tp.execution_profile_id<>p.execution_profile_id OR tp.node_id<>p.target_node_id OR qm.provider_owner_id<>(SELECT owner_id FROM nodes WHERE node_id=p.target_node_id) OR mp.descriptor->>'execution_digest'<>r.execution_profile_digest)) AND p.job_deadline>clock_timestamp()+interval '1 second' FOR SHARE OF r")
         .bind(job).bind(node).fetch_optional(&mut **tx).await?.ok_or(SessionError::Stale)?;
     let submitted = SubmitJob {
         root_budget_id: row.try_get("root_budget_id")?,
@@ -188,7 +212,7 @@ impl WorkerSessionStore {
             finish(tx, s).await?;
             return Ok(None);
         }
-        let job: Option<String> = sqlx::query_scalar("SELECT j.job_id FROM jobs j JOIN quote_execution_plans p USING(quote_id) JOIN reviewed_execution_profiles r USING(execution_profile_id) JOIN quotes q USING(quote_id) JOIN owners o ON o.owner_id=j.owner_id JOIN budget_roots b ON b.root_budget_id=j.root_budget_id WHERE p.target_node_id=$1 AND j.execution_state='queued' AND j.settlement_state='pending' AND (NOT j.input_required OR ($2=1 AND EXISTS(SELECT 1 FROM job_inputs i WHERE i.job_id=j.job_id))) AND r.enabled AND o.state='active' AND b.state='active' AND p.request_projection_digest=q.projection_digest AND p.job_deadline>clock_timestamp()+interval '11 seconds' AND NOT EXISTS(SELECT 1 FROM worker_execution_attempts a WHERE a.job_id=j.job_id) ORDER BY j.job_id LIMIT 1")
+        let job: Option<String> = sqlx::query_scalar("SELECT j.job_id FROM jobs j JOIN quote_execution_plans p USING(quote_id) JOIN reviewed_execution_profiles r USING(execution_profile_id) JOIN quotes q USING(quote_id) JOIN owners o ON o.owner_id=j.owner_id JOIN budget_roots b ON b.root_budget_id=j.root_budget_id WHERE p.target_node_id=$1 AND j.execution_state='queued' AND j.settlement_state='pending' AND (NOT j.input_required OR ($2=1 AND EXISTS(SELECT 1 FROM job_inputs i WHERE i.job_id=j.job_id))) AND r.enabled AND NOT EXISTS(SELECT 1 FROM quote_metering qm JOIN text_prices tp ON tp.price_version=qm.price_version JOIN trusted_meter_profiles mp ON mp.profile_digest=qm.meter_profile_digest WHERE qm.quote_id=j.quote_id AND (NOT tp.enabled OR NOT mp.enabled OR qm.price_version<>q.price_version OR tp.execution_profile_id<>p.execution_profile_id OR tp.node_id<>p.target_node_id OR qm.provider_owner_id<>(SELECT owner_id FROM nodes WHERE node_id=p.target_node_id) OR mp.descriptor->>'execution_digest'<>r.execution_profile_digest)) AND o.state='active' AND b.state='active' AND p.request_projection_digest=q.projection_digest AND p.job_deadline>clock_timestamp()+interval '11 seconds' AND NOT EXISTS(SELECT 1 FROM worker_execution_attempts a WHERE a.job_id=j.job_id) ORDER BY j.job_id LIMIT 1")
             .bind(&s.node_id).bind(s.input_artifacts_version as i32).fetch_optional(&mut *tx).await?;
         let Some(job) = job else {
             finish(tx, s).await?;

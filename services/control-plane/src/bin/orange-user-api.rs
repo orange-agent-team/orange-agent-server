@@ -9,6 +9,26 @@ use std::{env, error::Error, net::SocketAddr};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     if env::var("ORANGE_ENV").as_deref() != Ok("development") {
+        return Err("development deployment required".into());
+    }
+    let meter = if let Some(path) = env::var_os("ORANGE_METER_CONFIG") {
+        Some(orange_control_plane::meter_bootstrap::load(std::path::Path::new(&path)).await?)
+    } else {
+        None
+    };
+    let result = serve(meter.clone()).await;
+    if let Some(meter) = meter {
+        meter.shutdown().await?;
+    }
+    result
+}
+async fn serve(
+    meter: Option<orange_model_runtime::meter_service::TrustedMeter>,
+) -> Result<(), Box<dyn Error>> {
+    if meter.is_some() && env::var_os("ORANGE_ARTIFACT_ROOT").is_none() {
+        return Err("trusted pricing requires the private artifact writer".into());
+    }
+    if env::var("ORANGE_ENV").as_deref() != Ok("development") {
         return Err("This candidate currently permits development deployment only".into());
     }
     let address: SocketAddr = env::var("ORANGE_USER_BIND")
@@ -33,11 +53,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .unwrap_or_else(|_| "10000".into())
             .parse()?;
         Some(
-            orange_control_plane::artifacts::ArtifactStore::open_local(
+            orange_control_plane::artifacts::ArtifactStore::open_local_with_meter(
                 store.pool().clone(),
                 std::path::Path::new(&root),
                 bytes,
                 records,
+                meter,
             )
             .await?,
         )
@@ -98,6 +119,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             _=tick.tick()=>{
                 let result=tokio::select! {_=stopped.changed()=>break,result=objects.collect(100)=>result};
                 if result.is_err(){eprintln!("Artifact maintenance unavailable; unresolved objects remain accounted for");}
+                let settlement=tokio::select! {_=stopped.changed()=>break,result=objects.settle_ready(100)=>result};
+                if !matches!(settlement,Ok((_,0))){eprintln!("Unresolved development settlements remain pending");}
             }
         }}
     }));

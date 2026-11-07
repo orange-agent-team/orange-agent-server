@@ -105,7 +105,7 @@ impl CpuWorkerHandle {
 /// not a caller-provided profile alias. Paths are installation-specific and are
 /// verified by the existing supervisor against these hashes before spawning.
 pub fn cpu_profile_digest(profile: &CpuProfile) -> Result<String, CpuError> {
-    request_digest("orange-owned-cpu-v1",&serde_json::json!({"backend_sha256":profile.executable_sha256,"model_sha256":profile.model_sha256,"model_bytes":profile.model_bytes.to_string(),"model_version":profile.model_version,"context_tokens":profile.context_tokens,"startup_timeout_ms":profile.startup_timeout.as_millis().to_string(),"gpu_layers":0,"parallel":1,"threads":2})).map_err(|_|CpuError::Invalid)
+    profile.execution_digest().map_err(|_| CpuError::Invalid)
 }
 pub fn spawn_cpu(resources: CpuResources, spec: CpuExecutionSpec) -> CpuWorkerHandle {
     let (cancel, receiver) = watch::channel(false);

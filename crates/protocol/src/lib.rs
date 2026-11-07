@@ -5,6 +5,7 @@ pub mod events;
 pub mod execution;
 pub mod model;
 pub mod node_control;
+pub mod pricing;
 #[cfg(feature = "grpc")]
 pub mod grpc {
     pub mod worker {

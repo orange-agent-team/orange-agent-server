@@ -220,6 +220,19 @@ impl Store {
         if let Some(actor) = actor {
             check_budget_actor(&mut tx, &actor.user, owner, &req.root_budget_id).await?;
         }
+        let priced_requester: Option<String> = sqlx::query_scalar(
+            "SELECT requester_id FROM quote_metering WHERE quote_id=$1 AND owner_id=$2",
+        )
+        .bind(&req.quote_id)
+        .bind(owner)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if priced_requester
+            .as_deref()
+            .is_some_and(|user| actor.map(|a| a.user.as_str()) != Some(user))
+        {
+            return Err(StoreError::Forbidden);
+        }
         if let Some(job) = prior(&mut tx, owner, "submit_job", key, &digest).await? {
             check_submit_actor(&mut tx, &job, actor).await?;
             let view = job_in_tx(&mut tx, owner, &job).await?;
@@ -240,6 +253,10 @@ impl Store {
             record_key(&mut tx, owner, "submit_job", key, &digest, &view.job_id).await?;
             finish_submit(tx, actor).await?;
             return Ok(view);
+        }
+        let invalid_price:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM quote_metering m JOIN text_prices p USING(price_version) JOIN trusted_meter_profiles mp ON mp.profile_digest=m.meter_profile_digest WHERE m.quote_id=$1 AND (NOT p.enabled OR NOT mp.enabled))").bind(&req.quote_id).fetch_one(&mut *tx).await?;
+        if invalid_price {
+            return Err(StoreError::QuoteMismatch);
         }
         let quote = sqlx::query("SELECT *, expires_at > clock_timestamp() AS valid FROM quotes WHERE quote_id=$1 AND owner_id=$2")
             .bind(&req.quote_id).bind(owner).fetch_optional(&mut *tx).await?.ok_or(StoreError::NotFound)?;
@@ -408,7 +425,7 @@ async fn retry_backoff(attempt: u32) {
     .await;
 }
 
-fn allocate(amount: i64, balances: [i64; 3]) -> Result<[i64; 3], StoreError> {
+pub(crate) fn allocate(amount: i64, balances: [i64; 3]) -> Result<[i64; 3], StoreError> {
     let mut remaining = amount;
     let mut held = [0; 3];
     for i in 0..3 {
@@ -424,7 +441,7 @@ fn allocate(amount: i64, balances: [i64; 3]) -> Result<[i64; 3], StoreError> {
 fn credits(n: i64) -> Result<Credits, StoreError> {
     Credits::new(n).map_err(|_| StoreError::Invalid)
 }
-fn budget_model(r: &sqlx::postgres::PgRow) -> Result<Budget, StoreError> {
+pub(crate) fn budget_model(r: &sqlx::postgres::PgRow) -> Result<Budget, StoreError> {
     Ok(Budget {
         limit: credits(r.try_get("limit_amount")?)?,
         spent: credits(r.try_get("spent")?)?,
@@ -532,7 +549,7 @@ async fn emit(
     crate::events::append(tx, owner, id, kind, payload).await?;
     Ok(())
 }
-async fn ledger(
+pub(crate) async fn ledger(
     tx: &mut Transaction<'_, Postgres>,
     owner: &str,
     key: &str,

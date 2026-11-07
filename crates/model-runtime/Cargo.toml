@@ -17,6 +17,7 @@ name = "supervisor"
 required-features = ["process-test-fixture"]
 
 [dependencies]
+jsonschema.workspace = true
 orange-domain.workspace = true
 orange-protocol.workspace = true
 serde.workspace = true

@@ -100,6 +100,14 @@ impl ArtifactStore {
         if view(&current)? != metadata || authority::stamp(&mut tx, &current).await? != stamp {
             return Err(ArtifactError::Forbidden);
         }
+        let priced=sqlx::query("SELECT requester_id,input_artifact_id,input_version_id FROM quote_metering WHERE quote_id=$1").bind(row.try_get::<String,_>("quote_id")?).fetch_optional(&mut *tx).await?;
+        if let Some(priced) = priced
+            && (priced.try_get::<String, _>("requester_id")? != actor.user
+                || priced.try_get::<String, _>("input_artifact_id")? != metadata.artifact_id
+                || priced.try_get::<String, _>("input_version_id")? != metadata.version_id)
+        {
+            return Err(ArtifactError::Conflict);
+        }
         if !matches!(
             row.try_get::<String, _>("execution_state")?.as_str(),
             "queued" | "running"

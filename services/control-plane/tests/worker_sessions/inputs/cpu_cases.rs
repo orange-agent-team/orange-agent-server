@@ -4,6 +4,8 @@ use orange_worker::cpu::{CpuExecutionSpec, CpuPhase, CpuResources, cpu_profile_d
 use serde::Deserialize;
 #[path = "host_cases.rs"]
 mod host_cases;
+#[path = "pricing_cases.rs"]
+mod pricing_cases;
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RealProfile {

@@ -38,6 +38,7 @@ impl ArtifactReader {
                     pending: Arc::new(Semaphore::new(8)),
                     closed: AtomicBool::new(false),
                     tasks: Mutex::new(vec![]),
+                    meter: None,
                 }),
             },
         })

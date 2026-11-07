@@ -55,6 +55,9 @@ fn read_bounded(path: &Path, secret: bool) -> Result<Vec<u8>, Box<dyn Error>> {
     }
     Ok(bytes)
 }
+pub fn private_configuration(path: &Path) -> Result<Vec<u8>, Box<dyn Error>> {
+    read_bounded(path, true)
+}
 pub fn load(path: &Path) -> Result<(String, GatewayTls), Box<dyn Error>> {
     let config: Config = serde_json::from_slice(&read_bounded(path, true)?)?;
     let tls = GatewayTls {

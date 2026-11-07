@@ -210,6 +210,12 @@ impl WorkerGateway for Gateway {
             .commit_output(self.store.clone(), session, header, input)
             .await
             .map_err(output_error)?;
+        // Output commit is already durable. A settlement error leaves pending
+        // facts for the internal retry owner; never invent a successful charge.
+        writer
+            .settle_committed(&receipt.job_id)
+            .await
+            .map_err(output_error)?;
         Ok(Response::new(receipt))
     }
     async fn query_output(

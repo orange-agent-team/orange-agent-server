@@ -87,7 +87,7 @@ impl ArtifactStore {
             {
                 return Err(ArtifactError::Forbidden);
             }
-            let state = crate::worker::execution::job_authority(tx, &lease.job_id)
+            let state = crate::worker::execution::output_job_authority(tx, &lease.job_id)
                 .await
                 .map_err(|_| ArtifactError::Forbidden)?;
             if !matches!(state.as_str(), "running" | "succeeded") {
@@ -350,7 +350,7 @@ impl ArtifactStore {
             {
                 return Err(ArtifactError::Integrity);
             }
-            self.validate_response(sessions, s, h, &bytes).await?;
+            let usage = self.validate_response(sessions, s, h, &bytes).await?;
             if let Some(mut writer) = stage.take() {
                 writer.close().await?;
                 self.inner.objects.finish_write(&t.stage)?;
@@ -380,7 +380,8 @@ impl ArtifactStore {
             if Instant::now() >= deadline {
                 return Err(ArtifactError::Expired);
             }
-            self.publish_output(sessions, s, h, &t, deadline).await
+            self.publish_output(sessions, s, h, &t, deadline, usage.as_ref())
+                .await
         }
         .await;
         let mut close_error = None;
@@ -407,7 +408,7 @@ impl ArtifactStore {
         s: &DeviceSession,
         h: &worker::OutputHeader,
         bytes: &[u8],
-    ) -> Result<(), ArtifactError> {
+    ) -> Result<Option<orange_model_runtime::meter_service::MeasuredOutput>, ArtifactError> {
         let value = orange_protocol::canonical::parse_tool_arguments(
             std::str::from_utf8(bytes).map_err(|_| ArtifactError::Invalid)?,
         )
@@ -446,7 +447,17 @@ impl ArtifactStore {
         {
             return Err(ArtifactError::Invalid);
         }
-        Ok(())
+        let committed: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM job_response_commits WHERE job_id=$1)")
+                .bind(&scope.job)
+                .fetch_one(&self.inner.pool)
+                .await?;
+        if committed {
+            Ok(None)
+        } else {
+            self.measure_job_output(&scope.job, request, candidate)
+                .await
+        }
     }
     async fn publish_output(
         &self,
@@ -455,6 +466,7 @@ impl ArtifactStore {
         h: &worker::OutputHeader,
         t: &Transfer,
         deadline: Instant,
+        usage: Option<&orange_model_runtime::meter_service::MeasuredOutput>,
     ) -> Result<worker::OutputReceipt, ArtifactError> {
         let mut tx = self.inner.pool.begin().await?;
         let scope = self.output_scope(&mut tx, sessions, s, h, false).await?;
@@ -496,6 +508,8 @@ impl ArtifactStore {
                 header_digest: scope.header_digest,
             };
             sqlx::query("INSERT INTO job_response_commits(job_id,commit_id,artifact_id,version_id,response_digest,receipt) VALUES($1,$2,$3,$4,$5,$6)").bind(&scope.job).bind(&receipt.commit_id).bind(&t.view.artifact_id).bind(&t.view.version_id).bind(&h.response_digest).bind(receipt.encode_to_vec()).execute(&mut *tx).await?;
+            self.record_usage(&mut tx, &scope.job, &h.response_digest, usage)
+                .await?;
             sqlx::query("INSERT INTO artifact_pins(artifact_id,reference_id) VALUES($1,$2)")
                 .bind(&t.view.artifact_id)
                 .bind(format!("job-output:{}", scope.job))

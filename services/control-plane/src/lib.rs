@@ -3,6 +3,7 @@ pub mod artifacts;
 pub mod auth;
 pub mod events;
 pub mod http;
+pub mod meter_bootstrap;
 pub mod queue;
 pub mod store;
 pub mod team;
