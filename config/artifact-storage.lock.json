@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "direct_dependency": {
+    "name": "opendal",
+    "version": "0.59.5",
+    "default_features": false,
+    "features": [
+      "services-fs",
+      "executors-tokio"
+    ]
+  },
+  "backend": "private POSIX filesystem; single live owner per root",
+  "atomic_write_dir": false,
+  "key_strategy": "unique generated keys,if_not_exists; publication via PostgreSQL pointer after size/hash/current-ACL validation",
+  "reference_checkout": "edac5a0f9d6748c46dc28eabd645066cdaaa5d96",
+  "primary_sources": [
+    "https://docs.rs/crate/opendal/0.59.5",
+    "https://opendal.apache.org/docs/rust/opendal/services/struct.Fs.html"
+  ],
+  "new_lockfile_packages": [
+    {
+      "name": "asyncband",
+      "version": "0.7.4",
+      "license": "Apache-2.0",
+      "repository": "https://github.com/apache/asyncband",
+      "source_vcs": "3f521b528bcbe27cf632f1d35ff30dff9780ec3b"
+    },
+    {
+      "name": "futures",
+      "version": "0.3.34",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/rust-lang/futures-rs",
+      "source_vcs": "705e6b5c0f06535b1aac1cb1989a172b3d45be8c"
+    },
+    {
+      "name": "futures-macro",
+      "version": "0.3.34",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/rust-lang/futures-rs",
+      "source_vcs": "705e6b5c0f06535b1aac1cb1989a172b3d45be8c"
+    },
+    {
+      "name": "opendal",
+      "version": "0.59.5",
+      "license": "Apache-2.0",
+      "repository": "https://github.com/apache/opendal",
+      "source_vcs": "fce9cdefdea7c8e54dfbaf3c88c3b6d5ec68146e"
+    },
+    {
+      "name": "opendal-core",
+      "version": "0.59.5",
+      "license": "Apache-2.0",
+      "repository": "https://github.com/apache/opendal",
+      "source_vcs": "fce9cdefdea7c8e54dfbaf3c88c3b6d5ec68146e"
+    },
+    {
+      "name": "opendal-service-fs",
+      "version": "0.59.5",
+      "license": "Apache-2.0",
+      "repository": "https://github.com/apache/opendal",
+      "source_vcs": "fce9cdefdea7c8e54dfbaf3c88c3b6d5ec68146e"
+    },
+    {
+      "name": "quick-xml",
+      "version": "0.42.0",
+      "license": "MIT",
+      "repository": "https://github.com/tafia/quick-xml",
+      "source_vcs": "36a2c52a4f6c90878c3f60c3c3b5c62efaef28a9"
+    },
+    {
+      "name": "xattr",
+      "version": "1.7.0",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/Stebalien/xattr",
+      "source_vcs": "c0d3de0d4229e496584c4beb5882cbb1739f0632"
+    }
+  ],
+  "certification": "actual local filesystem tests; not cloud backend, complete license audit, multi-host filesystem, Windows ACL or production certification"
+}

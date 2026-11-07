@@ -28,6 +28,7 @@ def main():
     run([sys.executable,ROOT/'scripts/local-postgres.py','start']);run([sys.executable,ROOT/'scripts/local-user-identity.py'])
     run([cargo,'build','--bin','orange-user-api','--bin','orange-admin-api','--locked'])
     run([sys.executable,web/'scripts/local-tls.py'])
+    env.pop('ORANGE_ARTIFACT_ROOT',None)  # identity-only tests must not open an operator's storage root
     env.update(ORANGE_TEST_DATABASE_URL=(ROOT/'.local/database-url').read_text().strip(),ORANGE_TEST_USER_CONFIG_FILE=str(ROOT/'.local/identity/user-config.json'),
         ORANGE_IDENTITY_FIXTURE=str(ROOT/'.local/identity/fixture.json'),ORANGE_TEST_DATABASE_URL_FILE=str(ROOT/'.local/database-url'),ORANGE_USER_TLS_DIR=str(web/'.local/tls'))
     run([cargo,'test','-p','orange-control-plane','--features','integration-tests','--test','user_identity','--locked'])

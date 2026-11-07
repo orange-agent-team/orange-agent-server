@@ -36,6 +36,7 @@ tonic-prost = "=0.14.9"
 tonic-prost-build = "=0.14.9"
 prost = "=0.14.4"
 prost-types = "=0.14.4"
+opendal = { version = "=0.59.5", default-features = false, features = ["services-fs", "executors-tokio"] }
 tokio-stream = { version = "=0.1.19", features = ["net"] }
 
 [workspace.lints.rust]

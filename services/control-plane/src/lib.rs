@@ -1,4 +1,5 @@
 pub mod admin;
+pub mod artifacts;
 pub mod auth;
 pub mod events;
 pub mod http;

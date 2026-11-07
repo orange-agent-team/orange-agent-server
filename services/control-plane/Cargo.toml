@@ -59,9 +59,12 @@ tonic.workspace = true
 tokio-stream.workspace = true
 prost-types.workspace = true
 prost.workspace = true
+opendal.workspace = true
 libc.workspace = true
 
 [dev-dependencies]
+reqwest.workspace = true
+tempfile.workspace = true
 rusqlite.workspace = true
 tower.workspace = true
 orange-worker = { path = "../worker", version = "=0.1.0" }

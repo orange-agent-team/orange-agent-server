@@ -482,7 +482,7 @@ async fn user(
     }
     Ok(())
 }
-async fn organization_row(
+pub(crate) async fn organization_row(
     tx: &mut Transaction<'_, Postgres>,
     id: &str,
     exclusive: bool,
@@ -498,7 +498,7 @@ async fn organization_row(
         .await?
         .ok_or(TeamError::Forbidden)
 }
-async fn membership(
+pub(crate) async fn membership(
     tx: &mut Transaction<'_, Postgres>,
     org: &str,
     user: &str,
@@ -532,7 +532,7 @@ async fn resource_row(
         .await?
         .ok_or(TeamError::NotFound)
 }
-async fn resource_permission(
+pub(crate) async fn resource_permission(
     tx: &mut Transaction<'_, Postgres>,
     actor: &str,
     resource: &str,

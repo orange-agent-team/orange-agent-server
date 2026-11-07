@@ -173,6 +173,21 @@ impl UserIdentity {
         tx.commit().await?;
         Ok(token)
     }
+    /// Resolves HTTP identity and CSRF before creating a nonserializable storage
+    /// actor. Storage rechecks this session and current ACL after every object I/O.
+    pub async fn artifact_actor(
+        &self,
+        headers: &HeaderMap,
+        write: bool,
+    ) -> Result<crate::artifacts::ArtifactActor, AuthError> {
+        let guard = self.authenticate(headers).await?;
+        if write {
+            check_write(headers, &self.config.user_origin, &guard.view().csrf_token)?;
+        }
+        let actor = crate::artifacts::ArtifactActor::from_verified_session(guard.view(), write);
+        guard.finish().await?;
+        Ok(actor)
+    }
     pub async fn authenticate(&self, headers: &HeaderMap) -> Result<UserSessionGuard, AuthError> {
         let token = hash_secret(&cookie(headers, USER_COOKIE)?);
         let mut tx = self.pool.begin().await?;

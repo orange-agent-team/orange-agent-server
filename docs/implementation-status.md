@@ -4,6 +4,8 @@
 
 ## 最新增量（优先于下方早期记录）
 
+- 新增[私有输入对象存储](artifact-storage-implementation.md)：OpenDAL0.59.5、实际字节上传/校验/发布、当前会话与独立ACL、权限版本隔离、不可变版本、HTTP接口及引用保护回收。14项真实PG/文件系统/HTTP测试、实际开发二进制探测及全部相关源码回归通过，ARTIFACT-STORE-001单独记DONE。0017—0019已应用并冻结；Worker输入授权、推理输出与结算仍待接线。
+
 - E07/E08新增[拒绝持久回执与历史查询](worker-rejection-receipts.md)：独立可选能力、本机决定/云确认分离、当前节点认证、精确原ACK、schema1升级、旧PG事实补录及事件幂等。47项真实控制测试、28项本机测试、Rust/集成特性Clippy和相关统一源码回归全部通过，REJECTION-RECEIPT-001单独记DONE。拒绝不代表退款、设备释放、实际模型执行或自动重派。0016已应用并冻结。
 
 - E08新增[持久接收与本机启动屏障](worker-execution-receiver.md)：显式能力2、WAL/FULL执行日志、准确Broker许可、首次ACK单调锚点、不可延长预算及新鲜确认。39项真实控制测试、25项本机Broker/日志测试和Rust/Clippy通过；跨提交期限负例先红后绿，修复后的统一源码回归已全部刷新，EXECUTION-RECEIVER-001单独记DONE；实际模型进程/输入对象/续期/清理/结算仍未实现。迁移0015已应用并冻结。
