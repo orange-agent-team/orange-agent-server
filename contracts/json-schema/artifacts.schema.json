@@ -496,6 +496,12 @@
           }
         }
       ]
+    },
+    "CancelJob": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {},
+      "description": "Explicit original-user stop intent. No client-supplied refund, target actor or cleanup assertion."
     }
   }
 }

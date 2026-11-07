@@ -1,5 +1,7 @@
 //! Real customer input files and provider mTLS delivery. Prices, enrollment,
 //! user sessions and OS/device probes are explicit fixtures; no model is run.
+#[path = "inputs/cancel_cases.rs"]
+mod cancel_cases;
 #[path = "inputs/cleanup_cases.rs"]
 mod cleanup_cases;
 #[cfg(all(unix, feature = "real-worker-tests"))]

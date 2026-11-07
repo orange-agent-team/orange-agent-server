@@ -1,3 +1,4 @@
+pub mod account;
 pub mod artifacts;
 pub mod canonical;
 #[cfg(feature = "grpc")]

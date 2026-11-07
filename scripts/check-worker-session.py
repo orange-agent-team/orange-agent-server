@@ -25,7 +25,7 @@ with tempfile.TemporaryDirectory(prefix='orange-worker-mtls-') as directory:
         subprocess.run([openssl,*arguments],cwd=private,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,check=True)
     for ca in ['ca','other-ca']:
         command('req','-x509','-newkey','ec','-pkeyopt','ec_paramgen_curve:P-256','-nodes','-batch','-days','1','-subj','/CN=Orange-'+ca,'-keyout',ca+'.key','-out',ca+'.pem','-addext','basicConstraints=critical,CA:TRUE','-addext','keyUsage=critical,keyCertSign,cRLSign')
-    for name in ['server','client-a','client-b','client-c','client-d','client-e','client-f','client-g','client-h','client-i','client-j','client-k','client-l','client-m','client-n','client-o','client-p','client-q','client-r','client-s','client-t','client-u','client-v','client-w','client-x','client-y','client-z','client-aa','client-ab','client-ac','client-ad','client-ae','client-af','client-ag','client-ah','client-ai','client-aj','client-ak','client-al','client-am','client-an','client-ao','client-ap','client-aq','client-ar','client-as','client-at','client-au','client-av','client-aw','client-ax','client-ay','client-az','client-ba','client-bb','client-bc','client-bd','client-be','client-bf','client-bg','client-bh','client-bi','client-bj','client-bk','client-bl','client-bm','client-bn','client-bo','client-bp','client-bq','client-br','client-bs','client-bt','client-bu','client-bv','client-bw','client-bx','client-by','client-bz','client-ca','client-cb','client-cc','client-cd','client-ce','client-cf','client-cg','client-ch','client-ci','client-cj','client-ck','client-cl','client-cm','client-cn','client-co','client-cp','client-cq','client-cr','client-cs','client-ct','client-cu','client-cv','client-cw','client-cx','client-cy','unregistered','wrong-ca']:
+    for name in ['server','client-a','client-b','client-c','client-d','client-e','client-f','client-g','client-h','client-i','client-j','client-k','client-l','client-m','client-n','client-o','client-p','client-q','client-r','client-s','client-t','client-u','client-v','client-w','client-x','client-y','client-z','client-aa','client-ab','client-ac','client-ad','client-ae','client-af','client-ag','client-ah','client-ai','client-aj','client-ak','client-al','client-am','client-an','client-ao','client-ap','client-aq','client-ar','client-as','client-at','client-au','client-av','client-aw','client-ax','client-ay','client-az','client-ba','client-bb','client-bc','client-bd','client-be','client-bf','client-bg','client-bh','client-bi','client-bj','client-bk','client-bl','client-bm','client-bn','client-bo','client-bp','client-bq','client-br','client-bs','client-bt','client-bu','client-bv','client-bw','client-bx','client-by','client-bz','client-ca','client-cb','client-cc','client-cd','client-ce','client-cf','client-cg','client-ch','client-ci','client-cj','client-ck','client-cl','client-cm','client-cn','client-co','client-cp','client-cq','client-cr','client-cs','client-ct','client-cu','client-cv','client-cw','client-cx','client-cy','client-da','client-db','client-dc','client-dd','client-de','client-df','client-dg','client-dh','unregistered','wrong-ca']:
         command('req','-new','-newkey','ec','-pkeyopt','ec_paramgen_curve:P-256','-nodes','-batch','-subj','/CN=orange-'+name,'-keyout',name+'.key','-out',name+'.csr')
         extensions='basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage='+('serverAuth' if name=='server' else 'clientAuth')+'\n'
         if name=='server':extensions+='subjectAltName=DNS:localhost,IP:127.0.0.1\n'
@@ -35,7 +35,7 @@ with tempfile.TemporaryDirectory(prefix='orange-worker-mtls-') as directory:
         command('x509','-in',name+'.pem','-outform','DER','-out',name+'.der')
     for file in private.iterdir():file.chmod(0o600)
     environment['ORANGE_WORKER_TLS_DIR']=str(private)
-    environment['ORANGE_TEST_USER_CONFIG_FILE']=str(ROOT/'.local/identity/user-config.json')
+    environment.setdefault('ORANGE_TEST_USER_CONFIG_FILE',str(ROOT/'.local/identity/user-config.json'))
     if environment.get('ORANGE_REAL_WORKER_PROFILE'):
         subprocess.run([str(cargo),'build','-p','orange-worker','--bin','orange-worker','--locked'],cwd=ROOT,env=environment,check=True)
         if environment.get('CARGO_BUILD_TARGET'):raise SystemExit('Actual Worker process tests require a native host build')
@@ -47,10 +47,12 @@ with tempfile.TemporaryDirectory(prefix='orange-worker-mtls-') as directory:
     features='real-worker-tests' if environment.get('ORANGE_REAL_WORKER_PROFILE') else 'integration-tests'
     command=[str(cargo),'test','-p','orange-control-plane','--features',features,'--test','worker_sessions','--locked']
     if environment.get('ORANGE_REAL_WORKER_PROFILE'):
-        if environment.get('ORANGE_CLEANUP_REAL_TESTS'):command+=['input_cases::cpu_cases::pricing_cases::cleanup_real','--','--test-threads=1']
-        elif environment.get('ORANGE_PRICED_WORKER_TESTS'):command+=['input_cases::cpu_cases::pricing_cases','--','--test-threads=1','--skip','input_cases::cpu_cases::pricing_cases::cleanup_real']
+        if environment.get('ORANGE_CANCEL_REAL_TESTS'):command+=['input_cases::cpu_cases::pricing_cases::cancel_real','--','--test-threads=1']
+        elif environment.get('ORANGE_CLEANUP_REAL_TESTS'):command+=['input_cases::cpu_cases::pricing_cases::cleanup_real','--','--test-threads=1']
+        elif environment.get('ORANGE_PRICED_WORKER_TESTS'):command+=['input_cases::cpu_cases::pricing_cases','--','--test-threads=1','--skip','input_cases::cpu_cases::pricing_cases::cleanup_real','--skip','input_cases::cpu_cases::pricing_cases::cancel_real']
         elif environment.get('ORANGE_WORKER_HOST_TESTS'):command+=['input_cases::cpu_cases::host_cases','--','--test-threads=1']
         else:command+=['input_cases::cpu_cases','--','--test-threads=1','--skip','input_cases::cpu_cases::host_cases','--skip','input_cases::cpu_cases::pricing_cases']
+    elif environment.get('ORANGE_CANCEL_PROTOCOL_TESTS'):command+=['input_cases::cancel_cases','--','--test-threads=1']
     elif environment.get('ORANGE_CLEANUP_PROTOCOL_TESTS'):command+=['input_cases::cleanup_cases','--','--test-threads=1']
     elif environment.get('ORANGE_WORKER_OUTPUT_TESTS'):command+=['input_cases::output_cases','--','--test-threads=1']
     elif environment.get('ORANGE_WORKER_RENEWAL_TESTS'):command+=['input_cases::renewal_cases','--','--test-threads=1']

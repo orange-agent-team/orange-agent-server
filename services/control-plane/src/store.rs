@@ -1,3 +1,4 @@
+mod user_account;
 use orange_domain::{Budget, Credits};
 use orange_protocol::{
     BudgetView, CreateBudget, JobView, Money, SubmitJob, request_digest, valid_digest, valid_id,
@@ -313,9 +314,31 @@ impl Store {
         tx.commit().await?;
         Ok(view)
     }
-    /// Queue-only cancellation is a real release. Running work requires the future execution lifecycle.
+    /// Development bearer entry remains queue-only. Current user sessions use
+    /// cancel_for_user, which requests running cancellation without releasing funds.
     pub async fn cancel_queued(
         &self,
+        owner: &str,
+        id: &str,
+        key: &str,
+    ) -> Result<JobView, StoreError> {
+        self.cancel_as(None, owner, id, key).await
+    }
+    pub async fn cancel_for_user(
+        &self,
+        actor: &crate::artifacts::ArtifactActor,
+        owner: &str,
+        id: &str,
+        key: &str,
+    ) -> Result<JobView, StoreError> {
+        if !actor.write {
+            return Err(StoreError::Forbidden);
+        }
+        self.cancel_as(Some(actor), owner, id, key).await
+    }
+    async fn cancel_as(
+        &self,
+        actor: Option<&crate::artifacts::ArtifactActor>,
         owner: &str,
         id: &str,
         key: &str,
@@ -324,16 +347,40 @@ impl Store {
             return Err(StoreError::Invalid);
         }
         for attempt in 0..3 {
-            match self.cancel_once(owner, id, key).await {
+            match self.cancel_once(owner, id, key, actor).await {
                 Err(e) if e.retryable() && attempt < 2 => retry_backoff(attempt).await,
                 result => return result,
             }
         }
         unreachable!("bounded loop returns")
     }
-    async fn cancel_once(&self, owner: &str, id: &str, key: &str) -> Result<JobView, StoreError> {
-        let digest = request_digest("cancel_job", &id).map_err(|_| StoreError::Invalid)?;
+    async fn cancel_once(
+        &self,
+        owner: &str,
+        id: &str,
+        key: &str,
+        actor: Option<&crate::artifacts::ArtifactActor>,
+    ) -> Result<JobView, StoreError> {
+        let (operation, digest) = if let Some(actor) = actor {
+            (
+                format!("user_cancel_job:{}", actor.user),
+                request_digest("user_cancel_job.v1", &(id, &actor.user)),
+            )
+        } else {
+            ("cancel_job".into(), request_digest("cancel_job", &id))
+        };
+        let digest = digest.map_err(|_| StoreError::Invalid)?;
         let mut tx = self.begin().await?;
+        sqlx::query("SET LOCAL lock_timeout='3s'")
+            .execute(&mut *tx)
+            .await?;
+        if let Some(actor) = actor {
+            // Stop one's accepted work even after source ACL/spending revocation
+            // or downgrade to viewer. No new effect or content read is granted.
+            crate::artifacts::authority::scope(&mut tx, actor, owner, false)
+                .await
+                .map_err(artifact_error)?;
+        }
         authorize(&mut tx, owner).await?;
         let lookup = sqlx::query("SELECT root_budget_id FROM jobs WHERE job_id=$1 AND owner_id=$2")
             .bind(id)
@@ -358,20 +405,50 @@ impl Store {
             .bind(owner)
             .fetch_one(&mut *tx)
             .await?;
+        if actor.is_some() {
+            check_submit_actor(&mut tx, id, actor).await?;
+        }
         let current = job_view(&row)?;
-        if prior(&mut tx, owner, "cancel_job", key, &digest)
+        if prior(&mut tx, owner, &operation, key, &digest)
             .await?
             .is_some()
         {
-            tx.commit().await?;
+            finish_submit(tx, actor).await?;
             return Ok(current);
         }
         if current.execution_state == "cancelled" && current.settlement_state == "settled" {
-            record_key(&mut tx, owner, "cancel_job", key, &digest, id).await?;
-            tx.commit().await?;
+            record_key(&mut tx, owner, &operation, key, &digest, id).await?;
+            finish_submit(tx, actor).await?;
             return Ok(current);
         }
-        if current.execution_state != "queued" {
+        if actor.is_some()
+            && matches!(
+                current.execution_state.as_str(),
+                "succeeded" | "failed" | "cancelled"
+            )
+        {
+            // Delivery/cleanup/settlement remain the original terminal facts.
+            record_key(&mut tx, owner, &operation, key, &digest, id).await?;
+            finish_submit(tx, actor).await?;
+            return Ok(current);
+        }
+        if actor.is_some() && matches!(current.execution_state.as_str(), "running" | "cancelling") {
+            if current.settlement_state != "pending" {
+                return Err(StoreError::InvalidTransition);
+            }
+            record_key(&mut tx, owner, &operation, key, &digest, id).await?;
+            if current.execution_state == "running" {
+                sqlx::query("UPDATE jobs SET execution_state='cancelling' WHERE job_id=$1")
+                    .bind(id)
+                    .execute(&mut *tx)
+                    .await?;
+                emit(&mut tx, owner, id, "job.cancel_requested", &digest).await?;
+            }
+            let view = job_in_tx(&mut tx, owner, id).await?;
+            finish_submit(tx, actor).await?;
+            return Ok(view);
+        }
+        if current.execution_state != "queued" || current.settlement_state != "pending" {
             return Err(StoreError::InvalidTransition);
         }
         let next = budget_model(&root)?
@@ -395,7 +472,7 @@ impl Store {
             entries.push((format!("{owner}:{bucket}:available"), amount));
         }
         ledger(&mut tx, owner, &format!("release:{id}"), entries).await?;
-        record_key(&mut tx, owner, "cancel_job", key, &digest, id).await?;
+        record_key(&mut tx, owner, &operation, key, &digest, id).await?;
         sqlx::query("UPDATE jobs SET execution_state='cancelled',settlement_state='settled',charge=0 WHERE job_id=$1")
             .bind(id).execute(&mut *tx).await?;
         // Only queued cancellation can release this input pin here. Unknown or
@@ -410,7 +487,7 @@ impl Store {
         )
         .await?;
         let view = job_in_tx(&mut tx, owner, id).await?;
-        tx.commit().await?;
+        finish_submit(tx, actor).await?;
         Ok(view)
     }
 }

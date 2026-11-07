@@ -5,7 +5,7 @@ from pathlib import Path
 import subprocess
 ROOT=Path(__file__).resolve().parents[1]
 env=os.environ.copy()
-for name in ['ORANGE_REAL_WORKER_PROFILE','ORANGE_WORKER_HOST_TESTS','ORANGE_PRICED_WORKER_TESTS','ORANGE_WORKER_OUTPUT_TESTS','ORANGE_WORKER_RENEWAL_TESTS','ORANGE_CLEANUP_REAL_TESTS']:
+for name in ['ORANGE_REAL_WORKER_PROFILE','ORANGE_WORKER_HOST_TESTS','ORANGE_PRICED_WORKER_TESTS','ORANGE_WORKER_OUTPUT_TESTS','ORANGE_WORKER_RENEWAL_TESTS','ORANGE_CLEANUP_REAL_TESTS','ORANGE_CANCEL_PROTOCOL_TESTS','ORANGE_CANCEL_REAL_TESTS']:
     env.pop(name,None)
 env['ORANGE_CLEANUP_PROTOCOL_TESTS']='1'
 subprocess.run([os.sys.executable,'scripts/check-worker-session.py'],cwd=ROOT,env=env,check=True)

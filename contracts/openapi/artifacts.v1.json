@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Orange private artifact API",
-    "version": "0.1.2",
+    "version": "0.1.3",
     "description": "Current user sessions and independent artifact/source content ACLs. Includes committed Worker response references. Model execution success does not imply settlement or resource cleanup. Native usage is never a billing grant."
   },
   "paths": {
@@ -696,6 +696,97 @@
           }
         }
       }
+    },
+    "/api/v1/owners/{owner}/jobs/{job}/cancel": {
+      "post": {
+        "operationId": "requestOriginatingUserJobCancellation",
+        "security": [
+          {
+            "UserSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            }
+          },
+          {
+            "name": "job",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current Job metadata. cancelling is an accepted request, not proof of device release or refund.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Current authorized metadata, not execution authority.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Current originating user session and current owner/membership are required on every retry. A running Job becomes cancelling with held funds and resource occupancy unchanged. Completed delivery is never undone. Queue-only cancellation may settle zero before execution; independent cleanup/settlement remain required for started work. Source content and new-spend grants are not needed to stop the original Job.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CancelJob"
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1201,6 +1292,12 @@
             }
           }
         ]
+      },
+      "CancelJob": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {},
+        "description": "Explicit original-user stop intent. No client-supplied refund, target actor or cleanup assertion."
       }
     }
   }

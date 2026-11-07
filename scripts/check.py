@@ -17,12 +17,20 @@ if not version.startswith('rustc 1.97.1 '):
     raise SystemExit('Expected Rust 1.97.1; select installed toolchain with ORANGE_RUST_TOOLCHAIN')
 def run(*args):
     subprocess.run([str(cargo), *args], cwd=ROOT, env=environment, check=True)
+options=set(sys.argv[1:])
+focused='--focused' in options
+targets={'--http','--postgres','--teams','--events','--queue'}
+if options- (targets|{'--format','--focused'}):raise SystemExit('Unknown verification option')
+if focused and (not options & targets or '--format' in options):raise SystemExit('--focused requires an explicit integration target and cannot format source')
+# The execution DAG independently verifies DOMAIN-001 for these exact sources.
+# Standalone/default invocations retain the full unit/Clippy suite.
 if '--format' in sys.argv:
     run('fmt', '--all')
 else:
     run('fmt', '--all', '--check')
-    run('test', '--workspace', '--locked')
-    run('clippy', '--workspace', '--all-targets', '--locked', '--', '-D', 'warnings')
+    if not focused:
+        run('test', '--workspace', '--locked')
+        run('clippy', '--workspace', '--all-targets', '--locked', '--', '-D', 'warnings')
     if '--http' in sys.argv:
         run('build', '--bin', 'orange-api', '--locked')
         subprocess.run([sys.executable,str(ROOT/'scripts/http-smoke.py')],cwd=ROOT,env=environment,check=True)

@@ -4,6 +4,10 @@
 
 ## 最新增量（优先于下方早期记录）
 
+- 已实现并完成统一回归：[当前用户取消](user-job-cancellation.md)与[个人账户API](personal-account-api.md)。取消运行中Job保留原冻结额，实际退出/清理后才终结；迟到取消保留已交付结果与收费。个人钱包/预算只归当前会话的个人owner，预算创建不增加余额。正式源码4项取消协议、2项实际模型、3项个人账户测试、严格Clippy及全部关联回归通过，USER-JOB-CANCEL-001与PERSONAL-ACCOUNT-001单独记DONE。一次清理脚本环境键错误已修复并保留失败/复验记录。完整Web任务页面、组织预算治理和支付未因此完成。
+
+- CPU-CLEANUP-001及全部关联回归已通过并提交`3e37cc1`：4项协议/真库、3项实际模型/第二Job/恢复/回收、34项本机测试。PG0025/0026已应用并冻结，执行日志SQLite6。资源/结算事实分别记录；不是GPU或恶意主机远程证明。
+
 - 新增[云端CPU清理与终态](cpu-cleanup-lifecycle.md)：原执行/实例的持久退出事实、独立清理能力、审核CPU配置、幂等云回执和attempt关闭；真实第二个有价任务已执行。未交付任务释放原冻结额而不伪造usage，终态pin精确释放，源删除后的派生对象保留其他消费者引用并最终实际回收。针对性验证通过，最终统一状态以CPU-CLEANUP-001为准；不代表GPU/TEE或生产准入认证。
 
 - 新增[可信文本计量与开发积分结算](trusted-text-pricing.md)：服务端拥有固定模型Counter、离线有界工具schema校验、当前会话报价API、不可变价格/输入快照、发布前可信usage fact及原子开发账本。7项真实计量/结算专项、严格Clippy及全部关联回归通过，TRUSTED-PRICING-001已单独记DONE；包含伪造usage拒用、超限、价格撤销、事务故障/并发恢复及实际多进程闭环。0024已应用；生产价格治理、真实资金、云端cleanup与更多支持组合仍未完成。
@@ -60,6 +64,8 @@ Admin 已新增独立 OIDC/MFA、当前授权/会话、总览和操作列表后�
 先安装PostgreSQL17并运行`python3 scripts/local-postgres.py start`，创建的集群仅位于本仓库.local/postgres且监听127.0.0.1:55432；随机凭证写入忽略目录，不输出到日志。停止使用`python3 scripts/local-postgres.py stop`。
 
 验证：`python3 scripts/check.py --postgres`。脚本明确使用已安装Rust工具链并检查rustc 1.97.1，运行格式、单元/协议/SQLite恢复、Clippy和实际PostgreSQL并发测试。缺数据库时集成测试失败，不悄悄跳过。ORANGE_RUST_TOOLCHAIN可选择同版本已安装工具链。
+
+统一执行DAG使用`check.py --postgres/--teams/--events/--queue/--http --focused`执行指定专项，完整workspace单元与Clippy仍由同一源码的DOMAIN-001前置负责；未删除任何专项断言。默认、不带`--focused`的独立调用保留原完整检查。focused不得无目标运行或改写源码，也不能单独宣称通过全工作区验证。
 
 HTTP二进制orange-api还需显式ORANGE_ENV=development、DATABASE_URL及ORANGE_DEV_IDENTITIES_FILE。身份文件是owner_id/token数组，令牌至少32字符；owner和Quote必须来自受控开发初始化，未提供公开充值/造余额/伪报价接口。真实身份/报价切片完成前，本入口仅用于开发验证。
 

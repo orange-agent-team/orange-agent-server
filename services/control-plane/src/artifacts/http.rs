@@ -43,6 +43,10 @@ pub fn router(identity: UserIdentity, store: ArtifactStore) -> Router {
         .route("/api/v1/owners/{owner}/jobs/{job}", get(job_status))
         .route("/api/v1/owners/{owner}/jobs/{job}/result", get(job_result))
         .route(
+            "/api/v1/owners/{owner}/jobs/{job}/cancel",
+            axum::routing::post(cancel_job),
+        )
+        .route(
             "/api/v1/owners/{owner}/jobs/{job}/input",
             axum::routing::post(bind_input),
         )
@@ -347,4 +351,41 @@ async fn job_status(
     Ok(private(
         Json(api.store.job_for_user(&actor, &owner, &job).await?).into_response(),
     ))
+}
+
+/// Strict empty body: user-requested cancellation has no arbitrary state,
+/// refund amount, target identity or bypass flag supplied by the browser.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CancelJob {}
+async fn cancel_job(
+    State(api): State<Api>,
+    Path((owner, job)): Path<(String, String)>,
+    headers: HeaderMap,
+    body: Result<Json<CancelJob>, axum::extract::rejection::JsonRejection>,
+) -> Result<Response, Error> {
+    let actor = api.identity.artifact_actor(&headers, true).await?;
+    let Json(_) = body.map_err(|_| ArtifactError::Invalid)?;
+    let key = headers
+        .get("idempotency-key")
+        .and_then(|v| v.to_str().ok())
+        .ok_or(ArtifactError::Invalid)?;
+    let view = crate::store::Store::from_pool(api.store.inner.pool.clone())
+        .cancel_for_user(&actor, &owner, &job, key)
+        .await
+        .map_err(|e| match e {
+            crate::store::StoreError::Forbidden => Error(StatusCode::FORBIDDEN, "FORBIDDEN"),
+            crate::store::StoreError::NotFound => Error(StatusCode::NOT_FOUND, "NOT_FOUND"),
+            crate::store::StoreError::Invalid => {
+                Error(StatusCode::UNPROCESSABLE_ENTITY, "VALIDATION_ERROR")
+            }
+            crate::store::StoreError::Conflict => {
+                Error(StatusCode::CONFLICT, "IDEMPOTENCY_CONFLICT")
+            }
+            crate::store::StoreError::Database(_) | crate::store::StoreError::Migration(_) => {
+                Error(StatusCode::SERVICE_UNAVAILABLE, "SERVICE_UNAVAILABLE")
+            }
+            _ => Error(StatusCode::CONFLICT, "CANCELLATION_REJECTED"),
+        })?;
+    Ok(private(Json(view).into_response()))
 }

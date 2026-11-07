@@ -2,7 +2,7 @@
 //! are in pricing_cases::cleanup_real, not these declared cleanup reports.
 use super::*;
 use orange_protocol::cleanup::{CpuCleanupEvidence, cleanup_digest};
-async fn setup_cleanup(
+pub(super) async fn setup_cleanup(
     cert: &str,
     admit: bool,
 ) -> (
