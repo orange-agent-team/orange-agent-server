@@ -1,5 +1,7 @@
 # 开发 Worker 进程与节点停止接线
 
+后继更新：[输出交付切片](worker-output-delivery.md)已接真实对象/ResponseCommit和仅查询恢复。新配置commit_outputs默认true并要求有writer的Gateway；显式false才保留原未提交联调模式。User API可配置双入口共享writer，结算、云端cleanup、正式安装仍未完成。以下保留原Host切片的初始范围与诊断事件说明。
+
 本切片提供可实际运行的 `orange-worker` Unix 开发进程，连接已有 mTLS Gateway、持久 Journal/Broker 和真实 CPU 模型。它没有安装系统后台服务，不支持公开生产入口或 Windows/GPU，也尚未实现输出交付与结算。E08仍在原服务端仓库，不新增核心工程或仓库。
 
 ## 启动配置

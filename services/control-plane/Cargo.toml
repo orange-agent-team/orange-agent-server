@@ -42,6 +42,7 @@ name = "worker_sessions"
 required-features = ["integration-tests"]
 
 [dependencies]
+orange-model-runtime.workspace = true
 orange-domain.workspace = true
 orange-protocol = { workspace = true, features = ["grpc"] }
 serde.workspace = true

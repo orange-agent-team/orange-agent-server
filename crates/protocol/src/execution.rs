@@ -6,6 +6,25 @@ use serde_json::json;
 fn positive(value: u64) -> bool {
     value > 0 && value <= i64::MAX as u64
 }
+pub fn output_header_digest(h: &worker::OutputHeader, a: &worker::Assignment) -> Option<String> {
+    let ack = h.accepted.as_ref()?;
+    if h.session_id != a.session_id
+        || !valid_id(&h.upload_id)
+        || !h
+            .upload_id
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        || !valid_digest(&h.sha256)
+        || !valid_digest(&h.response_digest)
+        || !(1..=1024 * 1024).contains(&h.size_bytes)
+        || ack.result != worker::AckResult::Accepted as i32
+    {
+        return None;
+    }
+    let accepted = acknowledge_digest(ack, a)?;
+    request_digest("worker.output.header.v1",&json!({"session_id":h.session_id,"upload_id":h.upload_id,"accepted_digest":accepted,"sha256":h.sha256,"size_bytes":h.size_bytes.to_string(),"response_digest":h.response_digest})).ok()
+}
 pub fn renewal_digest(
     r: &worker::ExecutionRenewalRequest,
     a: &worker::Assignment,
@@ -301,5 +320,52 @@ mod tests {
             .expect("lease")
             .fencing_token += 1;
         assert!(renewal_digest(&r, &a).is_none());
+    }
+    #[test]
+    fn output_header_binds_exact_bytes_response_and_original_execution() {
+        let a = assignment();
+        let mut h = worker::OutputHeader {
+            session_id: a.session_id.clone(),
+            upload_id: "upload".into(),
+            accepted: Some(worker::Acknowledge {
+                command_id: a.command_id.clone(),
+                payload_digest: a.payload_digest.clone(),
+                lease: a.lease.clone(),
+                result: worker::AckResult::Accepted as i32,
+                execution_journal_id: "journal".into(),
+                broker_grant_id: "grant".into(),
+                broker_epoch: 1,
+                slot_generation: 1,
+            }),
+            sha256: "a".repeat(64),
+            size_bytes: 42,
+            response_digest: "b".repeat(64),
+        };
+        let original = output_header_digest(&h, &a).expect("digest");
+        h.sha256 = "c".repeat(64);
+        assert_ne!(
+            output_header_digest(&h, &a).expect("changed bytes"),
+            original
+        );
+        h.sha256 = "a".repeat(64);
+        h.response_digest = "d".repeat(64);
+        assert_ne!(
+            output_header_digest(&h, &a).expect("changed candidate"),
+            original
+        );
+        h.size_bytes = 1048577;
+        assert!(output_header_digest(&h, &a).is_none());
+        h.size_bytes = 42;
+        h.upload_id = "-invalid-upload".into();
+        assert!(output_header_digest(&h, &a).is_none());
+        h.upload_id = "upload".into();
+        h.accepted
+            .as_mut()
+            .expect("ack")
+            .lease
+            .as_mut()
+            .expect("lease")
+            .fencing_token += 1;
+        assert!(output_header_digest(&h, &a).is_none());
     }
 }

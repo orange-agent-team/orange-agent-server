@@ -2,6 +2,8 @@
 """Actual localhost mTLS/gRPC and PostgreSQL. Ephemeral test CA, no public enrollment."""
 import os
 import json
+import re
+import sys
 from pathlib import Path
 import secrets
 import shutil
@@ -23,7 +25,7 @@ with tempfile.TemporaryDirectory(prefix='orange-worker-mtls-') as directory:
         subprocess.run([openssl,*arguments],cwd=private,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,check=True)
     for ca in ['ca','other-ca']:
         command('req','-x509','-newkey','ec','-pkeyopt','ec_paramgen_curve:P-256','-nodes','-batch','-days','1','-subj','/CN=Orange-'+ca,'-keyout',ca+'.key','-out',ca+'.pem','-addext','basicConstraints=critical,CA:TRUE','-addext','keyUsage=critical,keyCertSign,cRLSign')
-    for name in ['server','client-a','client-b','client-c','client-d','client-e','client-f','client-g','client-h','client-i','client-j','client-k','client-l','client-m','client-n','client-o','client-p','client-q','client-r','client-s','client-t','client-u','client-v','client-w','client-x','client-y','client-z','client-aa','client-ab','client-ac','client-ad','client-ae','client-af','client-ag','client-ah','client-ai','client-aj','client-ak','client-al','client-am','client-an','client-ao','client-ap','client-aq','client-ar','client-as','client-at','client-au','client-av','client-aw','client-ax','client-ay','client-az','client-ba','client-bb','client-bc','client-bd','client-be','client-bf','client-bg','client-bh','client-bi','client-bj','client-bk','client-bl','client-bm','client-bn','client-bo','client-bp','client-bq','client-br','client-bs','client-bt','client-bu','unregistered','wrong-ca']:
+    for name in ['server','client-a','client-b','client-c','client-d','client-e','client-f','client-g','client-h','client-i','client-j','client-k','client-l','client-m','client-n','client-o','client-p','client-q','client-r','client-s','client-t','client-u','client-v','client-w','client-x','client-y','client-z','client-aa','client-ab','client-ac','client-ad','client-ae','client-af','client-ag','client-ah','client-ai','client-aj','client-ak','client-al','client-am','client-an','client-ao','client-ap','client-aq','client-ar','client-as','client-at','client-au','client-av','client-aw','client-ax','client-ay','client-az','client-ba','client-bb','client-bc','client-bd','client-be','client-bf','client-bg','client-bh','client-bi','client-bj','client-bk','client-bl','client-bm','client-bn','client-bo','client-bp','client-bq','client-br','client-bs','client-bt','client-bu','client-bv','client-bw','client-bx','client-by','client-bz','client-ca','client-cb','client-cc','client-cd','client-ce','client-cf','client-cg','client-ch','client-ci','client-cj','client-ck','unregistered','wrong-ca']:
         command('req','-new','-newkey','ec','-pkeyopt','ec_paramgen_curve:P-256','-nodes','-batch','-subj','/CN=orange-'+name,'-keyout',name+'.key','-out',name+'.csr')
         extensions='basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage='+('serverAuth' if name=='server' else 'clientAuth')+'\n'
         if name=='server':extensions+='subjectAltName=DNS:localhost,IP:127.0.0.1\n'
@@ -39,12 +41,23 @@ with tempfile.TemporaryDirectory(prefix='orange-worker-mtls-') as directory:
         if environment.get('CARGO_BUILD_TARGET'):raise SystemExit('Actual Worker process tests require a native host build')
         metadata=json.loads(subprocess.check_output([str(cargo),'metadata','--no-deps','--format-version','1','--locked'],cwd=ROOT,env=environment,text=True))
         environment['ORANGE_WORKER_BINARY']=str(Path(metadata['target_directory'])/'debug/orange-worker')
+        if environment.get('ORANGE_WORKER_HOST_TESTS'):
+            subprocess.run([str(cargo),'build','-p','orange-control-plane','--bin','orange-user-api','--locked'],cwd=ROOT,env=environment,check=True)
+            environment['ORANGE_USER_API_BINARY']=str(Path(metadata['target_directory'])/'debug/orange-user-api')
     features='real-worker-tests' if environment.get('ORANGE_REAL_WORKER_PROFILE') else 'integration-tests'
     command=[str(cargo),'test','-p','orange-control-plane','--features',features,'--test','worker_sessions','--locked']
     if environment.get('ORANGE_REAL_WORKER_PROFILE'):
         if environment.get('ORANGE_WORKER_HOST_TESTS'):command+=['input_cases::cpu_cases::host_cases','--','--test-threads=1']
         else:command+=['input_cases::cpu_cases','--','--test-threads=1','--skip','input_cases::cpu_cases::host_cases']
+    elif environment.get('ORANGE_WORKER_OUTPUT_TESTS'):command+=['input_cases::output_cases','--','--test-threads=1']
     elif environment.get('ORANGE_WORKER_RENEWAL_TESTS'):command+=['input_cases::renewal_cases','--','--test-threads=1']
-    subprocess.run(command,cwd=ROOT,env=environment,check=True)
+    passed=False
+    with subprocess.Popen(command,cwd=ROOT,env=environment,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True) as process:
+        for line in process.stdout:
+            sys.stdout.write(line);sys.stdout.flush()
+            if re.search(r'test result: ok\. [1-9][0-9]* passed; 0 failed;',line):passed=True
+        code=process.wait()
+    if code:raise SystemExit(code)
+    if not passed:raise SystemExit('No actual selected Worker tests passed; refusing an empty-filter success')
     subprocess.run([str(cargo),'build','-p','orange-control-plane','--bin','orange-worker-gateway','--locked'],cwd=ROOT,env=environment,check=True)
 if not environment.get('ORANGE_REAL_WORKER_PROFILE'):print('PASS real mTLS/PostgreSQL control and E08 SQLite/Broker receive/start barriers; explicit CA, profile, OS/device and raw-ACK fixtures, no model engine, physical cleanup or settlement')

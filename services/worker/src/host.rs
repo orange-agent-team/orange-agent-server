@@ -169,12 +169,21 @@ pub async fn run(
     if *stop.borrow() {
         return Ok(());
     }
-    let connection = ControlConnection::connect_renewable_execution(
-        config.control(&capabilities)?,
-        &mut node,
-        &mut journal,
-    )
-    .await?;
+    let connection = if config.commit_outputs {
+        ControlConnection::connect_output_execution(
+            config.control(&capabilities)?,
+            &mut node,
+            &mut journal,
+        )
+        .await?
+    } else {
+        ControlConnection::connect_renewable_execution(
+            config.control(&capabilities)?,
+            &mut node,
+            &mut journal,
+        )
+        .await?
+    };
     let mut resources = CpuResources {
         connection,
         node_journal: node,
@@ -182,6 +191,20 @@ pub async fn run(
         broker,
         supervisor,
     };
+    for command in resources.journal.unresolved_outputs()? {
+        resources
+            .connection
+            .query_output(&mut resources.journal, &command)
+            .await?;
+        emit(
+            &events,
+            HostEvent {
+                command_id: Some(command),
+                outcome: Some("response_committed".into()),
+                ..event("response_commit_recovered")
+            },
+        );
+    }
     emit(&events, event("ready"));
     // Preserve an unsubmitted candidate only in this owner's memory. Until the
     // output protocol is implemented it cannot start another model or report
@@ -251,7 +274,25 @@ pub async fn run(
                 return Err(HostError::PrivateState);
             }
             if pending_output.is_some() {
-                emit(&events, event("pending_output_commit"));
+                if config.commit_outputs {
+                    let response = pending_output.as_ref().ok_or(HostError::Configuration)?;
+                    resources
+                        .connection
+                        .commit_output(&mut resources.journal, &exit.report.command_id, response)
+                        .await?;
+                    pending_output = None;
+                    emit(
+                        &events,
+                        HostEvent {
+                            command_id: Some(exit.report.command_id),
+                            outcome: Some("response_committed".into()),
+                            cleanup_confirmed: true,
+                            ..event("response_committed")
+                        },
+                    );
+                } else {
+                    emit(&events, event("pending_output_commit"));
+                }
             }
         }
         tokio::select! {_=stop.changed()=>break,_=tokio::time::sleep(Duration::from_secs(1))=>{}}

@@ -11,6 +11,7 @@ use tokio::{
     net::TcpListener,
     sync::{Semaphore, mpsc, watch},
 };
+use tokio_stream::StreamExt;
 use tokio_stream::wrappers::{ReceiverStream, TcpListenerStream};
 use tonic::{
     Request, Response, Status, Streaming,
@@ -32,6 +33,7 @@ struct Gateway {
     input_slots: Arc<Semaphore>,
     shutdown: watch::Receiver<bool>,
     artifacts: Option<crate::artifacts::ArtifactReader>,
+    writer: Option<crate::artifacts::ArtifactStore>,
 }
 pub async fn serve(
     listener: TcpListener,
@@ -48,6 +50,34 @@ pub async fn serve_with_artifacts(
     artifacts: Option<crate::artifacts::ArtifactReader>,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<(), tonic::transport::Error> {
+    serve_storage(listener, tls, store, artifacts, None, shutdown).await
+}
+/// Share the existing single writer; never reopen a second writable root.
+pub async fn serve_with_output_store(
+    listener: TcpListener,
+    tls: GatewayTls,
+    store: WorkerSessionStore,
+    writer: crate::artifacts::ArtifactStore,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> Result<(), tonic::transport::Error> {
+    serve_storage(
+        listener,
+        tls,
+        store,
+        Some(writer.reader()),
+        Some(writer),
+        shutdown,
+    )
+    .await
+}
+async fn serve_storage(
+    listener: TcpListener,
+    tls: GatewayTls,
+    store: WorkerSessionStore,
+    artifacts: Option<crate::artifacts::ArtifactReader>,
+    writer: Option<crate::artifacts::ArtifactStore>,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> Result<(), tonic::transport::Error> {
     let (stop, receiver) = watch::channel(false);
     let gateway = Gateway {
         store,
@@ -55,6 +85,7 @@ pub async fn serve_with_artifacts(
         input_slots: Arc::new(Semaphore::new(16)),
         shutdown: receiver,
         artifacts,
+        writer,
     };
     Server::builder()
         .tls_config(
@@ -104,6 +135,21 @@ fn status(error: SessionError) -> Status {
         SessionError::Database(_) => Status::unavailable("authoritative store unavailable"),
     }
 }
+fn output_error(error: crate::artifacts::ArtifactError) -> Status {
+    use crate::artifacts::ArtifactError as E;
+    match error {
+        E::Forbidden => Status::permission_denied("output authority unavailable"),
+        E::Invalid | E::Input | E::Integrity => {
+            Status::invalid_argument("invalid output bytes or projection")
+        }
+        E::NotFound | E::NotReady => Status::not_found("committed output unavailable"),
+        E::Conflict | E::Deleted | E::Expired => {
+            Status::failed_precondition("output no longer valid or conflicting")
+        }
+        E::Busy | E::Capacity => Status::resource_exhausted("output capacity unavailable"),
+        _ => Status::unavailable("output storage unavailable"),
+    }
+}
 fn welcome(s: &DeviceSession) -> worker::ServerFrame {
     worker::ServerFrame {
         body: Some(server_frame::Body::Welcome(worker::Welcome {
@@ -116,6 +162,7 @@ fn welcome(s: &DeviceSession) -> worker::ServerFrame {
             rejection_receipts_version: s.rejection_receipts_version,
             input_artifacts_version: s.input_artifacts_version,
             renewal_version: s.renewal_version,
+            output_version: s.output_version,
             node_policy_generation: s.node_policy_generation,
         })),
     }
@@ -123,6 +170,83 @@ fn welcome(s: &DeviceSession) -> worker::ServerFrame {
 #[tonic::async_trait]
 impl WorkerGateway for Gateway {
     type ControlStream = ReceiverStream<Result<worker::ServerFrame, Status>>;
+    async fn commit_output(
+        &self,
+        request: Request<Streaming<worker::OutputFrame>>,
+    ) -> Result<Response<worker::OutputReceipt>, Status> {
+        let _permit = self
+            .input_slots
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| Status::resource_exhausted("output request limit"))?;
+        if *self.shutdown.borrow() {
+            return Err(Status::unavailable("gateway stopping"));
+        }
+        let writer = self
+            .writer
+            .as_ref()
+            .ok_or_else(|| Status::unimplemented("output writer not configured"))?;
+        let peer = fingerprint(&request)?;
+        let mut stream = request.into_inner();
+        let first = tokio::time::timeout(Duration::from_secs(5), stream.message())
+            .await
+            .map_err(|_| Status::deadline_exceeded("output header deadline"))??
+            .ok_or_else(|| Status::invalid_argument("output header required"))?;
+        let Some(worker::output_frame::Body::Header(header)) = first.body else {
+            return Err(Status::invalid_argument("header must be first"));
+        };
+        let session = self
+            .store
+            .input_peer(&peer, &header.session_id)
+            .await
+            .map_err(status)?;
+        let input = stream.map(|frame| match frame {
+            Ok(worker::OutputFrame {
+                body: Some(worker::output_frame::Body::Data(data)),
+            }) => Ok(data),
+            _ => Err(crate::artifacts::ArtifactError::Input),
+        });
+        let receipt = writer
+            .commit_output(self.store.clone(), session, header, input)
+            .await
+            .map_err(output_error)?;
+        Ok(Response::new(receipt))
+    }
+    async fn query_output(
+        &self,
+        request: Request<worker::OutputQuery>,
+    ) -> Result<Response<worker::OutputReceipt>, Status> {
+        let _permit = self
+            .input_slots
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| Status::resource_exhausted("output query limit"))?;
+        if *self.shutdown.borrow() {
+            return Err(Status::unavailable("gateway stopping"));
+        }
+        let writer = self
+            .writer
+            .as_ref()
+            .ok_or_else(|| Status::unimplemented("output writer not configured"))?;
+        let peer = fingerprint(&request)?;
+        let request = request.into_inner();
+        let session = self
+            .store
+            .input_peer(&peer, &request.session_id)
+            .await
+            .map_err(status)?;
+        let receipt = writer
+            .query_output(
+                self.store.clone(),
+                session,
+                request
+                    .original
+                    .ok_or_else(|| Status::invalid_argument("original output required"))?,
+            )
+            .await
+            .map_err(output_error)?;
+        Ok(Response::new(receipt))
+    }
     async fn renew_execution(
         &self,
         request: Request<worker::ExecutionRenewalRequest>,
@@ -242,6 +366,8 @@ impl WorkerGateway for Gateway {
             || hello.rejection_receipts_version > 1
             || hello.input_artifacts_version > 1
             || hello.renewal_version > 1
+            || hello.output_version > 1
+            || (hello.output_version == 1 && self.writer.is_none())
             || (hello.input_artifacts_version == 1 && self.artifacts.is_none())
         {
             return Err(Status::failed_precondition("unsupported protocol version"));

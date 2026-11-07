@@ -19,5 +19,6 @@
     "model_version": "REPLACE_MODEL_VERSION",
     "context_tokens": 4096,
     "startup_timeout_seconds": 120
-  }
+  },
+  "commit_outputs": true
 }

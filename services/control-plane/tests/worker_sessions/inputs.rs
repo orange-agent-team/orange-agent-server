@@ -3,6 +3,8 @@
 #[cfg(all(unix, feature = "real-worker-tests"))]
 #[path = "inputs/cpu_cases.rs"]
 mod cpu_cases;
+#[path = "inputs/output_cases.rs"]
+mod output_cases;
 #[path = "inputs/renewal_cases.rs"]
 mod renewal_cases;
 use super::*;
@@ -61,6 +63,24 @@ async fn setup_model(
     prompt: String,
     max_output_tokens: u32,
 ) -> InputFixture {
+    setup_model_scope(
+        cert,
+        model_sha,
+        execution_digest,
+        prompt,
+        max_output_tokens,
+        false,
+    )
+    .await
+}
+async fn setup_model_scope(
+    cert: &str,
+    model_sha: &str,
+    execution_digest: &str,
+    prompt: String,
+    max_output_tokens: u32,
+    organization: bool,
+) -> InputFixture {
     let d = device(cert).await;
     let pool = d.store.pool();
     let owner = Uuid::new_v4().to_string();
@@ -78,7 +98,32 @@ async fn setup_model(
         .execute(pool)
         .await
         .expect("development credits");
-    sqlx::query("INSERT INTO users(user_id,issuer,subject,personal_owner_id) VALUES($1,'input-customer-fixture',$1,$2)").bind(&user).bind(&owner).execute(pool).await.expect("customer user");
+    let personal = if organization {
+        let personal = Uuid::new_v4().to_string();
+        sqlx::query("INSERT INTO owners(owner_id) VALUES($1)")
+            .bind(&personal)
+            .execute(pool)
+            .await
+            .expect("personal owner fixture");
+        sqlx::query("INSERT INTO wallets(owner_id) VALUES($1)")
+            .bind(&personal)
+            .execute(pool)
+            .await
+            .expect("personal wallet");
+        personal
+    } else {
+        owner.clone()
+    };
+    sqlx::query("INSERT INTO users(user_id,issuer,subject,personal_owner_id) VALUES($1,'input-customer-fixture',$1,$2)").bind(&user).bind(&personal).execute(pool).await.expect("customer user");
+    if organization {
+        sqlx::query("INSERT INTO organizations(organization_id,name) VALUES($1,'Output permission fixture')").bind(&owner).execute(pool).await.expect("organization");
+        sqlx::query("INSERT INTO memberships(organization_id,user_id,role) VALUES($1,$2,'owner')")
+            .bind(&owner)
+            .bind(&user)
+            .execute(pool)
+            .await
+            .expect("membership");
+    }
     sqlx::query("INSERT INTO user_sessions(token_hash,session_id,user_id,csrf_token,auth_time,idle_expires_at,absolute_expires_at) VALUES($1,$2,$3,$4,0,floor(extract(epoch FROM clock_timestamp()))::bigint+3600,floor(extract(epoch FROM clock_timestamp()))::bigint+3600)").bind(hash_secret(&token)).bind(&session).bind(&user).bind(&csrf).execute(pool).await.expect("session fixture");
     let config: UserOidcConfig = serde_json::from_slice(
         &std::fs::read(std::env::var("ORANGE_TEST_USER_CONFIG_FILE").expect("identity config"))
@@ -151,6 +196,16 @@ async fn setup_model(
         )
         .await
         .expect("root");
+    if organization {
+        sqlx::query(
+            "INSERT INTO budget_user_grants(root_budget_id,user_id,can_submit) VALUES($1,$2,true)",
+        )
+        .bind(&budget.root_budget_id)
+        .bind(&user)
+        .execute(pool)
+        .await
+        .expect("explicit budget grant fixture");
+    }
     let quote = Uuid::new_v4().to_string();
     let profile = Uuid::new_v4().to_string();
     let projection = request_digest("model-request-v1", &request).expect("projection");
@@ -268,6 +323,19 @@ async fn receiver_mode(
     ExecutionJournal,
     ExecutionRecord,
 ) {
+    receiver_capabilities(f, server, renewal, false).await
+}
+async fn receiver_capabilities(
+    f: &InputFixture,
+    server: &Running,
+    renewal: bool,
+    output: bool,
+) -> (
+    ControlConnection,
+    NodeJournal,
+    ExecutionJournal,
+    ExecutionRecord,
+) {
     let base = PathBuf::from(std::env::var("ORANGE_WORKER_TLS_DIR").expect("root"));
     let mut node = NodeJournal::open(
         &base.join(format!("node-{}.sqlite", Uuid::new_v4())),
@@ -280,7 +348,9 @@ async fn receiver_mode(
     )
     .expect("journal");
     let config = worker_config(server, &f.d);
-    let mut connection = if renewal {
+    let mut connection = if output {
+        ControlConnection::connect_output_execution(config, &mut node, &mut journal).await
+    } else if renewal {
         ControlConnection::connect_renewable_execution(config, &mut node, &mut journal).await
     } else {
         ControlConnection::connect_execution_with_inputs(config, &mut node, &mut journal).await

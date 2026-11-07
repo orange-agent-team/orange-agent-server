@@ -2,6 +2,7 @@
 //! Only the authenticated in-crate control adapter can mutate this journal.
 #[cfg(unix)]
 mod cpu;
+mod outputs;
 mod rejections;
 mod renewals;
 use crate::{
@@ -56,7 +57,7 @@ impl ExecutionJournal {
         }
         let (mut connection, lock) = storage::open(path)?;
         let version: i64 = connection.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if !(0..=4).contains(&version) {
+        if !(0..=5).contains(&version) {
             return Err(ExecutionJournalError::Format);
         }
         if version == 0 {
@@ -92,6 +93,13 @@ impl ExecutionJournal {
         if version < 4 {
             tx.execute_batch(include_str!("execution_schema_v4.sql"))?;
         }
+        if version < 5 {
+            tx.execute_batch(include_str!("execution_schema_v5.sql"))?;
+        }
+        tx.execute(
+            "UPDATE execution_outputs SET state='unknown' WHERE state='prepared'",
+            [],
+        )?;
         tx.execute(
             "UPDATE execution_renewals SET state='unknown' WHERE state='pending'",
             [],
@@ -618,7 +626,7 @@ mod tests {
             j.connection
                 .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                 .expect("version"),
-            4
+            5
         );
     }
     #[cfg(unix)]

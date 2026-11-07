@@ -238,3 +238,39 @@ pub(crate) async fn check_input_in(
         media_type: row.try_get("media_type")?,
     }))
 }
+
+/// Reading a committed derivative needs current content rights, not a new
+/// spending/submission grant. Never reuse the stronger live-execution check to
+/// deny viewers legitimate historical reads or to restore a revoked reader.
+pub(crate) async fn source_read_in(
+    tx: &mut Tx<'_>,
+    job: &str,
+    user: &str,
+) -> Result<orange_protocol::grpc::worker::InputArtifact, ArtifactError> {
+    let row=sqlx::query("SELECT a.*,i.owner_id AS bound_owner FROM job_inputs i JOIN artifacts a USING(artifact_id) WHERE i.job_id=$1 AND a.owner_id=i.owner_id AND a.version_id=i.version_id AND a.sha256=i.artifact_sha256 AND a.size_bytes=i.size_bytes AND a.state='available' FOR SHARE OF a").bind(job).fetch_optional(&mut **tx).await?.ok_or(ArtifactError::Forbidden)?;
+    let owner: String = row.try_get("bound_owner")?;
+    let role = authority::user_scope(tx, user, &owner, false).await?;
+    match (role, row.try_get::<Option<String>, _>("resource_id")?) {
+        (None, None) => {}
+        (Some(role), Some(resource)) => {
+            sqlx::query("SELECT resource_id FROM team_resources WHERE resource_id=$1 AND organization_id=$2 AND NOT deleted FOR SHARE").bind(&resource).bind(&owner).fetch_optional(&mut **tx).await?.ok_or(ArtifactError::Forbidden)?;
+            crate::team::resource_permission(
+                tx,
+                user,
+                &resource,
+                role,
+                orange_protocol::team::ResourceAccess::Read,
+            )
+            .await
+            .map_err(|_| ArtifactError::Forbidden)?;
+        }
+        _ => return Err(ArtifactError::Forbidden),
+    }
+    Ok(orange_protocol::grpc::worker::InputArtifact {
+        artifact_id: row.try_get("artifact_id")?,
+        version_id: row.try_get("version_id")?,
+        sha256: row.try_get("sha256")?,
+        size_bytes: row.try_get::<i64, _>("size_bytes")? as u64,
+        media_type: row.try_get("media_type")?,
+    })
+}

@@ -4,6 +4,8 @@
 
 ## 最新增量（优先于下方早期记录）
 
+- 新增[Worker响应交付](worker-output-delivery.md)：独立mTLS输出能力、有界真实字节、不可变精确版本与ResponseCommit、当前用户/源ACL读取、重复去重和仅查询恢复。实际Worker默认要求输出能力，User API可与Gateway共享单writer；13项输出专项、71项真实控制、5项实际进程/交付、8项真实CPU及全部关联回归通过。0022—0023已应用，执行日志schema5；WORKER-OUTPUT-001已单独记DONE，并修复新增迁移的编译跟踪。Job执行成功不等于账本结算或云端资源回收，后两者仍未完成。
+
 - 新增[开发Worker进程与节点停止接线](worker-development-host.md)：实际Unix二进制、真实UID/私有模型锁准入、mTLS控制和固定模型、信号取消并等待退出、无正文版本化诊断事件。CPU执行者会先停模型，再认证并应用当前节点策略；命令缺失不伪造应用记录。8项真实CPU/策略、2项实际二进制、33项本机测试、58项控制测试和全部关联回归通过，WORKER-HOST-001已单独记DONE。候选仅在内存中未提交，云Job结算与Admin完成状态不自动改变；正式安装/恢复/输出仍待实现。
 
 - 新增[请求绑定的云执行续期](worker-execution-renewal.md)：独立版本协商、不可变首次决定、当前会话/输入/模型/预算授权、精确Broker许可和单调发送锚点。7项续期专项、58项真实控制测试、30项本机Broker/日志测试、5项真实模型测试与完整关联回归已通过，EXECUTION-RENEWAL-001已单独记DONE。0021增加有效期记录，原Assignment不变；本机schema4将未确认续期恢复为unknown。输出、结算和正式常驻控制器仍未完成。

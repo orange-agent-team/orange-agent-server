@@ -42,6 +42,15 @@ impl ArtifactStore {
         .fetch_one(&mut *tx)
         .await?;
         let row = self.row_in(&mut tx, owner, upload).await?;
+        let worker_output: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM worker_output_uploads WHERE artifact_id=$1)",
+        )
+        .bind(row.try_get::<String, _>("artifact_id")?)
+        .fetch_one(&mut *tx)
+        .await?;
+        if worker_output {
+            return Err(ArtifactError::Forbidden);
+        }
         authority::resource(&mut tx, actor, owner, &row, true, false).await?;
         let v = view(&row)?;
         let stamp = authority::stamp(&mut tx, &row).await?;

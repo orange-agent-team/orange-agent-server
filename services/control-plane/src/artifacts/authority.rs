@@ -72,7 +72,18 @@ pub(super) async fn resource(
             .map_err(|_| ArtifactError::Forbidden)
         }
         _ => Err(ArtifactError::Integrity),
+    }?;
+    if !write {
+        let job: Option<String> =
+            sqlx::query_scalar("SELECT job_id FROM worker_output_uploads WHERE artifact_id=$1")
+                .bind(row.try_get::<String, _>("artifact_id")?)
+                .fetch_optional(&mut **tx)
+                .await?;
+        if let Some(job) = job {
+            super::inputs::source_read_in(tx, &job, &actor.user).await?;
+        }
     }
+    Ok(())
 }
 pub(crate) async fn finish(mut tx: Tx<'_>, actor: &ArtifactActor) -> Result<(), ArtifactError> {
     let live:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM user_sessions WHERE session_id=$1 AND user_id=$2 AND NOT revoked AND idle_expires_at>floor(extract(epoch FROM clock_timestamp()))::bigint AND absolute_expires_at>floor(extract(epoch FROM clock_timestamp()))::bigint)").bind(&actor.session).bind(&actor.user).fetch_one(&mut *tx).await?;

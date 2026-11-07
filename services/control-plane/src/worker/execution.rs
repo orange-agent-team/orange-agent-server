@@ -39,7 +39,7 @@ pub(super) async fn abandon_session(
     }
     Ok(())
 }
-pub(super) fn decode(row: &sqlx::postgres::PgRow) -> Result<worker::Assignment, SessionError> {
+pub(crate) fn decode(row: &sqlx::postgres::PgRow) -> Result<worker::Assignment, SessionError> {
     let bytes: Vec<u8> = row.try_get("assignment")?;
     let a = worker::Assignment::decode(bytes.as_slice()).map_err(|_| SessionError::Invalid)?;
     if assignment_digest(&a).as_deref() != Some(a.payload_digest.as_str())

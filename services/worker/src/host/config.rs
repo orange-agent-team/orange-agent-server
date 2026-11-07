@@ -19,8 +19,13 @@ pub struct WorkerConfig {
     pub private_key: PathBuf,
     pub node_id: String,
     pub allow_remote_contribution: bool,
+    #[serde(default = "default_output")]
+    pub commit_outputs: bool,
     pub profile_id: String,
     pub profile: ProfileConfig,
+}
+fn default_output() -> bool {
+    true
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

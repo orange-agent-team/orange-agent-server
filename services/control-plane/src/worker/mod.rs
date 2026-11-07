@@ -7,3 +7,5 @@ pub use sessions::{DeviceSession, SessionError, WorkerSessionStore};
 
 mod rejections;
 mod renewals;
+
+pub mod bootstrap;

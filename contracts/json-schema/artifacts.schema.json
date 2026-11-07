@@ -117,7 +117,8 @@
             "audio/mpeg",
             "audio/flac",
             "audio/ogg",
-            "video/mp4"
+            "video/mp4",
+            "application/vnd.orange.model-response+json"
           ]
         },
         "artifact_id": {
@@ -382,6 +383,119 @@
           ]
         }
       }
+    },
+    "ModelResponseCandidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Committed model output payload, maximum1048576 UTF-8 JSON bytes. Tool calls remain untrusted and require host validation/approval; native_usage is not a billing fact.",
+      "required": [
+        "response_id",
+        "text",
+        "tool_calls",
+        "native_usage",
+        "finish_reason"
+      ],
+      "properties": {
+        "response_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
+        },
+        "text": {
+          "type": "string",
+          "maxLength": 1048576
+        },
+        "tool_calls": {
+          "type": "array",
+          "maxItems": 80,
+          "description": "IDs must be unique; names must belong to the original GenerateRequest tool set.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "name",
+              "arguments"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9_.:-]+$"
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9_.:-]+$"
+              },
+              "arguments": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "native_usage": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "input_tokens",
+                "output_tokens"
+              ],
+              "properties": {
+                "input_tokens": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "output_tokens": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              }
+            }
+          ]
+        },
+        "finish_reason": {
+          "enum": [
+            "stop",
+            "tool_calls"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "finish_reason": {
+                "const": "stop"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "tool_calls": {
+                "maxItems": 0
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "tool_calls": {
+                "minItems": 1
+              }
+            }
+          }
+        }
+      ]
     }
   }
 }

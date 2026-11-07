@@ -36,6 +36,7 @@ pub fn router(identity: UserIdentity, store: ArtifactStore) -> Router {
             axum::routing::post(submit_job),
         )
         .route("/api/v1/owners/{owner}/jobs/{job}", get(job_status))
+        .route("/api/v1/owners/{owner}/jobs/{job}/result", get(job_result))
         .route(
             "/api/v1/owners/{owner}/jobs/{job}/input",
             axum::routing::post(bind_input),
@@ -48,6 +49,15 @@ pub fn router(identity: UserIdentity, store: ArtifactStore) -> Router {
         })
 }
 struct Error(StatusCode, &'static str);
+async fn job_result(
+    State(api): State<Api>,
+    Path((owner, job)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Response, Error> {
+    let actor = api.identity.artifact_actor(&headers, false).await?;
+    let result = api.store.job_result(&actor, &owner, &job).await?;
+    Ok(private(Json(result).into_response()))
+}
 impl From<ArtifactError> for Error {
     fn from(e: ArtifactError) -> Self {
         match e {

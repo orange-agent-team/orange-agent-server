@@ -85,6 +85,19 @@ impl Running {
         store: &Store,
         objects: Option<orange_control_plane::artifacts::ArtifactReader>,
     ) -> Self {
+        Self::start_storage(store, objects, None).await
+    }
+    async fn start_with_output(
+        store: &Store,
+        writer: orange_control_plane::artifacts::ArtifactStore,
+    ) -> Self {
+        Self::start_storage(store, None, Some(writer)).await
+    }
+    async fn start_storage(
+        store: &Store,
+        objects: Option<orange_control_plane::artifacts::ArtifactReader>,
+        writer: Option<orange_control_plane::artifacts::ArtifactStore>,
+    ) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
         let port = listener.local_addr().expect("addr").port();
         let tls = GatewayTls {
@@ -95,15 +108,16 @@ impl Running {
         let sessions = WorkerSessionStore::new(store.pool().clone(), Uuid::new_v4().to_string())
             .expect("gateway");
         let (stop, receiver) = oneshot::channel();
-        let handle = tokio::spawn(gateway::serve_with_artifacts(
-            listener,
-            tls,
-            sessions,
-            objects,
-            async {
+        let handle = tokio::spawn(async move {
+            let shutdown = async {
                 let _ = receiver.await;
-            },
-        ));
+            };
+            if let Some(writer) = writer {
+                gateway::serve_with_output_store(listener, tls, sessions, writer, shutdown).await
+            } else {
+                gateway::serve_with_artifacts(listener, tls, sessions, objects, shutdown).await
+            }
+        });
         Self { port, stop, handle }
     }
     async fn client(
@@ -147,6 +161,7 @@ fn hello(node: &str) -> worker::WorkerFrame {
             rejection_receipts_version: 0,
             input_artifacts_version: 0,
             renewal_version: 0,
+            output_version: 0,
         })),
     }
 }

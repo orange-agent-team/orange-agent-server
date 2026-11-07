@@ -4,13 +4,55 @@
   "title": "Development Worker content-free diagnostic event",
   "type": "object",
   "additionalProperties": false,
-  "required": ["protocol", "state", "command_id", "outcome", "cleanup_confirmed", "policy_applied"],
+  "required": [
+    "protocol",
+    "state",
+    "command_id",
+    "outcome",
+    "cleanup_confirmed",
+    "policy_applied"
+  ],
   "properties": {
-    "protocol": {"const": 1},
-    "state": {"enum": ["ready", "policy_applied", "execution_stopped", "pending_output_commit", "unsubmitted_output_discarded", "stopped"]},
-    "command_id": {"type": ["string", "null"], "maxLength": 128},
-    "outcome": {"enum": [null, "computed_unsubmitted", "cancelled", "failed", "authority_lost", "cleanup_unknown", "resource_rejected", "profile_rejected"]},
-    "cleanup_confirmed": {"type": "boolean"},
-    "policy_applied": {"type": "boolean"}
+    "protocol": {
+      "const": 1
+    },
+    "state": {
+      "enum": [
+        "ready",
+        "policy_applied",
+        "execution_stopped",
+        "pending_output_commit",
+        "unsubmitted_output_discarded",
+        "stopped",
+        "response_committed",
+        "response_commit_recovered"
+      ]
+    },
+    "command_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 128
+    },
+    "outcome": {
+      "enum": [
+        null,
+        "computed_unsubmitted",
+        "cancelled",
+        "failed",
+        "authority_lost",
+        "cleanup_unknown",
+        "resource_rejected",
+        "profile_rejected",
+        "response_committed"
+      ]
+    },
+    "cleanup_confirmed": {
+      "type": "boolean"
+    },
+    "policy_applied": {
+      "type": "boolean"
+    }
   }
 }

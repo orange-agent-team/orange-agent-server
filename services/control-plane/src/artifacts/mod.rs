@@ -5,6 +5,7 @@ mod delivery;
 pub mod http;
 pub(crate) mod inputs;
 mod maintenance;
+mod outputs;
 mod storage;
 mod transfer;
 pub use delivery::ArtifactReader;
