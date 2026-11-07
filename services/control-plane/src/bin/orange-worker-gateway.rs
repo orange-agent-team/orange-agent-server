@@ -85,14 +85,29 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let store = Store::connect(&env::var("DATABASE_URL")?).await?;
     store.migrate().await?;
     let sessions = WorkerSessionStore::new(store.pool().clone(), config.gateway_instance_id)?;
+    let artifacts = if let Some(root) = env::var_os("ORANGE_ARTIFACT_ROOT") {
+        Some(
+            orange_control_plane::artifacts::ArtifactReader::open_local(
+                store.pool().clone(),
+                Path::new(&root),
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+    let reader = artifacts.clone();
     let listener = tokio::net::TcpListener::bind(address).await?;
     eprintln!(
-        "Development Worker mTLS control on {}; execution/enrollment not enabled",
+        "Development Worker mTLS control on {}; model execution/enrollment not enabled",
         listener.local_addr()?
     );
-    gateway::serve(listener, tls, sessions, async {
+    gateway::serve_with_artifacts(listener, tls, sessions, artifacts, async {
         let _ = tokio::signal::ctrl_c().await;
     })
     .await?;
+    if let Some(reader) = reader {
+        reader.drain().await?;
+    }
     Ok(())
 }

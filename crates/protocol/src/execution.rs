@@ -49,7 +49,25 @@ pub fn assignment_digest(a: &worker::Assignment) -> Option<String> {
     {
         return None;
     }
-    request_digest("worker.assignment.v1", &json!({
+    if !a.input_artifacts.is_empty() {
+        if a.input_artifacts.len() != 1 || a.input_artifact_ids.len() != 1 {
+            return None;
+        }
+        let input = &a.input_artifacts[0];
+        if a.input_artifact_ids[0] != input.artifact_id
+            || !valid_id(&input.artifact_id)
+            || !valid_id(&input.version_id)
+            || !valid_digest(&input.sha256)
+            || input.size_bytes == 0
+            || input.size_bytes > 256 * 1024
+            || input.media_type != "application/json"
+        {
+            return None;
+        }
+    } else if !a.input_artifact_ids.is_empty() {
+        return None;
+    }
+    let mut body = json!({
         "command_id": a.command_id, "node_id": a.node_id, "session_id": a.session_id,
         "policy_generation": a.node_policy_generation.to_string(),
         "lease_id": l.lease_id, "job_id": l.job_id, "attempt_id": l.attempt_id,
@@ -58,7 +76,12 @@ pub fn assignment_digest(a: &worker::Assignment) -> Option<String> {
         "model_version_id": a.model_version_id, "model_sha256": a.model_sha256,
         "execution_profile_id": a.execution_profile_id, "execution_profile_digest": a.execution_profile_digest,
         "request_projection_digest": a.request_projection_digest, "input_artifact_ids": a.input_artifact_ids
-    })).ok()
+    });
+    // Preserve the exact digest of historical empty-input assignments.
+    if !a.input_artifacts.is_empty() {
+        body["input_versions"]=json!(a.input_artifacts.iter().map(|a|json!({"artifact_id":a.artifact_id,"version_id":a.version_id,"sha256":a.sha256,"size_bytes":a.size_bytes.to_string(),"media_type":a.media_type})).collect::<Vec<_>>());
+    }
+    request_digest("worker.assignment.v1", &body).ok()
 }
 pub fn acknowledge_digest(
     a: &worker::Acknowledge,
@@ -128,6 +151,7 @@ mod tests {
             execution_profile_digest: "b".repeat(64),
             request_projection_digest: "c".repeat(64),
             input_artifact_ids: vec![],
+            input_artifacts: vec![],
         };
         a.payload_digest = assignment_digest(&a).expect("valid");
         a
@@ -195,5 +219,27 @@ mod tests {
             acknowledge_digest(&bad, &a).is_none(),
             "rejection cannot carry execution evidence"
         );
+    }
+    #[test]
+    fn input_version_hash_and_media_are_bound_without_changing_legacy_digest() {
+        let a = assignment();
+        let legacy = assignment_digest(&a).expect("legacy");
+        let mut b = a.clone();
+        b.input_artifact_ids = vec!["input".into()];
+        assert!(assignment_digest(&b).is_none());
+        b.input_artifacts = vec![worker::InputArtifact {
+            artifact_id: "input".into(),
+            version_id: "version".into(),
+            sha256: "e".repeat(64),
+            size_bytes: 8,
+            media_type: "application/json".into(),
+        }];
+        let digest = assignment_digest(&b).expect("versioned input");
+        assert_ne!(legacy, digest);
+        b.input_artifacts[0].version_id = "other-version".into();
+        assert_ne!(assignment_digest(&b).expect("other"), digest);
+        b.input_artifacts[0].size_bytes = 262145;
+        assert!(assignment_digest(&b).is_none());
+        assert_eq!(assignment_digest(&a).expect("unchanged legacy"), legacy);
     }
 }

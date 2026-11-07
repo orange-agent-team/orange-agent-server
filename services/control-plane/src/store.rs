@@ -141,6 +141,37 @@ impl Store {
         key: &str,
         req: &SubmitJob,
     ) -> Result<JobView, StoreError> {
+        self.submit_as(None, owner, key, req).await
+    }
+    pub async fn submit_for_user(
+        &self,
+        actor: &crate::artifacts::ArtifactActor,
+        owner: &str,
+        key: &str,
+        req: &SubmitJob,
+    ) -> Result<JobView, StoreError> {
+        if !matches!(
+            req.purpose,
+            orange_protocol::InvocationPurpose::Primary
+                | orange_protocol::InvocationPurpose::Summary
+                | orange_protocol::InvocationPurpose::Memory
+                | orange_protocol::InvocationPurpose::Title
+                | orange_protocol::InvocationPurpose::Continuation
+        ) {
+            return Err(StoreError::Invalid);
+        }
+        self.submit_as(Some(actor), owner, key, req).await
+    }
+    pub fn from_pool(pool: PgPool) -> Self {
+        Self { pool }
+    }
+    async fn submit_as(
+        &self,
+        actor: Option<&crate::artifacts::ArtifactActor>,
+        owner: &str,
+        key: &str,
+        req: &SubmitJob,
+    ) -> Result<JobView, StoreError> {
         if ![
             owner,
             key,
@@ -155,7 +186,7 @@ impl Store {
             return Err(StoreError::Invalid);
         }
         for attempt in 0..3 {
-            match self.submit_once(owner, key, req).await {
+            match self.submit_once(owner, key, req, actor).await {
                 Err(e) if e.retryable() && attempt < 2 => retry_backoff(attempt).await,
                 result => return result,
             }
@@ -167,9 +198,15 @@ impl Store {
         owner: &str,
         key: &str,
         req: &SubmitJob,
+        actor: Option<&crate::artifacts::ArtifactActor>,
     ) -> Result<JobView, StoreError> {
         let digest = request_digest("submit_job", req).map_err(|_| StoreError::Invalid)?;
         let mut tx = self.begin().await?;
+        if let Some(actor) = actor {
+            crate::artifacts::authority::scope(&mut tx, actor, owner, true)
+                .await
+                .map_err(artifact_error)?;
+        }
         authorize(&mut tx, owner).await?;
         // Lock root before wallet on every path. PostgreSQL, not client memory, arbitrates.
         let root = sqlx::query(
@@ -180,9 +217,13 @@ impl Store {
         .fetch_optional(&mut *tx)
         .await?
         .ok_or(StoreError::NotFound)?;
+        if let Some(actor) = actor {
+            check_budget_actor(&mut tx, &actor.user, owner, &req.root_budget_id).await?;
+        }
         if let Some(job) = prior(&mut tx, owner, "submit_job", key, &digest).await? {
+            check_submit_actor(&mut tx, &job, actor).await?;
             let view = job_in_tx(&mut tx, owner, &job).await?;
-            tx.commit().await?;
+            finish_submit(tx, actor).await?;
             return Ok(view);
         }
         if let Some(row) = sqlx::query("SELECT * FROM jobs WHERE owner_id=$1 AND invocation_id=$2")
@@ -194,9 +235,10 @@ impl Store {
             if row.try_get::<String, _>("request_digest")? != digest {
                 return Err(StoreError::Conflict);
             }
+            check_submit_actor(&mut tx, &row.try_get::<String, _>("job_id")?, actor).await?;
             let view = job_view(&row)?;
             record_key(&mut tx, owner, "submit_job", key, &digest, &view.job_id).await?;
-            tx.commit().await?;
+            finish_submit(tx, actor).await?;
             return Ok(view);
         }
         let quote = sqlx::query("SELECT *, expires_at > clock_timestamp() AS valid FROM quotes WHERE quote_id=$1 AND owner_id=$2")
@@ -232,9 +274,9 @@ impl Store {
             .await?;
         let job = Uuid::new_v4().to_string();
         let purpose = serde_json::to_value(&req.purpose).map_err(|_| StoreError::Invalid)?;
-        let row = sqlx::query("INSERT INTO jobs(job_id,owner_id,root_budget_id,invocation_id,purpose,quote_id,request_digest,execution_state,reserved,held_gift,held_earned,held_purchased) VALUES($1,$2,$3,$4,$5,$6,$7,'queued',$8,$9,$10,$11) RETURNING *")
+        let row = sqlx::query("INSERT INTO jobs(job_id,owner_id,root_budget_id,invocation_id,purpose,quote_id,request_digest,execution_state,reserved,held_gift,held_earned,held_purchased,submitting_user_id,input_required) VALUES($1,$2,$3,$4,$5,$6,$7,'queued',$8,$9,$10,$11,$12,$13) RETURNING *")
             .bind(&job).bind(owner).bind(&req.root_budget_id).bind(&req.invocation_id).bind(purpose.as_str().ok_or(StoreError::Invalid)?)
-            .bind(&req.quote_id).bind(&digest).bind(maximum.units()).bind(hg).bind(he).bind(hp).fetch_one(&mut *tx).await?;
+            .bind(&req.quote_id).bind(&digest).bind(maximum.units()).bind(hg).bind(he).bind(hp).bind(actor.map(|a|a.user.as_str())).bind(actor.is_some()).fetch_one(&mut *tx).await?;
         let mut entries = Vec::new();
         for (bucket, held) in ["gift", "earned", "purchased"].iter().zip([hg, he, hp]) {
             entries.push((format!("{owner}:{bucket}:available"), -held));
@@ -244,7 +286,7 @@ impl Store {
         record_key(&mut tx, owner, "submit_job", key, &digest, &job).await?;
         emit(&mut tx, owner, &job, "job.queued", &digest).await?;
         let view = job_view(&row)?;
-        tx.commit().await?;
+        finish_submit(tx, actor).await?;
         Ok(view)
     }
     pub async fn job(&self, owner: &str, id: &str) -> Result<JobView, StoreError> {
@@ -339,6 +381,9 @@ impl Store {
         record_key(&mut tx, owner, "cancel_job", key, &digest, id).await?;
         sqlx::query("UPDATE jobs SET execution_state='cancelled',settlement_state='settled',charge=0 WHERE job_id=$1")
             .bind(id).execute(&mut *tx).await?;
+        // Only queued cancellation can release this input pin here. Unknown or
+        // running attempts need their separate response/cleanup lifecycle.
+        sqlx::query("DELETE FROM artifact_pins WHERE reference_id=$1 AND artifact_id IN (SELECT artifact_id FROM job_inputs WHERE job_id=$2)").bind(format!("job-input:{id}")).bind(id).execute(&mut *tx).await?;
         emit(
             &mut tx,
             owner,
@@ -398,7 +443,7 @@ fn budget_view(r: &sqlx::postgres::PgRow) -> Result<BudgetView, StoreError> {
         status: r.try_get("state")?,
     })
 }
-fn job_view(r: &sqlx::postgres::PgRow) -> Result<JobView, StoreError> {
+pub(crate) fn job_view(r: &sqlx::postgres::PgRow) -> Result<JobView, StoreError> {
     let charge: Option<i64> = r.try_get("charge")?;
     Ok(JobView {
         job_id: r.try_get("job_id")?,
@@ -512,6 +557,63 @@ async fn ledger(
             .bind(amount)
             .execute(&mut **tx)
             .await?;
+    }
+    Ok(())
+}
+
+fn artifact_error(e: crate::artifacts::ArtifactError) -> StoreError {
+    match e {
+        crate::artifacts::ArtifactError::Database(e) => StoreError::Database(e),
+        _ => StoreError::Forbidden,
+    }
+}
+async fn finish_submit(
+    tx: Transaction<'_, Postgres>,
+    actor: Option<&crate::artifacts::ArtifactActor>,
+) -> Result<(), StoreError> {
+    if let Some(actor) = actor {
+        crate::artifacts::authority::finish(tx, actor)
+            .await
+            .map_err(artifact_error)
+    } else {
+        tx.commit().await?;
+        Ok(())
+    }
+}
+async fn check_submit_actor(
+    tx: &mut Transaction<'_, Postgres>,
+    job: &str,
+    actor: Option<&crate::artifacts::ArtifactActor>,
+) -> Result<(), StoreError> {
+    let submitted: Option<String> =
+        sqlx::query_scalar("SELECT submitting_user_id FROM jobs WHERE job_id=$1")
+            .bind(job)
+            .fetch_one(&mut **tx)
+            .await?;
+    if submitted.as_deref() != actor.map(|a| a.user.as_str()) {
+        return Err(StoreError::Forbidden);
+    }
+    Ok(())
+}
+
+pub(crate) async fn check_budget_actor(
+    tx: &mut Transaction<'_, Postgres>,
+    user: &str,
+    owner: &str,
+    root: &str,
+) -> Result<(), StoreError> {
+    let personal: Option<String> = sqlx::query_scalar(
+        "SELECT personal_owner_id FROM users WHERE user_id=$1 AND active FOR SHARE",
+    )
+    .bind(user)
+    .fetch_optional(&mut **tx)
+    .await?;
+    if personal.as_deref() == Some(owner) {
+        return Ok(());
+    }
+    let granted:Option<bool>=sqlx::query_scalar("SELECT can_submit FROM budget_user_grants WHERE root_budget_id=$1 AND user_id=$2 FOR SHARE").bind(root).bind(user).fetch_optional(&mut **tx).await?;
+    if granted != Some(true) {
+        return Err(StoreError::Forbidden);
     }
     Ok(())
 }

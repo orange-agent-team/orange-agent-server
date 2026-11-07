@@ -1,5 +1,6 @@
 //! Authenticated control liveness. A connected session is never an execution lease.
 mod execution;
+mod inputs;
 mod rejections;
 use crate::broker::{AppliedNodePolicy, Broker, BrokerError};
 use crate::node_journal::{NodeJournal, ReceivedNodeIntent};
@@ -58,6 +59,8 @@ pub struct ControlConnection {
     observed_policy_generation: u64,
     execution_control_version: u32,
     rejection_receipts_version: u32,
+    input_artifacts_version: u32,
+    input_client: WorkerGatewayClient<Channel>,
     offered: Option<worker::Assignment>,
 }
 /// Short-lived, nonserializable authorization borrowing its live control session.
@@ -86,7 +89,7 @@ impl AuthorizedNodeStop<'_> {
 }
 impl ControlConnection {
     pub async fn connect(config: ControlConfig) -> Result<Self, ControlError> {
-        Self::connect_mode(config, 0, 0, 0).await
+        Self::connect_mode(config, 0, 0, 0, 0).await
     }
     pub async fn connect_node_control(
         config: ControlConfig,
@@ -108,7 +111,7 @@ impl ControlConnection {
         if config.node_id != journal.node_id() {
             return Err(ControlError::Invalid);
         }
-        let connection = Self::connect_mode(config, version, 0, 0).await?;
+        let connection = Self::connect_mode(config, version, 0, 0, 0).await?;
         journal
             .bind(connection.identity())
             .map_err(|_| ControlError::Unavailable)?;
@@ -119,6 +122,7 @@ impl ControlConnection {
         node_control_version: u32,
         execution_control_version: u32,
         rejection_receipts_version: u32,
+        input_artifacts_version: u32,
     ) -> Result<Self, ControlError> {
         if !valid_id(&config.node_id)
             || !valid_digest(&config.capabilities_digest)
@@ -164,6 +168,7 @@ impl ControlConnection {
             node_control_version,
             execution_control_version,
             rejection_receipts_version,
+            input_artifacts_version,
         )
         .await
     }
@@ -174,6 +179,7 @@ impl ControlConnection {
         node_control_version: u32,
         execution_control_version: u32,
         rejection_receipts_version: u32,
+        input_artifacts_version: u32,
     ) -> Result<Self, ControlError> {
         let mut client = WorkerGatewayClient::new(channel)
             .max_decoding_message_size(64 * 1024)
@@ -189,6 +195,7 @@ impl ControlConnection {
                     node_control_version,
                     execution_control_version,
                     rejection_receipts_version,
+                    input_artifacts_version,
                 })),
             })
             .await
@@ -222,6 +229,7 @@ impl ControlConnection {
         if welcome.node_control_version != node_control_version
             || welcome.execution_control_version != execution_control_version
             || welcome.rejection_receipts_version != rejection_receipts_version
+            || welcome.input_artifacts_version != input_artifacts_version
         {
             return Err(ControlError::Unsupported);
         }
@@ -248,6 +256,8 @@ impl ControlConnection {
             observed_policy_generation: welcome.node_policy_generation,
             execution_control_version,
             rejection_receipts_version,
+            input_artifacts_version,
+            input_client: client,
             offered: None,
         })
     }
@@ -260,6 +270,7 @@ impl ControlConnection {
                 .is_none_or(|l| l.connection_epoch != self.identity.connection_epoch)
             || orange_protocol::execution::assignment_digest(a).as_deref()
                 != Some(a.payload_digest.as_str())
+            || (!a.input_artifacts.is_empty() && self.input_artifacts_version != 1)
             || self.offered.as_ref().is_some_and(|prior| prior != a)
         {
             return Err(ControlError::Protocol);

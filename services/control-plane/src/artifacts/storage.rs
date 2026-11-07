@@ -13,7 +13,8 @@ pub(super) struct LocalObjects {
     root: PathBuf,
     identity: (u64, u64),
     pub op: opendal::Operator,
-    _lock: File,
+    _lock: Option<File>,
+    writable: bool,
 }
 impl LocalObjects {
     pub fn open(root: &Path) -> Result<Self, ArtifactError> {
@@ -66,7 +67,47 @@ impl LocalObjects {
                 root,
                 identity,
                 op,
-                _lock: lock,
+                _lock: Some(lock),
+                writable: true,
+            })
+        }
+    }
+    pub fn open_read_only(root: &Path) -> Result<Self, ArtifactError> {
+        #[cfg(not(unix))]
+        {
+            let _ = root;
+            return Err(ArtifactError::StoragePolicy);
+        }
+        #[cfg(unix)]
+        {
+            use std::io::Read;
+            let m = fs::symlink_metadata(root)?;
+            if !m.is_dir() || m.file_type().is_symlink() || m.mode() & 0o077 != 0 {
+                return Err(ArtifactError::StoragePolicy);
+            }
+            let root = root.canonicalize()?;
+            let f = OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+                .open(root.join(".store-id"))?;
+            let fm = f.metadata()?;
+            if !fm.is_file() || fm.nlink() != 1 || fm.mode() & 0o077 != 0 {
+                return Err(ArtifactError::StoragePolicy);
+            }
+            let mut root_id = String::new();
+            f.take(129).read_to_string(&mut root_id)?;
+            uuid::Uuid::parse_str(&root_id).map_err(|_| ArtifactError::StoragePolicy)?;
+            let op = opendal::Operator::new(
+                opendal::services::Fs::default()
+                    .root(root.to_str().ok_or(ArtifactError::StoragePolicy)?),
+            )?;
+            Ok(Self {
+                root_id,
+                root,
+                identity: (m.dev(), m.ino()),
+                op,
+                _lock: None,
+                writable: false,
             })
         }
     }
@@ -98,6 +139,9 @@ impl LocalObjects {
         Ok(())
     }
     pub async fn writer(&self, key: &str) -> Result<opendal::Writer, ArtifactError> {
+        if !self.writable {
+            return Err(ArtifactError::StoragePolicy);
+        }
         self.check_root()?;
         key_valid(key)?;
         Ok(self.op.writer_with(key).if_not_exists(true).await?)
@@ -141,6 +185,9 @@ impl LocalObjects {
         Ok(data)
     }
     pub async fn remove(&self, key: &str) -> Result<(), ArtifactError> {
+        if !self.writable {
+            return Err(ArtifactError::StoragePolicy);
+        }
         self.check_root()?;
         key_valid(key)?;
         let metadata = match fs::symlink_metadata(self.root.join(key)) {

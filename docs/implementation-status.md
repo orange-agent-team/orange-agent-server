@@ -4,6 +4,8 @@
 
 ## 最新增量（优先于下方早期记录）
 
+- 新增[用户输入绑定与Worker租约读取](worker-input-delivery.md)：用户Job发起归属、显式团队预算授权、不可变输入/pin、当前权限与原请求投影校验、协商的mTLS分块读取、只读Gateway与客户端完整性校验。51项Worker及16项对象测试通过，相关统一源码回归全部刷新，WORKER-INPUT-001单独记DONE。0020已应用；当前只有文本GenerateRequest输入交付，没有模型执行/输出/结算认证。
+
 - 新增[私有输入对象存储](artifact-storage-implementation.md)：OpenDAL0.59.5、实际字节上传/校验/发布、当前会话与独立ACL、权限版本隔离、不可变版本、HTTP接口及引用保护回收。14项真实PG/文件系统/HTTP测试、实际开发二进制探测及全部相关源码回归通过，ARTIFACT-STORE-001单独记DONE。0017—0019已应用并冻结；Worker输入授权、推理输出与结算仍待接线。
 
 - E07/E08新增[拒绝持久回执与历史查询](worker-rejection-receipts.md)：独立可选能力、本机决定/云确认分离、当前节点认证、精确原ACK、schema1升级、旧PG事实补录及事件幂等。47项真实控制测试、28项本机测试、Rust/集成特性Clippy和相关统一源码回归全部通过，REJECTION-RECEIPT-001单独记DONE。拒绝不代表退款、设备释放、实际模型执行或自动重派。0016已应用并冻结。

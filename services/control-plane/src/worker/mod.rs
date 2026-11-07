@@ -1,7 +1,8 @@
 mod commands;
-mod execution;
+pub(crate) mod execution;
 pub mod gateway;
-mod sessions;
+mod input_reads;
+pub(crate) mod sessions;
 pub use sessions::{DeviceSession, SessionError, WorkerSessionStore};
 
 mod rejections;

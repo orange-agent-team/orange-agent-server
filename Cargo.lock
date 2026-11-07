@@ -1811,6 +1811,7 @@ dependencies = [
 name = "orange-worker"
 version = "0.1.0"
 dependencies = [
+ "hex",
  "libc",
  "orange-domain",
  "orange-protocol",
@@ -1819,6 +1820,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2 0.11.1",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",

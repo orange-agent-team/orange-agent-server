@@ -1,5 +1,7 @@
 #[path = "worker_sessions/execution_cases.rs"]
 mod execution_cases;
+#[path = "worker_sessions/inputs.rs"]
+mod input_cases;
 #[path = "worker_sessions/policy_cases.rs"]
 mod policy_cases;
 #[path = "worker_sessions/receiver_cases.rs"]
@@ -77,6 +79,12 @@ struct Running {
 }
 impl Running {
     async fn start(store: &Store) -> Self {
+        Self::start_with_input(store, None).await
+    }
+    async fn start_with_input(
+        store: &Store,
+        objects: Option<orange_control_plane::artifacts::ArtifactReader>,
+    ) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
         let port = listener.local_addr().expect("addr").port();
         let tls = GatewayTls {
@@ -87,9 +95,15 @@ impl Running {
         let sessions = WorkerSessionStore::new(store.pool().clone(), Uuid::new_v4().to_string())
             .expect("gateway");
         let (stop, receiver) = oneshot::channel();
-        let handle = tokio::spawn(gateway::serve(listener, tls, sessions, async {
-            let _ = receiver.await;
-        }));
+        let handle = tokio::spawn(gateway::serve_with_artifacts(
+            listener,
+            tls,
+            sessions,
+            objects,
+            async {
+                let _ = receiver.await;
+            },
+        ));
         Self { port, stop, handle }
     }
     async fn client(
@@ -131,6 +145,7 @@ fn hello(node: &str) -> worker::WorkerFrame {
             node_control_version: 0,
             execution_control_version: 0,
             rejection_receipts_version: 0,
+            input_artifacts_version: 0,
         })),
     }
 }

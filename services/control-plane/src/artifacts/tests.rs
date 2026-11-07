@@ -1077,3 +1077,103 @@ async fn a_replaced_link_cannot_expose_external_file_bytes() {
     assert_eq!(std::fs::read(&secret).expect("external unchanged"), b"safe");
     f.store.drain().await.expect("drain");
 }
+
+#[tokio::test]
+async fn organization_content_role_does_not_implicitly_grant_budget_spending() {
+    use orange_protocol::{CreateBudget, InvocationPurpose, SubmitJob, team::CreateOrganization};
+    let f = fixture().await;
+    let team = crate::team::TeamStore::new(f.store.inner.pool.clone());
+    let org = team
+        .create_organization(
+            &f.actor.user,
+            "budget-org",
+            &CreateOrganization {
+                name: "budget authority fixture".into(),
+                member_limit: 5,
+            },
+        )
+        .await
+        .expect("org")
+        .organization_id;
+    let store = crate::store::Store::from_pool(f.store.inner.pool.clone());
+    let root = store
+        .create_budget(
+            &org,
+            "root",
+            &CreateBudget {
+                scope_id: id(),
+                limit: "0".to_owned().try_into().expect("zero credits"),
+            },
+        )
+        .await
+        .expect("trusted budget fixture");
+    let quote = id();
+    let invocation = id();
+    sqlx::query("INSERT INTO quotes(quote_id,owner_id,root_budget_id,invocation_id,projection_digest,price_version,max_amount,expires_at) VALUES($1,$2,$3,$4,$5,'free-test-fixture',0,clock_timestamp()+interval '1 hour')").bind(&quote).bind(&org).bind(&root.root_budget_id).bind(&invocation).bind("a".repeat(64)).execute(&f.store.inner.pool).await.expect("quote fixture");
+    let req = SubmitJob {
+        root_budget_id: root.root_budget_id.clone(),
+        invocation_id: invocation,
+        purpose: InvocationPurpose::Primary,
+        quote_id: quote,
+        request_projection_digest: "a".repeat(64),
+    };
+    assert!(matches!(
+        store.submit_for_user(&f.actor, &org, "submit", &req).await,
+        Err(crate::store::StoreError::Forbidden)
+    ));
+    let n: i64 = sqlx::query_scalar("SELECT count(*) FROM jobs WHERE owner_id=$1")
+        .bind(&org)
+        .fetch_one(&f.store.inner.pool)
+        .await
+        .expect("none");
+    assert_eq!(n, 0);
+    sqlx::query("INSERT INTO budget_user_grants(root_budget_id,user_id) VALUES($1,$2)")
+        .bind(&root.root_budget_id)
+        .bind(&f.actor.user)
+        .execute(&f.store.inner.pool)
+        .await
+        .expect("explicit budget-grant fixture, not a provisioning API");
+    let job = store
+        .submit_for_user(&f.actor, &org, "submit", &req)
+        .await
+        .expect("explicitly authorized reserve");
+    assert_eq!(job.execution_state, "queued");
+    sqlx::query("UPDATE budget_user_grants SET can_submit=FALSE WHERE root_budget_id=$1")
+        .bind(&root.root_budget_id)
+        .execute(&f.store.inner.pool)
+        .await
+        .expect("revoke budget");
+    assert!(
+        matches!(
+            store.submit_for_user(&f.actor, &org, "submit", &req).await,
+            Err(crate::store::StoreError::Forbidden)
+        ),
+        "idempotent retry also reauthorizes"
+    );
+    f.store.drain().await.expect("drain");
+}
+
+#[tokio::test]
+async fn borrowed_gateway_reader_drain_does_not_close_the_input_writer() {
+    let f = fixture().await;
+    f.store
+        .reader()
+        .drain()
+        .await
+        .expect("reader does not own writer lifecycle");
+    let req = request(b"still writable");
+    f.store
+        .begin_upload(&f.actor, &f.owner, &req)
+        .await
+        .expect("begin");
+    f.store
+        .put(
+            f.actor.clone(),
+            f.owner.clone(),
+            req.upload_id.clone(),
+            input(b"still writable"),
+        )
+        .await
+        .expect("writer remains available");
+    f.store.drain().await.expect("actual owner shutdown");
+}

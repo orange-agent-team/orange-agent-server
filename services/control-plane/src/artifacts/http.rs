@@ -31,6 +31,15 @@ pub fn router(identity: UserIdentity, store: ArtifactStore) -> Router {
             "/api/v1/owners/{owner}/uploads/{upload}/content",
             get(download).put(upload),
         )
+        .route(
+            "/api/v1/owners/{owner}/jobs",
+            axum::routing::post(submit_job),
+        )
+        .route("/api/v1/owners/{owner}/jobs/{job}", get(job_status))
+        .route(
+            "/api/v1/owners/{owner}/jobs/{job}/input",
+            axum::routing::post(bind_input),
+        )
         .layer(DefaultBodyLimit::max(64 * 1024))
         .with_state(Api {
             identity,
@@ -236,4 +245,63 @@ async fn download(
         ))
         .map_err(|_| ArtifactError::Unavailable)?;
     Ok(private(response))
+}
+
+async fn submit_job(
+    State(api): State<Api>,
+    Path(owner): Path<String>,
+    headers: HeaderMap,
+    body: Result<Json<orange_protocol::SubmitJob>, axum::extract::rejection::JsonRejection>,
+) -> Result<Response, Error> {
+    let actor = api.identity.artifact_actor(&headers, true).await?;
+    let Json(request) = body.map_err(|_| ArtifactError::Invalid)?;
+    let key = headers
+        .get("idempotency-key")
+        .and_then(|v| v.to_str().ok())
+        .ok_or(ArtifactError::Invalid)?;
+    let job = api
+        .store
+        .submit_job(&actor, &owner, key, &request)
+        .await
+        .map_err(|e| match e {
+            crate::store::StoreError::Forbidden => Error(StatusCode::FORBIDDEN, "FORBIDDEN"),
+            crate::store::StoreError::NotFound => Error(StatusCode::NOT_FOUND, "NOT_FOUND"),
+            crate::store::StoreError::Database(_) | crate::store::StoreError::Migration(_) => {
+                Error(StatusCode::SERVICE_UNAVAILABLE, "SERVICE_UNAVAILABLE")
+            }
+            _ => Error(StatusCode::CONFLICT, "JOB_SUBMISSION_REJECTED"),
+        })?;
+    Ok(private(Json(job).into_response()))
+}
+async fn bind_input(
+    State(api): State<Api>,
+    Path((owner, job)): Path<(String, String)>,
+    headers: HeaderMap,
+    body: Result<
+        Json<orange_protocol::artifacts::BindJobInput>,
+        axum::extract::rejection::JsonRejection,
+    >,
+) -> Result<Response, Error> {
+    let actor = api.identity.artifact_actor(&headers, true).await?;
+    original_key(&headers, &job)?;
+    let Json(request) = body.map_err(|_| ArtifactError::Invalid)?;
+    Ok(private(
+        Json(
+            api.store
+                .bind_job_input(&actor, &owner, &job, &request)
+                .await?,
+        )
+        .into_response(),
+    ))
+}
+
+async fn job_status(
+    State(api): State<Api>,
+    Path((owner, job)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Response, Error> {
+    let actor = api.identity.artifact_actor(&headers, false).await?;
+    Ok(private(
+        Json(api.store.job_for_user(&actor, &owner, &job).await?).into_response(),
+    ))
 }

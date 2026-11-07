@@ -61,14 +61,22 @@ pub(super) fn decode(row: &sqlx::postgres::PgRow) -> Result<worker::Assignment, 
     Ok(a)
 }
 /// Root-before-Job agrees with reservation/cancellation; never takes wallet locks.
-async fn job_authority(tx: &mut Tx<'_>, job: &str) -> Result<String, SessionError> {
-    let row = sqlx::query("SELECT owner_id,root_budget_id FROM jobs WHERE job_id=$1")
-        .bind(job)
-        .fetch_optional(&mut **tx)
-        .await?
-        .ok_or(SessionError::Stale)?;
+pub(crate) async fn job_authority(tx: &mut Tx<'_>, job: &str) -> Result<String, SessionError> {
+    let row =
+        sqlx::query("SELECT owner_id,root_budget_id,submitting_user_id FROM jobs WHERE job_id=$1")
+            .bind(job)
+            .fetch_optional(&mut **tx)
+            .await?
+            .ok_or(SessionError::Stale)?;
     let owner: String = row.try_get("owner_id")?;
     let root: String = row.try_get("root_budget_id")?;
+    let user: Option<String> = row.try_get("submitting_user_id")?;
+    if let Some(user) = &user {
+        crate::artifacts::authority::user_scope(tx, user, &owner, true)
+            .await
+            .map_err(|_| SessionError::Unauthorized)?;
+    }
+
     let active: Option<String> = sqlx::query_scalar(
         "SELECT owner_id FROM owners WHERE owner_id=$1 AND state='active' FOR SHARE",
     )
@@ -78,9 +86,14 @@ async fn job_authority(tx: &mut Tx<'_>, job: &str) -> Result<String, SessionErro
     if active.is_none() {
         return Err(SessionError::Unauthorized);
     }
-    let active: Option<String> = sqlx::query_scalar("SELECT root_budget_id FROM budget_roots WHERE root_budget_id=$1 AND owner_id=$2 AND state='active' FOR SHARE").bind(root).bind(owner).fetch_optional(&mut **tx).await?;
+    let active: Option<String> = sqlx::query_scalar("SELECT root_budget_id FROM budget_roots WHERE root_budget_id=$1 AND owner_id=$2 AND state='active' FOR SHARE").bind(&root).bind(&owner).fetch_optional(&mut **tx).await?;
     if active.is_none() {
         return Err(SessionError::Stale);
+    }
+    if let Some(user) = user {
+        crate::store::check_budget_actor(tx, &user, &owner, &root)
+            .await
+            .map_err(|_| SessionError::Unauthorized)?;
     }
     let row =
         sqlx::query("SELECT execution_state,settlement_state FROM jobs WHERE job_id=$1 FOR UPDATE")
@@ -92,7 +105,7 @@ async fn job_authority(tx: &mut Tx<'_>, job: &str) -> Result<String, SessionErro
     }
     Ok(row.try_get("execution_state")?)
 }
-async fn eligible_plan(
+pub(crate) async fn eligible_plan(
     tx: &mut Tx<'_>,
     job: &str,
     node: &str,
@@ -161,6 +174,9 @@ impl WorkerSessionStore {
                     return Err(SessionError::Stale);
                 }
                 eligible_plan(&mut tx, &job, &s.node_id).await?;
+                crate::artifacts::inputs::check_input_in(&mut tx, &job)
+                    .await
+                    .map_err(|_| SessionError::Stale)?;
                 sqlx::query("UPDATE worker_execution_attempts SET last_sent_at=clock_timestamp() WHERE attempt_id=$1").bind(row.try_get::<String,_>("attempt_id")?).execute(&mut *tx).await?;
                 finish(tx, s).await?;
                 return Ok(Some(a));
@@ -172,8 +188,8 @@ impl WorkerSessionStore {
             finish(tx, s).await?;
             return Ok(None);
         }
-        let job: Option<String> = sqlx::query_scalar("SELECT j.job_id FROM jobs j JOIN quote_execution_plans p USING(quote_id) JOIN reviewed_execution_profiles r USING(execution_profile_id) JOIN quotes q USING(quote_id) JOIN owners o ON o.owner_id=j.owner_id JOIN budget_roots b ON b.root_budget_id=j.root_budget_id WHERE p.target_node_id=$1 AND j.execution_state='queued' AND j.settlement_state='pending' AND r.enabled AND o.state='active' AND b.state='active' AND p.request_projection_digest=q.projection_digest AND p.job_deadline>clock_timestamp()+interval '11 seconds' AND NOT EXISTS(SELECT 1 FROM worker_execution_attempts a WHERE a.job_id=j.job_id) ORDER BY j.job_id LIMIT 1")
-            .bind(&s.node_id).fetch_optional(&mut *tx).await?;
+        let job: Option<String> = sqlx::query_scalar("SELECT j.job_id FROM jobs j JOIN quote_execution_plans p USING(quote_id) JOIN reviewed_execution_profiles r USING(execution_profile_id) JOIN quotes q USING(quote_id) JOIN owners o ON o.owner_id=j.owner_id JOIN budget_roots b ON b.root_budget_id=j.root_budget_id WHERE p.target_node_id=$1 AND j.execution_state='queued' AND j.settlement_state='pending' AND (NOT j.input_required OR ($2=1 AND EXISTS(SELECT 1 FROM job_inputs i WHERE i.job_id=j.job_id))) AND r.enabled AND o.state='active' AND b.state='active' AND p.request_projection_digest=q.projection_digest AND p.job_deadline>clock_timestamp()+interval '11 seconds' AND NOT EXISTS(SELECT 1 FROM worker_execution_attempts a WHERE a.job_id=j.job_id) ORDER BY j.job_id LIMIT 1")
+            .bind(&s.node_id).bind(s.input_artifacts_version as i32).fetch_optional(&mut *tx).await?;
         let Some(job) = job else {
             finish(tx, s).await?;
             return Ok(None);
@@ -182,6 +198,13 @@ impl WorkerSessionStore {
             return Err(SessionError::Stale);
         }
         let plan = eligible_plan(&mut tx, &job, &s.node_id).await?;
+        let input = crate::artifacts::inputs::check_input_in(&mut tx, &job)
+            .await
+            .map_err(|_| SessionError::Stale)?;
+        if input.is_some() && s.input_artifacts_version != 1 {
+            return Err(SessionError::Invalid);
+        }
+
         let attempt = id();
         let command = id();
         let lease = id();
@@ -201,7 +224,8 @@ impl WorkerSessionStore {
             model_version_id: plan.try_get("model_version_id")?,
             execution_profile_id: plan.try_get("execution_profile_id")?,
             request_projection_digest: plan.try_get("request_projection_digest")?,
-            input_artifact_ids: plan.try_get("input_artifact_ids")?,
+            input_artifact_ids: input.iter().map(|i| i.artifact_id.clone()).collect(),
+            input_artifacts: input.into_iter().collect(),
             job_deadline: timestamp(plan.try_get("deadline")?),
             node_id: s.node_id.clone(),
             session_id: s.session_id.clone(),
@@ -243,6 +267,9 @@ impl WorkerSessionStore {
         }
         let job_state = job_authority(&mut tx, &job).await?;
         eligible_plan(&mut tx, &job, &s.node_id).await?;
+        crate::artifacts::inputs::check_input_in(&mut tx, &job)
+            .await
+            .map_err(|_| SessionError::Stale)?;
         let row = sqlx::query("SELECT *,lease_expires_at>clock_timestamp() AS live,ack_deadline>clock_timestamp() AS ack_live FROM worker_execution_attempts WHERE command_id=$1 FOR UPDATE").bind(&ack.command_id).fetch_one(&mut *tx).await?;
         let a = decode(&row)?;
         if a.node_policy_generation != generation as u64 || !row.try_get::<bool, _>("live")? {

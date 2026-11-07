@@ -89,3 +89,20 @@ mod tests {
         );
     }
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct BindJobInput {
+    pub upload_id: String,
+    pub version_id: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct JobInputView {
+    pub job_id: String,
+    pub artifact_id: String,
+    pub version_id: String,
+    pub sha256: String,
+    pub size_bytes: String,
+    pub projection_digest: String,
+}

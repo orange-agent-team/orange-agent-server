@@ -177,7 +177,6 @@ impl ExecutionJournal {
                 .as_ref()
                 .is_none_or(|l| l.connection_epoch != identity.connection_epoch)
             || assignment_digest(a).as_deref() != Some(a.payload_digest.as_str())
-            || !a.input_artifact_ids.is_empty()
         {
             return Err(ExecutionJournalError::Invalid);
         }
@@ -327,6 +326,7 @@ mod tests {
             execution_profile_digest: "b".repeat(64),
             request_projection_digest: "c".repeat(64),
             input_artifact_ids: vec![],
+            input_artifacts: vec![],
             lease: Some(worker::Lease {
                 lease_id: "lease".into(),
                 attempt_id: "attempt".into(),

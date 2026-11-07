@@ -1,10 +1,13 @@
 //! Input object storage. Only available immutable versions can be read; Worker
 //! delivery and output publication require separate Job/lease authorization.
-mod authority;
+pub(crate) mod authority;
+mod delivery;
 pub mod http;
+pub(crate) mod inputs;
 mod maintenance;
 mod storage;
 mod transfer;
+pub use delivery::ArtifactReader;
 use orange_protocol::{
     artifacts::{ArtifactView, CreateUpload},
     request_digest, valid_id,
@@ -61,9 +64,9 @@ pub enum ArtifactError {
 /// JSON, actor ID header or public constructor can establish this authority.
 #[derive(Clone)]
 pub struct ArtifactActor {
-    user: String,
-    session: String,
-    write: bool,
+    pub(crate) user: String,
+    pub(crate) session: String,
+    pub(crate) write: bool,
 }
 impl ArtifactActor {
     pub(crate) fn from_verified_session(

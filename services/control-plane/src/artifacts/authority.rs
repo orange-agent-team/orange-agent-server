@@ -2,7 +2,7 @@ use super::*;
 use orange_protocol::team::{ResourceAccess, TeamRole};
 /// Current user session, owner and organization are locked only during database
 /// decisions. Object I/O always happens after committing/releasing this scope.
-pub(super) async fn scope(
+pub(crate) async fn scope(
     tx: &mut Tx<'_>,
     actor: &ArtifactActor,
     owner: &str,
@@ -12,6 +12,16 @@ pub(super) async fn scope(
         return Err(ArtifactError::Forbidden);
     }
     let personal:Option<String>=sqlx::query_scalar("SELECT u.personal_owner_id FROM user_sessions s JOIN users u USING(user_id) JOIN owners o ON o.owner_id=u.personal_owner_id WHERE s.session_id=$1 AND s.user_id=$2 AND NOT s.revoked AND s.idle_expires_at>floor(extract(epoch FROM clock_timestamp()))::bigint AND s.absolute_expires_at>floor(extract(epoch FROM clock_timestamp()))::bigint AND u.active AND o.state='active' FOR SHARE OF s,u,o").bind(&actor.session).bind(&actor.user).fetch_optional(&mut **tx).await?;
+    personal.ok_or(ArtifactError::Forbidden)?;
+    user_scope(tx, &actor.user, owner, write).await
+}
+pub(crate) async fn user_scope(
+    tx: &mut Tx<'_>,
+    user: &str,
+    owner: &str,
+    write: bool,
+) -> Result<Option<TeamRole>, ArtifactError> {
+    let personal:Option<String>=sqlx::query_scalar("SELECT u.personal_owner_id FROM users u JOIN owners o ON o.owner_id=u.personal_owner_id WHERE u.user_id=$1 AND u.active AND o.state='active' FOR SHARE OF u,o").bind(user).fetch_optional(&mut **tx).await?;
     let personal = personal.ok_or(ArtifactError::Forbidden)?;
     if personal == owner {
         return Ok(None);
@@ -19,7 +29,7 @@ pub(super) async fn scope(
     crate::team::organization_row(tx, owner, false)
         .await
         .map_err(|_| ArtifactError::Forbidden)?;
-    let role = crate::team::membership(tx, owner, &actor.user)
+    let role = crate::team::membership(tx, owner, user)
         .await
         .map_err(|_| ArtifactError::Forbidden)?;
     if !role.can_read_content() || write && !role.can_create_content() {
@@ -64,7 +74,7 @@ pub(super) async fn resource(
         _ => Err(ArtifactError::Integrity),
     }
 }
-pub(super) async fn finish(mut tx: Tx<'_>, actor: &ArtifactActor) -> Result<(), ArtifactError> {
+pub(crate) async fn finish(mut tx: Tx<'_>, actor: &ArtifactActor) -> Result<(), ArtifactError> {
     let live:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM user_sessions WHERE session_id=$1 AND user_id=$2 AND NOT revoked AND idle_expires_at>floor(extract(epoch FROM clock_timestamp()))::bigint AND absolute_expires_at>floor(extract(epoch FROM clock_timestamp()))::bigint)").bind(&actor.session).bind(&actor.user).fetch_one(&mut *tx).await?;
     if !live {
         return Err(ArtifactError::Forbidden);

@@ -29,7 +29,9 @@ pub struct GatewayTls {
 struct Gateway {
     store: WorkerSessionStore,
     slots: Arc<Semaphore>,
+    input_slots: Arc<Semaphore>,
     shutdown: watch::Receiver<bool>,
+    artifacts: Option<crate::artifacts::ArtifactReader>,
 }
 pub async fn serve(
     listener: TcpListener,
@@ -37,11 +39,22 @@ pub async fn serve(
     store: WorkerSessionStore,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<(), tonic::transport::Error> {
+    serve_with_artifacts(listener, tls, store, None, shutdown).await
+}
+pub async fn serve_with_artifacts(
+    listener: TcpListener,
+    tls: GatewayTls,
+    store: WorkerSessionStore,
+    artifacts: Option<crate::artifacts::ArtifactReader>,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> Result<(), tonic::transport::Error> {
     let (stop, receiver) = watch::channel(false);
     let gateway = Gateway {
         store,
         slots: Arc::new(Semaphore::new(128)),
+        input_slots: Arc::new(Semaphore::new(16)),
         shutdown: receiver,
+        artifacts,
     };
     Server::builder()
         .tls_config(
@@ -90,6 +103,7 @@ fn welcome(s: &DeviceSession) -> worker::ServerFrame {
             node_control_version: s.node_control_version,
             execution_control_version: s.execution_control_version,
             rejection_receipts_version: s.rejection_receipts_version,
+            input_artifacts_version: s.input_artifacts_version,
             node_policy_generation: s.node_policy_generation,
         })),
     }
@@ -97,6 +111,59 @@ fn welcome(s: &DeviceSession) -> worker::ServerFrame {
 #[tonic::async_trait]
 impl WorkerGateway for Gateway {
     type ControlStream = ReceiverStream<Result<worker::ServerFrame, Status>>;
+    async fn read_input(
+        &self,
+        request: Request<worker::InputReadRequest>,
+    ) -> Result<Response<worker::InputReadReply>, Status> {
+        let _permit = self
+            .input_slots
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| Status::resource_exhausted("input request limit"))?;
+        let objects = self
+            .artifacts
+            .as_ref()
+            .ok_or_else(|| Status::unimplemented("input storage not configured"))?;
+        let certs = request
+            .extensions()
+            .get::<TlsConnectInfo<TcpConnectInfo>>()
+            .and_then(TlsConnectInfo::peer_certs)
+            .ok_or_else(|| Status::unauthenticated("verified peer required"))?;
+        let fingerprint = hex::encode(Sha256::digest(
+            certs
+                .first()
+                .ok_or_else(|| Status::unauthenticated("peer required"))?
+                .as_ref(),
+        ));
+        let body = request.into_inner();
+        let operation = async {
+            let session = self
+                .store
+                .input_peer(&fingerprint, &body.session_id)
+                .await
+                .map_err(status)?;
+            objects
+                .read_input(self.store.clone(), session, body)
+                .await
+                .map_err(|e| match e {
+                    crate::artifacts::ArtifactError::Forbidden => {
+                        Status::permission_denied("input authority unavailable")
+                    }
+                    crate::artifacts::ArtifactError::Invalid => {
+                        Status::invalid_argument("invalid input read")
+                    }
+                    crate::artifacts::ArtifactError::Busy => {
+                        Status::resource_exhausted("input read limit")
+                    }
+                    _ => Status::failed_precondition("input unavailable or no longer valid"),
+                })
+        };
+        let result = tokio::time::timeout(Duration::from_secs(5), operation)
+            .await
+            .map_err(|_| Status::deadline_exceeded("input deadline"))??;
+        Ok(Response::new(result))
+    }
+
     async fn control(
         &self,
         request: Request<Streaming<worker::WorkerFrame>>,
@@ -131,19 +198,14 @@ impl WorkerGateway for Gateway {
             || hello.node_control_version > 2
             || hello.execution_control_version > 2
             || hello.rejection_receipts_version > 1
+            || hello.input_artifacts_version > 1
+            || (hello.input_artifacts_version == 1 && self.artifacts.is_none())
         {
             return Err(Status::failed_precondition("unsupported protocol version"));
         }
         let session = tokio::time::timeout(
             Duration::from_secs(5),
-            self.store.claim(
-                &hello.node_id,
-                &fingerprint,
-                &hello.capabilities_digest,
-                hello.node_control_version,
-                hello.execution_control_version,
-                hello.rejection_receipts_version,
-            ),
+            self.store.claim(&hello, &fingerprint),
         )
         .await
         .map_err(|_| Status::unavailable("authoritative store timeout"))?
