@@ -609,3 +609,88 @@ async fn authorized_recovery_view_refuses_deleted_or_changed_completed_sources()
         Phase::Cancelled
     );
 }
+
+async fn search_approval_recovery(tool: &str, args: serde_json::Value, version: &str) {
+    let f = Fixture::new();
+    let mut j = f.open();
+    f.start(&mut j);
+    let model = ScriptedModel::new(vec![
+        tools(vec![call("search-call", tool, args)]),
+        final_response(),
+    ]);
+    let (_tx, rx) = watch::channel(false);
+    let pending = f
+        .advance(&mut j, &model, rx.clone())
+        .await
+        .expect("model candidate committed");
+    assert_eq!(pending.phase, Phase::ToolsPending);
+    assert_eq!(pending.pending.len(), 1);
+    let operation = pending.pending[0].operation_id.clone();
+    assert_eq!(pending.pending[0].tool_version, version);
+    assert!(matches!(
+        f.advance(&mut j, &model, rx.clone()).await,
+        Err(EngineError::ApprovalRequired)
+    ));
+    assert_eq!(
+        j.state("alice", &operation).expect("state").as_deref(),
+        Some("intended")
+    );
+    f.approve(&j);
+    drop(j);
+    let mut j = f.open();
+    assert_eq!(
+        f.advance(&mut j, &model, rx.clone())
+            .await
+            .expect("authorized search")
+            .phase,
+        Phase::Ready
+    );
+    assert_eq!(
+        j.state("alice", &operation).expect("state").as_deref(),
+        Some("succeeded")
+    );
+    drop(j);
+    let mut j = f.open();
+    assert_eq!(
+        f.advance(&mut j, &model, rx.clone())
+            .await
+            .expect("continue")
+            .phase,
+        Phase::Completed
+    );
+    f.advance(&mut j, &model, rx)
+        .await
+        .expect("terminal idempotence");
+    assert_eq!(model.calls.load(Ordering::SeqCst), 2);
+    let requests = model.requests.lock().expect("requests");
+    let results: Vec<_> = requests[1]
+        .messages
+        .iter()
+        .filter(|m| m.role == Role::Tool)
+        .collect();
+    assert_eq!(results.len(), 1);
+    assert!(
+        serde_json::to_string(results[0])
+            .expect("result")
+            .contains("note.txt")
+    );
+}
+
+#[tokio::test]
+async fn file_search_requires_approval_and_persists_one_result_across_reopen() {
+    search_approval_recovery(
+        "search_files",
+        json!({"path":".","glob":"**/*.txt"}),
+        "search_files.v1",
+    )
+    .await;
+}
+#[tokio::test]
+async fn text_search_requires_approval_and_persists_one_result_across_reopen() {
+    search_approval_recovery(
+        "search_text",
+        json!({"path":".","query":"allowed","glob":"*.txt"}),
+        "search_text.v1",
+    )
+    .await;
+}

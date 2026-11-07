@@ -4,6 +4,7 @@
 No synthetic model replies and no auto-approval in product code. This acceptance
 driver only approves bounded reads of the fixture it creates itself.
 """
+import argparse
 import fcntl
 import hashlib
 import json
@@ -20,6 +21,9 @@ import uuid
 ROOT=Path(__file__).resolve().parents[1]
 PRIVATE=ROOT/'.local/model-runtime'
 REPORT=ROOT/'.local/real-agent'
+parser=argparse.ArgumentParser()
+parser.add_argument('--required-tool',choices=['read_file','search_files','search_text'],default='read_file')
+args=parser.parse_args()
 
 def digest(path):
     value=hashlib.sha256()
@@ -34,7 +38,8 @@ def write(path,value):
 
 def main():
     os.umask(0o077)
-    write(REPORT/'last-report.json',{'passed':False,'phase':'preparing','test_run_id':uuid.uuid4().hex})
+    test_run_id=uuid.uuid4().hex
+    write(REPORT/'last-report.json',{'passed':False,'phase':'preparing','test_run_id':test_run_id})
     lock=json.loads((ROOT/'config/local-model.lock.json').read_text())
     build=json.loads((PRIVATE/'build.json').read_text())
     backend=PRIVATE/'build/bin/llama-server';model=PRIVATE/(lock['model']['sha256']+'.gguf')
@@ -47,7 +52,7 @@ def main():
     subprocess.run([str(cargo),'build','-p','orange-model-runtime','--bin','orange-model-host','--locked'],cwd=ROOT,env=env,check=True)
     REPORT.mkdir(parents=True,exist_ok=True,mode=0o700)
     result={'scope':'actual pinned CPU model, isolated local file, explicit test-owner approvals and SQLite recovery; not hosted Agent, public identity, charges or GPU',
-            'model_sha256':lock['model']['sha256'],'backend_commit':lock['backend']['commit'],'phases':[],'approved_operations':0,'passed':False}
+            'model_sha256':lock['model']['sha256'],'backend_commit':lock['backend']['commit'],'phases':[],'approved_operations':0,'passed':False,'test_run_id':test_run_id,'required_tool':args.required_tool,'observed_tools':[]}
     # Short private root avoids Unix socket path limits. Never use user-selected directories.
     with tempfile.TemporaryDirectory(prefix='oa-real-',dir='/private/tmp' if os.uname().sysname=='Darwin' else None) as temporary:
         base=Path(temporary).resolve();runtime=base/('durable-model-state-'*6);ipc=base/'m';state=base/'j';workspace=base/'w'
@@ -79,6 +84,10 @@ def main():
                     'journal':str(state/'journal.sqlite'),'private_roots':[str(runtime),str(ipc),str(state),str(PRIVATE)],'model_socket':str(ipc/'engine.sock'),
                     'model_key_file':str(runtime/'api.key'),'context_tokens':4096,
                     'prompt':'Use read_file to read the existing workspace file proof.txt with the relative path proof.txt. Do not guess its content. After the tool result is returned, answer with the exact file text.'}
+                if args.required_tool=='search_files':
+                    config['prompt']='Perform these steps in order. First call search_files with exactly these arguments: {"path":".","glob":"proof.txt"}. Use the literal filename proof.txt as the glob, not a wildcard. Wait for its result. Then call read_file with exactly {"path":"proof.txt"}. Finally answer with the exact file text. Do not invent content or call read_file before receiving the search result.'
+                elif args.required_tool=='search_text':
+                    config['prompt']='Call search_text with exactly these arguments: {"path":".","query":"ORANGE_EVIDENCE_"}. Do not add optional fields. Do not call read_file. Wait for the search result. Then answer with the exact complete matching line text from its excerpt. Do not invent or shorten the content.'
                 path=state/'agent.json';write(path,config)
                 def invoke(operation,*arguments,expect_error=False):
                     child=subprocess.Popen([str(ROOT/'target/debug/examples/local-agent'),str(path),operation,*arguments],cwd=ROOT,env={'PATH':'/usr/bin:/bin'},stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
@@ -96,6 +105,12 @@ def main():
                         if child.poll() is None:child.kill();child.wait()
                 config['run']['environment']=invoke('grant-info')['environment'];write(path,config)
                 view=invoke('start');result['phases'].append(view['phase'])
+                def committed_tool_results(tool):
+                    database=sqlite3.connect(state/'journal.sqlite')
+                    try:
+                        database.execute('PRAGMA query_only=ON')
+                        return [json.loads(row[0]) for row in database.execute('SELECT result_json FROM operations WHERE tool_version=? AND state=? AND result_json IS NOT NULL',(tool+'.v1','succeeded'))]
+                    finally:database.close()
                 seen=set();negative=False
                 for _ in range(16):
                     if view['phase']=='completed':break
@@ -107,15 +122,31 @@ def main():
                         for item in pending:
                             request=item['request'];tool=request['tool'];arguments=request['arguments']
                             if tool=='read_file':
-                                if arguments.get('path')!='proof.txt':raise RuntimeError('Unexpected read target; approval refused')
+                                if arguments.get('path')!='proof.txt' or args.required_tool=='search_text':raise RuntimeError('Unexpected read target/tool; approval refused')
+                                if args.required_tool=='search_files' and not committed_tool_results('search_files'):raise RuntimeError('Required filename search was bypassed')
                             elif tool=='list_directory':
                                 if arguments.get('path','') not in ['','.']:raise RuntimeError('Unexpected directory; approval refused')
+                            elif tool=='search_files' and args.required_tool=='search_files':
+                                if arguments.get('path')!='.' or arguments.get('glob')!='proof.txt':raise RuntimeError('Unexpected filename search scope; approval refused')
+                            elif tool=='search_text' and args.required_tool=='search_text':
+                                if arguments.get('path')!='.' or arguments.get('query')!='ORANGE_EVIDENCE_' or arguments.get('regular_expression',False):raise RuntimeError('Unexpected text search scope; approval refused')
                             else:raise RuntimeError('Unexpected capability; approval refused')
                             if item['operation_id'] not in seen:
-                                invoke('approve',item['operation_id']);seen.add(item['operation_id']);result['approved_operations']+=1
+                                invoke('approve',item['operation_id']);seen.add(item['operation_id']);result['approved_operations']+=1;result['observed_tools'].append(tool)
                     view=invoke('step');result['phases'].append(view['phase'])
                 result['final_phase']=view['phase'];result['sentinel_matched']=sentinel in (view.get('final_text') or '')
-                if view['phase']!='completed' or not result['sentinel_matched'] or not negative or not seen:raise RuntimeError('Real model/tool/file evidence did not complete; no substitute response used')
+                if view['phase']!='completed' or not result['sentinel_matched'] or not negative or not seen or args.required_tool not in result['observed_tools']:raise RuntimeError('Real model/tool/file evidence did not complete; no substitute response used')
+                committed=committed_tool_results(args.required_tool)
+                if not committed:raise RuntimeError('Required tool never committed an actual successful result')
+                for value in committed:
+                    if value.get('kind')!=args.required_tool:raise RuntimeError('Wrong committed tool result type')
+                    data=value['data']
+                    if args.required_tool=='search_files' and (data['paths']!=['proof.txt'] or data['truncated']):raise RuntimeError('Filename search did not locate the exact fixture')
+                    if args.required_tool=='search_text':
+                        matches=data['matches']
+                        expected=hashlib.sha256((sentinel+'\n').encode()).hexdigest()
+                        if data['truncated'] or len(matches)!=1 or matches[0]['path']!='proof.txt' or matches[0]['sha256']!=expected or matches[0]['excerpt']!=sentinel:raise RuntimeError('Text search did not return the actual versioned fixture line')
+                result['required_tool_result_verified']=True
                 def evidence_counts():
                     db=sqlite3.connect(state/'journal.sqlite')
                     try:
@@ -145,6 +176,7 @@ def main():
                 record_path=runtime/'process.json'
                 result['model_stopped']=record_path.is_file() and json.loads(record_path.read_text())['phase']=='stopped'
                 result['passed']=result['passed'] and result['model_stopped']
+                write(REPORT/('report-'+test_run_id+'.json'),result)
                 write(REPORT/'last-report.json',result)
                 if not result['model_stopped']:raise RuntimeError('Actual model cleanup unconfirmed')
     print(json.dumps(result))

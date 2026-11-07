@@ -1943,6 +1943,7 @@ dependencies = [
  "orange-domain",
  "orange-model-runtime",
  "orange-protocol",
+ "regex",
  "rusqlite",
  "serde",
  "serde_json",

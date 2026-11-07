@@ -34,7 +34,7 @@ def main():
     rustup=shutil.which('rustup') or '/opt/homebrew/opt/rustup/bin/rustup'
     cargo=Path(subprocess.check_output([rustup,'which','--toolchain','stable','cargo'],text=True).strip())
     environment=os.environ.copy();environment['PATH']=str(cargo.parent)+os.pathsep+environment.get('PATH','')
-    subprocess.run([str(cargo),'build','--bin','model-smoke','--bin','orange-model-host','--locked'],cwd=ROOT,env=environment,check=True)
+    subprocess.run([str(cargo),'build','-p','orange-model-runtime','--bin','model-smoke','--bin','orange-model-host','--locked'],cwd=ROOT,env=environment,check=True)
     live=PRIVATE/'live';live.mkdir(mode=0o700,exist_ok=True)
     profile=live/'profile.json';client_config=live/'client.json'
     write_private(profile,{'protocol':1,'runtime_directory':str(live),'executable':str(binary),'executable_sha256':report['executable_sha256'],'model':str(model),'model_sha256':manifest['model']['sha256'],'model_bytes':manifest['model']['bytes'],'model_version':'qwen-local-test-v1','context_tokens':2048,'startup_timeout_seconds':120})

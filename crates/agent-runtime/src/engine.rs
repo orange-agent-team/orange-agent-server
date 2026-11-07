@@ -810,7 +810,7 @@ fn tool_error_code(error: &WorkspaceError) -> &'static str {
         WorkspaceError::Revoked => "revoked",
         WorkspaceError::EnvironmentChanged => "environment_changed",
         WorkspaceError::PersistentIdentityUnavailable => "persistent_identity_unavailable",
-        WorkspaceError::Limit => "limit",
+        WorkspaceError::Limit | WorkspaceError::FileTooLarge => "limit",
         WorkspaceError::VersionChanged => "version_changed",
         WorkspaceError::SnapshotChanged => "snapshot_changed",
         WorkspaceError::NotText => "not_text",
