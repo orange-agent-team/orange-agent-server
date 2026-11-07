@@ -1,0 +1,52 @@
+//! Local development CPU Worker; never installs a background service implicitly.
+#[cfg(unix)]
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let runtime = tokio::runtime::Runtime::new()?;
+    let result = runtime.block_on(run());
+    runtime.shutdown_timeout(std::time::Duration::from_secs(1));
+    result
+}
+#[cfg(unix)]
+async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::Write;
+    use tokio::signal::unix::{SignalKind, signal};
+    let mut args = std::env::args_os().skip(1);
+    let path = args
+        .next()
+        .ok_or("usage: orange-worker <private-development-config.json>")?;
+    if args.next().is_some() {
+        return Err("one private configuration path required".into());
+    }
+    let config = orange_worker::host::WorkerConfig::read(std::path::Path::new(&path))?;
+    let (shutdown, stop) = tokio::sync::watch::channel(false);
+    let (events, mut receiver) = tokio::sync::mpsc::channel(32);
+    let mut terminate = signal(SignalKind::terminate())?;
+    let mut interrupt = signal(SignalKind::interrupt())?;
+    let signals = tokio::spawn(async move {
+        tokio::select! {_=terminate.recv()=>{},_=interrupt.recv()=>{}}
+        let _ = shutdown.send(true);
+    });
+    // Stdout is diagnostics only; it cannot block the owned resource lifecycle.
+    let printer = tokio::task::spawn_blocking(move || {
+        while let Some(event) = receiver.blocking_recv() {
+            let mut out = std::io::stdout().lock();
+            if serde_json::to_writer(&mut out, &event).is_err()
+                || out.write_all(b"\n").is_err()
+                || out.flush().is_err()
+            {
+                break;
+            }
+        }
+    });
+    let result = orange_worker::host::run(config, stop, events).await;
+    signals.abort();
+    // The diagnostic pipe is not resource authority; don't wait forever if its
+    // reader stopped consuming. Model cleanup has already been awaited by run.
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(1), printer).await;
+    result.map_err(Into::into)
+}
+#[cfg(not(unix))]
+fn main() {
+    eprintln!("This development Worker requires a verified Unix process backend");
+    std::process::exit(2);
+}

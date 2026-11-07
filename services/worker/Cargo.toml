@@ -22,6 +22,9 @@ tonic.workspace = true
 prost.workspace = true
 tokio-stream.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+rustix.workspace = true
+
 [dev-dependencies]
 prost-types.workspace = true
 tempfile.workspace = true

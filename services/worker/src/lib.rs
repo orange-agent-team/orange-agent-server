@@ -8,3 +8,5 @@ pub mod execution_journal;
 
 #[cfg(unix)]
 pub mod cpu;
+#[cfg(unix)]
+pub mod host;

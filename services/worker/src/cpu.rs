@@ -66,6 +66,8 @@ pub struct CpuRunReport {
     pub authority_checks: u64,
     pub supervision_renewals: u64,
     pub cloud_renewals: u64,
+    pub node_policy: Option<AppliedNodePolicy>,
+    pub node_policy_error: Option<String>,
     pub cloud_completion: String,
     pub error_code: Option<String>,
 }
@@ -178,19 +180,15 @@ async fn authority_cycle(
     snapshot: &str,
     not_before: Instant,
     renewal: Option<PendingRenewal>,
-) -> Result<
-    (
-        Vec<crate::node_journal::ReceivedNodeIntent>,
-        Option<VerifiedRenewal>,
-    ),
-    ControlError,
-> {
+) -> Result<(bool, Option<VerifiedRenewal>), ControlError> {
     tokio::time::sleep_until(tokio::time::Instant::from_std(not_before)).await;
     let intents = connection.heartbeat_node_control(snapshot, node).await?;
-    if intents.is_empty() {
+    let stop = !intents.is_empty()
+        || connection.policy_changed_since(record.assignment.node_policy_generation);
+    if !stop {
         connection.check_cpu_authority(record).await?;
     }
-    let renewed = if intents.is_empty() {
+    let renewed = if !stop {
         match renewal {
             Some(pending) => Some(connection.renew_execution(pending).await?),
             None => None,
@@ -198,7 +196,7 @@ async fn authority_cycle(
     } else {
         None
     };
-    Ok((intents, renewed))
+    Ok((stop, renewed))
 }
 async fn run(
     mut r: CpuResources,
@@ -251,6 +249,8 @@ async fn run(
                     authority_checks: 0,
                     supervision_renewals: 0,
                     cloud_renewals: 0,
+                    node_policy: None,
+                    node_policy_error: None,
                     cloud_completion: "not_started".into(),
                     error_code: None,
                 },
@@ -321,6 +321,8 @@ async fn run(
     let mut requested_cancel = false;
     let mut next_check = Instant::now();
     let mut generating = false;
+    let mut node_policy = None;
+    let mut node_policy_error = None;
     'owner: loop {
         let cycle_started = next_check;
         let pending = if r.connection.supports_renewal() && Instant::now() >= next_renewal {
@@ -367,7 +369,7 @@ async fn run(
             }
         };
         match network {
-            Ok((intents, renewed)) if intents.is_empty() => {
+            Ok((false, renewed)) => {
                 checks += 1;
                 if let Some(renewed) = renewed {
                     if r.connection
@@ -381,9 +383,29 @@ async fn run(
                     next_renewal = Instant::now() + Duration::from_secs(10);
                 }
             }
-            Ok(_) => {
+            Ok((true, _)) => {
                 authority_lost = true;
                 let _ = cancel.send(true);
+                let _ = progress.send(CpuPhase::Stopping);
+                // The model task is already cancelling. Quarantine/drain and
+                // current policy authentication must never imply process exit.
+                if r.broker.set_remote_allowed(false).is_err()
+                    || r.broker.begin_drain(&r.supervisor, &grant).is_err()
+                {
+                    node_policy_error = Some("LOCAL_DRAIN_FAILED".into());
+                } else {
+                    match r
+                        .connection
+                        .authorize_latest_node_stop(&spec.capability_snapshot, &mut r.node_journal)
+                        .await
+                    {
+                        Ok(authorization) => match authorization.apply(&mut r.broker) {
+                            Ok(applied) => node_policy = Some(applied),
+                            Err(_) => node_policy_error = Some("POLICY_APPLY_FAILED".into()),
+                        },
+                        Err(_) => node_policy_error = Some("POLICY_AUTHORITY_UNCONFIRMED".into()),
+                    }
+                }
                 break;
             }
             Err(_) => {
@@ -482,6 +504,8 @@ async fn run(
             authority_checks: checks,
             supervision_renewals: renewals,
             cloud_renewals,
+            node_policy,
+            node_policy_error,
             cloud_completion: "pending_output_commit".into(),
             error_code: error_code.map(str::to_owned),
         },

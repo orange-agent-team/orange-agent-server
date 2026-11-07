@@ -1,0 +1,23 @@
+{
+  "protocol": 1,
+  "environment": "development",
+  "state_directory": "/ABSOLUTE/PRIVATE/worker-state",
+  "endpoint": "https://127.0.0.1:50051/",
+  "server_name": "localhost",
+  "server_ca": "/ABSOLUTE/PRIVATE/tls/ca.pem",
+  "certificate": "/ABSOLUTE/PRIVATE/tls/worker.pem",
+  "private_key": "/ABSOLUTE/PRIVATE/tls/worker.key",
+  "node_id": "REPLACE_ENROLLED_NODE_ID",
+  "allow_remote_contribution": false,
+  "profile_id": "REPLACE_REVIEWED_PROFILE_ID",
+  "profile": {
+    "executable": "/ABSOLUTE/VERIFIED/llama-server",
+    "executable_sha256": "REPLACE_VERIFIED_BACKEND_SHA256",
+    "model": "/ABSOLUTE/VERIFIED/model.gguf",
+    "model_sha256": "REPLACE_REVIEWED_MODEL_SHA256",
+    "model_bytes": 0,
+    "model_version": "REPLACE_MODEL_VERSION",
+    "context_tokens": 4096,
+    "startup_timeout_seconds": 120
+  }
+}

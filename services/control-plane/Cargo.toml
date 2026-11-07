@@ -71,5 +71,8 @@ rusqlite.workspace = true
 tower.workspace = true
 orange-worker = { path = "../worker", version = "=0.1.0" }
 
+[target.'cfg(unix)'.dev-dependencies]
+rustix.workspace = true
+
 [lints]
 workspace = true

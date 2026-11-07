@@ -181,6 +181,11 @@ impl Broker {
             return Err(BrokerError::Stale);
         }
         tx.commit()?;
+        // A slow durable commit may cross the authentication window. Keep the
+        // restrictive policy fact, but don't return it as fresh authorization.
+        if Instant::now() >= deadline {
+            return Err(BrokerError::Stale);
+        }
         Ok(result)
     }
 }

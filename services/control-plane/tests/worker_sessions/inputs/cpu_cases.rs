@@ -2,6 +2,8 @@ use super::*;
 use orange_model_runtime::supervisor::CpuProfile;
 use orange_worker::cpu::{CpuExecutionSpec, CpuPhase, CpuResources, cpu_profile_digest, spawn_cpu};
 use serde::Deserialize;
+#[path = "host_cases.rs"]
+mod host_cases;
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RealProfile {
@@ -434,6 +436,194 @@ async fn actual_owned_model_remains_authorized_beyond_original_lease_then_genera
     assert_eq!(job.settlement_state, "pending");
     assert!(job.charge.is_none());
     c.close();
+    server.stop().await;
+    f.objects.drain().await.expect("drain");
+}
+
+async fn stopped_by_policy(cert: &str, kind: &str) {
+    let p = profile();
+    let digest = cpu_profile_digest(&p).expect("digest");
+    let f = setup_model(
+        cert,
+        &p.model_sha256,
+        &digest,
+        "Count from 1 to 10000, write each number without summarizing.".into(),
+        1024,
+    )
+    .await;
+    bind(&f).await;
+    let server = Running::start_with_input(&f.d.store, Some(f.objects.reader())).await;
+    let (connection, node_journal, journal, record) = receiver_mode(&f, &server, true).await;
+    let (broker, supervisor) = broker(&f).await;
+    let root = runtime();
+    let mut handle = spawn_cpu(
+        CpuResources {
+            connection,
+            node_journal,
+            journal,
+            broker,
+            supervisor,
+        },
+        CpuExecutionSpec {
+            command_id: record.command_id,
+            profile_id: f.profile.clone(),
+            profile: p,
+            runtime_directory: root.path().to_path_buf(),
+            capability_snapshot: "policy-cpu".into(),
+        },
+    );
+    generating(&handle).await;
+    // Accepted Admin intent is an explicit fixture; delivery, policy application
+    // and actual model shutdown are real. MFA is certified in its own tests.
+    let (command, action) = enqueue_stop(&f.d, 1, kind).await;
+    let mut exit = tokio::time::timeout(Duration::from_secs(25), handle.wait())
+        .await
+        .expect("bounded policy stop")
+        .expect("report");
+    assert_eq!(exit.report.outcome, "authority_lost");
+    assert!(exit.report.response.is_none());
+    assert!(exit.report.cleanup_confirmed);
+    assert!(exit.report.node_policy_error.is_none());
+    let applied = exit
+        .report
+        .node_policy
+        .as_ref()
+        .expect("fresh policy application");
+    assert_eq!(applied.command_id, command);
+    assert_eq!(applied.policy_generation, "1");
+    assert!(
+        exit.resources
+            .broker
+            .node_policy()
+            .expect("policy")
+            .platform_blocked
+    );
+    assert!(matches!(
+        exit.resources.broker.set_remote_allowed(true),
+        Err(BrokerError::PlatformBlocked)
+    ));
+    assert_eq!(
+        exit.resources.broker.slot("cpu").expect("slot").state,
+        "idle"
+    );
+    assert_eq!(
+        exit.resources
+            .broker
+            .applied_node_policy(&command)
+            .expect("durable policy")
+            .as_ref(),
+        Some(applied)
+    );
+    let state: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.path().join("process.json")).expect("real exit receipt"),
+    )
+    .expect("json");
+    assert_eq!(state["phase"], "stopped");
+    let state: String =
+        sqlx::query_scalar("SELECT document->>'state' FROM admin_actions WHERE action_id=$1")
+            .bind(action)
+            .fetch_one(f.d.store.pool())
+            .await
+            .expect("Admin state");
+    assert_eq!(
+        state, "executing",
+        "local exit is not a cloud action completion certificate"
+    );
+    let job = f.d.store.job(&f.owner, &f.job).await.expect("job");
+    assert_eq!(job.settlement_state, "pending");
+    assert!(job.charge.is_none());
+    exit.resources.connection.close();
+    server.stop().await;
+    f.objects.drain().await.expect("drain");
+}
+#[tokio::test]
+async fn actual_model_drain_applies_current_policy_and_confirms_owned_exit() {
+    stopped_by_policy("client-bq", "node.drain").await;
+}
+#[tokio::test]
+async fn actual_model_quarantine_latches_policy_without_completing_admin_action() {
+    stopped_by_policy("client-br", "node.quarantine").await;
+}
+
+#[tokio::test]
+async fn changed_policy_without_command_stops_model_without_inventing_application() {
+    let p = profile();
+    let digest = cpu_profile_digest(&p).expect("digest");
+    let f = setup_model(
+        "client-bu",
+        &p.model_sha256,
+        &digest,
+        "Count from 1 to 10000 without summarizing, print every number.".into(),
+        1024,
+    )
+    .await;
+    bind(&f).await;
+    let server = Running::start_with_input(&f.d.store, Some(f.objects.reader())).await;
+    let (connection, node_journal, journal, record) = receiver_mode(&f, &server, true).await;
+    let (broker, supervisor) = broker(&f).await;
+    let root = runtime();
+    let mut handle = spawn_cpu(
+        CpuResources {
+            connection,
+            node_journal,
+            journal,
+            broker,
+            supervisor,
+        },
+        CpuExecutionSpec {
+            command_id: record.command_id,
+            profile_id: f.profile.clone(),
+            profile: p,
+            runtime_directory: root.path().to_path_buf(),
+            capability_snapshot: "missing-policy-command".into(),
+        },
+    );
+    generating(&handle).await;
+    sqlx::query("UPDATE nodes SET policy_generation=1,state='draining' WHERE node_id=$1")
+        .bind(&f.d.node)
+        .execute(f.d.store.pool())
+        .await
+        .expect("missing command fault fixture");
+    let mut exit = tokio::time::timeout(Duration::from_secs(25), handle.wait())
+        .await
+        .expect("bounded fail-closed stop")
+        .expect("report");
+    assert_eq!(exit.report.outcome, "authority_lost");
+    assert!(exit.report.response.is_none());
+    assert!(exit.report.cleanup_confirmed);
+    assert!(exit.report.node_policy.is_none());
+    assert_eq!(
+        exit.report.node_policy_error.as_deref(),
+        Some("POLICY_AUTHORITY_UNCONFIRMED")
+    );
+    assert_eq!(
+        exit.resources
+            .broker
+            .node_policy()
+            .expect("policy")
+            .policy_generation,
+        "0"
+    );
+    let request = AcquireRequest {
+        request_id: "blocked-new-request".into(),
+        device_id: "cpu".into(),
+        mode: Holder::Remote,
+        profile_id: f.profile.clone(),
+        remote: Some(RemoteBinding {
+            node_id: f.d.node.clone(),
+            attempt_id: "new-attempt".into(),
+            lease_id: "new-lease".into(),
+            connection_epoch: exit.resources.connection.identity().connection_epoch,
+            fencing_token: 99,
+        }),
+    };
+    assert!(matches!(
+        exit.resources
+            .broker
+            .acquire(&exit.resources.supervisor, &request),
+        Err(BrokerError::RemoteDisabled)
+    ));
+    exit.resources.connection.close();
     server.stop().await;
     f.objects.drain().await.expect("drain");
 }

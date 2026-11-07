@@ -81,6 +81,16 @@ pub struct AuthorizedNodeStop<'a> {
     received: ReceivedNodeIntent,
     deadline: Instant,
 }
+struct PendingPolicy<'a> {
+    connection: Option<&'a mut ControlConnection>,
+}
+impl Drop for PendingPolicy<'_> {
+    fn drop(&mut self) {
+        if let Some(connection) = self.connection.as_deref_mut() {
+            connection.active = false;
+        }
+    }
+}
 impl AuthorizedNodeStop<'_> {
     pub fn apply(self, broker: &mut Broker) -> Result<AppliedNodePolicy, ControlError> {
         if !self.connection.is_current_locally() || Instant::now() >= self.deadline {
@@ -353,6 +363,55 @@ impl ControlConnection {
         let deadline = self.stop_at.min(Instant::now() + Duration::from_secs(5));
         Ok(AuthorizedNodeStop {
             connection: self,
+            received,
+            deadline,
+        })
+    }
+    pub(crate) fn policy_changed_since(&self, generation: u64) -> bool {
+        self.observed_policy_generation != generation
+    }
+    /// Wait only for a current authenticated stop receipt. A changed heartbeat
+    /// generation is a reason to stop execution, never policy-application proof.
+    pub async fn authorize_latest_node_stop<'a>(
+        &'a mut self,
+        snapshot: &str,
+        journal: &mut NodeJournal,
+    ) -> Result<AuthorizedNodeStop<'a>, ControlError> {
+        if self.node_control_version != 2 || !self.is_current_locally() {
+            return Err(ControlError::Stale);
+        }
+        let until = self.stop_at.min(Instant::now() + Duration::from_secs(6));
+        let mut pending = PendingPolicy {
+            connection: Some(self),
+        };
+        let received = tokio::time::timeout_at(tokio::time::Instant::from_std(until), async {
+            loop {
+                let connection = pending
+                    .connection
+                    .as_deref_mut()
+                    .ok_or(ControlError::Unavailable)?;
+                connection.heartbeat_node_control(snapshot, journal).await?;
+                if let Some(latest) = journal
+                    .latest_received()
+                    .map_err(|_| ControlError::Unavailable)?
+                    && latest.intent.generation().map(|g| g as u64)
+                        == Some(connection.observed_policy_generation)
+                {
+                    return journal
+                        .current_receipt(connection.identity(), &latest.intent.command_id)
+                        .map_err(|_| ControlError::Stale);
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .map_err(|_| ControlError::Unavailable)??;
+        let connection = pending.connection.take().ok_or(ControlError::Unavailable)?;
+        let deadline = connection
+            .stop_at
+            .min(Instant::now() + Duration::from_secs(5));
+        Ok(AuthorizedNodeStop {
+            connection,
             received,
             deadline,
         })
