@@ -8,7 +8,7 @@ Each operation scans at most10000 directory entries and32 levels, returns at mos
 
 The existing response commit → intent → explicit approval → dispatch → result flow owns this tool. The model cannot grant itself access or approve execution. Current owner/environment/policy and revocation are rechecked by the same prepared-tool path as reads. SQLite recovery preserves the approved intent and publishes exactly one tool result.
 
-`python3 scripts/check-file-search.py` runs actual filesystem and SQLite checks for matching/Unicode, argument rejection, sensitive directories/link aliases, scope and prepared revocation, depth/entry/JSON limits, explicit approval and reopening without duplicated result. The model transport is an explicit script. Broader Runtime tests and strict Clippy passed in preparation; formal source regression is required before this slice is DONE.
+`python3 scripts/check-file-search.py` runs actual filesystem and SQLite checks for matching/Unicode, argument rejection, sensitive directories/link aliases, scope and prepared revocation, depth/entry/JSON limits, explicit approval and reopening without duplicated result. The model transport is an explicit script. Broader Runtime tests, strict Clippy and formal source-bound related regression passed. This completes the scoped tool implementation slice, not broad model qualification or a new Desktop release.
 
 Desktop still consumes its independently pinned Runtime release; this source change does not silently upgrade its vendor bundle. Windows/Linux target certification, TK-04 text search and the remaining G3 tools are separate work.
 
