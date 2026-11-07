@@ -502,6 +502,83 @@
       "additionalProperties": false,
       "properties": {},
       "description": "Explicit original-user stop intent. No client-supplied refund, target actor or cleanup assertion."
+    },
+    "UserJobList": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "owner_id",
+        "user_id",
+        "data",
+        "next_cursor"
+      ],
+      "properties": {
+        "owner_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
+        },
+        "user_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
+        },
+        "data": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "$ref": "#/$defs/JobView"
+          }
+        },
+        "next_cursor": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_.:-]+$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "UserJobLookup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "owner_id",
+        "user_id",
+        "quote_id",
+        "job"
+      ],
+      "properties": {
+        "owner_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
+        },
+        "user_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
+        },
+        "quote_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
+        },
+        "job": {
+          "$ref": "#/$defs/JobView"
+        }
+      }
     }
   }
 }

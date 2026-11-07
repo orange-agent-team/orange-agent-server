@@ -106,3 +106,24 @@ pub struct JobInputView {
     pub size_bytes: String,
     pub projection_digest: String,
 }
+
+/// Current submitter's metadata, never a grant to read input/output content.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UserJobList {
+    pub owner_id: String,
+    pub user_id: String,
+    pub data: Vec<crate::JobView>,
+    pub next_cursor: Option<String>,
+}
+
+/// Read-only recovery of a submitted Invocation. No source-content digest or
+/// body is exposed, and absence does not prove that an in-flight write failed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UserJobLookup {
+    pub owner_id: String,
+    pub user_id: String,
+    pub quote_id: String,
+    pub job: crate::JobView,
+}

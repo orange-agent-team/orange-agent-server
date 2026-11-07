@@ -38,9 +38,13 @@ pub fn router(identity: UserIdentity, store: ArtifactStore) -> Router {
         )
         .route(
             "/api/v1/owners/{owner}/jobs",
-            axum::routing::post(submit_job),
+            get(job_list).post(submit_job),
         )
         .route("/api/v1/owners/{owner}/jobs/{job}", get(job_status))
+        .route(
+            "/api/v1/owners/{owner}/jobs/by-invocation/{invocation}",
+            get(job_lookup),
+        )
         .route("/api/v1/owners/{owner}/jobs/{job}/result", get(job_result))
         .route(
             "/api/v1/owners/{owner}/jobs/{job}/cancel",
@@ -388,4 +392,50 @@ async fn cancel_job(
             _ => Error(StatusCode::CONFLICT, "CANCELLATION_REJECTED"),
         })?;
     Ok(private(Json(view).into_response()))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct JobListQuery {
+    after: Option<String>,
+    limit: Option<u16>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NoQuery {}
+async fn job_lookup(
+    State(api): State<Api>,
+    Path((owner, invocation)): Path<(String, String)>,
+    headers: HeaderMap,
+    query: Result<Query<NoQuery>, axum::extract::rejection::QueryRejection>,
+) -> Result<Response, Error> {
+    let actor = api.identity.artifact_actor(&headers, false).await?;
+    let Query(_) = query.map_err(|_| ArtifactError::Invalid)?;
+    Ok(private(
+        Json(
+            api.store
+                .job_by_invocation(&actor, &owner, &invocation)
+                .await?,
+        )
+        .into_response(),
+    ))
+}
+async fn job_list(
+    State(api): State<Api>,
+    Path(owner): Path<String>,
+    headers: HeaderMap,
+    query: Result<Query<JobListQuery>, axum::extract::rejection::QueryRejection>,
+) -> Result<Response, Error> {
+    let actor = api.identity.artifact_actor(&headers, false).await?;
+    let Query(query) = query.map_err(|_| ArtifactError::Invalid)?;
+    let result = api
+        .store
+        .jobs_for_user(
+            &actor,
+            &owner,
+            query.after.as_deref().unwrap_or(""),
+            query.limit.unwrap_or(50),
+        )
+        .await?;
+    Ok(private(Json(result).into_response()))
 }

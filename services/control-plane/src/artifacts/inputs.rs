@@ -7,6 +7,60 @@ use orange_protocol::{
     model::GenerateRequest,
 };
 impl ArtifactStore {
+    pub async fn job_by_invocation(
+        &self,
+        actor: &ArtifactActor,
+        owner: &str,
+        invocation: &str,
+    ) -> Result<orange_protocol::artifacts::UserJobLookup, ArtifactError> {
+        if !valid_id(invocation) {
+            return Err(ArtifactError::Invalid);
+        }
+        let mut tx = self.inner.pool.begin().await?;
+        authority::scope(&mut tx, actor, owner, false).await?;
+        let row=sqlx::query("SELECT * FROM jobs WHERE owner_id=$1 AND submitting_user_id=$2 AND invocation_id=$3 FOR SHARE").bind(owner).bind(&actor.user).bind(invocation).fetch_optional(&mut *tx).await?.ok_or(ArtifactError::NotFound)?;
+        let result = orange_protocol::artifacts::UserJobLookup {
+            owner_id: owner.into(),
+            user_id: actor.user.clone(),
+            quote_id: row.try_get("quote_id")?,
+            job: crate::store::job_view(&row).map_err(|_| ArtifactError::Integrity)?,
+        };
+        authority::finish(tx, actor).await?;
+        Ok(result)
+    }
+
+    pub async fn jobs_for_user(
+        &self,
+        actor: &ArtifactActor,
+        owner: &str,
+        after: &str,
+        limit: u16,
+    ) -> Result<orange_protocol::artifacts::UserJobList, ArtifactError> {
+        if (!after.is_empty() && !valid_id(after)) || !(1..=100).contains(&limit) {
+            return Err(ArtifactError::Invalid);
+        }
+        let mut tx = self.inner.pool.begin().await?;
+        authority::scope(&mut tx, actor, owner, false).await?;
+        let rows=sqlx::query("SELECT * FROM jobs WHERE owner_id=$1 AND submitting_user_id=$2 AND job_id>$3 ORDER BY job_id LIMIT $4").bind(owner).bind(&actor.user).bind(after).bind(i64::from(limit)+1).fetch_all(&mut *tx).await?;
+        let more = rows.len() > usize::from(limit);
+        let mut data = Vec::new();
+        for row in rows.iter().take(usize::from(limit)) {
+            data.push(crate::store::job_view(row).map_err(|_| ArtifactError::Integrity)?);
+        }
+        let next_cursor = if more {
+            data.last().map(|job| job.job_id.clone())
+        } else {
+            None
+        };
+        authority::finish(tx, actor).await?;
+        Ok(orange_protocol::artifacts::UserJobList {
+            owner_id: owner.into(),
+            user_id: actor.user.clone(),
+            data,
+            next_cursor,
+        })
+    }
+
     pub async fn submit_job(
         &self,
         actor: &ArtifactActor,

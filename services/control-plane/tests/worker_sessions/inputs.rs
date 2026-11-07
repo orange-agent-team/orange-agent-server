@@ -7,6 +7,8 @@ mod cleanup_cases;
 #[cfg(all(unix, feature = "real-worker-tests"))]
 #[path = "inputs/cpu_cases.rs"]
 mod cpu_cases;
+#[path = "inputs/job_queries.rs"]
+mod job_queries;
 #[path = "inputs/output_cases.rs"]
 mod output_cases;
 #[path = "inputs/renewal_cases.rs"]
