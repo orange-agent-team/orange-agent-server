@@ -1,4 +1,5 @@
 //! Explicit directory capabilities for TK-01/TK-02/TK-03. Never an ambient path or command executor.
+pub mod creation;
 mod search;
 mod text_search;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -518,6 +519,7 @@ fn sensitive(name: &str) -> bool {
     ]
     .contains(&name.as_str())
         || name.starts_with(".env.")
+        || name.starts_with(".orange-agent-tmp-")
         || [".pem", ".key", ".p12", ".pfx"]
             .iter()
             .any(|suffix| name.ends_with(suffix))
