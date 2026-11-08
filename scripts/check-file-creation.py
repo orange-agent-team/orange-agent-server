@@ -5,6 +5,8 @@ Each CLI invocation reopens the Host. Test approval is confined to owned fixture
 No real inference, desktop OS consent or Windows support is certified here.
 """
 import http.server
+import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -17,6 +19,10 @@ import threading
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
+parser=argparse.ArgumentParser()
+parser.add_argument('--legacy-runtime',type=Path)
+args=parser.parse_args()
+legacy_binary=None
 rustup = shutil.which('rustup') or '/opt/homebrew/opt/rustup/bin/rustup'
 cargo = Path(subprocess.check_output([rustup, 'which', '--toolchain', 'stable', 'cargo'], text=True).strip())
 env = os.environ.copy()
@@ -26,6 +32,34 @@ metadata = json.loads(subprocess.check_output([str(cargo), 'metadata', '--no-dep
 if env.get('CARGO_BUILD_TARGET'):
     raise SystemExit('CLI acceptance requires native build')
 binary = Path(metadata['target_directory']) / 'debug/examples/local-agent'
+if args.legacy_runtime:
+    legacy=args.legacy_runtime.resolve()
+    manifest_path=legacy/'release-manifest.json'
+    if legacy.is_symlink() or hashlib.sha256(manifest_path.read_bytes()).hexdigest()!='cf33ccae01c04658b02188bab8268783828e9c651ec8066fc18aa6759d461400':
+        raise SystemExit('Exact prior Runtime7e115c3 source artifact required')
+    release=json.loads(manifest_path.read_text())
+    if release['origin_commit']!='7e115c3aa197f307f43f0aa3aef5333fdb2d8479':
+        raise SystemExit('Unexpected legacy origin')
+    actual=set()
+    for directory,folders,names in os.walk(legacy,followlinks=False):
+        for name in folders:
+            if (Path(directory)/name).is_symlink():
+                raise SystemExit('Linked legacy source directory')
+        folders[:]=[name for name in folders if name!='target']
+        for name in names:
+            file=Path(directory)/name
+            if file.is_symlink() or not file.is_file():
+                raise SystemExit('Irregular legacy source entry')
+            actual.add(file.relative_to(legacy).as_posix())
+    if actual!=set(release['content_sha256'])|{'release-manifest.json'}:
+        raise SystemExit('Legacy source inventory mismatch')
+    for relative,expected in release['content_sha256'].items():
+        file=legacy/relative
+        if file.is_symlink() or not file.is_file() or hashlib.sha256(file.read_bytes()).hexdigest()!=expected:
+            raise SystemExit('Legacy source integrity mismatch: '+relative)
+    legacy_env=env.copy();legacy_env['CARGO_TARGET_DIR']=str(ROOT/'.local/legacy-runtime-target')
+    subprocess.run([str(cargo),'build','--manifest-path',str(legacy/'Cargo.toml'),'-p','orange-agent-runtime','--example','local-agent','--locked','--offline'],cwd=ROOT,env=legacy_env,check=True,timeout=300)
+    legacy_binary=Path(legacy_env['CARGO_TARGET_DIR'])/'debug/examples/local-agent'
 key_value = secrets.token_hex(32)
 proof = 'owned-fixture-' + secrets.token_hex(16)
 observations, failures = [], []
@@ -100,8 +134,9 @@ try:
         def save():
             config_path.write_text(json.dumps(config))
             config_path.chmod(0o600)
+        active_binary = legacy_binary or binary
         def invoke(command, *arguments, failed=False):
-            result = subprocess.run([str(binary), str(config_path), command, *arguments], cwd=ROOT, env=env, capture_output=True, text=True, timeout=20)
+            result = subprocess.run([str(active_binary), str(config_path), command, *arguments], cwd=ROOT, env=env, capture_output=True, text=True, timeout=20)
             if failed:
                 assert result.returncode != 0, 'invalid command accepted'
                 return None
@@ -137,7 +172,21 @@ try:
         with sqlite3.connect(database) as db:
             assert db.execute('SELECT count(*) FROM approvals WHERE operation_id=?', (pending['operation_id'],)).fetchone()[0] == 0
         invoke('approve-create', pending['operation_id'], pending['argument_digest'])
+        if legacy_binary:
+            with sqlite3.connect(database) as db:
+                assert db.execute('PRAGMA user_version').fetchone()[0] == 6
+                assert db.execute('SELECT count(*) FROM approvals').fetchone()[0] == 2
+                assert db.execute("SELECT count(*) FROM operations WHERE state='intended'").fetchone()[0] == 1
+            assert not target.exists()
+            active_binary = binary
         assert invoke('step')['phase'] == 'ready'
+        if legacy_binary:
+            with sqlite3.connect(database) as db:
+                assert db.execute('PRAGMA user_version').fetchone()[0] == 7
+                assert db.execute("SELECT count(*) FROM runtime_tool_catalogs WHERE origin='legacy_builtin_v1'").fetchone()[0] == 2
+                assert db.execute('SELECT count(*) FROM approvals').fetchone()[0] == 2
+                assert db.execute('SELECT count(*) FROM runtime_tool_approvals').fetchone()[0] == 1
+
         assert target.read_text() == proof
         complete = invoke('step')
         assert complete['phase'] == 'completed' and complete['steps'] == 5
@@ -157,3 +206,6 @@ finally:
     server.server_close()
     thread.join(timeout=5)
 print('PASS actual CLI/HTTP adapter/SQLite/source read/new Unicode file/exact approval/reopen/no replay/revocation; model responses and count are explicit fixtures, not inference or OS-consent certification')
+
+if legacy_binary:
+    print('PASS actual fixed Runtime7e115c3 schema6 pending approved creation -> current schema7 snapshot/approval adoption; no extra approval or effect replay. Desktop OS access restoration is separately verified.')
