@@ -31,6 +31,15 @@ fn quote_view(row: &sqlx::postgres::PgRow) -> Result<TextQuoteView, ArtifactErro
         expires_at_unix: row.try_get::<i64, _>("expires")?.to_string(),
     })
 }
+// Candidate selection and locked price revalidation share exactly the same
+// authority conditions. Apply the bounded catalog LIMIT only after eligibility,
+// so historical/offline prices cannot hide currently usable nodes.
+macro_rules! eligible_price_sql {
+    ($select:literal, $suffix:literal) => {
+        concat!($select, "FROM text_prices p JOIN trusted_meter_profiles m ON m.profile_digest=p.meter_profile_digest JOIN reviewed_execution_profiles r USING(execution_profile_id) JOIN nodes n USING(node_id) JOIN owners o ON o.owner_id=n.owner_id JOIN wallets w ON w.owner_id=n.owner_id JOIN worker_sessions s USING(node_id) JOIN worker_credentials c ON c.certificate_sha256=s.certificate_sha256 JOIN users u ON u.user_id=c.enrollment_user_id WHERE p.enabled AND p.admission='development_only' AND m.enabled AND m.profile_digest=$1 AND m.descriptor=$2 AND r.enabled AND r.execution_profile_digest=$3 AND r.model_sha256=$4 AND r.model_version_id=$5 AND n.environment='dev' AND n.state='online' AND o.state='active' AND s.expires_at>clock_timestamp() AND s.output_version=1 AND c.active AND c.not_before<=clock_timestamp() AND c.expires_at>clock_timestamp() AND u.active AND (u.personal_owner_id=n.owner_id OR EXISTS(SELECT 1 FROM memberships ms WHERE ms.organization_id=n.owner_id AND ms.user_id=u.user_id AND ms.active AND ms.role IN('owner','admin')))", $suffix)
+    };
+}
+
 async fn price_in(
     tx: &mut Tx<'_>,
     version: &str,
@@ -50,8 +59,19 @@ async fn price_in(
         .fetch_one(&mut **tx)
         .await?;
 
-    let row=sqlx::query("SELECT p.*,r.model_version_id,r.model_sha256,r.execution_profile_digest,n.owner_id AS provider_owner_id FROM text_prices p JOIN trusted_meter_profiles m ON m.profile_digest=p.meter_profile_digest JOIN reviewed_execution_profiles r USING(execution_profile_id) JOIN nodes n USING(node_id) JOIN owners o ON o.owner_id=n.owner_id JOIN wallets w ON w.owner_id=n.owner_id JOIN worker_sessions s USING(node_id) JOIN worker_credentials c ON c.certificate_sha256=s.certificate_sha256 JOIN users u ON u.user_id=c.enrollment_user_id WHERE p.price_version=$1 AND p.enabled AND p.admission='development_only' AND m.enabled AND m.profile_digest=$2 AND m.descriptor=$3 AND r.enabled AND r.execution_profile_digest=$4 AND r.model_sha256=$5 AND r.model_version_id=$6 AND n.environment='dev' AND n.state='online' AND o.state='active' AND s.expires_at>clock_timestamp() AND s.output_version=1 AND c.active AND c.not_before<=clock_timestamp() AND c.expires_at>clock_timestamp() AND u.active AND (u.personal_owner_id=n.owner_id OR EXISTS(SELECT 1 FROM memberships ms WHERE ms.organization_id=n.owner_id AND ms.user_id=u.user_id AND ms.active AND ms.role IN('owner','admin'))) FOR SHARE OF p,m,r,n,o,s,c,u")
-        .bind(version).bind(&d.profile_digest).bind(serde_json::to_value(d).map_err(|_|ArtifactError::Invalid)?).bind(&d.execution_digest).bind(&d.model_sha256).bind(&d.model_version).fetch_optional(&mut **tx).await?.ok_or(ArtifactError::PricingUnavailable)?;
+    let row = sqlx::query(eligible_price_sql!(
+        "SELECT p.*,r.model_version_id,r.model_sha256,r.execution_profile_digest,n.owner_id AS provider_owner_id ",
+        " AND p.price_version=$6 FOR SHARE OF p,m,r,n,o,s,c,u"
+    ))
+        .bind(&d.profile_digest)
+        .bind(serde_json::to_value(d).map_err(|_| ArtifactError::Invalid)?)
+        .bind(&d.execution_digest)
+        .bind(&d.model_sha256)
+        .bind(&d.model_version)
+        .bind(version)
+        .fetch_optional(&mut **tx)
+        .await?
+        .ok_or(ArtifactError::PricingUnavailable)?;
     Ok(row)
 }
 impl ArtifactStore {
@@ -68,7 +88,18 @@ impl ArtifactStore {
                 .fetch_one(&mut *tx)
                 .await?;
         authority::scope(&mut tx, actor, &personal, false).await?;
-        let versions:Vec<String>=sqlx::query_scalar("SELECT price_version FROM text_prices WHERE enabled AND meter_profile_digest=$1 ORDER BY price_version LIMIT 100").bind(&meter.descriptor().profile_digest).fetch_all(&mut *tx).await?;
+        let d = meter.descriptor();
+        let versions: Vec<String> = sqlx::query_scalar(eligible_price_sql!(
+            "SELECT p.price_version ",
+            " ORDER BY p.price_version LIMIT 100"
+        ))
+        .bind(&d.profile_digest)
+        .bind(serde_json::to_value(d).map_err(|_| ArtifactError::Invalid)?)
+        .bind(&d.execution_digest)
+        .bind(&d.model_sha256)
+        .bind(&d.model_version)
+        .fetch_all(&mut *tx)
+        .await?;
         let mut result = vec![];
         for version in versions {
             match price_in(&mut tx, &version, meter).await {

@@ -290,6 +290,34 @@ async fn disabled_price_cannot_create_a_new_quote_or_reservation() {
     let c = setup_priced("client-cp").await;
     let server = Running::start_with_output(&c.f.d.store, c.f.objects.clone()).await;
     let (connection, _, _) = idle(&c, &server).await;
+    // More than a full catalog page of enabled prices with an ineligible
+    // execution profile must not consume the available-node result bound.
+    let disabled_profile = format!("catalog-disabled-{}", Uuid::new_v4());
+    sqlx::query("INSERT INTO reviewed_execution_profiles(execution_profile_id,model_version_id,model_sha256,execution_profile_digest,enabled) SELECT $1,model_version_id,model_sha256,execution_profile_digest,false FROM reviewed_execution_profiles WHERE execution_profile_id=$2")
+        .bind(&disabled_profile).bind(&c.f.profile).execute(c.f.d.store.pool()).await.expect("disabled profile fixture");
+    let prefix = format!("0-catalog-{}-", Uuid::new_v4());
+    sqlx::query("INSERT INTO text_prices(price_version,node_id,execution_profile_id,meter_profile_digest,input_price,output_price,output_limit,fee_bps) SELECT $1 || i::text,p.node_id,$2,p.meter_profile_digest,p.input_price,p.output_price,p.output_limit,p.fee_bps FROM text_prices p CROSS JOIN generate_series(1,101) i WHERE p.price_version=$3")
+        .bind(&prefix).bind(&disabled_profile).bind(&c.price).execute(c.f.d.store.pool()).await.expect("101 enabled but unavailable price fixtures");
+    let predecessors: i64 = sqlx::query_scalar("SELECT count(*) FROM text_prices WHERE starts_with(price_version,$1) AND price_version < $2 AND enabled")
+        .bind(&prefix).bind(&c.price).fetch_one(c.f.d.store.pool()).await.expect("fixture ordering");
+    assert_eq!(
+        predecessors, 101,
+        "fixture occupies the whole old pre-filter page"
+    );
+    let catalog =
+        c.f.objects
+            .prices(&c.f.actor)
+            .await
+            .expect("current catalog");
+    assert!(
+        catalog.iter().any(|p| p.price_version == c.price),
+        "unavailable records must not starve the live price"
+    );
+    assert!(catalog.len() <= 100);
+    assert!(
+        !catalog.iter().any(|p| p.price_version.starts_with(&prefix)),
+        "disabled execution profile cannot be offered"
+    );
     let req = quote_request(&c, 32);
     let q = quote_http(&c, &req).await;
     sqlx::query("UPDATE text_prices SET enabled=false WHERE price_version=$1")
@@ -297,6 +325,15 @@ async fn disabled_price_cannot_create_a_new_quote_or_reservation() {
         .execute(c.f.d.store.pool())
         .await
         .expect("admission revoked");
+    assert!(
+        !c.f.objects
+            .prices(&c.f.actor)
+            .await
+            .expect("revalidated catalog")
+            .iter()
+            .any(|p| p.price_version == c.price),
+        "revoked price disappears from the catalog"
+    );
     assert_eq!(
         quote_http(&c, &req).await.quote_id,
         q.quote_id,
