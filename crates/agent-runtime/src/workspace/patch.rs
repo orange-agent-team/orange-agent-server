@@ -43,6 +43,10 @@ impl PatchArgs {
 #[derive(Debug, thiserror::Error)]
 pub enum PatchError {
     #[error(transparent)]
+    Journal(#[from] crate::JournalError),
+    #[error("unresolved execution or permission state requires recovery")]
+    RecoveryRequired,
+    #[error(transparent)]
     Workspace(#[from] WorkspaceError),
     #[error("invalid single-file unified patch")]
     Invalid,

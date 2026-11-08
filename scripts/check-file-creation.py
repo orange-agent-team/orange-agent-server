@@ -182,7 +182,7 @@ try:
         assert invoke('step')['phase'] == 'ready'
         if legacy_binary:
             with sqlite3.connect(database) as db:
-                assert db.execute('PRAGMA user_version').fetchone()[0] == 7
+                assert db.execute('PRAGMA user_version').fetchone()[0] == 8
                 assert db.execute("SELECT count(*) FROM runtime_tool_catalogs WHERE origin='legacy_builtin_v1'").fetchone()[0] == 2
                 assert db.execute('SELECT count(*) FROM approvals').fetchone()[0] == 2
                 assert db.execute('SELECT count(*) FROM runtime_tool_approvals').fetchone()[0] == 1
@@ -193,7 +193,7 @@ try:
         assert invoke('step') == complete and len(observations) == 3
         with sqlite3.connect(database) as db:
             assert db.execute("SELECT count(*) FROM operations WHERE tool_version='write_file.v1' AND state='succeeded' AND context_applied=1").fetchone()[0] == 1
-            assert db.execute('PRAGMA user_version').fetchone()[0] == 7
+            assert db.execute('PRAGMA user_version').fetchone()[0] == 8
         target.unlink()
         invoke('show', failed=True)
         invoke('step', failed=True)
@@ -208,4 +208,4 @@ finally:
 print('PASS actual CLI/HTTP adapter/SQLite/source read/new Unicode file/exact approval/reopen/no replay/revocation; model responses and count are explicit fixtures, not inference or OS-consent certification')
 
 if legacy_binary:
-    print('PASS actual fixed Runtime7e115c3 schema6 pending approved creation -> current schema7 snapshot/approval adoption; no extra approval or effect replay. Desktop OS access restoration is separately verified.')
+    print('PASS actual fixed Runtime7e115c3 schema6 pending approved creation -> current current-schema snapshot/approval adoption; no extra approval or effect replay. Desktop OS access restoration is separately verified.')

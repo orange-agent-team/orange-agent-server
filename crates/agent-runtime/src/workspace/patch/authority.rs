@@ -1,10 +1,12 @@
 //! Explicit edit authority and real-source preview. No publication is performed.
+mod consent;
 use super::*;
 use crate::workspace::{
     CancellationGuard, Permit, READ_SLOTS, WorkspaceGrant, directory_identity, open_directory,
 };
 use cap_fs_ext::{FollowSymlinks, OpenOptionsFollowExt, OpenOptionsSyncExt, OsMetadataExt};
 use cap_std::fs::{Dir, OpenOptions};
+pub use consent::{EditConsentView, EditRevoker};
 use std::{
     io::Read,
     path::{Path, PathBuf},
@@ -17,6 +19,9 @@ use std::{
 pub struct EditFileGrant {
     grant: WorkspaceGrant,
     environment: String,
+    consent_id: String,
+    version: i64,
+    epoch: Option<i64>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -71,7 +76,19 @@ impl EditFileGrant {
             &(consent, grant.environment()),
         )
         .map_err(|_| PatchError::Invalid)?;
-        Ok(Self { grant, environment })
+        Ok(Self {
+            grant,
+            environment,
+            consent_id: consent.into(),
+            version: 0,
+            epoch: None,
+        })
+    }
+    pub fn consent_id(&self) -> &str {
+        &self.consent_id
+    }
+    pub fn consent_version(&self) -> Option<String> {
+        self.epoch.map(|_| self.version.to_string())
     }
     pub fn environment(&self) -> &str {
         &self.environment

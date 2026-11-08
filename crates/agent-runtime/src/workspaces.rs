@@ -134,8 +134,8 @@ impl Journal {
                 _ => return Err(WorkspaceStoreError::Conflict),
             }
         }
-        let creation_rows = {
-            let mut query=self.connection.prepare("SELECT owner,consent_id,policy,canonical_path,resource_identity FROM creation_consents WHERE active=1")?;
+        let mutation_rows = {
+            let mut query=self.connection.prepare("SELECT owner,consent_id,policy,canonical_path,resource_identity FROM creation_consents WHERE active=1 UNION ALL SELECT owner,consent_id,policy,canonical_path,resource_identity FROM editing_consents WHERE active=1")?;
             query
                 .query_map([], |r| {
                     Ok((
@@ -148,7 +148,7 @@ impl Journal {
                 })?
                 .collect::<Result<Vec<_>, _>>()?
         };
-        for (owner, id, policy, root, resource) in creation_rows {
+        for (owner, id, policy, root, resource) in mutation_rows {
             match WorkspaceGrant::open(&owner, &id, &policy, Path::new(&root), &roots) {
                 Ok(grant) if grant.resource_identity() == resource => {}
                 _ => return Err(WorkspaceStoreError::Conflict),
@@ -436,6 +436,7 @@ pub(crate) fn quarantined(
     connection.query_row("SELECT EXISTS(
       SELECT 1 FROM operations o LEFT JOIN run_workspaces rw USING(run_id) LEFT JOIN local_workspaces w USING(workspace_id) WHERE o.owner=?1 AND o.state IN('unknown','dispatching') AND (w.resource_identity=?2 OR rw.workspace_id IS NULL)
       UNION SELECT 1 FROM runtime_invocations i JOIN runs r USING(run_id) LEFT JOIN run_workspaces rw USING(run_id) LEFT JOIN local_workspaces w USING(workspace_id) WHERE r.owner=?1 AND i.state IN('unknown','dispatched') AND (w.resource_identity=?2 OR rw.workspace_id IS NULL)
+      UNION SELECT 1 FROM operations o JOIN editing_consents c ON c.environment=o.environment WHERE c.owner=?1 AND o.owner=?1 AND c.resource_identity=?2 AND o.state IN('unknown','dispatching')
       UNION SELECT 1 FROM runtime_runs rr JOIN runs r USING(run_id) LEFT JOIN run_workspaces rw USING(run_id) LEFT JOIN local_workspaces w USING(workspace_id) WHERE r.owner=?1 AND rr.phase='recovery_required' AND (w.resource_identity=?2 OR rw.workspace_id IS NULL))",params![owner,resource],|r|r.get(0))
 }
 
