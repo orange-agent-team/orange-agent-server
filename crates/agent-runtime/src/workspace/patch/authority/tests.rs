@@ -394,7 +394,7 @@ async fn schema_seven_migration_preserves_existing_rights_without_inventing_edit
         .authorize_file_creation("alice", "create", "policy", f.root.path())
         .expect("create consent");
     let create_id = create.consent_id().to_owned();
-    j.connection.execute_batch("DROP TABLE editing_consent_audit; DROP TABLE editing_request_keys; DROP TABLE editing_consents; PRAGMA user_version=7;").expect("actual prior schema fixture");
+    j.connection.execute_batch("DROP TABLE editing_approvals; DROP TABLE editing_previews; DROP TABLE editing_consent_audit; DROP TABLE editing_request_keys; DROP TABLE editing_consents; PRAGMA user_version=7;").expect("actual prior schema fixture");
     drop(j);
     let j = crate::Journal::open(&path).expect("migrate");
     assert!(j.editing_consents("alice").expect("inventory").is_empty());
@@ -412,7 +412,7 @@ async fn schema_seven_migration_preserves_existing_rights_without_inventing_edit
         .connection
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .expect("version");
-    assert_eq!(version, 8);
+    assert_eq!(version, 9);
     assert!(
         j.preview_file_edit(&f.edit, &f.read, input(b"old\n"))
             .await

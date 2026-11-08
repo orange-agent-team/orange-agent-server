@@ -3,6 +3,8 @@
 //! own capability and obtain a separate immutable edit approval.
 #[cfg(unix)]
 pub mod authority;
+#[cfg(unix)]
+pub mod review;
 use super::{WorkspaceError, components};
 use orange_protocol::{request_digest, valid_digest};
 use serde::{Deserialize, Serialize};
@@ -10,7 +12,7 @@ use sha2::{Digest, Sha256};
 const MAX_TEXT: usize = 1024 * 1024;
 const MAX_PATCH: usize = 64 * 1024;
 const MAX_HUNKS: usize = 128;
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct PatchArgs {
     pub path: String,

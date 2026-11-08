@@ -31,3 +31,13 @@ Isolated SQLite schema8 now stores separate edit consents, immutable request key
 Revocation signals close live capabilities before durable acknowledgement. If persistence fails, the database remains unchanged but existing handles stay closed. Old request IDs cannot reactivate revoked rights. A changed physical directory invalidates its old consent; private namespaces cannot overlap active editors. Unresolved effects prevent fresh edit/create/read authorization for the affected resource. Limits are32 active and1000 historical edit consents with8192 request keys per owner.
 
 The complete Runtime suite now passes118 tests and strict all-target Clippy, including actual schema7→8 migration, immutable history, revocation rollback, independent read/create rights, current source review and unknown-effect quarantine. Schema8 has only been applied to owned test databases. Per-operation patch preview/approval records, actual publication, recovery and Agent/Desktop exposure remain unfinished.
+
+## Exact durable review and approval
+
+Isolated schema9 stores immutable patch previews and separate approval bindings. A preview is tied to one owned active Run, one complete committed model response, its digest, the exact tool call ID/arguments, edit consent/version/environment, readonly environment, actual file identity and complete diff. Digest-only responses, foreign calls and normal Agent Runs without registered edit capability are refused.
+
+Review loading, approval and prepared-execution access all re-read the real source. Changed bytes, replacement identity or changed authority cannot silently replace an old preview. The approval digest binds the whole stored review, and the generic approval row alone is insufficient. Review/pin insertion failures roll back their own bound state; preview and approval history cannot be updated or deleted. Reopening requires a fresh edit capability and retains the exact reviewed data.
+
+`approved_patch` currently returns preparation evidence only: directory leases and exact proposed bytes. Its `has_live_directory_access` method checks those leases, not an evergreen approval. The future publisher must recheck Run/approval expiry, persist dispatch and handle filesystem uncertainty before changing a file. No publication function exists yet, and apply_patch is not registered in the normal Agent loop.
+
+The complete Runtime suite passes125 tests and strict Clippy, including actual source changes after approval, atomic review/approval failure, exact reopening, immutable rows and generic-approval bypass refusal. These are owned-filesystem/SQLite tests with an explicit trusted model-adapter fixture; no real model patching or OS edit grant is certified. Schemas8/9 have only been applied to owned test databases.
