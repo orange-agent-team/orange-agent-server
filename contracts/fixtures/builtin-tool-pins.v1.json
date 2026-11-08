@@ -1,0 +1,11 @@
+{
+  "pins": {
+    "ask_user.v1": "9aca5fc0dc9c6443155d7926174273de9ba28c725334b4486420ba959534c28c",
+    "list_directory.v1": "7a2a06f4a71e5727bfbeb23283c04f1534922f4d56d7067259f1060bbf3ea89d",
+    "read_file.v1": "0ee7c90e80646d2ff053d4c15900e4520a3a1eef0919307f1e28ad061e8da967",
+    "search_files.v1": "8a24541fa81a269df91c2c4ea5d16ddc9bef7c90b5c71dca396dd57a72684b18",
+    "search_text.v1": "848f3dae5b7064d3300487a440262d70e927a50572eb7d7964347673f3c8a714",
+    "write_file.v1": "38bcc18a3ef8f8f299a7ae8f9d0d3ccc6ace7959b25495f4027e66f007fbadc1"
+  },
+  "rule": "tool-spec-execution.v1"
+}

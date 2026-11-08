@@ -18,7 +18,7 @@ if not re.fullmatch('[0-9a-f]{40}',args.commit):raise SystemExit('A complete imm
 def git(*argv):return subprocess.check_output(['git',*argv],cwd=ROOT)
 if git('cat-file','-t',args.commit).strip()!=b'commit':raise SystemExit('Origin must be a commit')
 members=['crates/domain','crates/protocol','crates/agent-runtime','crates/model-runtime']
-roots=['Cargo.toml','Cargo.lock',*members,'contracts/proto','contracts/fixtures/metering-v1.json','config/local-model.lock.json','config/local-tokenizer.lock.json']
+roots=['Cargo.toml','Cargo.lock',*members,'contracts/proto','contracts/fixtures/metering-v1.json','contracts/fixtures/builtin-tool-pins.v1.json','config/local-model.lock.json','config/local-tokenizer.lock.json']
 entries=git('ls-tree','-r','-z',args.commit,'--',*roots).split(b'\0')
 files={};modes={}
 for entry in filter(None,entries):

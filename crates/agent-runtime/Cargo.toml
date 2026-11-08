@@ -23,6 +23,7 @@ base64.workspace = true
 regex.workspace = true
 rustix = { workspace = true, features = ["fs"] }
 unicode-normalization.workspace = true
+jsonschema.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

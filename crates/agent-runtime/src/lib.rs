@@ -1,8 +1,10 @@
 //! Durable local operation boundary and controlled, local-only model/tool host.
+pub mod catalog;
 pub mod engine;
 mod storage;
 pub mod workspace;
 pub mod workspaces;
+
 use orange_domain::{ExecutionIdentity, validate_response};
 use orange_protocol::{valid_digest, valid_id};
 use rusqlite::{Connection, OptionalExtension, params};

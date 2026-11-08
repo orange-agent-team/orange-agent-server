@@ -1,0 +1,15 @@
+# Immutable tool contract catalogue — integration preparation
+
+This isolated slice implements AG-006.01's descriptor boundary. It is not yet wired into normal Agent dispatch and does not complete RF-01, the concurrent executor, or the planned tool catalogue.
+
+`orange_protocol::tool_spec::ToolSpec` declares input/output JSON Schema, tool/spec versions, execution environment, effect class, concurrency, approval requirement, execution timeout and argument/result/model-projection byte limits. Unknown effect strings are retained in the execution digest and treated conservatively: approval required and no parallel-safe declaration. An absent timeout is accepted only for host user interaction, whose wait is governed by the containing Run deadline.
+
+`ToolCatalog` validates schemas offline, rejects duplicate names even across versions, bounds depth/nodes/bytes, and validates input and output payloads against an exact `ToolPin`. External, recursive and dynamic schema references are rejected. Byte counting includes JSON escaping and stops without allocating an unbounded second encoding. Full-file durable results and smaller model projections have separate limits. Sanitized tool failures have an explicit output shape.
+
+Execution pins cover schemas, effect/concurrency, approval, environment, version and limits. Description-only wording changes do not invalidate an execution pin. The document digest separately covers all descriptor data and order, so such changes cannot silently mutate a persisted snapshot or cache identity. Neither digest authenticates an arbitrary publisher or grants permissions: callers must compare against trusted ownership/version state, and physical grants plus per-operation approval remain mandatory.
+
+The six implemented builtins have versioned pin fixtures and preserved legacy model-definition order. Catalogue selection can omit clarification or creation tools; an absent tool is unavailable rather than an implicit fallback. A descriptor for `write_file` does not enable a readonly workspace grant to write, which is checked on an actual filesystem fixture.
+
+Validation: protocol15 tests and complete Runtime90 tests passed; after adding the separate document digest, the five catalogue tests and strict all-target Clippy passed. Dependencies reuse the exact existing lock package/version/source/checksum set. A shared-runtime export now includes the pin fixture required by the package tests.
+
+Next implementation is atomic capture of the catalogue alongside the persisted ModelInvocation and validation of its version/schema/approval requirements before intent approval, dispatch and result publication. Existing `runtime_invocations.request` already preserves the model's original input schemas. Migration must use that saved request and an explicit known builtin-v1 compatibility rule; it must not infer new rights or silently reinterpret unknown tool versions. Concurrent scheduling, plugin handlers, output artifact offload and environment implementations remain separate unfinished work.

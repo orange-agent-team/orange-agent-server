@@ -1,6 +1,6 @@
 # Create-only Agent capability — development implementation
 
-The Rust Agent loop can explicitly negotiate `write_file` using `start_agent_creating`; legacy Runs retain their original tools. The desktop now consumes this capability through a fixed source release with explicit creation consent and per-file approval. This remains a development candidate and is not complete TK-06 editing support. The trusted Host must acquire separate OS access and durable create-only consent. Readonly grants cannot be converted to write grants. Each proposed file also requires exact per-operation approval.
+The Rust Agent loop can explicitly negotiate `write_file` using `start_agent_creating`; legacy Runs retain their original tools. The desktop now consumes this capability through a fixed source release with explicit creation consent and per-file approval. This remains a development candidate and is not a certification of every required target platform. The trusted Host must acquire separate OS access and durable create-only consent. Readonly grants cannot be converted to write grants. Each proposed file also requires exact per-operation approval.
 
 ## Contract and invocation
 
@@ -31,3 +31,5 @@ The host validation passed85 complete Runtime tests, strict Clippy for all Runti
 CLI configured exclusions may include readonly shared model assets. They remain enforced by the readonly workspace capability; they are not registered as writable private state directories. Create consent and execution must match that independently checked physical resource. Journal private storage is always protected. The CLI fixture now includes a0755 excluded model-asset directory and rejects broad workspace selection before permission creation.
 
 Integration evidence additionally includes125 shared-workspace tests, a real pinned7B read→exact new-file creation scenario with restart/no replay/confirmed stop, and desktop9 Rust/17 widget/5 native fixture scenarios. The real model previously returned model_unknown in one creation attempt; broad model qualification is not claimed. Actual macOS picker inspection remains unverified after the local computer-use channel failed; see the desktop creation boundary document and execution reports. Windows publication and the rest of the planned tool catalogue remain unfinished.
+
+Scope clarification: the approved support catalogue defines TK-06 `write_file` as creation only. Existing-file editing is TK-05 `apply_patch`, a separate unfinished capability. The creation implementation matches TK-06's no-overwrite behavior; target-platform and OS-picker certification remain incomplete.
