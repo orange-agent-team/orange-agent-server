@@ -1,6 +1,9 @@
 //! A trusted local host, not an autonomous approval authority. Each advance does
 //! at most one model dispatch or one approved filesystem operation. Network model
 //! implementations are injected by the application; no paid fallback is provided.
+mod questions;
+pub use questions::PendingUserQuestion;
+
 use crate::{
     Journal, JournalError, Operation,
     workspace::{self, WorkspaceError, WorkspaceGrant, WorkspaceRequest},
@@ -67,6 +70,7 @@ pub enum Phase {
     Ready,
     ModelPending,
     ToolsPending,
+    AwaitingUser,
     Completed,
     Cancelled,
     Limited,
@@ -89,6 +93,8 @@ pub struct RunView {
     pub invocations: u32,
     pub steps: u32,
     pub pending: Vec<PendingApproval>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_question: Option<PendingUserQuestion>,
     pub final_text: Option<String>,
     pub failure: Option<String>,
 }
@@ -99,7 +105,9 @@ struct StoredRun {
     invocations: u32,
     steps: u32,
     active: Option<String>,
+    user_questions: bool,
 }
+type StoredRunRow = (String, String, String, u32, u32, Option<String>, bool);
 #[derive(Debug, Clone)]
 struct StoredOperation {
     id: String,
@@ -151,6 +159,24 @@ impl Journal {
         messages: Vec<Message>,
         grant: &WorkspaceGrant,
     ) -> Result<RunView, EngineError> {
+        self.start_agent_mode(config, messages, grant, false)
+    }
+    /// Only a trusted host that can present and durably answer questions opts in.
+    pub fn start_agent_interactive(
+        &mut self,
+        config: &RunConfig,
+        messages: Vec<Message>,
+        grant: &WorkspaceGrant,
+    ) -> Result<RunView, EngineError> {
+        self.start_agent_mode(config, messages, grant, true)
+    }
+    fn start_agent_mode(
+        &mut self,
+        config: &RunConfig,
+        messages: Vec<Message>,
+        grant: &WorkspaceGrant,
+        user_questions: bool,
+    ) -> Result<RunView, EngineError> {
         if ![
             &config.owner,
             &config.run_id,
@@ -173,8 +199,12 @@ impl Journal {
         }
         check_grant(config, grant)?;
         let config_json = encode(config)?;
-        let config_digest = digest("run-config-v1", &(config, &messages))?;
-        let request = make_request(config, "validation", messages.clone());
+        let config_digest = if user_questions {
+            digest("run-config-interactive-v1", &(config, &messages))?
+        } else {
+            digest("run-config-v1", &(config, &messages))?
+        };
+        let request = make_request(config, "validation", messages.clone(), user_questions);
         request.validate().map_err(|_| EngineError::Invalid)?;
         let tx = self
             .connection
@@ -211,6 +241,12 @@ impl Journal {
             params![config.run_id, config.owner, config.policy],
         )?;
         tx.execute("INSERT INTO runtime_runs(run_id,config,config_digest,environment,messages,phase) VALUES(?,?,?,?,?,'ready')",params![config.run_id,config_json,config_digest,config.environment,encode(&messages)?])?;
+        if user_questions {
+            tx.execute(
+                "INSERT INTO runtime_capabilities(run_id,user_questions) VALUES(?,1)",
+                [&config.run_id],
+            )?;
+        }
         if let Some((workspace, _)) = registered {
             tx.execute(
                 "INSERT INTO run_workspaces(run_id,workspace_id) VALUES(?,?)",
@@ -225,8 +261,8 @@ impl Journal {
         self.agent_view(&config.owner, &config.run_id)
     }
     fn stored_run(&self, owner: &str, run: &str) -> Result<StoredRun, EngineError> {
-        let row:Option<(String,String,String,u32,u32,Option<String>)>=self.connection.query_row("SELECT config,messages,phase,invocations,steps,active_invocation FROM runtime_runs JOIN runs USING(run_id) WHERE run_id=? AND owner=?",params![run,owner],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?))).optional()?;
-        let (config, messages, phase, invocations, steps, active) =
+        let row:Option<StoredRunRow>=self.connection.query_row("SELECT config,messages,phase,invocations,steps,active_invocation,COALESCE((SELECT user_questions FROM runtime_capabilities c WHERE c.run_id=runtime_runs.run_id),0) FROM runtime_runs JOIN runs USING(run_id) WHERE run_id=? AND owner=?",params![run,owner],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?))).optional()?;
+        let (config, messages, phase, invocations, steps, active, user_questions) =
             row.ok_or(EngineError::Forbidden)?;
         Ok(StoredRun {
             config: serde_json::from_str(&config).map_err(|_| EngineError::Invalid)?,
@@ -235,6 +271,7 @@ impl Journal {
             invocations,
             steps,
             active,
+            user_questions,
         })
     }
     fn pending_operations(&self, run: &str) -> Result<Vec<StoredOperation>, EngineError> {
@@ -286,6 +323,14 @@ impl Journal {
             [run],
             |r| Ok((r.get(0)?, r.get(1)?,r.get::<_,bool>(2)?)),
         )?;
+        let user_question = if active && stored.phase == "awaiting_user" {
+            Some(
+                self.pending_user_question(&stored)?
+                    .ok_or(EngineError::Invalid)?,
+            )
+        } else {
+            None
+        };
         let phase = serde_json::from_value(serde_json::Value::String(stored.phase))
             .map_err(|_| EngineError::Invalid)?;
         Ok(RunView {
@@ -294,6 +339,7 @@ impl Journal {
             invocations: stored.invocations,
             steps: stored.steps,
             pending: if active { pending } else { vec![] },
+            user_question,
             final_text: if active { final_text } else { None },
             failure,
         })
@@ -309,7 +355,7 @@ impl Journal {
         let stored = self.stored_run(owner, run)?;
         check_grant(&stored.config, grant)?;
         let view = self.agent_view(owner, run)?;
-        if view.final_text.is_some() || !view.pending.is_empty() {
+        if view.final_text.is_some() || !view.pending.is_empty() || view.user_question.is_some() {
             let _leases = self.revalidate_sources(&stored.config, grant).await?;
             check_grant(&stored.config, grant)?;
             return self.agent_view(owner, run);
@@ -392,6 +438,10 @@ impl Journal {
         )?;
         tx.execute("UPDATE runtime_runs SET phase='cancelled',failure='cancelled' WHERE run_id=? AND phase!='completed'",[run])?;
         tx.execute(
+            "UPDATE runtime_questions SET state='cancelled' WHERE run_id=? AND state='pending'",
+            [run],
+        )?;
+        tx.execute(
             "INSERT INTO events(run_id,kind) VALUES(?,'run.cancelled')",
             [run],
         )?;
@@ -415,6 +465,10 @@ impl Journal {
             [run],
         )?;
         tx.execute(
+            "UPDATE runtime_questions SET state='cancelled' WHERE run_id=? AND state='pending'",
+            [run],
+        )?;
+        tx.execute(
             "INSERT INTO events(run_id,kind) VALUES(?,?)",
             params![run, format!("run.{phase}")],
         )?;
@@ -434,7 +488,7 @@ impl Journal {
         let stored = self.stored_run(owner, run)?;
         if !matches!(
             stored.phase.as_str(),
-            "ready" | "model_pending" | "tools_pending"
+            "ready" | "model_pending" | "tools_pending" | "awaiting_user"
         ) {
             return self.agent_view(owner, run);
         }
@@ -453,6 +507,9 @@ impl Journal {
         if now()? >= stored.config.deadline_unix {
             self.stop_agent(run, "limited", "deadline")?;
             return self.agent_view(owner, run);
+        }
+        if stored.phase == "awaiting_user" {
+            return self.agent_view_authorized(owner, run, grant).await;
         }
         if stored.phase == "tools_pending" {
             self.advance_tool(stored, grant, cancellation).await?;
@@ -491,7 +548,12 @@ impl Journal {
             self.stop_agent(run, "limited", "deadline")?;
             return self.agent_view(owner, run);
         }
-        let request = make_request(&stored.config, &invocation, stored.messages.clone());
+        let request = make_request(
+            &stored.config,
+            &invocation,
+            stored.messages.clone(),
+            stored.user_questions,
+        );
         if request.validate().is_err() {
             self.stop_agent(run, "limited", "context_budget")?;
             return self.agent_view(owner, run);
@@ -563,6 +625,7 @@ impl Journal {
         }
         let mut ids = std::collections::BTreeSet::new();
         let mut requests = Vec::new();
+        let mut question = None;
         for call in &candidate.tool_calls {
             if !valid_id(&call.id)
                 || !ids.insert(&call.id)
@@ -574,7 +637,17 @@ impl Journal {
             {
                 return Err(EngineError::Invalid);
             }
-            requests.push(WorkspaceRequest::parse(&call.name, &call.arguments)?);
+            if call.name == "ask_user" {
+                if !stored.user_questions || candidate.tool_calls.len() != 1 {
+                    return Err(EngineError::Invalid);
+                }
+                question = Some(
+                    orange_protocol::questions::AskUser::parse(&call.arguments)
+                        .ok_or(EngineError::Invalid)?,
+                );
+            } else {
+                requests.push(WorkspaceRequest::parse(&call.name, &call.arguments)?);
+            }
         }
         let c = &stored.config;
         let mut messages = stored.messages.clone();
@@ -600,6 +673,9 @@ impl Journal {
                 encode(candidate)?
             ],
         )?;
+        if let Some(args) = &question {
+            questions::commit_question(&tx, c, invocation, &candidate.tool_calls[0].id, args)?;
+        }
         for (ordinal, (call, request)) in candidate.tool_calls.iter().zip(requests).enumerate() {
             let ordinal = i64::try_from(ordinal).map_err(|_| EngineError::Invalid)?;
             let id = format!("op-{}", uuid::Uuid::new_v4());
@@ -618,7 +694,13 @@ impl Journal {
             "UPDATE runtime_runs SET messages=?,phase=?,final_text=? WHERE run_id=?",
             params![
                 encode(&messages)?,
-                if done { "completed" } else { "tools_pending" },
+                if done {
+                    "completed"
+                } else if question.is_some() {
+                    "awaiting_user"
+                } else {
+                    "tools_pending"
+                },
                 if done { Some(&candidate.text) } else { None },
                 c.run_id
             ],
@@ -784,12 +866,21 @@ impl Journal {
         Ok(leases)
     }
 }
-fn make_request(c: &RunConfig, invocation: &str, messages: Vec<Message>) -> GenerateRequest {
+fn make_request(
+    c: &RunConfig,
+    invocation: &str,
+    messages: Vec<Message>,
+    user_questions: bool,
+) -> GenerateRequest {
+    let mut tools = workspace::definitions();
+    if user_questions {
+        tools.push(orange_protocol::questions::definition());
+    }
     GenerateRequest {
         invocation_id: invocation.into(),
         model_version: c.model_version.clone(),
         messages,
-        tools: workspace::definitions(),
+        tools,
         max_output_tokens: c.max_output_tokens,
     }
 }

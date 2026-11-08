@@ -9,6 +9,7 @@ pub mod execution;
 pub mod model;
 pub mod node_control;
 pub mod pricing;
+pub mod questions;
 #[cfg(feature = "grpc")]
 pub mod grpc {
     pub mod worker {

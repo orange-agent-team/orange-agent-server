@@ -103,7 +103,7 @@ impl Journal {
             return Err(WorkspaceStoreError::Limit);
         }
         roots.push(path.clone());
-        let legacy_active:bool=self.connection.query_row("SELECT EXISTS(SELECT 1 FROM runtime_runs rr JOIN runs r USING(run_id) LEFT JOIN run_workspaces rw USING(run_id) WHERE rw.workspace_id IS NULL AND r.active=1 AND rr.phase IN('ready','model_pending','tools_pending','recovery_required'))",[],|r|r.get(0))?;
+        let legacy_active:bool=self.connection.query_row("SELECT EXISTS(SELECT 1 FROM runtime_runs rr JOIN runs r USING(run_id) LEFT JOIN run_workspaces rw USING(run_id) WHERE rw.workspace_id IS NULL AND r.active=1 AND rr.phase IN('ready','model_pending','tools_pending','awaiting_user','recovery_required'))",[],|r|r.get(0))?;
         if legacy_active {
             return Err(WorkspaceStoreError::RecoveryRequired);
         }
@@ -332,6 +332,7 @@ impl Journal {
         tx.execute("UPDATE operations SET state='unknown' WHERE state='dispatching' AND run_id IN(SELECT run_id FROM run_workspaces WHERE workspace_id=?)",[id])?;
         tx.execute("UPDATE runtime_invocations SET state='unknown' WHERE state='dispatched' AND run_id IN(SELECT run_id FROM run_workspaces WHERE workspace_id=?)",[id])?;
         tx.execute("UPDATE runtime_runs SET phase='cancelled',failure='workspace_revoked' WHERE phase!='completed' AND run_id IN(SELECT run_id FROM run_workspaces WHERE workspace_id=?)",[id])?;
+        tx.execute("UPDATE runtime_questions SET state='cancelled' WHERE state='pending' AND run_id IN(SELECT run_id FROM run_workspaces WHERE workspace_id=?)",[id])?;
         tx.execute("INSERT INTO workspace_audit(workspace_id,owner,kind,version) SELECT workspace_id,owner,'workspace.revoked',version FROM local_workspaces WHERE workspace_id=?",[id])?;
         tx.commit()?;
         self.workspace(owner, id)

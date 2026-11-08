@@ -694,3 +694,723 @@ async fn text_search_requires_approval_and_persists_one_result_across_reopen() {
     )
     .await;
 }
+
+fn question_response() -> ResponseCandidate {
+    tools(vec![call(
+        "question-call",
+        "ask_user",
+        json!({"questions":[{"prompt":"Which file should be used?","choices":["note.txt","another.txt"]}]}),
+    )])
+}
+fn start_interactive(f: &Fixture, j: &mut Journal) {
+    j.start_agent_interactive(
+        &f.config,
+        vec![Message::plain(Role::User, "Clarify the task".into())],
+        &f.grant,
+    )
+    .expect("interactive start");
+}
+fn user_answer(view: &RunView, text: &str) -> orange_protocol::questions::AnswerUser {
+    let question = view.user_question.as_ref().expect("committed question");
+    orange_protocol::questions::AnswerUser {
+        question_id: question.question_id.clone(),
+        argument_digest: question.argument_digest.clone(),
+        answers: vec![text.into()],
+    }
+}
+#[tokio::test]
+async fn user_question_reopens_and_answers_once_without_approving_tools() {
+    let f = Fixture::new();
+    let mut j = f.open();
+    start_interactive(&f, &mut j);
+    let model = ScriptedModel::new(vec![
+        question_response(),
+        tools(vec![call(
+            "read-after-answer",
+            "read_file",
+            json!({"path":"note.txt"}),
+        )]),
+        final_response(),
+    ]);
+    let (_tx, rx) = watch::channel(false);
+    let pending = f
+        .advance(&mut j, &model, rx.clone())
+        .await
+        .expect("question");
+    assert_eq!(pending.phase, Phase::AwaitingUser);
+    assert!(pending.pending.is_empty());
+    assert_eq!(
+        f.advance(&mut j, &model, rx.clone())
+            .await
+            .expect("waiting does not dispatch")
+            .phase,
+        Phase::AwaitingUser
+    );
+    assert_eq!(model.calls.load(Ordering::SeqCst), 1);
+    let answer = user_answer(&pending, "Yes, approve everything");
+    assert!(matches!(
+        j.approve_agent_tool(
+            "alice",
+            "run-1",
+            &answer.question_id,
+            now().expect("time") + 30,
+            &f.grant
+        ),
+        Err(EngineError::ApprovalRequired)
+    ));
+    drop(j);
+    let mut j = f.open();
+    assert_eq!(
+        j.agent_view_authorized("alice", "run-1", &f.grant)
+            .await
+            .expect("recovered current question")
+            .user_question
+            .expect("question")
+            .question_id,
+        answer.question_id
+    );
+    let ready = j
+        .answer_agent_question("alice", "run-1", &answer, &f.grant, rx.clone())
+        .await
+        .expect("answer");
+    assert_eq!(ready.phase, Phase::Ready);
+    assert!(ready.user_question.is_none());
+    assert_eq!(ready.steps, 2);
+    assert_eq!(
+        j.answer_agent_question("alice", "run-1", &answer, &f.grant, rx.clone())
+            .await
+            .expect("same reply")
+            .steps,
+        2
+    );
+    let mut changed = answer.clone();
+    changed.answers = vec!["different".into()];
+    assert!(matches!(
+        j.answer_agent_question("alice", "run-1", &changed, &f.grant, rx.clone())
+            .await,
+        Err(EngineError::Journal(JournalError::Conflict))
+    ));
+    let next = f
+        .advance(&mut j, &model, rx.clone())
+        .await
+        .expect("next model");
+    assert_eq!(next.phase, Phase::ToolsPending);
+    assert_eq!(next.pending.len(), 1);
+    assert!(matches!(
+        f.advance(&mut j, &model, rx.clone()).await,
+        Err(EngineError::ApprovalRequired)
+    ));
+    let approvals: i64 = j
+        .connection
+        .query_row("SELECT count(*) FROM approvals", [], |r| r.get(0))
+        .expect("no implicit approval");
+    assert_eq!(approvals, 0);
+    let request = model.requests.lock().expect("requests")[1].clone();
+    assert_eq!(
+        request
+            .messages
+            .iter()
+            .filter(|m| m.role == Role::Tool && m.tool_call_id.as_deref() == Some("question-call"))
+            .count(),
+        1
+    );
+    f.approve(&j);
+    f.advance(&mut j, &model, rx.clone())
+        .await
+        .expect("explicitly approved read");
+    assert_eq!(
+        f.advance(&mut j, &model, rx).await.expect("final").phase,
+        Phase::Completed
+    );
+}
+#[tokio::test]
+async fn user_question_capability_is_opt_in_and_mixed_responses_commit_nothing() {
+    for interactive in [false, true] {
+        let f = Fixture::new();
+        let mut j = f.open();
+        let response = if interactive {
+            start_interactive(&f, &mut j);
+            let mut r = question_response();
+            r.tool_calls
+                .push(call("mixed-read", "read_file", json!({"path":"note.txt"})));
+            r
+        } else {
+            f.start(&mut j);
+            question_response()
+        };
+        let model = ScriptedModel::new(vec![response]);
+        let (_tx, rx) = watch::channel(false);
+        assert!(f.advance(&mut j, &model, rx).await.is_err());
+        for table in ["responses", "runtime_questions", "operations"] {
+            let count: i64 = j
+                .connection
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
+                .expect("no partial commit");
+            assert_eq!(count, 0);
+        }
+        let offered = model.requests.lock().expect("request")[0]
+            .tools
+            .iter()
+            .any(|t| t.name == "ask_user");
+        assert_eq!(offered, interactive);
+    }
+}
+#[tokio::test]
+async fn user_question_answer_checks_owner_digest_cancel_and_revocation() {
+    for mode in ["owner", "digest", "cancel", "revoke"] {
+        let f = Fixture::new();
+        let mut j = f.open();
+        start_interactive(&f, &mut j);
+        let model = ScriptedModel::new(vec![question_response()]);
+        let (_tx, rx) = watch::channel(false);
+        let pending = f
+            .advance(&mut j, &model, rx.clone())
+            .await
+            .expect("question");
+        let mut answer = user_answer(&pending, "note.txt");
+        if mode == "digest" {
+            answer.argument_digest = "f".repeat(64);
+        }
+        if mode == "cancel" {
+            j.cancel_agent_run("alice", "run-1").expect("cancel");
+        }
+        if mode == "revoke" {
+            f.grant.request_revoke();
+        }
+        let result = j
+            .answer_agent_question(
+                if mode == "owner" { "bob" } else { "alice" },
+                "run-1",
+                &answer,
+                &f.grant,
+                rx,
+            )
+            .await;
+        assert!(result.is_err(), "{mode}");
+        let accepted: i64 = j
+            .connection
+            .query_row(
+                "SELECT count(*) FROM runtime_questions WHERE answers IS NOT NULL",
+                [],
+                |r| r.get(0),
+            )
+            .expect("no answer");
+        assert_eq!(accepted, 0);
+        assert_eq!(model.calls.load(Ordering::SeqCst), 1);
+    }
+}
+#[tokio::test]
+async fn user_question_answer_transaction_rolls_back_and_budget_closes_pending_question() {
+    let f = Fixture::new();
+    let mut j = f.open();
+    start_interactive(&f, &mut j);
+    let model = ScriptedModel::new(vec![question_response()]);
+    let (_tx, rx) = watch::channel(false);
+    let pending = f
+        .advance(&mut j, &model, rx.clone())
+        .await
+        .expect("question");
+    let answer = user_answer(&pending, "note.txt");
+    j.connection.execute_batch("CREATE TRIGGER answer_fault BEFORE INSERT ON events WHEN NEW.kind='question.answered' BEGIN SELECT RAISE(ABORT,'explicit answer commit fault'); END;").expect("fault");
+    assert!(
+        j.answer_agent_question("alice", "run-1", &answer, &f.grant, rx.clone())
+            .await
+            .is_err()
+    );
+    j.connection
+        .execute_batch("DROP TRIGGER answer_fault;")
+        .expect("remove exact fault");
+    let pending = j.agent_view("alice", "run-1").expect("rolled back");
+    assert_eq!(pending.phase, Phase::AwaitingUser);
+    assert_eq!(pending.steps, 1);
+    assert!(
+        j.answer_agent_question("alice", "run-1", &answer, &f.grant, rx)
+            .await
+            .is_ok()
+    );
+    let mut f = Fixture::new();
+    f.config.max_steps = 1;
+    let mut j = f.open();
+    start_interactive(&f, &mut j);
+    let model = ScriptedModel::new(vec![question_response()]);
+    let (_tx, rx) = watch::channel(false);
+    let pending = f
+        .advance(&mut j, &model, rx.clone())
+        .await
+        .expect("last allowed model step");
+    let limited = j
+        .answer_agent_question(
+            "alice",
+            "run-1",
+            &user_answer(&pending, "note.txt"),
+            &f.grant,
+            rx,
+        )
+        .await
+        .expect("limit");
+    assert_eq!(limited.phase, Phase::Limited);
+    assert!(limited.user_question.is_none());
+    let state: String = j
+        .connection
+        .query_row("SELECT state FROM runtime_questions", [], |r| r.get(0))
+        .expect("closed question");
+    assert_eq!(state, "cancelled");
+}
+#[tokio::test]
+async fn user_question_changed_source_hides_question_and_blocks_answer() {
+    let f = Fixture::new();
+    let mut j = f.open();
+    start_interactive(&f, &mut j);
+    let model = ScriptedModel::new(vec![
+        tools(vec![call(
+            "source-read",
+            "read_file",
+            json!({"path":"note.txt"}),
+        )]),
+        question_response(),
+    ]);
+    let (_tx, rx) = watch::channel(false);
+    f.advance(&mut j, &model, rx.clone())
+        .await
+        .expect("source intent");
+    f.approve(&j);
+    f.advance(&mut j, &model, rx.clone())
+        .await
+        .expect("read source");
+    let pending = f
+        .advance(&mut j, &model, rx.clone())
+        .await
+        .expect("question after source");
+    let answer = user_answer(&pending, "note.txt");
+    std::fs::remove_file(f.workspace.path().join("note.txt")).expect("delete fixture source");
+    assert!(
+        j.agent_view_authorized("alice", "run-1", &f.grant)
+            .await
+            .is_err()
+    );
+    assert!(
+        j.answer_agent_question("alice", "run-1", &answer, &f.grant, rx)
+            .await
+            .is_err()
+    );
+    let count: i64 = j
+        .connection
+        .query_row(
+            "SELECT count(*) FROM runtime_questions WHERE state='answered'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("no accepted reply");
+    assert_eq!(count, 0);
+    assert!(
+        j.cancel_agent_run("alice", "run-1")
+            .expect("stop without source")
+            .user_question
+            .is_none()
+    );
+}
+#[test]
+fn user_question_migration_preserves_sparse_run_cursor_and_denies_implicit_capability() {
+    let f = Fixture::new();
+    let mut j = f.open();
+    f.start(&mut j);
+    j.connection.execute_batch("UPDATE runtime_runs SET rowid=37; DROP TABLE runtime_questions; DROP TABLE runtime_capabilities; PRAGMA user_version=3;").expect("prior-version fixture with sparse cursor");
+    drop(j);
+    let mut j = f.open();
+    let rowid: i64 = j
+        .connection
+        .query_row("SELECT rowid FROM runtime_runs", [], |r| r.get(0))
+        .expect("cursor");
+    assert_eq!(rowid, 37);
+    assert!(
+        !j.stored_run("alice", "run-1")
+            .expect("legacy")
+            .user_questions
+    );
+    let broken: i64 = j
+        .connection
+        .query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| {
+            r.get(0)
+        })
+        .expect("foreign keys");
+    assert_eq!(broken, 0);
+    assert!(
+        j.start_agent_interactive(
+            &f.config,
+            vec![Message::plain(Role::User, "Read note.txt".into())],
+            &f.grant
+        )
+        .is_err(),
+        "existing Run cannot silently gain questions"
+    );
+}
+
+#[tokio::test]
+async fn user_question_prior_answer_cannot_answer_a_new_question() {
+    let f = Fixture::new();
+    let mut j = f.open();
+    start_interactive(&f, &mut j);
+    let mut second = question_response();
+    second.response_id = "response-two".into();
+    second.tool_calls[0].id = "question-call-two".into();
+    let model = ScriptedModel::new(vec![question_response(), second]);
+    let (_tx, rx) = watch::channel(false);
+    let first = f
+        .advance(&mut j, &model, rx.clone())
+        .await
+        .expect("first question");
+    let answer = user_answer(&first, "note.txt");
+    j.answer_agent_question("alice", "run-1", &answer, &f.grant, rx.clone())
+        .await
+        .expect("first answer");
+    assert!(
+        j.connection
+            .execute(
+                "UPDATE runtime_questions SET answers='[]' WHERE question_id=?",
+                [&answer.question_id]
+            )
+            .is_err()
+    );
+    assert!(
+        j.connection
+            .execute(
+                "UPDATE runtime_capabilities SET user_questions=0 WHERE run_id='run-1'",
+                []
+            )
+            .is_err()
+    );
+    let second = f
+        .advance(&mut j, &model, rx.clone())
+        .await
+        .expect("second question");
+    let second_id = second
+        .user_question
+        .as_ref()
+        .expect("second")
+        .question_id
+        .clone();
+    assert_ne!(answer.question_id, second_id);
+    let replay = j
+        .answer_agent_question("alice", "run-1", &answer, &f.grant, rx)
+        .await
+        .expect("read original answer outcome");
+    assert_eq!(
+        replay
+            .user_question
+            .expect("new question still pending")
+            .question_id,
+        second_id
+    );
+    let counts: (i64, i64) = j
+        .connection
+        .query_row(
+            "SELECT sum(state='answered'),sum(state='pending') FROM runtime_questions",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .expect("decisions");
+    assert_eq!(counts, (1, 1));
+}
+#[tokio::test]
+async fn user_question_expired_or_cancelled_signal_never_accepts_answer() {
+    for expire in [false, true] {
+        let mut f = Fixture::new();
+        if expire {
+            f.config.deadline_unix = now().expect("clock") + 2;
+        }
+        let mut j = f.open();
+        start_interactive(&f, &mut j);
+        let model = ScriptedModel::new(vec![question_response()]);
+        let (tx, rx) = watch::channel(false);
+        let pending = f
+            .advance(&mut j, &model, rx.clone())
+            .await
+            .expect("question");
+        let answer = user_answer(&pending, "note.txt");
+        if expire {
+            while now().expect("clock") < f.config.deadline_unix {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        } else {
+            tx.send(true).expect("cancel signal");
+        }
+        let stopped = j
+            .answer_agent_question("alice", "run-1", &answer, &f.grant, rx)
+            .await
+            .expect("bounded termination");
+        assert_eq!(
+            stopped.phase,
+            if expire {
+                Phase::Limited
+            } else {
+                Phase::Cancelled
+            }
+        );
+        assert!(stopped.user_question.is_none());
+        let accepted: i64 = j
+            .connection
+            .query_row(
+                "SELECT count(*) FROM runtime_questions WHERE state='answered'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("no reply");
+        assert_eq!(accepted, 0);
+        assert_eq!(model.calls.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[tokio::test]
+async fn user_question_failed_request_event_rolls_back_response_and_question() {
+    let f = Fixture::new();
+    let mut j = f.open();
+    start_interactive(&f, &mut j);
+    j.connection.execute_batch("CREATE TRIGGER question_fault BEFORE INSERT ON events WHEN NEW.kind='question.requested' BEGIN SELECT RAISE(ABORT,'explicit question commit fault'); END;").expect("fault");
+    let model = ScriptedModel::new(vec![question_response()]);
+    let (_tx, rx) = watch::channel(false);
+    assert!(f.advance(&mut j, &model, rx.clone()).await.is_err());
+    j.connection
+        .execute_batch("DROP TRIGGER question_fault;")
+        .expect("remove exact fault");
+    for table in ["responses", "runtime_questions", "operations", "approvals"] {
+        let count: i64 = j
+            .connection
+            .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
+            .expect("atomic rollback");
+        assert_eq!(count, 0);
+    }
+    assert_eq!(
+        j.agent_view("alice", "run-1").expect("stopped").phase,
+        Phase::RecoveryRequired
+    );
+    drop(j);
+    let mut j = f.open();
+    assert_eq!(
+        f.advance(&mut j, &model, rx)
+            .await
+            .expect("no model replay")
+            .phase,
+        Phase::RecoveryRequired
+    );
+    assert_eq!(model.calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn user_question_foreign_response_reference_never_becomes_visible_or_answered() {
+    let f = Fixture::new();
+    let mut j = f.open();
+    start_interactive(&f, &mut j);
+    let model = ScriptedModel::new(vec![final_response()]);
+    let (_tx, rx) = watch::channel(false);
+    f.advance(&mut j, &model, rx.clone())
+        .await
+        .expect("first owner committed response");
+    let foreign: String = j
+        .connection
+        .query_row("SELECT invocation FROM responses", [], |r| r.get(0))
+        .expect("original response");
+    let other_workspace = tempfile::tempdir().expect("other workspace");
+    let grant = WorkspaceGrant::open(
+        "bob",
+        "bob-grant",
+        "policy-v1",
+        other_workspace.path(),
+        &[f.private.path().to_owned()],
+    )
+    .expect("other explicit grant");
+    let mut config = f.config.clone();
+    config.owner = "bob".into();
+    config.run_id = "bob-run".into();
+    config.environment = grant.environment().into();
+    j.start_agent_interactive(
+        &config,
+        vec![Message::plain(Role::User, "different task".into())],
+        &grant,
+    )
+    .expect("other run");
+    let body = orange_protocol::questions::AskUser::parse(
+        &json!({"questions":[{"prompt":"forged cross-run provenance"}]}),
+    )
+    .expect("body");
+    let digest = digest(
+        "ask-user-intent-v1",
+        &(
+            &config.run_id,
+            &config.owner,
+            &config.environment,
+            &config.policy,
+            &body,
+        ),
+    )
+    .expect("fixture digest");
+    let forged_messages = vec![
+        Message::plain(Role::User, "different task".into()),
+        Message {
+            role: Role::Assistant,
+            content: String::new(),
+            tool_call_id: None,
+            tool_calls: vec![call(
+                "forged-call",
+                "ask_user",
+                json!({"questions":[{"prompt":"forged cross-run provenance"}]}),
+            )],
+        },
+    ];
+    j.connection.execute("UPDATE runtime_runs SET phase='awaiting_user',active_invocation=?,messages=? WHERE run_id='bob-run'",params![foreign,encode(&forged_messages).expect("protocol-valid forged context")]).expect("explicit integrity fault");
+    j.connection.execute("INSERT INTO runtime_questions(question_id,run_id,invocation,call_id,body,argument_digest,state) VALUES('forged-question','bob-run',?,'forged-call',?,?,'pending')",params![foreign,encode(&body).expect("body"),digest]).expect("explicit cross-run fixture");
+    assert!(
+        j.agent_view_authorized("bob", "bob-run", &grant)
+            .await
+            .is_err()
+    );
+    let answer = orange_protocol::questions::AnswerUser {
+        question_id: "forged-question".into(),
+        argument_digest: digest,
+        answers: vec!["no authority".into()],
+    };
+    assert!(matches!(
+        j.answer_agent_question("bob", "bob-run", &answer, &grant, rx)
+            .await,
+        Err(EngineError::RecoveryRequired)
+    ));
+    let accepted: i64 = j
+        .connection
+        .query_row(
+            "SELECT count(*) FROM runtime_questions WHERE state='answered'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("no accepted answer");
+    assert_eq!(accepted, 0);
+}
+
+#[tokio::test]
+async fn user_question_requires_an_actual_ask_call_not_just_an_owned_response() {
+    let f = Fixture::new();
+    let mut j = f.open();
+    start_interactive(&f, &mut j);
+    let model = ScriptedModel::new(vec![final_response()]);
+    let (_tx, rx) = watch::channel(false);
+    f.advance(&mut j, &model, rx.clone())
+        .await
+        .expect("ordinary final response");
+    let invocation: String = j
+        .connection
+        .query_row("SELECT invocation FROM responses", [], |r| r.get(0))
+        .expect("owned response");
+    let body = orange_protocol::questions::AskUser::parse(
+        &json!({"questions":[{"prompt":"not actually requested by the committed model"}]}),
+    )
+    .expect("body");
+    let argument_digest = digest(
+        "ask-user-intent-v1",
+        &(
+            &f.config.run_id,
+            &f.config.owner,
+            &f.config.environment,
+            &f.config.policy,
+            &body,
+        ),
+    )
+    .expect("digest");
+    j.connection.execute("INSERT INTO runtime_questions(question_id,run_id,invocation,call_id,body,argument_digest,state) VALUES('unrequested-question','run-1',?,'unrequested-call',?,?,'pending')",params![invocation,encode(&body).expect("body"),argument_digest]).expect("explicit local integrity fault");
+    j.connection
+        .execute(
+            "UPDATE runtime_runs SET phase='awaiting_user' WHERE run_id='run-1'",
+            [],
+        )
+        .expect("fault phase");
+    assert!(matches!(
+        j.agent_view_authorized("alice", "run-1", &f.grant).await,
+        Err(EngineError::RecoveryRequired)
+    ));
+    let answer = orange_protocol::questions::AnswerUser {
+        question_id: "unrequested-question".into(),
+        argument_digest,
+        answers: vec!["not authority".into()],
+    };
+    assert!(matches!(
+        j.answer_agent_question("alice", "run-1", &answer, &f.grant, rx)
+            .await,
+        Err(EngineError::RecoveryRequired)
+    ));
+    let replies: i64 = j
+        .connection
+        .query_row(
+            "SELECT count(*) FROM runtime_questions WHERE answers IS NOT NULL",
+            [],
+            |r| r.get(0),
+        )
+        .expect("no reply");
+    assert_eq!(replies, 0);
+}
+
+#[tokio::test]
+async fn user_question_waiting_run_keeps_private_root_guard_and_revoke_closes_it() {
+    let f = Fixture::new();
+    let mut j = f.open();
+    start_interactive(&f, &mut j);
+    let model = ScriptedModel::new(vec![question_response()]);
+    let (_tx, rx) = watch::channel(false);
+    f.advance(&mut j, &model, rx)
+        .await
+        .expect("waiting question");
+    let private_area = private_temp();
+    assert!(matches!(
+        j.reserve_private_directory(private_area.path()),
+        Err(crate::workspaces::WorkspaceStoreError::RecoveryRequired)
+    ));
+    j.revoke_run("alice", "run-1")
+        .expect("low-level owner revocation");
+    let state: String = j
+        .connection
+        .query_row("SELECT state FROM runtime_questions", [], |r| r.get(0))
+        .expect("closed question");
+    assert_eq!(state, "cancelled");
+}
+#[tokio::test]
+async fn user_question_workspace_revocation_durably_closes_pending_reply() {
+    let mut f = Fixture::new();
+    let mut j = f.open();
+    let workspace = j
+        .authorize_workspace(
+            "alice",
+            "registered-question-workspace",
+            f.workspace.path(),
+            "policy-v1",
+        )
+        .expect("actual persisted workspace");
+    f.grant = j
+        .open_workspace("alice", &workspace.workspace_id)
+        .expect("fresh access");
+    f.config.environment = f.grant.environment().into();
+    start_interactive(&f, &mut j);
+    let model = ScriptedModel::new(vec![question_response()]);
+    let (_tx, rx) = watch::channel(false);
+    let pending = f
+        .advance(&mut j, &model, rx.clone())
+        .await
+        .expect("question");
+    let answer = user_answer(&pending, "note.txt");
+    j.revoke_workspace("alice", &workspace.workspace_id, &workspace.version)
+        .expect("workspace revocation");
+    assert!(f.grant.is_revoked());
+    assert!(
+        j.answer_agent_question("alice", "run-1", &answer, &f.grant, rx)
+            .await
+            .is_err()
+    );
+    let state: String = j
+        .connection
+        .query_row("SELECT state FROM runtime_questions", [], |r| r.get(0))
+        .expect("question closed atomically");
+    assert_eq!(state, "cancelled");
+    drop(j);
+    let j = f.open();
+    assert!(
+        j.agent_view("alice", "run-1")
+            .expect("metadata only")
+            .user_question
+            .is_none()
+    );
+}

@@ -22,7 +22,7 @@ ROOT=Path(__file__).resolve().parents[1]
 PRIVATE=ROOT/'.local/model-runtime'
 REPORT=ROOT/'.local/real-agent'
 parser=argparse.ArgumentParser()
-parser.add_argument('--required-tool',choices=['read_file','search_files','search_text'],default='read_file')
+parser.add_argument('--required-tool',choices=['read_file','search_files','search_text','ask_user'],default='read_file')
 args=parser.parse_args()
 
 def digest(path):
@@ -88,12 +88,15 @@ def main():
                     config['prompt']='Perform these steps in order. First call search_files with exactly these arguments: {"path":".","glob":"proof.txt"}. Use the literal filename proof.txt as the glob, not a wildcard. Wait for its result. Then call read_file with exactly {"path":"proof.txt"}. Finally answer with the exact file text. Do not invent content or call read_file before receiving the search result.'
                 elif args.required_tool=='search_text':
                     config['prompt']='Call search_text with exactly these arguments: {"path":".","query":"ORANGE_EVIDENCE_"}. Do not add optional fields. Do not call read_file. Wait for the search result. Then answer with the exact complete matching line text from its excerpt. Do not invent or shorten the content.'
+                if args.required_tool=='ask_user':
+                    config['user_questions']=True
+                    config['prompt']='First call ask_user with exactly these arguments: {"questions":[{"prompt":"Which file should I read?"}]}. Wait for the user answer. Do not call any filesystem tool before that answer. After receiving the answers array, your next response must call read_file with path equal to the answered filename. Do not produce prose or merely repeat the filename. Only after receiving the read_file result may you return the exact file content. The task is not complete until the file content is returned.'
                 path=state/'agent.json';write(path,config)
-                def invoke(operation,*arguments,expect_error=False):
-                    child=subprocess.Popen([str(ROOT/'target/debug/examples/local-agent'),str(path),operation,*arguments],cwd=ROOT,env={'PATH':'/usr/bin:/bin'},stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+                def invoke(operation,*arguments,expect_error=False,input_json=None):
+                    child=subprocess.Popen([str(ROOT/'target/debug/examples/local-agent'),str(path),operation,*arguments],cwd=ROOT,env={'PATH':'/usr/bin:/bin'},stdin=subprocess.PIPE if input_json is not None else subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
                     try:
                         for _ in range(25):
-                            try:out,error=child.communicate(timeout=5);break
+                            try:out,error=child.communicate(input=json.dumps(input_json) if input_json is not None and _==0 else None,timeout=5);break
                             except subprocess.TimeoutExpired:host.stdin.write('ping\n');host.stdin.flush()
                         else:raise RuntimeError('Bounded CLI transition deadline')
                         if expect_error:
@@ -114,6 +117,21 @@ def main():
                 seen=set();negative=False
                 for _ in range(16):
                     if view['phase']=='completed':break
+                    if view['phase']=='awaiting_user':
+                        if args.required_tool!='ask_user' or result.get('user_answers',0):raise RuntimeError('Unexpected extra question group')
+                        question=view['user_question']
+                        if len(question['questions'])!=1 or view['pending']:raise RuntimeError('Mixed question/tool authority')
+                        if invoke('step')['user_question']!=question:raise RuntimeError('Waiting question changed or redispatched')
+                        invoke('approve',question['question_id'],expect_error=True)
+                        answer={'question_id':question['question_id'],'argument_digest':question['argument_digest'],'answers':['proof.txt']}
+                        view=invoke('answer',input_json=answer)
+                        if view['phase']!='ready' or invoke('answer',input_json=answer)!=view:raise RuntimeError('Reply did not commit exactly once')
+                        database=sqlite3.connect(state/'journal.sqlite')
+                        try:
+                            database.execute('PRAGMA query_only=ON')
+                            if database.execute('SELECT count(*) FROM approvals').fetchone()[0]!=0:raise RuntimeError('User answer incorrectly granted authority')
+                        finally:database.close()
+                        result['user_answers']=1;result['answer_did_not_approve_tools']=True;result['observed_tools'].append('ask_user');result['phases'].append(view['phase']);continue
                     if view['phase'] not in ['ready','tools_pending']:raise RuntimeError('Agent entered non-executable phase: '+str(view))
                     pending=view.get('pending',[])
                     if pending:
@@ -122,9 +140,9 @@ def main():
                         for item in pending:
                             request=item['request'];tool=request['tool'];arguments=request['arguments']
                             if tool=='read_file':
-                                if arguments.get('path')!='proof.txt' or args.required_tool=='search_text':raise RuntimeError('Unexpected read target/tool; approval refused')
+                                if arguments.get('path')!='proof.txt' or args.required_tool=='search_text' or (args.required_tool=='ask_user' and result.get('user_answers')!=1):raise RuntimeError('Unexpected read target/tool; approval refused')
                                 if args.required_tool=='search_files' and not committed_tool_results('search_files'):raise RuntimeError('Required filename search was bypassed')
-                            elif tool=='list_directory':
+                            elif tool=='list_directory' and args.required_tool!='ask_user':
                                 if arguments.get('path','') not in ['','.']:raise RuntimeError('Unexpected directory; approval refused')
                             elif tool=='search_files' and args.required_tool=='search_files':
                                 if arguments.get('path')!='.' or arguments.get('glob')!='proof.txt':raise RuntimeError('Unexpected filename search scope; approval refused')
@@ -136,10 +154,18 @@ def main():
                     view=invoke('step');result['phases'].append(view['phase'])
                 result['final_phase']=view['phase'];result['sentinel_matched']=sentinel in (view.get('final_text') or '')
                 if view['phase']!='completed' or not result['sentinel_matched'] or not negative or not seen or args.required_tool not in result['observed_tools']:raise RuntimeError('Real model/tool/file evidence did not complete; no substitute response used')
-                committed=committed_tool_results(args.required_tool)
+                if args.required_tool=='ask_user':
+                    database=sqlite3.connect(state/'journal.sqlite')
+                    try:
+                        database.execute('PRAGMA query_only=ON')
+                        replies=database.execute("SELECT answers FROM runtime_questions WHERE state='answered'").fetchall()
+                        if len(replies)!=1 or json.loads(replies[0][0])!=['proof.txt']:raise RuntimeError('Missing original committed user answer')
+                    finally:database.close()
+                required_result='read_file' if args.required_tool=='ask_user' else args.required_tool
+                committed=committed_tool_results(required_result)
                 if not committed:raise RuntimeError('Required tool never committed an actual successful result')
                 for value in committed:
-                    if value.get('kind')!=args.required_tool:raise RuntimeError('Wrong committed tool result type')
+                    if value.get('kind')!=required_result:raise RuntimeError('Wrong committed tool result type')
                     data=value['data']
                     if args.required_tool=='search_files' and (data['paths']!=['proof.txt'] or data['truncated']):raise RuntimeError('Filename search did not locate the exact fixture')
                     if args.required_tool=='search_text':

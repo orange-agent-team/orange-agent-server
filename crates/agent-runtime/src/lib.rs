@@ -68,7 +68,7 @@ impl Journal {
             rusqlite::OpenFlags::default() | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
         )?;
         let version: i64 = connection.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if !(0..=3).contains(&version) {
+        if !(0..=4).contains(&version) {
             return Err(JournalError::UnsupportedVersion);
         }
         if version == 0 {
@@ -102,12 +102,16 @@ impl Journal {
             tx.execute_batch(include_str!("schema_v3.sql"))?;
             tx.commit()?;
         }
+        if version < 4 {
+            storage::migrate_v4(&mut connection)?;
+        }
         connection.execute_batch("BEGIN IMMEDIATE;
             UPDATE runtime_host SET epoch=epoch+1 WHERE singleton=1;
             INSERT INTO events(run_id,operation_id,kind) SELECT run_id,operation_id,'operation.unknown' FROM operations WHERE state='dispatching';
             UPDATE operations SET state='unknown' WHERE state='dispatching';
             UPDATE runtime_invocations SET state='unknown' WHERE state='dispatched';
             UPDATE runtime_runs SET phase='recovery_required',failure='interrupted_dispatch' WHERE run_id IN(SELECT run_id FROM operations WHERE state='unknown' UNION SELECT run_id FROM runtime_invocations WHERE state='unknown');
+            UPDATE runtime_questions SET state='cancelled' WHERE state='pending' AND run_id IN(SELECT rr.run_id FROM runtime_runs rr JOIN runs r USING(run_id) WHERE r.active=0 OR rr.phase!='awaiting_user');
             COMMIT;")?;
         Ok(Self {
             connection,
@@ -157,6 +161,10 @@ impl Journal {
             [run],
         )?;
         tx.execute("UPDATE runtime_runs SET phase='cancelled',failure='revoked' WHERE run_id=? AND phase!='completed'",[run])?;
+        tx.execute(
+            "UPDATE runtime_questions SET state='cancelled' WHERE run_id=? AND state='pending'",
+            [run],
+        )?;
         tx.execute(
             "INSERT INTO events(run_id,kind) VALUES(?,'run.revoked')",
             [run],

@@ -28,6 +28,8 @@ struct Config {
     model_key_file: PathBuf,
     context_tokens: u32,
     prompt: String,
+    #[serde(default)]
+    user_questions: bool,
 }
 struct LocalModel(LlamaClient);
 impl ModelGateway for LocalModel {
@@ -43,12 +45,17 @@ impl ModelGateway for LocalModel {
                 .await
                 .map_err(|_| GatewayFailure)?;
             for call in &candidate.tool_calls {
-                if orange_agent_runtime::workspace::WorkspaceRequest::parse(
-                    &call.name,
-                    &call.arguments,
-                )
-                .is_err()
-                {
+                let valid = if call.name == "ask_user" {
+                    request.tools.iter().any(|t| t.name == "ask_user")
+                        && orange_protocol::questions::AskUser::parse(&call.arguments).is_some()
+                } else {
+                    orange_agent_runtime::workspace::WorkspaceRequest::parse(
+                        &call.name,
+                        &call.arguments,
+                    )
+                    .is_ok()
+                };
+                if !valid {
                     // Shape-only diagnostics: never log model text, argument
                     // values, unknown field names or identifiers supplied by it.
                     let (name, known): (&str, &[&str]) = match call.name.as_str() {
@@ -64,6 +71,19 @@ impl ModelGateway for LocalModel {
                             ],
                         ),
                         "list_directory" => ("list_directory", &["path", "cursor", "limit"]),
+                        "search_files" => ("search_files", &["path", "glob", "limit"]),
+                        "search_text" => (
+                            "search_text",
+                            &[
+                                "path",
+                                "query",
+                                "glob",
+                                "limit",
+                                "regular_expression",
+                                "case_sensitive",
+                            ],
+                        ),
+                        "ask_user" => ("ask_user", &["questions"]),
                         _ => ("unavailable", &[]),
                     };
                     let object = call.arguments.as_object();
@@ -126,7 +146,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 3 {
         return Err(
-            "usage: local-agent <private-config.json> <start|show|step|approve OP_ID|cancel>"
+            "usage: local-agent <private-config.json> <start|show|step|approve OP_ID|answer|cancel>; answer reads bounded AnswerUser JSON from stdin"
                 .into(),
         );
     }
@@ -167,14 +187,59 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .into());
     }
+    // Read user data before acquiring the exclusive Journal owner lock.
+    let answer_input = if args[2] == "answer" {
+        if args.len() != 3 {
+            return Err("answer data must use stdin, not process arguments".into());
+        }
+        let mut bytes = Vec::new();
+        std::io::stdin()
+            .take(128 * 1024 + 1)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() > 128 * 1024 {
+            return Err("answer input exceeds bound".into());
+        }
+        Some(
+            serde_json::from_slice::<orange_protocol::questions::AnswerUser>(&bytes)
+                .map_err(|_| "invalid answer request")?,
+        )
+    } else {
+        None
+    };
     let mut journal = Journal::open(&config.journal)?;
     let view = match args[2].as_str() {
-        "start" => journal.start_agent(
-            &config.run,
-            vec![Message::plain(Role::User, config.prompt)],
-            &grant,
-        )?,
-        "show" => journal.agent_view(&config.run.owner, &config.run.run_id)?,
+        "start" => {
+            let messages = vec![Message::plain(Role::User, config.prompt)];
+            if config.user_questions {
+                journal.start_agent_interactive(&config.run, messages, &grant)?
+            } else {
+                journal.start_agent(&config.run, messages, &grant)?
+            }
+        }
+        "show" => {
+            journal
+                .agent_view_authorized(&config.run.owner, &config.run.run_id, &grant)
+                .await?
+        }
+        "answer" => {
+            let answer = answer_input.as_ref().ok_or("answer input required")?;
+            let (sender, receiver) = watch::channel(false);
+            let signal = tokio::spawn(async move {
+                let _ = tokio::signal::ctrl_c().await;
+                let _ = sender.send(true);
+            });
+            let result = journal
+                .answer_agent_question(
+                    &config.run.owner,
+                    &config.run.run_id,
+                    answer,
+                    &grant,
+                    receiver,
+                )
+                .await;
+            signal.abort();
+            result?
+        }
         "approve" => {
             let id = args
                 .get(3)
@@ -191,7 +256,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 (seconds + 60).min(config.run.deadline_unix),
                 &grant,
             )?;
-            journal.agent_view(&config.run.owner, &config.run.run_id)?
+            journal
+                .agent_view_authorized(&config.run.owner, &config.run.run_id, &grant)
+                .await?
         }
         "cancel" => {
             let view = journal.cancel_agent(&config.run.owner, &config.run.run_id, &grant)?;
@@ -238,13 +305,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         _ => return Err("unknown command".into()),
     };
-    let view = if view.final_text.is_some() || !view.pending.is_empty() {
-        journal
-            .agent_view_authorized(&config.run.owner, &config.run.run_id, &grant)
-            .await?
-    } else {
-        view
-    };
+    let view =
+        if view.final_text.is_some() || !view.pending.is_empty() || view.user_question.is_some() {
+            journal
+                .agent_view_authorized(&config.run.owner, &config.run.run_id, &grant)
+                .await?
+        } else {
+            view
+        };
     println!("{}", serde_json::to_string_pretty(&view)?);
     Ok(())
 }

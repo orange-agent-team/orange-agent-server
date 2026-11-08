@@ -97,6 +97,24 @@ pub(crate) fn migrate_v2(connection: &mut Connection) -> Result<(), JournalError
     connection.execute_batch("PRAGMA foreign_keys=ON;")?;
     result
 }
+pub(crate) fn migrate_v4(connection: &mut Connection) -> Result<(), JournalError> {
+    connection.execute_batch("PRAGMA foreign_keys=OFF;")?;
+    let result = (|| {
+        let tx = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        tx.execute_batch(include_str!("schema_v4.sql"))?;
+        let broken: i64 =
+            tx.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| {
+                r.get(0)
+            })?;
+        if broken != 0 {
+            return Err(JournalError::Conflict);
+        }
+        tx.commit()?;
+        Ok(())
+    })();
+    connection.execute_batch("PRAGMA foreign_keys=ON;")?;
+    result
+}
 
 #[cfg(test)]
 pub(crate) fn private_temp() -> tempfile::TempDir {
@@ -137,7 +155,7 @@ mod tests {
             .connection
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .expect("version");
-        assert_eq!(version, 3);
+        assert_eq!(version, 4);
         assert_eq!(
             journal.state("alice", "op").expect("state").as_deref(),
             Some("unknown")
@@ -169,7 +187,7 @@ mod tests {
     }
     #[test]
     fn future_and_unknown_schemas_are_not_rewritten() {
-        for version in [0, 4] {
+        for version in [0, 5] {
             let dir = private_temp();
             let path = dir.path().join("future.sqlite");
             drop(private_file(&path).expect("file"));

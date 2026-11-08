@@ -1,0 +1,19 @@
+# Opt-in user questions — TK-24
+
+A trusted host that implements question display and answers can call `start_agent_interactive`. Existing `start_agent` callers retain the four-tool, noninteractive behavior; old Runs cannot silently gain the capability. Run configuration digests distinguish the two modes, and the capability is persisted independently and cannot be updated in place.
+
+`ask_user` must be the only tool call in a complete valid model response. The response, question identity and `awaiting_user` state commit atomically. A question has at most3 prompts; optional2–3 distinct choices are suggestions, with free text answers allowed. Prompts are bounded to1024 UTF-8 bytes, choices256 bytes and each answer4096 bytes. Unknown authority fields, null model choices, wrong cardinality, blank values and malformed identities are rejected.
+
+Questions have their own durable table and are never `operations` or `approvals`. The displayed request and any reply must refer to the exact committed `ask_user` call in the same Run, with matching response and argument digests. A response owned by another Run, or an ordinary final response that never asked a question, grants no question authority.
+
+The caller answers using the original question ID and digest. Accepted answers append one tool-result message and one event in the same SQLite transaction. An identical replay only reads the current outcome; changed answers conflict. Replaying a prior group's answer does not answer a later question. An answer such as “approve everything” never inserts a tool approval; a subsequent file tool still stops for its own explicit approval.
+
+Current owner, workspace capability and original source versions are revalidated. Cancellation, deadline/step limits, workspace revocation and low-level Run revocation close undecided questions. Waiting legacy Runs still prevent private-area changes. Reopening preserves a valid waiting question; interrupted effects remain unknown and are not replayed. Content-bearing question views and CLI outputs revalidate their sources rather than revealing cached deleted data.
+
+SQLite schema4 extends the phase CHECK and creates question/capability tables. It preserves sparse `runtime_runs.rowid` pagination values and checks existing foreign keys. Schemas1–3 retain their original SQL; legacy Runs have no implicit interactive capability. Old binaries refuse the newer schema. This preparation has not migrated a production or user's existing database.
+
+The developer CLI accepts `user_questions: true` in its private configuration and `answer` with bounded `AnswerUser` JSON on stdin. It reads that input before taking the Journal owner lock. Answer text is never put in process arguments, and malformed answer errors omit supplied values. Existing CLI start/show/step/approve/cancel behavior remains available.
+
+`python3 scripts/check-user-questions.py` exercises actual processes, HTTP/SSE parsing, SQLite, stdin and files. Its model, token count and identity are explicit local fixtures. Core tests additionally cover provenance faults, late/cancelled replies, immutable decisions, source deletion, repeated answers, rollback and migration. These results do not certify model intelligence, cloud RunStore or a Desktop/Web question UI.
+
+The fixed development0.5B model actually asked a question and accepted the persisted answer in three attempts, but then repeated the filename instead of completing the required separately approved read and exact-content task. All three full-task attempts failed and remain recorded; no response or scope assertion was replaced to manufacture a pass. Further same-condition retries are deferred. A separately fixed suitable model/profile still needs qualification before claiming the complete model-driven scenario.
