@@ -41,11 +41,11 @@ impl ModelGateway for LocalModel {
         cancel: watch::Receiver<bool>,
     ) -> ModelFuture<'a> {
         Box::pin(async move {
-            let candidate = self
-                .0
-                .generate(request, cancel)
-                .await
-                .map_err(|_| GatewayFailure)?;
+            let candidate = self.0.generate(request, cancel).await.map_err(|error| {
+                // ModelError has only fixed variants, no prompt, key or URL.
+                eprintln!("model_gateway_rejected kind={error:?}");
+                GatewayFailure
+            })?;
             for call in &candidate.tool_calls {
                 let valid = if call.name == "ask_user" {
                     request.tools.iter().any(|t| t.name == "ask_user")
