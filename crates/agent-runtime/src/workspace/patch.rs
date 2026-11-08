@@ -1,6 +1,8 @@
 //! Exact single-file unified-hunk preparation. No filesystem effect and no
 //! permission grant: the eventual executor must read/version-check through its
 //! own capability and obtain a separate immutable edit approval.
+#[cfg(unix)]
+pub mod authority;
 use super::{WorkspaceError, components};
 use orange_protocol::{request_digest, valid_digest};
 use serde::{Deserialize, Serialize};
