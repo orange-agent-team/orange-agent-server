@@ -100,6 +100,247 @@ fn count(j: &Journal, table: &str) -> i64 {
         .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
         .expect("count")
 }
+
+async fn approved_fixture(
+    f: &Fixture,
+    j: &mut Journal,
+    edit: &EditFileGrant,
+    operation: &Operation<'_>,
+) {
+    let review = j
+        .prepare_patch_review(edit, &f.read, operation, f.args.clone(), "patch-call")
+        .await
+        .expect("review");
+    j.approve_patch_review(
+        edit,
+        &f.read,
+        operation,
+        &review.preview_digest,
+        "alice",
+        now().expect("clock") + 300,
+    )
+    .await
+    .expect("approval");
+}
+
+#[tokio::test]
+async fn publication_reservation_is_durable_owner_scoped_and_never_replayed_after_reopen() {
+    let f = Fixture::new();
+    let mut j = f.journal();
+    let edit = f.edit(&mut j);
+    f.response(&j, true);
+    let digest = f.args.digest().expect("digest");
+    let operation = op(&edit, &digest);
+    approved_fixture(&f, &mut j, &edit, &operation).await;
+    let token = j
+        .begin_patch_publication(&edit, &f.read, &operation)
+        .await
+        .expect("durable barrier");
+    assert!(token.has_live_directory_access());
+    let plan = token.plan().clone();
+    assert_ne!(plan.staged_name, plan.backup_name);
+    assert!(components(&plan.staged_name, false).is_err());
+    assert!(components(&plan.backup_name, false).is_err());
+    assert_eq!(
+        j.patch_publication_plan("alice", "op").expect("owner"),
+        Some(plan.clone())
+    );
+    assert_eq!(
+        j.patch_publication_plan("bob", "op")
+            .expect("foreign owner"),
+        None
+    );
+    assert_eq!(
+        j.state("alice", "op").expect("state").as_deref(),
+        Some("dispatching")
+    );
+    assert!(
+        j.begin_patch_publication(&edit, &f.read, &operation)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        fs::read_dir(f.root.path())
+            .expect("no filesystem effect")
+            .count(),
+        1
+    );
+    assert_eq!(
+        fs::read(f.root.path().join("file.txt")).expect("unchanged"),
+        b"old\n"
+    );
+    drop(token);
+    drop(j);
+    let mut j = f.journal();
+    assert_eq!(
+        j.state("alice", "op").expect("recovered").as_deref(),
+        Some("unknown")
+    );
+    assert_eq!(
+        j.patch_publication_plan("alice", "op")
+            .expect("recovery evidence"),
+        Some(plan)
+    );
+    assert!(
+        j.begin_patch_publication(&edit, &f.read, &operation)
+            .await
+            .is_err()
+    );
+    assert_eq!(count(&j, "editing_publications"), 1);
+    assert!(
+        j.connection
+            .execute("DELETE FROM editing_publications", [])
+            .is_err()
+    );
+    assert!(
+        j.connection
+            .execute("UPDATE editing_publications SET reserved_bytes=1", [])
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn reservation_failure_rolls_back_dispatch_and_preserves_original_approval() {
+    let f = Fixture::new();
+    let mut j = f.journal();
+    let edit = f.edit(&mut j);
+    f.response(&j, true);
+    let digest = f.args.digest().expect("digest");
+    let operation = op(&edit, &digest);
+    approved_fixture(&f, &mut j, &edit, &operation).await;
+    j.connection.execute_batch("CREATE TRIGGER fail_reservation BEFORE INSERT ON editing_publications BEGIN SELECT RAISE(ABORT,'injected reservation failure');END;").expect("fault");
+    assert!(
+        j.begin_patch_publication(&edit, &f.read, &operation)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        j.state("alice", "op").expect("rolled back").as_deref(),
+        Some("intended")
+    );
+    assert_eq!(count(&j, "editing_publications"), 0);
+    assert_eq!(count(&j, "editing_approvals"), 1);
+    j.connection
+        .execute_batch("DROP TRIGGER fail_reservation;")
+        .expect("remove owned injection");
+    j.begin_patch_publication(&edit, &f.read, &operation)
+        .await
+        .expect("same exact approval accepted once");
+    assert_eq!(count(&j, "editing_publications"), 1);
+}
+
+#[tokio::test]
+async fn changed_source_or_revoked_access_cannot_cross_publication_barrier() {
+    let f = Fixture::new();
+    let mut j = f.journal();
+    let edit = f.edit(&mut j);
+    f.response(&j, true);
+    let digest = f.args.digest().expect("digest");
+    let operation = op(&edit, &digest);
+    approved_fixture(&f, &mut j, &edit, &operation).await;
+    fs::write(f.root.path().join("file.txt"), b"external change\n").expect("external write");
+    assert!(
+        j.begin_patch_publication(&edit, &f.read, &operation)
+            .await
+            .is_err()
+    );
+    assert_eq!(count(&j, "editing_publications"), 0);
+    edit.request_revoke();
+    assert!(
+        j.begin_patch_publication(&edit, &f.read, &operation)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        j.state("alice", "op").expect("state").as_deref(),
+        Some("intended")
+    );
+    assert_eq!(
+        fs::read(f.root.path().join("file.txt")).expect("preserved"),
+        b"external change\n"
+    );
+}
+
+#[tokio::test]
+async fn retained_publications_have_a_bounded_per_resource_admission_limit() {
+    let f = Fixture::new();
+    let mut j = f.journal();
+    let edit = f.edit(&mut j);
+    f.response(&j, true);
+    let digest = f.args.digest().expect("digest");
+    for n in 0..65 {
+        let id = format!("operation-{n}");
+        let invocation = format!("invocation-{n}");
+        j.connection.execute("INSERT INTO responses(invocation,run_id,attempt,digest,body) SELECT ?,run_id,attempt,digest,body FROM responses WHERE invocation='inv'",[&invocation]).expect("distinct committed response fixture");
+        let operation = Operation {
+            id: &id,
+            invocation: &invocation,
+            ..op(&edit, &digest)
+        };
+        approved_fixture(&f, &mut j, &edit, &operation).await;
+        let outcome = j.begin_patch_publication(&edit, &f.read, &operation).await;
+        if n < 64 {
+            assert!(outcome.is_ok());
+            // Journal-only terminal fixture for retained-plan accounting;
+            // this does not certify a filesystem publication.
+            j.complete("alice", &id, &digest)
+                .expect("synthetic terminal journal fixture");
+        } else {
+            assert!(matches!(outcome, Err(PatchError::Limit)));
+            assert_eq!(
+                j.state("alice", &id).expect("not dispatched").as_deref(),
+                Some("intended")
+            );
+        }
+    }
+    assert_eq!(count(&j, "editing_publications"), 64);
+    assert_eq!(fs::read_dir(f.root.path()).expect("no effects").count(), 1);
+}
+
+#[tokio::test]
+async fn retention_byte_limit_applies_before_the_plan_count_limit() {
+    let mut f = Fixture::new();
+    let content = format!("old\n{}\n", "a".repeat(MAX_TEXT - 5));
+    fs::write(f.root.path().join("file.txt"), &content).expect("large owned text");
+    f.args.expected_sha256 = hex::encode(sha2::Sha256::digest(content.as_bytes()));
+    let mut j = f.journal();
+    let edit = f.edit(&mut j);
+    f.response(&j, true);
+    let digest = f.args.digest().expect("digest");
+    let expected_admissions = (64 * 1024 * 1024) / (2 * MAX_TEXT + 2 * 384 * 1024);
+    assert!(expected_admissions < 64);
+    for n in 0..=expected_admissions {
+        let id = format!("operation-{n}");
+        let invocation = format!("invocation-{n}");
+        j.connection.execute("INSERT INTO responses(invocation,run_id,attempt,digest,body) SELECT ?,run_id,attempt,digest,body FROM responses WHERE invocation='inv'",[&invocation]).expect("distinct committed response fixture");
+        let operation = Operation {
+            id: &id,
+            invocation: &invocation,
+            ..op(&edit, &digest)
+        };
+        approved_fixture(&f, &mut j, &edit, &operation).await;
+        let result = j.begin_patch_publication(&edit, &f.read, &operation).await;
+        if n < expected_admissions {
+            assert!(result.is_ok());
+            j.complete("alice", &id, &digest)
+                .expect("synthetic terminal journal fixture");
+        } else {
+            assert!(matches!(result, Err(PatchError::Limit)));
+            assert_eq!(
+                j.state("alice", &id).expect("state").as_deref(),
+                Some("intended")
+            );
+        }
+    }
+    assert_eq!(
+        count(&j, "editing_publications"),
+        expected_admissions as i64
+    );
+    assert_eq!(
+        fs::read_to_string(f.root.path().join("file.txt")).expect("unchanged"),
+        content
+    );
+}
 #[tokio::test]
 async fn exact_review_and_separate_approval_never_publish_a_file_by_themselves() {
     let f = Fixture::new();
