@@ -291,6 +291,16 @@ pub(super) fn read_source(
 }
 impl SourceIdentity {
     #[cfg(target_vendor = "apple")]
+    pub(super) fn same_inode(&self, other: &Self) -> bool {
+        self.device == other.device
+            && self.inode == other.inode
+            && self.created_nanos == other.created_nanos
+    }
+    #[cfg(target_vendor = "apple")]
+    pub(super) fn same_parent(&self, parent: &Dir) -> Result<bool, PatchError> {
+        Ok(directory_identity(parent)? == (self.parent_device, self.parent_inode))
+    }
+    #[cfg(target_vendor = "apple")]
     pub(super) fn bind_security(&mut self, digest: [u8; 32]) {
         self.security_digest = hex::encode(digest);
     }

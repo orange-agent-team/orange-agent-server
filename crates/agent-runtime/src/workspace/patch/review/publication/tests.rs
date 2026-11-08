@@ -1,3 +1,4 @@
+use super::super::dispatch::recovery::inspection::RecoveryFileObservation;
 use super::super::tests::{Fixture, approved_fixture, op};
 use super::*;
 use std::{fs, os::unix::fs::PermissionsExt};
@@ -491,4 +492,191 @@ fn abrupt_process_exit_preserves_recovery_evidence_across_every_filesystem_bound
             );
         }
     }
+}
+
+#[tokio::test]
+async fn explicit_read_capability_inspects_unknown_versions_without_content_or_mutation() {
+    let f = Fixture::new();
+    let (mut j, edit, token) = ready(&f).await;
+    let plan = token.plan().clone();
+    assert!(
+        j.publish_patch_with_hook(&edit, &f.read, token, |stage| if stage == 4 {
+            Err(PatchError::RecoveryRequired)
+        } else {
+            Ok(())
+        })
+        .is_err()
+    );
+    let receipt = j
+        .inspect_patch_recovery("alice", "op", &f.read)
+        .await
+        .expect("read-only inspection");
+    let view = receipt.snapshot().expect("live view");
+    assert_eq!(view.journal.execution_state, "unknown");
+    assert!(matches!(view.target, RecoveryFileObservation::Missing));
+    assert!(matches!(
+        view.staged,
+        RecoveryFileObservation::Regular {
+            matches_result_content: true,
+            reviewed_original_inode: false,
+            ..
+        }
+    ));
+    assert!(matches!(
+        view.original,
+        RecoveryFileObservation::Regular {
+            matches_original_content: true,
+            reviewed_original_inode: true,
+            ..
+        }
+    ));
+    let encoded = serde_json::to_string(view).expect("metadata JSON");
+    assert!(!encoded.contains("old\\n") && !encoded.contains("new\\n"));
+    assert!(!f.root.path().join("file.txt").exists());
+    assert_eq!(
+        fs::read(f.root.path().join(&plan.staged_name)).expect("staging unchanged"),
+        b"new\n"
+    );
+    assert_eq!(
+        fs::read(f.root.path().join(&plan.backup_name)).expect("backup unchanged"),
+        b"old\n"
+    );
+    f.read.request_revoke();
+    assert!(receipt.snapshot().is_err());
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(10), f.read.wait_drained())
+            .await
+            .is_err()
+    );
+    drop(receipt);
+    tokio::time::timeout(std::time::Duration::from_secs(1), f.read.wait_drained())
+        .await
+        .expect("drained");
+    assert!(
+        j.inspect_patch_recovery("alice", "op", &f.read)
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn recovery_inspection_rejects_foreign_owner_directory_and_links() {
+    let f = Fixture::new();
+    let (mut j, edit, token) = ready(&f).await;
+    let plan = token.plan().clone();
+    assert!(
+        j.publish_patch_with_hook(&edit, &f.read, token, |stage| if stage == 4 {
+            Err(PatchError::RecoveryRequired)
+        } else {
+            Ok(())
+        })
+        .is_err()
+    );
+    assert!(
+        j.inspect_patch_recovery("bob", "op", &f.read)
+            .await
+            .is_err()
+    );
+    let foreign = tempfile::tempdir().expect("foreign owned fixture");
+    let wrong = WorkspaceGrant::open(
+        "alice",
+        "different-root",
+        "policy",
+        foreign.path(),
+        &[f.private.path().into()],
+    )
+    .expect("foreign read grant");
+    assert!(
+        j.inspect_patch_recovery("alice", "op", &wrong)
+            .await
+            .is_err()
+    );
+    let secret = foreign.path().join("private.txt");
+    fs::write(&secret, b"owned confidential outside fixture").expect("outside fixture");
+    let backup = f.root.path().join(&plan.backup_name);
+    fs::rename(
+        &backup,
+        f.root.path().join(format!("{}.saved", plan.backup_name)),
+    )
+    .expect("retain actual original");
+    std::os::unix::fs::symlink(&secret, &backup).expect("adversarial link");
+    let inspected = j
+        .inspect_patch_recovery("alice", "op", &f.read)
+        .await
+        .expect("reports refused link");
+    assert!(matches!(
+        inspected.snapshot().expect("snapshot").original,
+        RecoveryFileObservation::Refused { .. }
+    ));
+    assert!(
+        !serde_json::to_string(inspected.snapshot().expect("snapshot"))
+            .expect("JSON")
+            .contains("confidential")
+    );
+    assert_eq!(
+        fs::read(secret).expect("external untouched"),
+        b"owned confidential outside fixture"
+    );
+}
+
+#[tokio::test]
+async fn recovery_inspection_detects_late_old_inode_updates_without_claiming_receipt_changed() {
+    let f = Fixture::new();
+    let mut old = fs::File::options()
+        .write(true)
+        .open(f.root.path().join("file.txt"))
+        .expect("old fd");
+    let (mut j, edit, token) = ready(&f).await;
+    let published = j
+        .publish_patch_dispatch(&edit, &f.read, token)
+        .expect("publish");
+    old.write_all(b"late original version\n")
+        .expect("late update");
+    old.sync_all().expect("sync");
+    let receipt = j
+        .inspect_patch_recovery("alice", "op", &f.read)
+        .await
+        .expect("inspect current versions");
+    let view = receipt.snapshot().expect("snapshot");
+    assert_eq!(view.journal.committed_receipt.as_ref(), Some(&published));
+    assert!(matches!(
+        view.target,
+        RecoveryFileObservation::Regular {
+            matches_result_content: true,
+            ..
+        }
+    ));
+    assert!(matches!(
+        view.original,
+        RecoveryFileObservation::Regular {
+            reviewed_original_inode: true,
+            matches_original_content: false,
+            ..
+        }
+    ));
+    assert!(matches!(view.staged, RecoveryFileObservation::Missing));
+}
+
+#[tokio::test]
+async fn corrupted_success_receipt_is_not_presented_as_committed_recovery_evidence() {
+    let f = Fixture::new();
+    let (mut j, edit, token) = ready(&f).await;
+    j.publish_patch_dispatch(&edit, &f.read, token)
+        .expect("publish");
+    j.connection
+        .execute(
+            "UPDATE operations SET result_digest=? WHERE operation_id='op'",
+            ["0".repeat(64)],
+        )
+        .expect("owned corrupt-database fixture");
+    assert!(j.patch_recovery_view("alice", "op").is_err());
+    assert!(
+        j.inspect_patch_recovery("alice", "op", &f.read)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        fs::read(f.root.path().join("file.txt")).expect("no filesystem effects"),
+        b"new\n"
+    );
 }

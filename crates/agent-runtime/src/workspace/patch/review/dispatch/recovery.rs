@@ -1,6 +1,8 @@
 //! Journal evidence only. Last durable intent is not proof of current files;
 //! reading this view never grants access, inspects names or resumes dispatch.
 use super::*;
+#[cfg(target_vendor = "apple")]
+pub mod inspection;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
