@@ -21,6 +21,7 @@ cap-std.workspace = true
 cap-fs-ext.workspace = true
 base64.workspace = true
 regex.workspace = true
+unicode-normalization.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
