@@ -77,6 +77,20 @@ async fn real_publication_preserves_source_inode_metadata_and_durable_receipt() 
         metadata
     );
     assert_eq!(steps(&j), 7);
+    let view = j
+        .patch_recovery_view("alice", "op")
+        .expect("recovery metadata")
+        .expect("owned plan");
+    assert_eq!(
+        view.last_durable_stage,
+        Some(super::super::dispatch::recovery::PublicationStage::Confirmed)
+    );
+    assert_eq!(view.committed_receipt, Some(receipt.clone()));
+    assert!(
+        j.patch_recovery_view("bob", "op")
+            .expect("other owner")
+            .is_none()
+    );
     assert_eq!(
         j.state("alice", "op").expect("state").as_deref(),
         Some("succeeded")
@@ -138,6 +152,16 @@ async fn concurrent_new_target_is_never_overwritten_and_all_three_versions_survi
         Some("unknown")
     );
     assert_eq!(steps(&j), 5);
+    let view = j
+        .patch_recovery_view("alice", "op")
+        .expect("uncertain metadata")
+        .expect("plan");
+    assert_eq!(view.execution_state, "unknown");
+    assert_eq!(
+        view.last_durable_stage,
+        Some(super::super::dispatch::recovery::PublicationStage::PublishIntent)
+    );
+    assert!(view.committed_receipt.is_none());
 }
 
 #[tokio::test]
@@ -262,6 +286,13 @@ async fn stage_name_collision_and_revocation_never_overwrite_source_or_collision
     edit.request_revoke();
     assert!(j.publish_patch_dispatch(&edit, &f.read, token).is_err());
     assert_eq!(steps(&j), 0);
+    assert_eq!(
+        j.patch_recovery_view("alice", "op")
+            .expect("no effect evidence")
+            .expect("plan")
+            .last_durable_stage,
+        None
+    );
     assert_eq!(fs::read_dir(f.root.path()).expect("no effects").count(), 1);
 }
 

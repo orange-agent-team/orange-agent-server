@@ -1,22 +1,12 @@
 //! Synchronous trusted-host publisher for the verified Apple backend. The
 //! owning host must run this bounded-file work on its blocking execution lane.
 //! It is not registered as an ordinary Agent tool and never overwrites a name.
+pub use super::dispatch::PublishedPatch;
 use super::{dispatch::PatchDispatch, *};
 use crate::workspace::{directory_identity, open_directory};
 use cap_fs_ext::{FollowSymlinks, OpenOptionsFollowExt, OpenOptionsSyncExt};
 use cap_std::fs::{Dir, File, OpenOptions, OpenOptionsExt};
 use std::io::{Read, Seek, Write};
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct PublishedPatch {
-    pub path: String,
-    pub original_sha256: String,
-    pub result_sha256: String,
-    pub bytes: String,
-    /// Original inode retained; never delete automatically after confirmation.
-    pub retained_original: String,
-}
 
 fn io_error(error: std::io::Error) -> PatchError {
     WorkspaceError::Io(error).into()

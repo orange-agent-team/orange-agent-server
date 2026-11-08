@@ -1,6 +1,7 @@
 //! Durable publication reservation. This module changes only the journal;
 //! it does not write, rename, delete or automatically recover workspace files.
 use super::*;
+pub mod recovery;
 
 const MAX_PUBLICATIONS: i64 = 64;
 const MAX_RESERVED_BYTES: i64 = 64 * 1024 * 1024;
@@ -16,6 +17,17 @@ pub struct PublicationPlan {
     pub original_sha256: String,
     pub result_sha256: String,
     pub reserved_bytes: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PublishedPatch {
+    pub path: String,
+    pub original_sha256: String,
+    pub result_sha256: String,
+    pub bytes: String,
+    /// Original inode retained; never delete automatically after confirmation.
+    pub retained_original: String,
 }
 
 /// Non-serializable ownership token. A plan read from SQLite is never a token.

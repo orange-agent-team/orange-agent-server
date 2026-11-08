@@ -20,6 +20,8 @@ schema10 的 `editing_publications` 与 operation 的 intended→dispatching 在
 
 本机实测正常发布、ACL/xattr/mode 保留、竞争目标三版本保留、旧 fd 写入、源变化、暂存名冲突、撤权、审批过期、最终 receipt 写入失败。另使用独立真实测试子进程在六个边界直接 exit（含 rename 已发生但完成阶段尚未落库的窗口）；父进程重开 Journal 后均为 unknown，保留对应文件和阶段且不自动恢复。此证据不等于断电/文件系统故障认证。
 
+`patch_recovery_view` 提供按 owner 隔离的只读日志视图，核对阶段连续性和已提交 receipt 摘要。区分最后持久化 intent、已记录的 publication 和已确认结果；不会把 intent 当作文件已经移动或发布。该查询不打开工作区、不返回文件内容、不授予恢复权限，也不能代替当前文件的实际检查。
+
 ## 后续实现要求
 
 1. 受授权的恢复检查、明确恢复决策和保留容量释放；新建恢复副本只能 no-replace，不能丢弃仍被旧 fd 修改的版本。
