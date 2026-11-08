@@ -1014,7 +1014,7 @@ fn user_question_migration_preserves_sparse_run_cursor_and_denies_implicit_capab
     let f = Fixture::new();
     let mut j = f.open();
     f.start(&mut j);
-    j.connection.execute_batch("UPDATE runtime_runs SET rowid=37; DROP TABLE runtime_questions; DROP TABLE runtime_capabilities; PRAGMA user_version=3;").expect("prior-version fixture with sparse cursor");
+    j.connection.execute_batch("UPDATE runtime_runs SET rowid=37; DROP TABLE creation_consent_audit; DROP TABLE creation_request_keys; DROP TABLE creation_consents; DROP TABLE runtime_questions; DROP TABLE runtime_capabilities; PRAGMA user_version=3;").expect("prior-version fixture with sparse cursor");
     drop(j);
     let mut j = f.open();
     let rowid: i64 = j

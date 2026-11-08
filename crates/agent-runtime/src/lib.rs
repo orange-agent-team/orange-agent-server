@@ -68,7 +68,7 @@ impl Journal {
             rusqlite::OpenFlags::default() | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
         )?;
         let version: i64 = connection.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if !(0..=4).contains(&version) {
+        if !(0..=5).contains(&version) {
             return Err(JournalError::UnsupportedVersion);
         }
         if version == 0 {
@@ -104,6 +104,12 @@ impl Journal {
         }
         if version < 4 {
             storage::migrate_v4(&mut connection)?;
+        }
+        if version < 5 {
+            let tx =
+                connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            tx.execute_batch(include_str!("schema_v5.sql"))?;
+            tx.commit()?;
         }
         connection.execute_batch("BEGIN IMMEDIATE;
             UPDATE runtime_host SET epoch=epoch+1 WHERE singleton=1;

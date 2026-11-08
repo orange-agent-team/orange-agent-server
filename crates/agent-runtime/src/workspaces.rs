@@ -134,6 +134,26 @@ impl Journal {
                 _ => return Err(WorkspaceStoreError::Conflict),
             }
         }
+        let creation_rows = {
+            let mut query=self.connection.prepare("SELECT owner,consent_id,policy,canonical_path,resource_identity FROM creation_consents WHERE active=1")?;
+            query
+                .query_map([], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, String>(3)?,
+                        r.get::<_, String>(4)?,
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        for (owner, id, policy, root, resource) in creation_rows {
+            match WorkspaceGrant::open(&owner, &id, &policy, Path::new(&root), &roots) {
+                Ok(grant) if grant.resource_identity() == resource => {}
+                _ => return Err(WorkspaceStoreError::Conflict),
+            }
+        }
         self.extra_private_roots.push(path);
         Ok(())
     }

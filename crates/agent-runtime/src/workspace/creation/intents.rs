@@ -70,6 +70,7 @@ impl Journal {
         call_id: &str,
     ) -> Result<CreationPreview, CreateFileError> {
         validate_binding(grant, op, args)?;
+        self.validate_creation_consent(grant)?;
         self.creation_source(op, args, call_id)?;
         self.prepare(op)?;
         let encoded = serde_json::to_string(&Request {
@@ -113,6 +114,7 @@ impl Journal {
             return Err(JournalError::Invalid.into());
         }
         validate_binding(grant, op, &request.arguments)?;
+        self.validate_creation_consent(grant)?;
         self.creation_source(op, &request.arguments, &call_id)?;
         Ok(CreationPreview {
             operation_id: op.id.into(),

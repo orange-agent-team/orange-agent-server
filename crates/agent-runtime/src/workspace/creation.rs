@@ -2,8 +2,10 @@
 //! converted to this type, and it is never constructed from model arguments.
 //! Model-loop and OS-consent integration remain separate from this boundary.
 use super::*;
+mod consent;
 mod intents;
 use crate::{Journal, JournalError, Operation};
+pub use consent::{CreationConsentView, CreationRevoker};
 pub use intents::CreationPreview;
 use intents::validate_binding;
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
@@ -45,8 +47,17 @@ pub struct CreatedFile {
 pub struct CreateFileGrant {
     grant: WorkspaceGrant,
     environment: String,
+    consent_id: String,
+    version: i64,
+    epoch: i64,
 }
 impl CreateFileGrant {
+    pub fn consent_id(&self) -> &str {
+        &self.consent_id
+    }
+    pub fn consent_version(&self) -> String {
+        self.version.to_string()
+    }
     pub fn environment(&self) -> &str {
         &self.environment
     }
@@ -75,23 +86,6 @@ struct Publication {
     _permit: Permit,
 }
 impl Journal {
-    /// Explicit process-local write consent, supplied only by the trusted Host.
-    /// It is not inferred from a readonly workspace, persisted across restart,
-    /// or exposed to a model. Each effect additionally requires an approval.
-    pub fn authorize_file_creation(
-        &self,
-        owner: &str,
-        consent_id: &str,
-        policy: &str,
-        root: &Path,
-    ) -> Result<CreateFileGrant, CreateFileError> {
-        let mut private = vec![self.private_root.clone()];
-        private.extend(self.extra_private_roots.clone());
-        let grant = WorkspaceGrant::open(owner, consent_id, policy, root, &private)?;
-        let environment = request_digest("create-only-workspace-v1", &grant.environment())
-            .map_err(|_| WorkspaceError::Invalid)?;
-        Ok(CreateFileGrant { grant, environment })
-    }
     /// Complete response -> exact approval -> durable dispatch -> atomic new
     /// file -> durable receipt. Uncertain outcomes cannot be retried as fresh.
     pub async fn create_file(
@@ -101,6 +95,7 @@ impl Journal {
         args: CreateFileArgs,
     ) -> Result<CreatedFile, CreateFileError> {
         validate_binding(grant, op, &args)?;
+        self.validate_creation_consent(grant)?;
         #[cfg(not(any(target_vendor = "apple", target_os = "linux", target_os = "android")))]
         return Err(CreateFileError::Unsupported);
         let slot = WRITE_SLOTS

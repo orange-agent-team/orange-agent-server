@@ -16,7 +16,7 @@ impl Fixture {
     fn open(&self) -> Journal {
         Journal::open(&self.private.path().join("state.sqlite")).expect("journal")
     }
-    fn grant(&self, j: &Journal) -> CreateFileGrant {
+    fn grant(&self, j: &mut Journal) -> CreateFileGrant {
         j.authorize_file_creation(
             "alice",
             "explicit-create-consent",
@@ -105,7 +105,7 @@ fn args(path: &str, content: &str) -> CreateFileArgs {
 async fn create_file_requires_response_write_authority_and_exact_approval() {
     let f = Fixture::new();
     let mut j = f.open();
-    let grant = f.grant(&j);
+    let grant = f.grant(&mut j);
     let input = args("new.txt", "actual content");
     let digest = input.digest().expect("digest");
     let op = operation("create-1", &digest, &grant);
@@ -169,7 +169,7 @@ async fn create_file_never_overwrites_and_keeps_unicode_paths_literal() {
     let f = Fixture::new();
     let mut j = f.open();
     response(&j);
-    let grant = f.grant(&j);
+    let grant = f.grant(&mut j);
     fs::create_dir(f.root.path().join("中文")).expect("parent");
     fs::write(f.root.path().join("中文/你好.txt"), "original").expect("existing file");
     let input = args("中文/你好.txt", "replacement");
@@ -206,7 +206,7 @@ async fn create_file_rejects_readonly_environment_protected_names_links_and_revo
     let f = Fixture::new();
     let mut j = f.open();
     response(&j);
-    let grant = f.grant(&j);
+    let grant = f.grant(&mut j);
     let readonly = WorkspaceGrant::open(
         "alice",
         "explicit-create-consent",
@@ -259,7 +259,7 @@ async fn create_file_postpublication_journal_failure_is_unknown_and_never_replay
     let f = Fixture::new();
     let mut j = f.open();
     response(&j);
-    let grant = f.grant(&j);
+    let grant = f.grant(&mut j);
     let input = args("created.txt", "first publication");
     let digest = input.digest().expect("digest");
     let op = operation("faulted", &digest, &grant);
@@ -279,12 +279,19 @@ async fn create_file_postpublication_journal_failure_is_unknown_and_never_replay
         j.state("alice", "faulted").expect("recovery").as_deref(),
         Some("unknown")
     );
-    let grant = f.grant(&j);
-    let op = operation("faulted", &digest, &grant);
     fs::write(f.root.path().join("created.txt"), "user edit after crash").expect("user change");
     assert!(matches!(
-        j.create_file(&grant, &op, input).await,
-        Err(CreateFileError::Journal(JournalError::AlreadyDispatched))
+        j.authorize_file_creation("alice", "explicit-create-consent", "policy", f.root.path()),
+        Err(CreateFileError::Unknown)
+    ));
+    assert!(matches!(
+        j.authorize_file_creation(
+            "alice",
+            "new-consent-cannot-bypass",
+            "policy",
+            f.root.path()
+        ),
+        Err(CreateFileError::Unknown)
     ));
     assert_eq!(
         fs::read_to_string(f.root.path().join("created.txt")).expect("preserve"),
@@ -300,8 +307,8 @@ async fn create_file_racing_hosts_publish_exactly_one_complete_file() {
     let mut b = Journal::open(&second.path().join("state.sqlite")).expect("independent journal");
     response(&a);
     response(&b);
-    let ga = f.grant(&a);
-    let gb = f.grant(&b);
+    let ga = f.grant(&mut a);
+    let gb = f.grant(&mut b);
     let aa = args("race.txt", &"α".repeat(20_000));
     let ab = args("race.txt", &"β".repeat(20_000));
     let da = aa.digest().expect("digest");
@@ -338,7 +345,7 @@ async fn create_file_expired_or_optional_approval_never_writes() {
     let f = Fixture::new();
     let mut j = f.open();
     response(&j);
-    let grant = f.grant(&j);
+    let grant = f.grant(&mut j);
     let input = args("new.txt", "body");
     let digest = input.digest().expect("digest");
     let mut op = operation("expired", &digest, &grant);
@@ -367,7 +374,7 @@ async fn create_file_digest_only_response_and_generic_approval_cannot_bypass_pre
     let f = Fixture::new();
     let mut j = f.open();
     response(&j);
-    let grant = f.grant(&j);
+    let grant = f.grant(&mut j);
     let input = args("new.txt", "bound content");
     let digest = input.digest().expect("digest");
     let op = operation("unbound", &digest, &grant);
@@ -410,7 +417,7 @@ async fn create_file_preview_reopens_exactly_and_rejects_changed_response_or_dig
     let f = Fixture::new();
     let mut j = f.open();
     response(&j);
-    let grant = f.grant(&j);
+    let grant = f.grant(&mut j);
     let input = args("新文件.txt", "reviewed content\n");
     let digest = input.digest().expect("digest");
     let op = operation("preview", &digest, &grant);
@@ -426,7 +433,7 @@ async fn create_file_preview_reopens_exactly_and_rejects_changed_response_or_dig
     );
     drop(j);
     let mut j = f.open();
-    let grant = f.grant(&j);
+    let grant = f.grant(&mut j);
     let op = operation("preview", &digest, &grant);
     assert_eq!(
         j.file_creation_preview(&grant, &op)
@@ -472,7 +479,7 @@ async fn create_file_wrong_call_foreign_response_or_forged_stored_preview_has_no
     let f = Fixture::new();
     let mut j = f.open();
     response(&j);
-    let grant = f.grant(&j);
+    let grant = f.grant(&mut j);
     let input = args("new.txt", "content");
     let digest = input.digest().expect("digest");
     let op = operation("source", &digest, &grant);
@@ -509,4 +516,294 @@ async fn create_file_wrong_call_foreign_response_or_forged_stored_preview_has_no
         )
         .expect("count");
     assert_eq!(dispatched, 0);
+}
+
+#[test]
+fn create_consent_is_owned_idempotent_and_does_not_upgrade_readonly_records() {
+    let f = Fixture::new();
+    let mut j = f.open();
+    let read = j
+        .authorize_workspace("alice", "read-consent", f.root.path(), "policy")
+        .expect("readonly consent");
+    assert!(
+        j.creation_consents("alice")
+            .expect("no implicit writes")
+            .is_empty()
+    );
+    let first = f.grant(&mut j);
+    let id = first.consent_id().to_owned();
+    let again = f.grant(&mut j);
+    assert_eq!(first.environment(), again.environment());
+    assert_eq!(id, again.consent_id());
+    assert!(j.creation_consent("bob", &id).is_err());
+    let other = tempfile::tempdir().expect("other root");
+    assert!(matches!(
+        j.authorize_file_creation("alice", "explicit-create-consent", "policy", other.path()),
+        Err(CreateFileError::Journal(JournalError::Conflict))
+    ));
+    assert_eq!(j.creation_consents("alice").expect("inventory").len(), 1);
+    assert_eq!(
+        j.workspace("alice", &read.workspace_id)
+            .expect("original readonly view")
+            .environment,
+        read.environment
+    );
+    assert_ne!(read.environment, first.environment());
+    assert!(
+        j.authorize_file_creation("alice", "private-write", "policy", f.private.path())
+            .is_err()
+    );
+}
+#[tokio::test]
+async fn create_consent_revoke_closes_all_handles_and_old_request_cannot_reactivate() {
+    let f = Fixture::new();
+    let mut j = f.open();
+    response(&j);
+    let first = f.grant(&mut j);
+    let id = first.consent_id().to_owned();
+    let second = j
+        .restore_file_creation("alice", &id)
+        .expect("second current handle");
+    assert!(matches!(
+        j.revoke_file_creation("alice", &id, "2"),
+        Err(CreateFileError::Journal(JournalError::Conflict))
+    ));
+    assert!(!first.grant.is_revoked());
+    let signal = j.creation_revoker("alice", &id).expect("owned signal");
+    signal.request_revoke();
+    assert!(first.grant.is_revoked() && second.grant.is_revoked());
+    assert!(
+        j.creation_consent("alice", &id)
+            .expect("signal not durable acknowledgement")
+            .active
+    );
+    let stopped = j
+        .revoke_file_creation("alice", &id, "1")
+        .expect("durable revoke");
+    assert!(!stopped.active);
+    assert_eq!(stopped.version, "2");
+    assert_eq!(
+        j.revoke_file_creation("alice", &id, "1")
+            .expect("same revoke replay"),
+        stopped
+    );
+    assert!(matches!(
+        j.authorize_file_creation("alice", "explicit-create-consent", "policy", f.root.path()),
+        Err(CreateFileError::Workspace(WorkspaceError::Revoked))
+    ));
+    let fresh = j
+        .authorize_file_creation("alice", "fresh-explicit-consent", "policy", f.root.path())
+        .expect("new independent user consent");
+    assert_ne!(fresh.environment(), first.environment());
+    let input = args("after.txt", "content");
+    let hash = input.digest().expect("digest");
+    let old = operation("late-old", &hash, &first);
+    assert!(matches!(
+        j.create_file(&first, &old, input).await,
+        Err(CreateFileError::Workspace(WorkspaceError::Revoked))
+    ));
+    assert!(!f.root.path().join("after.txt").exists());
+}
+#[test]
+fn create_consent_reopen_needs_fresh_capability_and_retains_exact_preview() {
+    let f = Fixture::new();
+    let mut j = f.open();
+    response(&j);
+    let old = f.grant(&mut j);
+    let id = old.consent_id().to_owned();
+    let input = args("new.txt", "content");
+    let hash = input.digest().expect("digest");
+    let op = operation("resume", &hash, &old);
+    bind_intent(&mut j, &old, &op, &input);
+    drop(j);
+    let mut j = f.open();
+    assert!(
+        j.creation_consent("alice", &id)
+            .expect("stored consent")
+            .active
+    );
+    assert!(
+        j.file_creation_preview(&old, &op).is_err(),
+        "prior Host handle never grants new-session write access"
+    );
+    let current = j
+        .restore_file_creation("alice", &id)
+        .expect("trusted Host explicitly restored access");
+    let op = operation("resume", &hash, &current);
+    assert_eq!(
+        j.file_creation_preview(&current, &op)
+            .expect("same durable preview")
+            .arguments,
+        input
+    );
+}
+#[test]
+fn create_consent_replaced_directory_and_private_area_overlap_are_refused() {
+    let f = Fixture::new();
+    let mut j = f.open();
+    let grant = f.grant(&mut j);
+    let id = grant.consent_id().to_owned();
+    let inside = f.root.path().join("future-private");
+    fs::create_dir(&inside).expect("private area fixture");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&inside, fs::Permissions::from_mode(0o700)).expect("private");
+    }
+    assert!(
+        j.reserve_private_directory(&inside).is_err(),
+        "must not create a secret namespace under an active writer"
+    );
+    let moved = f
+        .root
+        .path()
+        .with_extension(format!("moved-{}", uuid::Uuid::new_v4()));
+    fs::rename(f.root.path(), &moved).expect("move exact owned fixture");
+    fs::create_dir(f.root.path()).expect("replace path");
+    assert!(matches!(
+        j.restore_file_creation("alice", &id),
+        Err(CreateFileError::Workspace(
+            WorkspaceError::EnvironmentChanged
+        ))
+    ));
+    assert!(
+        !j.creation_consent("alice", &id)
+            .expect("fenced consent")
+            .active
+    );
+    assert!(grant.grant.is_revoked());
+    fs::remove_dir_all(moved).expect("remove only moved owned fixture");
+}
+#[test]
+fn create_consent_migration_preserves_legacy_data_without_inventing_write_rights() {
+    let f = Fixture::new();
+    let mut j = f.open();
+    let read = j
+        .authorize_workspace("alice", "prior-read", f.root.path(), "policy")
+        .expect("readonly");
+    j.connection.execute_batch("DROP TABLE creation_consent_audit;DROP TABLE creation_request_keys;DROP TABLE creation_consents;PRAGMA user_version=4;").expect("real prior schema fixture");
+    drop(j);
+    let j = f.open();
+    assert!(
+        j.creation_consents("alice")
+            .expect("no implicit writes")
+            .is_empty()
+    );
+    assert_eq!(
+        j.workspace("alice", &read.workspace_id)
+            .expect("preserved readonly environment")
+            .environment,
+        read.environment
+    );
+    let broken: i64 = j
+        .connection
+        .query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| {
+            r.get(0)
+        })
+        .expect("FK integrity");
+    assert_eq!(broken, 0);
+}
+
+#[test]
+fn create_consent_revocation_failure_does_not_acknowledge_or_restore_live_handles() {
+    let f = Fixture::new();
+    let mut j = f.open();
+    let grant = f.grant(&mut j);
+    let id = grant.consent_id().to_owned();
+    j.connection.execute_batch("CREATE TRIGGER reject_consent_revoke BEFORE INSERT ON creation_consent_audit WHEN NEW.kind='creation.revoked' BEGIN SELECT RAISE(ABORT,'explicit revoke audit failure');END;").expect("fault fixture");
+    assert!(j.revoke_file_creation("alice", &id, "1").is_err());
+    assert!(grant.grant.is_revoked());
+    let stored = j
+        .creation_consent("alice", &id)
+        .expect("rolled back durable state");
+    assert!(stored.active);
+    assert_eq!(stored.version, "1");
+    assert!(matches!(
+        j.restore_file_creation("alice", &id),
+        Err(CreateFileError::Workspace(WorkspaceError::Revoked))
+    ));
+    j.connection
+        .execute_batch("DROP TRIGGER reject_consent_revoke")
+        .expect("remove owned fault");
+    assert!(
+        !j.revoke_file_creation("alice", &id, "1")
+            .expect("retry original revocation")
+            .active
+    );
+}
+#[test]
+fn create_consent_terminal_identity_keys_and_history_are_immutable() {
+    let f = Fixture::new();
+    let mut j = f.open();
+    let grant = f.grant(&mut j);
+    let id = grant.consent_id().to_owned();
+    assert!(
+        j.connection
+            .execute(
+                "UPDATE creation_consents SET policy='changed' WHERE consent_id=?",
+                [&id]
+            )
+            .is_err()
+    );
+    assert!(
+        j.connection
+            .execute("DELETE FROM creation_consents WHERE consent_id=?", [&id])
+            .is_err()
+    );
+    assert!(
+        j.connection
+            .execute(
+                "UPDATE creation_request_keys SET digest='changed' WHERE consent_id=?",
+                [&id]
+            )
+            .is_err()
+    );
+    assert!(
+        j.connection
+            .execute(
+                "DELETE FROM creation_consent_audit WHERE consent_id=?",
+                [&id]
+            )
+            .is_err()
+    );
+    j.revoke_file_creation("alice", &id, "1").expect("revoke");
+    assert!(
+        j.connection
+            .execute(
+                "UPDATE creation_consents SET active=1,version=3 WHERE consent_id=?",
+                [&id]
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn create_consent_request_aliases_are_bounded_but_exact_retry_still_resolves() {
+    let f = Fixture::new();
+    let mut j = f.open();
+    let grant = f.grant(&mut j);
+    let id = grant.consent_id().to_owned();
+    let tx = j
+        .connection
+        .transaction()
+        .expect("quota fixture transaction");
+    for i in 0..8191 {
+        tx.execute("INSERT INTO creation_request_keys(owner,request_id,digest,consent_id) VALUES('alice',?,'quota-fixture',?)",params![format!("alias-{i}"),id]).expect("owned quota fixture");
+    }
+    tx.commit().expect("quota fixture");
+    assert!(matches!(
+        j.authorize_file_creation("alice", "extra-alias", "policy", f.root.path()),
+        Err(CreateFileError::Workspace(WorkspaceError::Limit))
+    ));
+    assert_eq!(
+        f.grant(&mut j).consent_id(),
+        id,
+        "lost-response retry must not consume a new key"
+    );
+    assert_eq!(
+        j.creation_consents("alice")
+            .expect("no invented extra grants")
+            .len(),
+        1
+    );
 }

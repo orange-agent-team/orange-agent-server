@@ -410,7 +410,7 @@ fn schema_two_upgrades_without_inventing_workspace_permissions() {
     .expect("legacy");
     j.start_agent(&config("legacy-run", &grant), messages(), &grant)
         .expect("run");
-    j.connection.execute_batch("DROP TABLE runtime_questions; DROP TABLE runtime_capabilities; DROP TABLE workspace_audit; DROP TABLE run_workspaces; DROP TABLE workspace_request_keys; DROP TABLE local_workspaces; PRAGMA user_version=2;").expect("v2 fixture without later-version tables");
+    j.connection.execute_batch("DROP TABLE creation_consent_audit; DROP TABLE creation_request_keys; DROP TABLE creation_consents; DROP TABLE runtime_questions; DROP TABLE runtime_capabilities; DROP TABLE workspace_audit; DROP TABLE run_workspaces; DROP TABLE workspace_request_keys; DROP TABLE local_workspaces; PRAGMA user_version=2;").expect("v2 fixture without later-version tables");
     drop(j);
     let j = f.journal();
     assert!(
