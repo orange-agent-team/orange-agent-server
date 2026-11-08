@@ -1,6 +1,6 @@
-# Create-only Agent capability — isolated candidate
+# Create-only Agent capability — development implementation
 
-The Rust Agent loop can explicitly negotiate `write_file` using `start_agent_creating`; legacy Runs retain their original tools. This remains an isolated candidate and is not a Desktop write feature or complete TK-06 implementation. The trusted Host must acquire separate OS access and durable create-only consent. Readonly grants cannot be converted to write grants. Each proposed file also requires exact per-operation approval.
+The Rust Agent loop can explicitly negotiate `write_file` using `start_agent_creating`; legacy Runs retain their original tools. The desktop now consumes this capability through a fixed source release with explicit creation consent and per-file approval. This remains a development candidate and is not complete TK-06 editing support. The trusted Host must acquire separate OS access and durable create-only consent. Readonly grants cannot be converted to write grants. Each proposed file also requires exact per-operation approval.
 
 ## Contract and invocation
 
@@ -24,8 +24,10 @@ The publication primitive writes a private random staging file under a capabilit
 
 See `scripts/check-file-creation.py` for actual CLI restart, local HTTP adapter, SQLite and filesystem verification using explicitly scripted model/count responses. Runtime tests additionally exercise competing writers, symlink/protected-path refusal, expiry, permission revocation, schema migration, exact approval, context-commit interruption and post-publication receipt failure. These are not real-model quality results.
 
-The atomic implementation currently targets Apple/Linux/Android; only available macOS has been exercised. Windows publication, Desktop OS write consent/UI, real model creation scenarios and the full cancellation/fault matrix remain required. No user directories, paid models, public deployment or real funds are used. Candidate schemas5/6 have not migrated the formal Desktop or user databases.
+The atomic implementation currently targets Apple/Linux/Android; only available macOS has been exercised. Windows publication, Desktop OS write consent/UI, real model creation scenarios and the full cancellation/fault matrix remain required. No user directories, paid models, public deployment or real funds are used. Schemas5/6 are included in the fixed desktop candidate. Native and CLI tests use owned temporary databases; existing user data is not used as a migration fixture.
 
-The isolated host validation passed85 complete Runtime tests, strict Clippy for all Runtime targets, the new actual CLI/HTTP creation scenario, and the existing ask-user CLI regression. Evidence: `services_plan/execution/create-agent-host-validation.log` in the coordination workspace. These results do not certify Desktop integration or a real model.
+The host validation passed85 complete Runtime tests, strict Clippy for all Runtime targets, the new actual CLI/HTTP creation scenario, and the existing ask-user CLI regression. Evidence: `services_plan/execution/create-agent-host-validation.log` in the coordination workspace. These results do not certify Desktop integration or a real model.
 
 CLI configured exclusions may include readonly shared model assets. They remain enforced by the readonly workspace capability; they are not registered as writable private state directories. Create consent and execution must match that independently checked physical resource. Journal private storage is always protected. The CLI fixture now includes a0755 excluded model-asset directory and rejects broad workspace selection before permission creation.
+
+Integration evidence additionally includes125 shared-workspace tests, a real pinned7B read→exact new-file creation scenario with restart/no replay/confirmed stop, and desktop9 Rust/17 widget/5 native fixture scenarios. The real model previously returned model_unknown in one creation attempt; broad model qualification is not claimed. Actual macOS picker inspection remains unverified after the local computer-use channel failed; see the desktop creation boundary document and execution reports. Windows publication and the rest of the planned tool catalogue remain unfinished.
