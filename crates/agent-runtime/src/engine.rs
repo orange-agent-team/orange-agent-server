@@ -4,7 +4,7 @@
 mod creation;
 mod questions;
 use crate::workspace::creation::CreateFileGrant;
-pub use creation::CreationApproval;
+pub use creation::{CreationApproval, CreationRequirement};
 pub use questions::PendingUserQuestion;
 
 use crate::{
@@ -109,7 +109,7 @@ struct StoredRun {
     steps: u32,
     active: Option<String>,
     user_questions: bool,
-    creation: Option<creation::CreationBinding>,
+    creation: Option<creation::CreationRequirement>,
 }
 type StoredRunRow = (String, String, String, u32, u32, Option<String>, bool);
 #[derive(Debug, Clone)]
@@ -208,7 +208,7 @@ impl Journal {
             self.check_creation_permission(cap)
                 .map_err(creation::error)?;
             creation::check_pair(config, grant, cap)?;
-            Some(creation::CreationBinding::from_grant(cap))
+            Some(creation::CreationRequirement::from_grant(cap))
         } else {
             None
         };

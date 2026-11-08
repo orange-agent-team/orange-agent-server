@@ -1698,6 +1698,14 @@ async fn create_agent_reopens_with_fresh_consent_and_never_reexecutes_committed_
     let mut j = f.open();
     let create = creating(&f, &mut j);
     let consent_id = create.consent_id().to_owned();
+    let requirement = j
+        .agent_creation_requirement("alice", "run-1")
+        .expect("owned immutable requirement")
+        .expect("explicit creation");
+    assert_eq!(requirement.consent_id, consent_id);
+    assert_eq!(requirement.version, create.consent_version());
+    assert_eq!(requirement.environment, create.environment());
+    assert!(j.agent_creation_requirement("bob", "run-1").is_err());
     let model = ScriptedModel::new(vec![write_response(), final_response()]);
     let (_stop, rx) = watch::channel(false);
     j.advance_agent_creating("alice", "run-1", &f.grant, &create, &model, rx.clone())

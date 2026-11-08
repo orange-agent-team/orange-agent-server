@@ -2,13 +2,14 @@ use super::*;
 use crate::workspace::creation::{CreateFileArgs, CreateFileError, CreatedFile};
 use sha2::Digest;
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub(super) struct CreationBinding {
+/// Content-free immutable Run requirement; this metadata grants no filesystem access.
+pub struct CreationRequirement {
     pub consent_id: String,
     pub version: String,
     pub environment: String,
 }
-impl CreationBinding {
-    pub fn from_grant(grant: &CreateFileGrant) -> Self {
+impl CreationRequirement {
+    pub(super) fn from_grant(grant: &CreateFileGrant) -> Self {
         Self {
             consent_id: grant.consent_id().into(),
             version: grant.consent_version(),
@@ -49,11 +50,20 @@ pub(super) fn check_pair(
     Ok(())
 }
 impl Journal {
+    /// Authenticated host recovery selects the exact stored consent. The caller
+    /// must still reacquire OS access and restore a current process capability.
+    pub fn agent_creation_requirement(
+        &self,
+        owner: &str,
+        run: &str,
+    ) -> Result<Option<CreationRequirement>, EngineError> {
+        Ok(self.stored_run(owner, run)?.creation)
+    }
     pub(super) fn creation_binding(
         &self,
         run: &str,
-    ) -> Result<Option<CreationBinding>, EngineError> {
-        Ok(self.connection.query_row("SELECT consent_id,consent_version,environment FROM runtime_creation_capabilities WHERE run_id=?",[run],|r|Ok(CreationBinding{consent_id:r.get(0)?,version:r.get::<_,i64>(1)?.to_string(),environment:r.get(2)?})).optional()?)
+    ) -> Result<Option<CreationRequirement>, EngineError> {
+        Ok(self.connection.query_row("SELECT consent_id,consent_version,environment FROM runtime_creation_capabilities WHERE run_id=?",[run],|r|Ok(CreationRequirement{consent_id:r.get(0)?,version:r.get::<_,i64>(1)?.to_string(),environment:r.get(2)?})).optional()?)
     }
     pub(super) fn check_creation_binding(
         &self,
@@ -63,7 +73,9 @@ impl Journal {
     ) -> Result<(), EngineError> {
         match (&stored.creation, create) {
             (None, None) => Ok(()),
-            (Some(binding), Some(create)) if *binding == CreationBinding::from_grant(create) => {
+            (Some(binding), Some(create))
+                if *binding == CreationRequirement::from_grant(create) =>
+            {
                 check_pair(&stored.config, read, create)?;
                 self.check_creation_permission(create).map_err(error)
             }
