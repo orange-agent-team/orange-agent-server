@@ -897,7 +897,7 @@ fn list_directory(
     }
     Ok(result)
 }
-fn model_view(result: &WorkspaceResult) -> Result<String, WorkspaceError> {
+pub(crate) fn model_view(result: &WorkspaceResult) -> Result<String, WorkspaceError> {
     let mut result = result.clone();
     if let WorkspaceResult::ReadFile(read) = &mut result {
         trim_read(read, MAX_MODEL)?;

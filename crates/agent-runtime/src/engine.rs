@@ -1,6 +1,7 @@
 //! A trusted local host, not an autonomous approval authority. Each advance does
 //! at most one model dispatch or one approved filesystem operation. Network model
 //! implementations are injected by the application; no paid fallback is provided.
+mod contracts;
 mod creation;
 mod questions;
 use crate::workspace::creation::CreateFileGrant;
@@ -398,6 +399,13 @@ impl Journal {
         let view = self.agent_view(owner, run)?;
         if view.final_text.is_some() || !view.pending.is_empty() || view.user_question.is_some() {
             let _leases = self.revalidate_sources(&stored.config, grant).await?;
+            for op in self
+                .pending_operations(run)?
+                .iter()
+                .filter(|op| op.state == "intended")
+            {
+                self.intent_contract(&stored.config, op)?;
+            }
             check_grant(&stored.config, grant)?;
             return self.agent_view(owner, run);
         }
@@ -448,7 +456,12 @@ impl Journal {
         if matches!(op.request, WorkspaceRequest::WriteFile(_)) {
             return Err(EngineError::ApprovalRequired);
         }
+        let (_, pin) = self.intent_contract(&stored.config, &op)?;
+        let tx =
+            rusqlite::Transaction::new_unchecked(&self.connection, TransactionBehavior::Immediate)?;
         self.approve(&op.operation(&stored.config), owner, expires_at)?;
+        self.record_tool_approval_pin(&op, &pin)?;
+        tx.commit()?;
         Ok(())
     }
     pub fn cancel_agent(
@@ -620,6 +633,7 @@ impl Journal {
             self.stop_agent(run, "limited", "deadline")?;
             return self.agent_view(owner, run);
         }
+        let catalog = contracts::current(&stored)?;
         let request = make_request_mode(
             &stored.config,
             &invocation,
@@ -640,6 +654,7 @@ impl Journal {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx.execute("INSERT INTO runtime_invocations(invocation,run_id,ordinal,request,request_digest,state,epoch,fencing,attempt) VALUES(?,?,?,?,?,'dispatched',?,?,1)",params![invocation,run,stored.invocations+1,encode(&request)?,digest("model-request-v1",&request)?,epoch,stored.invocations+1])?;
+        contracts::capture(&tx, &invocation, &request, &catalog)?;
         tx.execute("UPDATE runtime_runs SET phase='model_pending',active_invocation=?,invocations=invocations+1,steps=steps+1 WHERE run_id=? AND phase='ready'",params![invocation,run])?;
         tx.execute(
             "INSERT INTO events(run_id,kind) VALUES(?,'model.dispatched')",
@@ -703,6 +718,7 @@ impl Journal {
         {
             return Err(EngineError::Invalid);
         }
+        let catalog = self.invocation_catalog(&stored.config, invocation)?;
         let mut ids = std::collections::BTreeSet::new();
         let mut requests = Vec::new();
         let mut question = None;
@@ -717,6 +733,12 @@ impl Journal {
             {
                 return Err(EngineError::Invalid);
             }
+            let pin = catalog
+                .pin(&call.name)
+                .map_err(|_| EngineError::Forbidden)?;
+            catalog
+                .validate_input(&pin, &call.arguments)
+                .map_err(|_| EngineError::Invalid)?;
             if call.name == "ask_user" {
                 if !stored.user_questions || candidate.tool_calls.len() != 1 {
                     return Err(EngineError::Invalid);
@@ -830,6 +852,8 @@ impl Journal {
             self.stop_agent(&c.run_id, "limited", "execution_budget")?;
             return Ok(());
         }
+        let (_, pin) = self.intent_contract(c, op)?;
+        self.require_tool_approval_pin(op, &pin)?;
         if let WorkspaceRequest::WriteFile(args) = &op.request {
             return self
                 .advance_creation_tool(
@@ -875,6 +899,19 @@ impl Journal {
         }
         match result {
             Ok(receipt) => {
+                self.validate_tool_output(
+                    c,
+                    op,
+                    &serde_json::to_value(receipt.result()).map_err(|_| EngineError::Invalid)?,
+                    crate::catalog::OutputChannel::Durable,
+                )?;
+                self.validate_tool_output(
+                    c,
+                    op,
+                    &serde_json::from_str(receipt.model_text())
+                        .map_err(|_| EngineError::Invalid)?,
+                    crate::catalog::OutputChannel::Model,
+                )?;
                 let tx = self
                     .connection
                     .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -888,6 +925,12 @@ impl Journal {
             }
             Err(error) => {
                 let code = tool_error_code(&error);
+                self.validate_tool_output(
+                    c,
+                    op,
+                    &serde_json::json!({"error":code}),
+                    crate::catalog::OutputChannel::Model,
+                )?;
                 let tx = self
                     .connection
                     .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -917,6 +960,7 @@ impl Journal {
         if stored.active.as_deref() != Some(&op.invocation) {
             return Err(EngineError::Invalid);
         }
+        self.checked_cached_result(&stored.config, op)?;
         let mut messages = stored.messages.clone();
         messages.push(Message {
             role: Role::Tool,
@@ -954,19 +998,23 @@ impl Journal {
         grant: &WorkspaceGrant,
     ) -> Result<Vec<workspace::ToolReceipt>, EngineError> {
         let rows = {
-            let mut statement=self.connection.prepare("SELECT request_json,result_digest,result_json FROM operations WHERE run_id=? AND state='succeeded' AND request_json IS NOT NULL")?;
+            let mut statement=self.connection.prepare("SELECT request_json,result_digest,result_json,operation_id FROM operations WHERE run_id=? AND state='succeeded' AND request_json IS NOT NULL")?;
             statement
                 .query_map([&c.run_id], |r| {
                     Ok((
                         r.get::<_, String>(0)?,
                         r.get::<_, String>(1)?,
                         r.get::<_, String>(2)?,
+                        r.get::<_, String>(3)?,
                     ))
                 })?
                 .collect::<Result<Vec<_>, _>>()?
         };
         let mut leases = Vec::new();
-        for (request, expected, encoded) in rows {
+        for (request, expected, encoded, id) in rows {
+            let op = self.operation_record(c, &id)?;
+            self.intent_contract(c, &op)?;
+            self.checked_cached_result(c, &op)?;
             let request: WorkspaceRequest =
                 serde_json::from_str(&request).map_err(|_| EngineError::Invalid)?;
             if let WorkspaceRequest::WriteFile(args) = &request {

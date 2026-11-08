@@ -144,7 +144,7 @@ try:
         assert invoke('step') == complete and len(observations) == 3
         with sqlite3.connect(database) as db:
             assert db.execute("SELECT count(*) FROM operations WHERE tool_version='write_file.v1' AND state='succeeded' AND context_applied=1").fetchone()[0] == 1
-            assert db.execute('PRAGMA user_version').fetchone()[0] == 6
+            assert db.execute('PRAGMA user_version').fetchone()[0] == 7
         target.unlink()
         invoke('show', failed=True)
         invoke('step', failed=True)

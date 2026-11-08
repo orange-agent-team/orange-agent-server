@@ -1,6 +1,6 @@
-# Immutable tool contract catalogue — integration preparation
+# Immutable tool contract catalogue — integrated candidate
 
-This isolated slice implements AG-006.01's descriptor boundary. It is not yet wired into normal Agent dispatch and does not complete RF-01, the concurrent executor, or the planned tool catalogue.
+This isolated candidate implements descriptors and their use in the normal builtin Agent loop. It covers the implemented tools' RF-01 snapshot/approval boundaries; it does not complete the concurrent executor, plugin transports or the entire planned tool catalogue.
 
 `orange_protocol::tool_spec::ToolSpec` declares input/output JSON Schema, tool/spec versions, execution environment, effect class, concurrency, approval requirement, execution timeout and argument/result/model-projection byte limits. Unknown effect strings are retained in the execution digest and treated conservatively: approval required and no parallel-safe declaration. An absent timeout is accepted only for host user interaction, whose wait is governed by the containing Run deadline.
 
@@ -12,4 +12,12 @@ The six implemented builtins have versioned pin fixtures and preserved legacy mo
 
 Validation: protocol15 tests and complete Runtime90 tests passed; after adding the separate document digest, the five catalogue tests and strict all-target Clippy passed. Dependencies reuse the exact existing lock package/version/source/checksum set. A shared-runtime export now includes the pin fixture required by the package tests.
 
-Next implementation is atomic capture of the catalogue alongside the persisted ModelInvocation and validation of its version/schema/approval requirements before intent approval, dispatch and result publication. Existing `runtime_invocations.request` already preserves the model's original input schemas. Migration must use that saved request and an explicit known builtin-v1 compatibility rule; it must not infer new rights or silently reinterpret unknown tool versions. Concurrent scheduling, plugin handlers, output artifact offload and environment implementations remain separate unfinished work.
+SQLite schema7 captures the complete catalogue in the same transaction as ModelInvocation dispatch. A failed snapshot insert rolls back the invocation and counters before the model is called. Immutable approval pins bind the operation to its exact invocation, tool version and execution digest; generic approvals cannot bypass these pins for normal Agent Runs. Descriptions alone still grant no authority.
+
+Migration marks only invocations and original approvals that predate schema7. A saved model request must pass its original digest and match the known builtin-v1 input schemas and Run capabilities before a legacy snapshot is adopted. A legacy approval must still match its original actor, parameters, environment, policy and expiry. New invocations with missing snapshots, unsupported old schemas and changed approvals fail closed. Old clarification questions can resume without inventing filesystem approval.
+
+Every normal intent is checked against its committed complete model response and snapshot before approval or dispatch. Output schema/size checks precede successful result publication; cached model projections must also equal the deterministic projection of the committed raw receipt and its digest. Schema-valid altered content and ignored extra raw-result fields are therefore refused before model reuse. Normal Agent creation also requires the paired readonly capability even when a caller tries the low-level creation entry. Uncertain writes remain non-replayable.
+
+A catalogue instance represents one selected execution/model snapshot (up to80 tools), not the full installed extension inventory. Concurrent scheduling, plugin handlers, output artifact offload, full registry discovery and additional environment implementations remain unfinished.
+
+Integrated validation passed99 complete Runtime tests and strict Runtime/Protocol all-target Clippy, plus actual CLI restart/file creation and question/answer flows over a local scripted HTTP model. This is not new real-model, desktop OS-picker or multi-platform certification. Schemas1–6 are unchanged; schema7 has only been exercised in isolated temporary databases.

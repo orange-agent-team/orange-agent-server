@@ -147,6 +147,9 @@ impl Journal {
         }
         let _leases = self.revalidate_sources(&stored.config, read).await?;
         check_grant(&stored.config, read)?;
+        let (_, pin) = self.intent_contract(&stored.config, &op)?;
+        let tx =
+            rusqlite::Transaction::new_unchecked(&self.connection, TransactionBehavior::Immediate)?;
         self.approve_file_creation(
             create,
             &op.operation(&stored.config),
@@ -154,7 +157,10 @@ impl Journal {
             owner,
             approval.expires_at,
         )
-        .map_err(error)
+        .map_err(error)?;
+        self.record_tool_approval_pin(&op, &pin)?;
+        tx.commit()?;
+        Ok(())
     }
     pub(super) async fn advance_creation_tool(
         &mut self,

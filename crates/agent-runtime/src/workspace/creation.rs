@@ -181,6 +181,17 @@ impl Journal {
         if read_permit.as_ref().is_some_and(|p| p.inner.is_revoked()) {
             return Err(WorkspaceError::Revoked.into());
         }
+        let runtime = self
+            .check_runtime_creation_intent(op)
+            .map_err(|error| match error {
+                crate::engine::EngineError::ApprovalRequired => {
+                    CreateFileError::Journal(JournalError::ApprovalRequired)
+                }
+                _ => CreateFileError::Journal(JournalError::Conflict),
+            })?;
+        if runtime && read_permit.is_none() {
+            return Err(WorkspaceError::Forbidden.into());
+        }
         self.claim_with_runtime_step(op, now, true)?;
         let mut cancellation = CancellationGuard {
             inner: permit.inner.clone(),
@@ -209,6 +220,11 @@ impl Journal {
                     .map_err(|_| JournalError::Invalid)?;
                 let body =
                     serde_json::to_string(&receipt.result).map_err(|_| JournalError::Invalid)?;
+                self.check_runtime_creation_output(
+                    op,
+                    &json!({"kind":"write_file","data":receipt.result}),
+                )
+                .map_err(|_| CreateFileError::Unknown)?;
                 let model =
                     serde_json::to_string(&json!({"kind":"write_file","data":receipt.result}))
                         .map_err(|_| JournalError::Invalid)?;

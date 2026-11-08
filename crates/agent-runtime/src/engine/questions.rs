@@ -38,11 +38,12 @@ pub(super) fn commit_question(
 impl Journal {
     fn validate_question_source(
         &self,
-        run: &str,
+        config: &RunConfig,
         invocation: &str,
         call_id: &str,
         body: &AskUser,
     ) -> Result<(), EngineError> {
+        let run = &config.run_id;
         let row:Option<(String,String)>=self.connection.query_row("SELECT p.body,p.digest FROM responses p JOIN runtime_invocations i USING(invocation) WHERE p.invocation=? AND p.run_id=? AND i.run_id=p.run_id AND i.state='committed' AND p.attempt=i.attempt AND i.attempt=1",params![invocation,run],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
         let (encoded, expected) = row.ok_or(EngineError::RecoveryRequired)?;
         let response: ResponseCandidate =
@@ -60,6 +61,10 @@ impl Journal {
         {
             return Err(EngineError::RecoveryRequired);
         }
+        let (catalog, pin) = self.checked_tool_pin(config, invocation, "ask_user")?;
+        catalog
+            .validate_input(&pin, &call.arguments)
+            .map_err(|_| EngineError::RecoveryRequired)?;
         Ok(())
     }
     pub(super) fn pending_user_question(
@@ -80,7 +85,7 @@ impl Journal {
         if stored.active.as_deref() != Some(invocation.as_str()) {
             return Err(EngineError::RecoveryRequired);
         }
-        self.validate_question_source(&stored.config.run_id, &invocation, &call_id, &body)?;
+        self.validate_question_source(&stored.config, &invocation, &call_id, &body)?;
         Ok(Some(PendingUserQuestion {
             question_id,
             argument_digest,
@@ -121,7 +126,15 @@ impl Journal {
         if !valid_answers(&answer.answers, body.questions.len()) {
             return Err(EngineError::Invalid);
         }
-        self.validate_question_source(run, &invocation, &call_id, &body)?;
+        self.validate_question_source(&stored.config, &invocation, &call_id, &body)?;
+        let (catalog, pin) = self.checked_tool_pin(&stored.config, &invocation, "ask_user")?;
+        catalog
+            .validate_output(
+                &pin,
+                &serde_json::json!({"answers":answer.answers}),
+                crate::catalog::OutputChannel::Model,
+            )
+            .map_err(|_| EngineError::RecoveryRequired)?;
         let answered = digest(
             "user-answer-v1",
             &(run, &answer.question_id, &expected, &answer.answers),
