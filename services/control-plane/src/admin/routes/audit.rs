@@ -250,7 +250,7 @@ pub(super) async fn get_one(
     response(value, &request)
 }
 
-/// The session's union of permissions is not a per-scope grant. This additive
+/// The legacy session permission intersection omits scope-specific rights. This additive
 /// endpoint lets the UI render conservative controls for the selected scope.
 pub(super) async fn scope_permissions(
     State(identity): State<Arc<AdminIdentity>>,

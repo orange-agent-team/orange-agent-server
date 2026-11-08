@@ -5861,7 +5861,7 @@
           }
         },
         "x-implementation-status": "planned",
-        "description": "Current permissions for one exact scope already granted to this MFA administration session. The global session permission union is not a per-scope authorization."
+        "description": "Current permissions for one exact scope already granted to this MFA administration session. Legacy session permissions are the intersection of scope grants and do not enumerate every right in the selected scope."
       }
     }
   },
