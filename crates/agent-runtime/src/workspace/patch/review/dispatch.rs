@@ -22,8 +22,8 @@ pub struct PublicationPlan {
 /// Holding this value does not make an expired/revoked approval valid; a future
 /// publisher must recheck current authorization and the actual source first.
 pub struct PatchDispatch {
-    approved: ApprovedPatch,
-    plan: PublicationPlan,
+    pub(super) approved: ApprovedPatch,
+    pub(super) plan: PublicationPlan,
 }
 impl PatchDispatch {
     pub fn plan(&self) -> &PublicationPlan {

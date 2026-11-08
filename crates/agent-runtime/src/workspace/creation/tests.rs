@@ -681,7 +681,7 @@ fn create_consent_migration_preserves_legacy_data_without_inventing_write_rights
     let read = j
         .authorize_workspace("alice", "prior-read", f.root.path(), "policy")
         .expect("readonly");
-    j.connection.execute_batch("DROP TABLE editing_publications; DROP TABLE editing_approvals; DROP TABLE editing_previews; DROP TABLE editing_consent_audit; DROP TABLE editing_request_keys; DROP TABLE editing_consents; DROP TABLE runtime_tool_approvals; DROP TABLE runtime_tool_catalogs; DROP TABLE runtime_catalog_legacy_approvals; DROP TABLE runtime_catalog_legacy; DROP TABLE runtime_creation_capabilities; DROP TABLE creation_consent_audit;DROP TABLE creation_request_keys;DROP TABLE creation_consents;PRAGMA user_version=4;").expect("real prior schema fixture");
+    j.connection.execute_batch("DROP TABLE editing_publication_steps; DROP TABLE editing_publications; DROP TABLE editing_approvals; DROP TABLE editing_previews; DROP TABLE editing_consent_audit; DROP TABLE editing_request_keys; DROP TABLE editing_consents; DROP TABLE runtime_tool_approvals; DROP TABLE runtime_tool_catalogs; DROP TABLE runtime_catalog_legacy_approvals; DROP TABLE runtime_catalog_legacy; DROP TABLE runtime_creation_capabilities; DROP TABLE creation_consent_audit;DROP TABLE creation_request_keys;DROP TABLE creation_consents;PRAGMA user_version=4;").expect("real prior schema fixture");
     drop(j);
     let j = f.open();
     assert!(

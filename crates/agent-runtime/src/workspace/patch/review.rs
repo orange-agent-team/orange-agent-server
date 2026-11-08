@@ -1,5 +1,5 @@
-//! Durable exact review for a trusted adapter. Normal Agent registration and
-//! publication are not enabled by this module.
+//! Durable exact review for a trusted adapter. Apple publication lives behind
+//! a separate consumed dispatch token; normal Agent registration is not enabled.
 use super::authority::{AuthorizedPatchPreview, EditFileGrant, SourceIdentity};
 use super::*;
 use crate::{Journal, JournalError, Operation, workspace::WorkspaceGrant};
@@ -7,6 +7,8 @@ use orange_protocol::{model::ResponseCandidate, valid_id};
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 use std::time::{SystemTime, UNIX_EPOCH};
 pub mod dispatch;
+#[cfg(target_vendor = "apple")]
+pub mod publication;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct PatchReview {

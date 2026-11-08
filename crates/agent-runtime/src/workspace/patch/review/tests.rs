@@ -3,16 +3,19 @@ use crate::{ResponseAuthority, storage::private_temp};
 use orange_domain::ExecutionIdentity;
 use orange_protocol::model::ToolCall;
 use std::fs;
-struct Fixture {
-    private: tempfile::TempDir,
-    root: tempfile::TempDir,
-    read: WorkspaceGrant,
-    args: PatchArgs,
+pub(super) struct Fixture {
+    pub(super) private: tempfile::TempDir,
+    pub(super) root: tempfile::TempDir,
+    pub(super) read: WorkspaceGrant,
+    pub(super) args: PatchArgs,
 }
 impl Fixture {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let private = private_temp();
         let root = tempfile::tempdir().expect("root");
+        Self::with_dirs(private, root)
+    }
+    pub(super) fn with_dirs(private: tempfile::TempDir, root: tempfile::TempDir) -> Self {
         fs::write(root.path().join("file.txt"), b"old\n").expect("source");
         let read = WorkspaceGrant::open(
             "alice",
@@ -34,14 +37,14 @@ impl Fixture {
             args,
         }
     }
-    fn journal(&self) -> Journal {
+    pub(super) fn journal(&self) -> Journal {
         Journal::open(&self.private.path().join("journal.sqlite")).expect("journal")
     }
-    fn edit(&self, j: &mut Journal) -> EditFileGrant {
+    pub(super) fn edit(&self, j: &mut Journal) -> EditFileGrant {
         j.authorize_file_edit("alice", "explicit-edit", "policy", self.root.path())
             .expect("edit consent")
     }
-    fn response(&self, j: &Journal, body: bool) {
+    pub(super) fn response(&self, j: &Journal, body: bool) {
         j.register_run("alice", "run", "policy").expect("run");
         let candidate = ResponseCandidate {
             response_id: "response".into(),
@@ -82,7 +85,7 @@ impl Fixture {
         }
     }
 }
-fn op<'a>(edit: &'a EditFileGrant, digest: &'a str) -> Operation<'a> {
+pub(super) fn op<'a>(edit: &'a EditFileGrant, digest: &'a str) -> Operation<'a> {
     Operation {
         id: "op",
         owner: "alice",
@@ -101,7 +104,7 @@ fn count(j: &Journal, table: &str) -> i64 {
         .expect("count")
 }
 
-async fn approved_fixture(
+pub(super) async fn approved_fixture(
     f: &Fixture,
     j: &mut Journal,
     edit: &EditFileGrant,

@@ -40,11 +40,11 @@ pub(super) struct SourceIdentity {
 }
 pub struct AuthorizedPatchPreview {
     prepared: PreparedPatch,
-    args: PatchArgs,
+    pub(super) args: PatchArgs,
     binding_digest: String,
     pub(super) identity: SourceIdentity,
-    _read: Permit,
-    _edit: Permit,
+    pub(super) _read: Permit,
+    pub(super) _edit: Permit,
 }
 impl AuthorizedPatchPreview {
     pub fn preview(&self) -> &PatchPreview {
@@ -203,7 +203,10 @@ impl EditFileGrant {
         Ok(result)
     }
 }
-fn identity(parent: &Dir, metadata: &cap_std::fs::Metadata) -> Result<SourceIdentity, PatchError> {
+pub(super) fn identity(
+    parent: &Dir,
+    metadata: &cap_std::fs::Metadata,
+) -> Result<SourceIdentity, PatchError> {
     if !metadata.is_file() || metadata.nlink() != 1 || metadata.ino() == 0 {
         return Err(WorkspaceError::Forbidden.into());
     }
@@ -234,7 +237,10 @@ fn identity(parent: &Dir, metadata: &cap_std::fs::Metadata) -> Result<SourceIden
         security_digest: String::new(),
     })
 }
-fn read_source(root: &Dir, args: &PatchArgs) -> Result<(Vec<u8>, SourceIdentity), PatchError> {
+pub(super) fn read_source(
+    root: &Dir,
+    args: &PatchArgs,
+) -> Result<(Vec<u8>, SourceIdentity), PatchError> {
     let names = components(&args.path, false)?;
     let (name, parents) = names.split_last().ok_or(PatchError::Invalid)?;
     let parent = open_directory(root, parents)?;
@@ -282,6 +288,19 @@ fn read_source(root: &Dir, args: &PatchArgs) -> Result<(Vec<u8>, SourceIdentity)
     }
     opened.security_digest = hex::encode(security.digest());
     Ok((bytes, opened))
+}
+impl SourceIdentity {
+    #[cfg(target_vendor = "apple")]
+    pub(super) fn bind_security(&mut self, digest: [u8; 32]) {
+        self.security_digest = hex::encode(digest);
+    }
+    #[cfg(target_vendor = "apple")]
+    pub(super) fn matches_after_rename(&self, current: &Self) -> bool {
+        let mut current = current.clone();
+        current.change_seconds = self.change_seconds;
+        current.change_nanos = self.change_nanos;
+        self == &current
+    }
 }
 #[cfg(test)]
 mod tests;
