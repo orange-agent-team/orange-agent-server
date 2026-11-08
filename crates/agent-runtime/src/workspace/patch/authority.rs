@@ -36,6 +36,7 @@ pub(super) struct SourceIdentity {
     change_nanos: i64,
     bytes: u64,
     mode: u32,
+    security_digest: String,
 }
 pub struct AuthorizedPatchPreview {
     prepared: PreparedPatch,
@@ -230,6 +231,7 @@ fn identity(parent: &Dir, metadata: &cap_std::fs::Metadata) -> Result<SourceIden
         change_nanos: metadata.ctime_nsec(),
         bytes: metadata.len(),
         mode: metadata.mode(),
+        security_digest: String::new(),
     })
 }
 fn read_source(root: &Dir, args: &PatchArgs) -> Result<(Vec<u8>, SourceIdentity), PatchError> {
@@ -248,10 +250,11 @@ fn read_source(root: &Dir, args: &PatchArgs) -> Result<(Vec<u8>, SourceIdentity)
     let mut file = parent
         .open_with(name, &options)
         .map_err(WorkspaceError::Io)?;
-    let opened = identity(&parent, &file.metadata().map_err(WorkspaceError::Io)?)?;
+    let mut opened = identity(&parent, &file.metadata().map_err(WorkspaceError::Io)?)?;
     if named != opened {
         return Err(PatchError::VersionChanged);
     }
+    let security = orange_platform_files::security_metadata(&file).map_err(WorkspaceError::Io)?;
     let mut bytes = Vec::new();
     (&mut file)
         .take((MAX_TEXT + 1) as u64)
@@ -274,6 +277,10 @@ fn read_source(root: &Dir, args: &PatchArgs) -> Result<(Vec<u8>, SourceIdentity)
     if directory_identity(&open_directory(root, parents)?)? != directory_identity(&parent)? {
         return Err(PatchError::VersionChanged);
     }
+    if orange_platform_files::security_metadata(&file).map_err(WorkspaceError::Io)? != security {
+        return Err(PatchError::VersionChanged);
+    }
+    opened.security_digest = hex::encode(security.digest());
     Ok((bytes, opened))
 }
 #[cfg(test)]

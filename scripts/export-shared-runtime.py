@@ -18,6 +18,10 @@ if not re.fullmatch('[0-9a-f]{40}',args.commit):raise SystemExit('A complete imm
 def git(*argv):return subprocess.check_output(['git',*argv],cwd=ROOT)
 if git('cat-file','-t',args.commit).strip()!=b'commit':raise SystemExit('Origin must be a commit')
 members=['crates/domain','crates/protocol','crates/agent-runtime','crates/model-runtime']
+# E03's native metadata boundary is an internal package, not a fifth core
+# project. Historical commits must still export their original four members.
+if subprocess.run(['git','cat-file','-e',args.commit+':crates/platform-files/Cargo.toml'],cwd=ROOT,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode==0:
+    members.append('crates/platform-files')
 roots=['Cargo.toml','Cargo.lock',*members,'contracts/proto','contracts/fixtures/metering-v1.json','contracts/fixtures/builtin-tool-pins.v1.json','config/local-model.lock.json','config/local-tokenizer.lock.json']
 entries=git('ls-tree','-r','-z',args.commit,'--',*roots).split(b'\0')
 files={};modes={}
@@ -58,7 +62,7 @@ with tempfile.TemporaryDirectory(prefix='export-',dir=stage_root) as directory:
         raise SystemExit('Export resolved a dependency absent from the committed source lock')
     if args.verify:
         subprocess.run([str(cargo),'test','--workspace','--locked','--offline'],cwd=stage,env=environment,check=True)
-manifest={'schema':'orange-shared-runtime-source-v1','origin_repository':'orange-agent-server','origin_commit':args.commit,'version':'0.1.0','members':members,'source_sha256':original,'content_sha256':{name:hashlib.sha256(content).hexdigest() for name,content in files.items()},'transformations':['Cargo workspace members restricted to E01-E04','Cargo lock pruned offline; every remaining package/version/source/checksum must exist in original lock'],'verification':'actual shared-workspace Rust tests' if args.verify else 'source integrity and locked dependency subset only'}
+manifest={'schema':'orange-shared-runtime-source-v1','origin_repository':'orange-agent-server','origin_commit':args.commit,'version':'0.1.0','members':members,'source_sha256':original,'content_sha256':{name:hashlib.sha256(content).hexdigest() for name,content in files.items()},'transformations':['Cargo workspace members restricted to E01-E04 and their explicitly listed internal support packages','Cargo lock pruned offline; every remaining package/version/source/checksum must exist in original lock'],'verification':'actual shared-workspace Rust tests' if args.verify else 'source integrity and locked dependency subset only'}
 files['release-manifest.json']=(json.dumps(manifest,ensure_ascii=False,sort_keys=True,indent=2)+'\n').encode();modes['release-manifest.json']=0o644
 buffer=io.BytesIO()
 with gzip.GzipFile(fileobj=buffer,mode='wb',mtime=0,filename='') as zipped:

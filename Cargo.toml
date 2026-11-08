@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/domain", "crates/protocol", "crates/agent-runtime", "crates/model-runtime", "services/worker", "services/control-plane"]
+members = ["crates/domain", "crates/protocol", "crates/agent-runtime", "crates/model-runtime", "crates/platform-files", "services/worker", "services/control-plane"]
 resolver = "2"
 
 [workspace.package]
@@ -11,6 +11,7 @@ publish = false
 [workspace.dependencies]
 orange-domain = { path = "crates/domain" }
 orange-protocol = { path = "crates/protocol" }
+orange-platform-files = { path = "crates/platform-files", version = "=0.1.0" }
 orange-model-runtime = { path = "crates/model-runtime", version = "=0.1.0" }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = { version = "=1.0.154", features = ["float_roundtrip"] }

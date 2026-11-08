@@ -25,6 +25,9 @@ rustix = { workspace = true, features = ["fs"] }
 unicode-normalization.workspace = true
 jsonschema.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+orange-platform-files.workspace = true
+
 [dev-dependencies]
 tempfile.workspace = true
 orange-model-runtime = { path = "../model-runtime", version = "=0.1.0" }

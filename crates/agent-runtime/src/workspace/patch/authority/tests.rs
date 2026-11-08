@@ -15,6 +15,55 @@ struct Fixture {
     read: WorkspaceGrant,
     edit: EditFileGrant,
 }
+#[cfg(target_vendor = "apple")]
+#[tokio::test]
+async fn security_attributes_are_pinned_and_cannot_reuse_old_review() {
+    let f = Fixture::new();
+    let path = f.root.path().join("file.txt");
+    let original = f
+        .edit
+        .preview(&f.read, input(b"old\n"))
+        .await
+        .expect("original");
+    assert_eq!(original.identity.security_digest.len(), 64);
+    let file = fs::File::open(&path).expect("owned fd");
+    rustix::fs::fsetxattr(
+        &file,
+        "com.orangeagent.fixture",
+        b"changed",
+        rustix::fs::XattrFlags::empty(),
+    )
+    .expect("attribute");
+    assert!(f.edit.revalidate(&f.read, &original).await.is_err());
+    let changed = f
+        .edit
+        .preview(&f.read, input(b"old\n"))
+        .await
+        .expect("new attribute review");
+    assert_ne!(
+        original.identity.security_digest,
+        changed.identity.security_digest
+    );
+    assert!(
+        std::process::Command::new("/bin/chmod")
+            .args(["+a", "everyone allow read"])
+            .arg(&path)
+            .status()
+            .expect("ACL")
+            .success()
+    );
+    assert!(f.edit.revalidate(&f.read, &changed).await.is_err());
+    let with_acl = f
+        .edit
+        .preview(&f.read, input(b"old\n"))
+        .await
+        .expect("ACL review");
+    assert_ne!(
+        changed.identity.security_digest,
+        with_acl.identity.security_digest
+    );
+    assert_eq!(fs::read(path).expect("unchanged content"), b"old\n");
+}
 impl Fixture {
     fn new() -> Self {
         let private = private_temp();
