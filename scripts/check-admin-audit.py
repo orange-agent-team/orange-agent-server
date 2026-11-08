@@ -3,7 +3,7 @@
 import argparse,json,os,shutil,socket,subprocess,sys,urllib.parse,uuid,hashlib
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
-parser=argparse.ArgumentParser();parser.add_argument('--database-url-file',type=Path,required=True);parser.add_argument('--identity-config',type=Path,required=True);parser.add_argument('--admin-repo',type=Path);parser.add_argument('--node',type=Path);args=parser.parse_args()
+parser=argparse.ArgumentParser();parser.add_argument('--database-url-file',type=Path,required=True);parser.add_argument('--identity-config',type=Path,required=True);parser.add_argument('--admin-repo',type=Path);parser.add_argument('--node',type=Path,default=shutil.which('node'));args=parser.parse_args()
 source=urllib.parse.urlsplit(args.database_url_file.read_text().strip())
 if source.scheme not in ('postgres','postgresql') or source.hostname not in ('127.0.0.1','localhost','::1'):raise SystemExit('Explicit local PostgreSQL required')
 if not args.identity_config.is_file():raise SystemExit('Explicit private development identity configuration required')
