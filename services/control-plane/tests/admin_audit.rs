@@ -16,6 +16,9 @@ use serde_json::Value;
 use sqlx::PgPool;
 use tower::ServiceExt;
 use uuid::Uuid;
+#[cfg(unix)]
+#[path = "admin_audit/browser.rs"]
+mod browser;
 
 async fn session(pool: &PgPool, principal: &str) -> String {
     let token = random_secret();
@@ -105,8 +108,8 @@ async fn migrated_audit_scope_cursor_snapshot_trace_and_revocation() {
     .run(&pool)
     .await
     .expect("real prior29 migrations");
-    let a = Uuid::new_v4().to_string();
-    let b = Uuid::new_v4().to_string();
+    let a = format!("a-{}", Uuid::new_v4());
+    let b = format!("b-{}", Uuid::new_v4());
     seed(&pool, "legacy-a", Some("dev"), Some(&a)).await;
     seed(&pool, "foreign-b", Some("dev"), Some(&b)).await;
     seed(&pool, "foreign-production", Some("production"), Some(&a)).await;
@@ -292,7 +295,7 @@ async fn migrated_audit_scope_cursor_snapshot_trace_and_revocation() {
             .contains(&serde_json::json!("audit.read"))
     );
     // The same principal has a different role in a different scope. Its global
-    // session union must not grant audit access or advertise it in this scope.
+    // session aggregate cannot replace an exact scope capability check.
     sqlx::query("INSERT INTO admin_grants(principal_id,role,environment,scope_kind,scope_id,expires_at) VALUES($1,'compute_operator','dev','tenant',$2,FLOOR(EXTRACT(EPOCH FROM clock_timestamp()))::bigint+3600)").bind(&principal).bind(&b).execute(&pool).await.expect("second scope with compute-only authority");
     let (status, permissions) = get(
         &app,
@@ -311,6 +314,8 @@ async fn migrated_audit_scope_cursor_snapshot_trace_and_revocation() {
         get(&app, &token, &list(&b, 2)).await.0,
         StatusCode::FORBIDDEN
     );
+    #[cfg(unix)]
+    browser::run(&pool, app.clone(), &principal, &token, &a, &b).await;
     // Revocation blocks both saved cursor and direct immutable-event lookup.
     sqlx::query("UPDATE admin_grants SET revoked=true WHERE principal_id=$1")
         .bind(&principal)
