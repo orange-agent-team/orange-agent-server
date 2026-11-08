@@ -2345,7 +2345,8 @@
         "result": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 100
+          "maxLength": 100,
+          "description": "recorded denotes an immutable event record, not underlying business completion."
         },
         "occurred_at": {
           "type": "string",
@@ -2353,10 +2354,18 @@
           "pattern": "Z$"
         },
         "request_id": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 128,
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Original request correlation when recorded. Null means it was not captured; event_id must not be substituted."
         },
         "version": {
           "type": "string",
@@ -2749,6 +2758,43 @@
         "csrf_token"
       ],
       "additionalProperties": false
+    },
+    "AdminScopePermissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "principal_id",
+        "scope",
+        "permissions",
+        "policy_version"
+      ],
+      "properties": {
+        "principal_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "permissions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "minItems": 0,
+          "maxItems": 100
+        },
+        "policy_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        }
+      }
     }
   },
   "$ref": "#/$defs/AdminActionCreate"

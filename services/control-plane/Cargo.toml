@@ -16,6 +16,10 @@ name = "postgres"
 required-features = ["integration-tests"]
 
 [[test]]
+name = "admin_audit"
+required-features = ["integration-tests"]
+
+[[test]]
 name = "admin_identity"
 required-features = ["integration-tests"]
 
