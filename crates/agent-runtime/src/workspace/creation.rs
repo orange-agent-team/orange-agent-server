@@ -2,13 +2,16 @@
 //! converted to this type, and it is never constructed from model arguments.
 //! Model-loop and OS-consent integration remain separate from this boundary.
 use super::*;
+mod intents;
 use crate::{Journal, JournalError, Operation};
+pub use intents::CreationPreview;
+use intents::validate_binding;
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 use std::io::{Seek, Write};
 
 const MAX_CREATE: usize = 64 * 1024;
 static WRITE_SLOTS: LazyLock<Arc<Semaphore>> = LazyLock::new(|| Arc::new(Semaphore::new(2)));
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct CreateFileArgs {
     pub path: String,
@@ -24,7 +27,11 @@ impl CreateFileArgs {
     }
     pub fn digest(&self) -> Result<String, WorkspaceError> {
         self.validate()?;
-        request_digest("write_file.v1", self).map_err(|_| WorkspaceError::Invalid)
+        request_digest(
+            "write_file.v1",
+            &json!({"tool":"write_file","arguments":self}),
+        )
+        .map_err(|_| WorkspaceError::Invalid)
     }
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -93,16 +100,7 @@ impl Journal {
         op: &Operation<'_>,
         args: CreateFileArgs,
     ) -> Result<CreatedFile, CreateFileError> {
-        args.validate()?;
-        if !op.requires_approval
-            || op.tool_version != "write_file.v1"
-            || op.argument_digest != args.digest()?
-            || op.environment != grant.environment
-            || op.owner != grant.grant.owner()
-            || op.policy_version != grant.grant.policy()
-        {
-            return Err(WorkspaceError::Forbidden.into());
-        }
+        validate_binding(grant, op, &args)?;
         #[cfg(not(any(target_vendor = "apple", target_os = "linux", target_os = "android")))]
         return Err(CreateFileError::Unsupported);
         let slot = WRITE_SLOTS
@@ -115,6 +113,10 @@ impl Journal {
             .permit(op.owner, grant.grant.environment(), op.policy_version)
             .await?;
         self.prepare(op)?;
+        let preview = self.file_creation_preview(grant, op)?;
+        if preview.arguments != args {
+            return Err(JournalError::Conflict.into());
+        }
         let existing: Option<String> = self
             .connection
             .query_row(

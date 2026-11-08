@@ -28,30 +28,61 @@ impl Fixture {
 }
 fn response(j: &Journal) {
     j.register_run("alice", "run", "policy").expect("run");
+}
+// Explicit trusted-adapter fixture. This is not a model-quality certificate.
+fn bind_intent(
+    j: &mut Journal,
+    grant: &CreateFileGrant,
+    op: &Operation<'_>,
+    args: &CreateFileArgs,
+) {
+    let candidate = orange_protocol::model::ResponseCandidate {
+        response_id: format!("response-{}", op.id),
+        text: String::new(),
+        tool_calls: vec![orange_protocol::model::ToolCall {
+            id: op.id.into(),
+            name: "write_file".into(),
+            arguments: serde_json::to_value(args).expect("args"),
+        }],
+        native_usage: None,
+        finish_reason: "tool_calls".into(),
+    };
+    let digest = request_digest("model-response-v1", &candidate).expect("response digest");
     let identity = ExecutionIdentity {
         connection_epoch: 1,
         fencing: 1,
         attempt: 1,
     };
     j.commit_response(
-        "alice",
-        "run",
-        "invocation",
+        op.owner,
+        op.run,
+        op.invocation,
         ResponseAuthority {
             current: identity,
             incoming: identity,
             complete: true,
         },
-        &"a".repeat(64),
+        &digest,
     )
-    .expect("explicit complete model response fixture");
+    .expect("validated complete response fixture");
+    j.connection
+        .execute(
+            "UPDATE responses SET body=? WHERE invocation=? AND body IS NULL",
+            params![
+                serde_json::to_string(&candidate).expect("response"),
+                op.invocation
+            ],
+        )
+        .expect("fixture body");
+    j.prepare_file_creation(grant, op, args, op.id)
+        .expect("durable exact preview");
 }
 fn operation<'a>(id: &'a str, digest: &'a str, grant: &'a CreateFileGrant) -> Operation<'a> {
     Operation {
         id,
         owner: "alice",
         run: "run",
-        invocation: "invocation",
+        invocation: id,
         argument_digest: digest,
         tool_version: "write_file.v1",
         environment: grant.environment(),
@@ -59,10 +90,10 @@ fn operation<'a>(id: &'a str, digest: &'a str, grant: &'a CreateFileGrant) -> Op
         requires_approval: true,
     }
 }
-fn approve(j: &mut Journal, op: &Operation<'_>) {
-    j.prepare(op).expect("durable intent");
-    j.approve(op, "alice", i64::MAX)
-        .expect("explicit owner approval");
+fn approve(j: &mut Journal, grant: &CreateFileGrant, op: &Operation<'_>, args: &CreateFileArgs) {
+    bind_intent(j, grant, op, args);
+    j.approve_file_creation(grant, op, op.argument_digest, "alice", i64::MAX)
+        .expect("explicit stored-preview approval");
 }
 fn args(path: &str, content: &str) -> CreateFileArgs {
     CreateFileArgs {
@@ -84,12 +115,13 @@ async fn create_file_requires_response_write_authority_and_exact_approval() {
         Err(CreateFileError::Journal(JournalError::ResponseRequired))
     ));
     response(&j);
+    bind_intent(&mut j, &grant, &op, &input);
     assert!(matches!(
         j.create_file(&grant, &op, input.clone()).await,
         Err(CreateFileError::Journal(JournalError::ApprovalRequired))
     ));
     assert!(!f.root.path().join("new.txt").exists());
-    approve(&mut j, &op);
+    approve(&mut j, &grant, &op, &input);
     assert!(matches!(
         j.create_file(&grant, &op, args("new.txt", "changed body"))
             .await,
@@ -143,7 +175,7 @@ async fn create_file_never_overwrites_and_keeps_unicode_paths_literal() {
     let input = args("中文/你好.txt", "replacement");
     let digest = input.digest().expect("digest");
     let op = operation("conflict", &digest, &grant);
-    approve(&mut j, &op);
+    approve(&mut j, &grant, &op, &input);
     assert!(matches!(
         j.create_file(&grant, &op, input).await,
         Err(CreateFileError::AlreadyExists)
@@ -161,7 +193,7 @@ async fn create_file_never_overwrites_and_keeps_unicode_paths_literal() {
     let input = args("中文/新建.txt", "新内容");
     let digest = input.digest().expect("digest");
     let op = operation("unicode", &digest, &grant);
-    approve(&mut j, &op);
+    approve(&mut j, &grant, &op, &input);
     let receipt = j
         .create_file(&grant, &op, input)
         .await
@@ -209,12 +241,12 @@ async fn create_file_rejects_readonly_environment_protected_names_links_and_revo
         let input = args("link/escape.txt", "body");
         let digest = input.digest().expect("digest");
         let op = operation("parent-link", &digest, &grant);
-        approve(&mut j, &op);
+        approve(&mut j, &grant, &op, &input);
         assert!(j.create_file(&grant, &op, input).await.is_err());
         assert!(!outside.path().join("escape.txt").exists());
     }
     let op = operation("revoked", &digest, &grant);
-    approve(&mut j, &op);
+    approve(&mut j, &grant, &op, &input);
     grant.request_revoke();
     assert!(matches!(
         j.create_file(&grant, &op, input).await,
@@ -231,7 +263,7 @@ async fn create_file_postpublication_journal_failure_is_unknown_and_never_replay
     let input = args("created.txt", "first publication");
     let digest = input.digest().expect("digest");
     let op = operation("faulted", &digest, &grant);
-    approve(&mut j, &op);
+    approve(&mut j, &grant, &op, &input);
     j.connection.execute_batch("CREATE TRIGGER fail_creation_receipt BEFORE UPDATE ON operations WHEN NEW.state='succeeded' BEGIN SELECT RAISE(ABORT,'explicit receipt fault');END;").expect("failure fixture");
     assert!(matches!(
         j.create_file(&grant, &op, input.clone()).await,
@@ -276,8 +308,8 @@ async fn create_file_racing_hosts_publish_exactly_one_complete_file() {
     let db = ab.digest().expect("digest");
     let oa = operation("race-a", &da, &ga);
     let ob = operation("race-b", &db, &gb);
-    approve(&mut a, &oa);
-    approve(&mut b, &ob);
+    approve(&mut a, &ga, &oa, &aa);
+    approve(&mut b, &gb, &ob, &ab);
     let (ra, rb) = tokio::join!(
         a.create_file(&ga, &oa, aa.clone()),
         b.create_file(&gb, &ob, ab.clone())
@@ -310,8 +342,9 @@ async fn create_file_expired_or_optional_approval_never_writes() {
     let input = args("new.txt", "body");
     let digest = input.digest().expect("digest");
     let mut op = operation("expired", &digest, &grant);
-    j.prepare(&op).expect("intent");
-    j.approve(&op, "alice", 0).expect("expired fixture");
+    bind_intent(&mut j, &grant, &op, &input);
+    j.approve_file_creation(&grant, &op, &digest, "alice", 0)
+        .expect("expired fixture");
     assert!(matches!(
         j.create_file(&grant, &op, input.clone()).await,
         Err(CreateFileError::Journal(JournalError::ApprovalRequired))
@@ -327,4 +360,153 @@ async fn create_file_expired_or_optional_approval_never_writes() {
             .count(),
         0
     );
+}
+
+#[tokio::test]
+async fn create_file_digest_only_response_and_generic_approval_cannot_bypass_preview() {
+    let f = Fixture::new();
+    let mut j = f.open();
+    response(&j);
+    let grant = f.grant(&j);
+    let input = args("new.txt", "bound content");
+    let digest = input.digest().expect("digest");
+    let op = operation("unbound", &digest, &grant);
+    let id = ExecutionIdentity {
+        connection_epoch: 1,
+        fencing: 1,
+        attempt: 1,
+    };
+    j.commit_response(
+        "alice",
+        "run",
+        op.invocation,
+        ResponseAuthority {
+            current: id,
+            incoming: id,
+            complete: true,
+        },
+        &"a".repeat(64),
+    )
+    .expect("legacy digest-only response");
+    j.prepare(&op).expect("generic intent");
+    j.approve(&op, "alice", i64::MAX).expect("generic approval");
+    assert!(matches!(
+        j.create_file(&grant, &op, input).await,
+        Err(CreateFileError::Journal(JournalError::ResponseRequired))
+    ));
+    assert_eq!(
+        j.state("alice", op.id).expect("state").as_deref(),
+        Some("intended")
+    );
+    assert_eq!(
+        fs::read_dir(f.root.path())
+            .expect("no filesystem work")
+            .count(),
+        0
+    );
+}
+#[tokio::test]
+async fn create_file_preview_reopens_exactly_and_rejects_changed_response_or_digest() {
+    let f = Fixture::new();
+    let mut j = f.open();
+    response(&j);
+    let grant = f.grant(&j);
+    let input = args("新文件.txt", "reviewed content\n");
+    let digest = input.digest().expect("digest");
+    let op = operation("preview", &digest, &grant);
+    bind_intent(&mut j, &grant, &op, &input);
+    let original = j
+        .file_creation_preview(&grant, &op)
+        .expect("stored preview");
+    assert_eq!(original.arguments, input);
+    assert_eq!(original.call_id, "preview");
+    assert!(
+        j.approve_file_creation(&grant, &op, &"0".repeat(64), "alice", i64::MAX)
+            .is_err()
+    );
+    drop(j);
+    let mut j = f.open();
+    let grant = f.grant(&j);
+    let op = operation("preview", &digest, &grant);
+    assert_eq!(
+        j.file_creation_preview(&grant, &op)
+            .expect("same committed body"),
+        original
+    );
+    let saved: String = j
+        .connection
+        .query_row(
+            "SELECT body FROM responses WHERE invocation=?",
+            [op.invocation],
+            |r| r.get(0),
+        )
+        .expect("body");
+    let mut changed: serde_json::Value = serde_json::from_str(&saved).expect("fixture");
+    changed["tool_calls"][0]["arguments"]["content"] = json!("not reviewed");
+    j.connection
+        .execute(
+            "UPDATE responses SET body=? WHERE invocation=?",
+            params![changed.to_string(), op.invocation],
+        )
+        .expect("explicit storage fault");
+    assert!(j.file_creation_preview(&grant, &op).is_err());
+    assert!(
+        j.approve_file_creation(&grant, &op, &digest, "alice", i64::MAX)
+            .is_err()
+    );
+    assert_eq!(fs::read_dir(f.root.path()).expect("unchanged").count(), 0);
+    j.connection
+        .execute(
+            "UPDATE responses SET body=? WHERE invocation=?",
+            params![saved, op.invocation],
+        )
+        .expect("restore test fixture");
+    j.approve_file_creation(&grant, &op, &digest, "alice", i64::MAX)
+        .expect("approve original");
+    j.create_file(&grant, &op, input)
+        .await
+        .expect("execute original after reopen");
+}
+#[tokio::test]
+async fn create_file_wrong_call_foreign_response_or_forged_stored_preview_has_no_effect() {
+    let f = Fixture::new();
+    let mut j = f.open();
+    response(&j);
+    let grant = f.grant(&j);
+    let input = args("new.txt", "content");
+    let digest = input.digest().expect("digest");
+    let op = operation("source", &digest, &grant);
+    bind_intent(&mut j, &grant, &op, &input);
+    assert!(
+        j.prepare_file_creation(&grant, &op, &input, "different-call")
+            .is_err()
+    );
+    j.register_run("alice", "foreign-run", "policy")
+        .expect("foreign run fixture");
+    j.connection
+        .execute(
+            "UPDATE responses SET run_id='foreign-run' WHERE invocation=?",
+            [op.invocation],
+        )
+        .expect("foreign binding fault");
+    assert!(j.file_creation_preview(&grant, &op).is_err());
+    j.connection
+        .execute(
+            "UPDATE responses SET run_id='run' WHERE invocation=?",
+            [op.invocation],
+        )
+        .expect("restore fixture");
+    j.connection.execute("UPDATE operations SET request_json=? WHERE operation_id=?",params![json!({"tool":"write_file","arguments":{"path":"different.txt","content":"content"}}).to_string(),op.id]).expect("preview corruption fixture");
+    assert!(j.file_creation_preview(&grant, &op).is_err());
+    assert!(j.create_file(&grant, &op, input).await.is_err());
+    assert_eq!(fs::read_dir(f.root.path()).expect("no effect").count(), 0);
+    let dispatched: i64 = j
+        .connection
+        .query_row(
+            "SELECT count(*) FROM events WHERE kind='operation.dispatching'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("count");
+    assert_eq!(dispatched, 0);
 }
