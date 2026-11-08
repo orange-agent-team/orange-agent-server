@@ -1414,3 +1414,68 @@ async fn user_question_workspace_revocation_durably_closes_pending_reply() {
             .is_none()
     );
 }
+
+#[tokio::test]
+async fn unicode_path_policy_rejects_model_batch_before_response_or_approval() {
+    let f = Fixture::new();
+    std::fs::create_dir(f.workspace.path().join(".kube")).expect("owned protected fixture");
+    std::fs::write(
+        f.workspace.path().join(".kube/proof.txt"),
+        "owned protected fixture",
+    )
+    .expect("fixture");
+    let mut journal = f.open();
+    f.start(&mut journal);
+    let model = ScriptedModel::new(vec![tools(vec![
+        call("ordinary", "read_file", json!({"path":"note.txt"})),
+        call(
+            "protected-alias",
+            "read_file",
+            json!({"path":".Kube/proof.txt"}),
+        ),
+    ])]);
+    let (_cancel, rx) = watch::channel(false);
+    assert!(f.advance(&mut journal, &model, rx.clone()).await.is_err());
+    for table in ["responses", "operations", "approvals"] {
+        let count = match table {
+            "responses" => {
+                journal
+                    .connection
+                    .query_row("SELECT count(*) FROM responses", [], |r| r.get::<_, i64>(0))
+            }
+            "operations" => {
+                journal
+                    .connection
+                    .query_row("SELECT count(*) FROM operations", [], |r| {
+                        r.get::<_, i64>(0)
+                    })
+            }
+            _ => journal
+                .connection
+                .query_row("SELECT count(*) FROM approvals", [], |r| r.get::<_, i64>(0)),
+        }
+        .expect("actual durable count");
+        assert_eq!(count, 0, "no partial response or effect: {table}");
+    }
+    drop(journal);
+    let mut journal = f.open();
+    assert_eq!(
+        journal
+            .agent_view("alice", "run-1")
+            .expect("reopened")
+            .phase,
+        Phase::RecoveryRequired
+    );
+    assert_eq!(
+        f.advance(&mut journal, &model, rx)
+            .await
+            .expect("recoverable view")
+            .phase,
+        Phase::RecoveryRequired
+    );
+    assert_eq!(
+        model.calls.load(Ordering::SeqCst),
+        1,
+        "recovery must not redispatch the rejected response"
+    );
+}

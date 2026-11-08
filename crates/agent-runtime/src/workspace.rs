@@ -23,6 +23,7 @@ use std::{
     time::{Duration, UNIX_EPOCH},
 };
 use tokio::sync::{OwnedRwLockReadGuard, OwnedSemaphorePermit, RwLock, Semaphore};
+use unicode_normalization::UnicodeNormalization;
 const MAX_FILE: usize = 10 * 1024 * 1024;
 const MAX_READ: usize = 1024 * 1024;
 const MAX_MODEL: usize = 64 * 1024;
@@ -485,7 +486,18 @@ impl PreparedTool {
     }
 }
 fn sensitive(name: &str) -> bool {
-    let name = name.to_ascii_lowercase();
+    // This key is only for protected-name matching, never a replacement path.
+    // Normalization-insensitive filesystems can resolve Kelvin K or long s to
+    // ASCII credential names, including sharp-s expansion. This is a security
+    // comparison key for the ASCII protected identifiers, not a general path
+    // canonicalizer. Preserve ordinary Unicode names and their exact
+    // requested spelling while denying these protected equivalences everywhere.
+    let name: String = name
+        .nfkc()
+        .flat_map(char::to_lowercase)
+        .flat_map(char::to_uppercase)
+        .flat_map(char::to_lowercase)
+        .collect();
     [
         ".git",
         ".hg",
@@ -932,6 +944,123 @@ mod tests {
         f.grant
             .execute("alice", f.grant.environment(), "policy-v1", request)
             .await
+    }
+    #[tokio::test]
+    async fn unicode_path_policy_protected_aliases_never_return_content() {
+        let f = fixture();
+        fs::create_dir(f.root.join(".kube")).expect("owned secret-name fixture");
+        fs::create_dir(f.root.join(".ssh")).expect("owned secret-name fixture");
+        fs::write(f.root.join(".kube/proof.txt"), "owned protected fixture").expect("fixture");
+        fs::write(f.root.join(".ssh/proof.txt"), "owned protected fixture").expect("fixture");
+        fs::write(f.root.join("client.key"), "owned protected fixture").expect("fixture");
+        for path in [
+            ".Kube/proof.txt",
+            ".ſſh/proof.txt",
+            ".ßh/proof.txt",
+            ".ẞh/proof.txt",
+            "client.Key",
+        ] {
+            let direct = WorkspaceRequest::ReadFile(ReadFileArgs {
+                path: path.into(),
+                start_byte: None,
+                max_bytes: None,
+                start_line: None,
+                end_line: None,
+                expected_sha256: None,
+            });
+            match execute(&f, direct).await {
+                Err(WorkspaceError::Forbidden) => {}
+                Ok(receipt) => panic!(
+                    "protected alias admitted actual fixture content: {:?}",
+                    receipt.result()
+                ),
+                Err(error) => {
+                    panic!("alias must be denied by policy before filesystem access: {error:?}")
+                }
+            }
+            assert!(matches!(
+                WorkspaceRequest::parse("read_file", &json!({"path":path})),
+                Err(WorkspaceError::Forbidden)
+            ));
+        }
+        for tool in ["list_directory", "search_files", "search_text"] {
+            let mut args = json!({"path":".Kube"});
+            if tool == "search_files" {
+                args["glob"] = json!("*");
+            }
+            if tool == "search_text" {
+                args["query"] = json!("fixture");
+            }
+            assert!(matches!(
+                WorkspaceRequest::parse(tool, &args),
+                Err(WorkspaceError::Forbidden)
+            ));
+        }
+    }
+    #[tokio::test]
+    async fn unicode_path_policy_inventory_search_and_text_hide_protected_spellings() {
+        let f = fixture();
+        fs::create_dir(f.root.join(".Kube")).expect("stored Unicode protected name");
+        fs::write(f.root.join(".Kube/proof.txt"), "needle private").expect("fixture");
+        fs::write(f.root.join("client.Key"), "needle private").expect("fixture");
+        fs::write(f.root.join("说明.txt"), "needle public").expect("public Unicode fixture");
+        let list = execute(&f, request("list_directory", json!({"path":"."})))
+            .await
+            .expect("list");
+        let WorkspaceResult::ListDirectory(data) = list.result() else {
+            panic!("list result")
+        };
+        assert_eq!(
+            data.entries
+                .iter()
+                .map(|v| v.name.as_str())
+                .collect::<Vec<_>>(),
+            ["说明.txt"]
+        );
+        assert!(data.omitted_unsupported);
+        let files = execute(
+            &f,
+            request("search_files", json!({"path":".","glob":"**/*"})),
+        )
+        .await
+        .expect("search");
+        let WorkspaceResult::SearchFiles(data) = files.result() else {
+            panic!("file result")
+        };
+        assert_eq!(data.paths, ["说明.txt"]);
+        let text = execute(
+            &f,
+            request("search_text", json!({"path":".","query":"needle"})),
+        )
+        .await
+        .expect("text");
+        let WorkspaceResult::SearchText(data) = text.result() else {
+            panic!("text result")
+        };
+        assert_eq!(data.matches.len(), 1);
+        assert_eq!(data.matches[0].path, "说明.txt");
+        assert!(!text.model_text().contains("private"));
+    }
+    #[tokio::test]
+    async fn unicode_path_policy_keeps_normal_paths_literal() {
+        let f = fixture();
+        fs::create_dir(f.root.join("中文")).expect("directory");
+        for path in [
+            "中文/你好.txt",
+            "中文/café.txt",
+            "中文/Ω.txt",
+            "中文/👨‍👩‍👧.txt",
+        ] {
+            fs::write(f.root.join(path), "public Unicode content").expect("file");
+            let result = execute(&f, request("read_file", json!({"path":path})))
+                .await
+                .expect("normal Unicode remains supported");
+            let WorkspaceResult::ReadFile(data) = result.result() else {
+                panic!("read result")
+            };
+            assert_eq!(data.path, path);
+            assert_eq!(data.content, "public Unicode content");
+        }
     }
     #[tokio::test]
     async fn text_search_literal_regex_unicode_ranges_and_versions_are_explicit() {
