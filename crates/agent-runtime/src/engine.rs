@@ -1,7 +1,10 @@
 //! A trusted local host, not an autonomous approval authority. Each advance does
 //! at most one model dispatch or one approved filesystem operation. Network model
 //! implementations are injected by the application; no paid fallback is provided.
+mod creation;
 mod questions;
+use crate::workspace::creation::CreateFileGrant;
+pub use creation::CreationApproval;
 pub use questions::PendingUserQuestion;
 
 use crate::{
@@ -106,6 +109,7 @@ struct StoredRun {
     steps: u32,
     active: Option<String>,
     user_questions: bool,
+    creation: Option<creation::CreationBinding>,
 }
 type StoredRunRow = (String, String, String, u32, u32, Option<String>, bool);
 #[derive(Debug, Clone)]
@@ -118,6 +122,7 @@ struct StoredOperation {
     call_id: String,
     state: String,
     model_result: Option<String>,
+    environment: String,
 }
 impl StoredOperation {
     fn operation<'a>(&'a self, c: &'a RunConfig) -> Operation<'a> {
@@ -128,7 +133,7 @@ impl StoredOperation {
             invocation: &self.invocation,
             argument_digest: &self.digest,
             tool_version: &self.version,
-            environment: &c.environment,
+            environment: &self.environment,
             policy_version: &c.policy,
             requires_approval: true,
         }
@@ -159,7 +164,7 @@ impl Journal {
         messages: Vec<Message>,
         grant: &WorkspaceGrant,
     ) -> Result<RunView, EngineError> {
-        self.start_agent_mode(config, messages, grant, false)
+        self.start_agent_mode(config, messages, grant, false, None)
     }
     /// Only a trusted host that can present and durably answer questions opts in.
     pub fn start_agent_interactive(
@@ -168,7 +173,7 @@ impl Journal {
         messages: Vec<Message>,
         grant: &WorkspaceGrant,
     ) -> Result<RunView, EngineError> {
-        self.start_agent_mode(config, messages, grant, true)
+        self.start_agent_mode(config, messages, grant, true, None)
     }
     fn start_agent_mode(
         &mut self,
@@ -176,6 +181,7 @@ impl Journal {
         messages: Vec<Message>,
         grant: &WorkspaceGrant,
         user_questions: bool,
+        creation: Option<&CreateFileGrant>,
     ) -> Result<RunView, EngineError> {
         if ![
             &config.owner,
@@ -198,13 +204,32 @@ impl Journal {
             return Err(EngineError::Invalid);
         }
         check_grant(config, grant)?;
+        let creation_binding = if let Some(cap) = creation {
+            self.check_creation_permission(cap)
+                .map_err(creation::error)?;
+            creation::check_pair(config, grant, cap)?;
+            Some(creation::CreationBinding::from_grant(cap))
+        } else {
+            None
+        };
         let config_json = encode(config)?;
-        let config_digest = if user_questions {
+        let config_digest = if let Some(binding) = &creation_binding {
+            digest(
+                "run-config-create-v1",
+                &(config, &messages, user_questions, binding),
+            )?
+        } else if user_questions {
             digest("run-config-interactive-v1", &(config, &messages))?
         } else {
             digest("run-config-v1", &(config, &messages))?
         };
-        let request = make_request(config, "validation", messages.clone(), user_questions);
+        let request = make_request_mode(
+            config,
+            "validation",
+            messages.clone(),
+            user_questions,
+            creation_binding.is_some(),
+        );
         request.validate().map_err(|_| EngineError::Invalid)?;
         let tx = self
             .connection
@@ -247,6 +272,9 @@ impl Journal {
                 [&config.run_id],
             )?;
         }
+        if let Some(binding) = &creation_binding {
+            tx.execute("INSERT INTO runtime_creation_capabilities(run_id,consent_id,consent_version,environment) VALUES(?,?,?,?)",params![config.run_id,binding.consent_id,binding.version,binding.environment])?;
+        }
         if let Some((workspace, _)) = registered {
             tx.execute(
                 "INSERT INTO run_workspaces(run_id,workspace_id) VALUES(?,?)",
@@ -272,10 +300,11 @@ impl Journal {
             steps,
             active,
             user_questions,
+            creation: self.creation_binding(run)?,
         })
     }
     fn pending_operations(&self, run: &str) -> Result<Vec<StoredOperation>, EngineError> {
-        let mut query=self.connection.prepare("SELECT operation_id,invocation,request_json,argument_digest,tool_version,call_id,state,model_result FROM operations WHERE run_id=? AND context_applied=0 AND request_json IS NOT NULL ORDER BY rowid")?;
+        let mut query=self.connection.prepare("SELECT operation_id,invocation,request_json,argument_digest,tool_version,call_id,state,model_result,environment FROM operations WHERE run_id=? AND context_applied=0 AND request_json IS NOT NULL ORDER BY rowid")?;
         let rows = query.query_map([run], |r| {
             Ok((
                 r.get::<_, String>(0)?,
@@ -286,10 +315,21 @@ impl Journal {
                 r.get::<_, String>(5)?,
                 r.get::<_, String>(6)?,
                 r.get::<_, Option<String>>(7)?,
+                r.get::<_, String>(8)?,
             ))
         })?;
         rows.map(|row| {
-            let (id, invocation, request, digest, version, call_id, state, model_result) = row?;
+            let (
+                id,
+                invocation,
+                request,
+                digest,
+                version,
+                call_id,
+                state,
+                model_result,
+                environment,
+            ) = row?;
             Ok(StoredOperation {
                 id,
                 invocation,
@@ -299,6 +339,7 @@ impl Journal {
                 call_id,
                 state,
                 model_result,
+                environment,
             })
         })
         .collect()
@@ -315,7 +356,7 @@ impl Journal {
                 request: o.request,
                 argument_digest: o.digest,
                 tool_version: o.version,
-                environment: stored.config.environment.clone(),
+                environment: o.environment,
             })
             .collect();
         let (final_text, failure, active) = self.connection.query_row(
@@ -404,6 +445,9 @@ impl Journal {
             .into_iter()
             .find(|o| o.id == operation_id && o.state == "intended")
             .ok_or(EngineError::ApprovalRequired)?;
+        if matches!(op.request, WorkspaceRequest::WriteFile(_)) {
+            return Err(EngineError::ApprovalRequired);
+        }
         self.approve(&op.operation(&stored.config), owner, expires_at)?;
         Ok(())
     }
@@ -483,15 +527,42 @@ impl Journal {
         run: &str,
         grant: &WorkspaceGrant,
         gateway: &G,
+        cancellation: watch::Receiver<bool>,
+    ) -> Result<RunView, EngineError> {
+        self.advance_agent_mode(
+            owner,
+            run,
+            creation::Authority {
+                read: grant,
+                create: None,
+            },
+            gateway,
+            cancellation,
+        )
+        .await
+    }
+    async fn advance_agent_mode<G: ModelGateway>(
+        &mut self,
+        owner: &str,
+        run: &str,
+        authority: creation::Authority<'_>,
+        gateway: &G,
         mut cancellation: watch::Receiver<bool>,
     ) -> Result<RunView, EngineError> {
+        let grant = authority.read;
         let stored = self.stored_run(owner, run)?;
         if !matches!(
             stored.phase.as_str(),
             "ready" | "model_pending" | "tools_pending" | "awaiting_user"
         ) {
-            return self.agent_view(owner, run);
+            let view = self.agent_view(owner, run)?;
+            if view.final_text.is_some() || !view.pending.is_empty() || view.user_question.is_some()
+            {
+                return self.agent_view_authorized(owner, run, grant).await;
+            }
+            return Ok(view);
         }
+        self.check_creation_binding(&stored, grant, authority.create)?;
         if *cancellation.borrow() || cancellation.has_changed().is_err() || grant.is_revoked() {
             return self.cancel_agent(owner, run, grant);
         }
@@ -512,7 +583,8 @@ impl Journal {
             return self.agent_view_authorized(owner, run, grant).await;
         }
         if stored.phase == "tools_pending" {
-            self.advance_tool(stored, grant, cancellation).await?;
+            self.advance_tool(stored, grant, authority.create, cancellation)
+                .await?;
             return self.agent_view(owner, run);
         }
         if stored.phase == "model_pending" {
@@ -548,11 +620,12 @@ impl Journal {
             self.stop_agent(run, "limited", "deadline")?;
             return self.agent_view(owner, run);
         }
-        let request = make_request(
+        let request = make_request_mode(
             &stored.config,
             &invocation,
             stored.messages.clone(),
             stored.user_questions,
+            stored.creation.is_some(),
         );
         if request.validate().is_err() {
             self.stop_agent(run, "limited", "context_budget")?;
@@ -592,9 +665,14 @@ impl Journal {
         }
         match result {
             Ok(Ok(candidate)) => {
-                if let Err(error) =
-                    self.accept_candidate(&stored, &invocation, epoch, &candidate, grant)
-                {
+                if let Err(error) = self.accept_candidate(
+                    &stored,
+                    &invocation,
+                    epoch,
+                    &candidate,
+                    grant,
+                    authority.create,
+                ) {
                     self.stop_agent(run, "recovery_required", "invalid_model_response")?;
                     return Err(error);
                 }
@@ -610,8 +688,10 @@ impl Journal {
         epoch: i64,
         candidate: &ResponseCandidate,
         grant: &WorkspaceGrant,
+        creation: Option<&CreateFileGrant>,
     ) -> Result<(), EngineError> {
         check_grant(&stored.config, grant)?;
+        self.check_creation_binding(stored, grant, creation)?;
         if !valid_id(&candidate.response_id)
             || candidate.tool_calls.len() > 80
             || encode(candidate)?.len() > 256 * 1024
@@ -646,7 +726,11 @@ impl Journal {
                         .ok_or(EngineError::Invalid)?,
                 );
             } else {
-                requests.push(WorkspaceRequest::parse(&call.name, &call.arguments)?);
+                let request = WorkspaceRequest::parse(&call.name, &call.arguments)?;
+                if matches!(request, WorkspaceRequest::WriteFile(_)) && stored.creation.is_none() {
+                    return Err(EngineError::Forbidden);
+                }
+                requests.push(request);
             }
         }
         let c = &stored.config;
@@ -679,7 +763,17 @@ impl Journal {
         for (ordinal, (call, request)) in candidate.tool_calls.iter().zip(requests).enumerate() {
             let ordinal = i64::try_from(ordinal).map_err(|_| EngineError::Invalid)?;
             let id = format!("op-{}", uuid::Uuid::new_v4());
-            tx.execute("INSERT INTO operations(operation_id,owner,run_id,invocation,argument_digest,tool_version,environment,policy,requires_approval,state,request_json,call_id,ordinal) VALUES(?,?,?,?,?,?,?,?,1,'intended',?,?,?)",params![id,c.owner,c.run_id,invocation,request.digest()?,request.version(),c.environment,c.policy,encode(&request)?,call.id,ordinal])?;
+            let environment = if matches!(request, WorkspaceRequest::WriteFile(_)) {
+                stored
+                    .creation
+                    .as_ref()
+                    .ok_or(EngineError::Forbidden)?
+                    .environment
+                    .as_str()
+            } else {
+                c.environment.as_str()
+            };
+            tx.execute("INSERT INTO operations(operation_id,owner,run_id,invocation,argument_digest,tool_version,environment,policy,requires_approval,state,request_json,call_id,ordinal) VALUES(?,?,?,?,?,?,?,?,1,'intended',?,?,?)",params![id,c.owner,c.run_id,invocation,request.digest()?,request.version(),environment,c.policy,encode(&request)?,call.id,ordinal])?;
             tx.execute(
                 "INSERT INTO events(run_id,operation_id,kind) VALUES(?,?,'operation.intended')",
                 params![c.run_id, id],
@@ -716,6 +810,7 @@ impl Journal {
         &mut self,
         stored: StoredRun,
         grant: &WorkspaceGrant,
+        creation: Option<&CreateFileGrant>,
         mut cancellation: watch::Receiver<bool>,
     ) -> Result<(), EngineError> {
         let c = &stored.config;
@@ -734,6 +829,20 @@ impl Journal {
         if stored.steps >= c.max_steps {
             self.stop_agent(&c.run_id, "limited", "execution_budget")?;
             return Ok(());
+        }
+        if let WorkspaceRequest::WriteFile(args) = &op.request {
+            return self
+                .advance_creation_tool(
+                    &stored,
+                    op,
+                    args.clone(),
+                    creation::Authority {
+                        read: grant,
+                        create: creation,
+                    },
+                    cancellation,
+                )
+                .await;
         }
         // Capacity acquisition may wait, but has no filesystem effect before claim.
         let prepared = tokio::select! {
@@ -845,16 +954,28 @@ impl Journal {
         grant: &WorkspaceGrant,
     ) -> Result<Vec<workspace::ToolReceipt>, EngineError> {
         let rows = {
-            let mut statement=self.connection.prepare("SELECT request_json,result_digest FROM operations WHERE run_id=? AND state='succeeded' AND request_json IS NOT NULL")?;
+            let mut statement=self.connection.prepare("SELECT request_json,result_digest,result_json FROM operations WHERE run_id=? AND state='succeeded' AND request_json IS NOT NULL")?;
             statement
                 .query_map([&c.run_id], |r| {
-                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                    ))
                 })?
                 .collect::<Result<Vec<_>, _>>()?
         };
         let mut leases = Vec::new();
-        for (request, expected) in rows {
-            let request = serde_json::from_str(&request).map_err(|_| EngineError::Invalid)?;
+        for (request, expected, encoded) in rows {
+            let request: WorkspaceRequest =
+                serde_json::from_str(&request).map_err(|_| EngineError::Invalid)?;
+            if let WorkspaceRequest::WriteFile(args) = &request {
+                leases.push(
+                    self.creation_source_lease(c, grant, args, &encoded, &expected)
+                        .await?,
+                );
+                continue;
+            }
             let receipt = grant
                 .execute(&c.owner, &c.environment, &c.policy, request)
                 .await?;
@@ -866,15 +987,19 @@ impl Journal {
         Ok(leases)
     }
 }
-fn make_request(
+fn make_request_mode(
     c: &RunConfig,
     invocation: &str,
     messages: Vec<Message>,
     user_questions: bool,
+    create_files: bool,
 ) -> GenerateRequest {
     let mut tools = workspace::definitions();
     if user_questions {
         tools.push(orange_protocol::questions::definition());
+    }
+    if create_files {
+        tools.push(workspace::creation::definition());
     }
     GenerateRequest {
         invocation_id: invocation.into(),

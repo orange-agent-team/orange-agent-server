@@ -1014,7 +1014,7 @@ fn user_question_migration_preserves_sparse_run_cursor_and_denies_implicit_capab
     let f = Fixture::new();
     let mut j = f.open();
     f.start(&mut j);
-    j.connection.execute_batch("UPDATE runtime_runs SET rowid=37; DROP TABLE creation_consent_audit; DROP TABLE creation_request_keys; DROP TABLE creation_consents; DROP TABLE runtime_questions; DROP TABLE runtime_capabilities; PRAGMA user_version=3;").expect("prior-version fixture with sparse cursor");
+    j.connection.execute_batch("UPDATE runtime_runs SET rowid=37; DROP TABLE runtime_creation_capabilities; DROP TABLE creation_consent_audit; DROP TABLE creation_request_keys; DROP TABLE creation_consents; DROP TABLE runtime_questions; DROP TABLE runtime_capabilities; PRAGMA user_version=3;").expect("prior-version fixture with sparse cursor");
     drop(j);
     let mut j = f.open();
     let rowid: i64 = j
@@ -1477,5 +1477,465 @@ async fn unicode_path_policy_rejects_model_batch_before_response_or_approval() {
         model.calls.load(Ordering::SeqCst),
         1,
         "recovery must not redispatch the rejected response"
+    );
+}
+
+fn creating(f: &Fixture, j: &mut Journal) -> CreateFileGrant {
+    let grant = j
+        .authorize_file_creation(
+            "alice",
+            "write-consent",
+            &f.config.policy,
+            f.workspace.path(),
+        )
+        .expect("separate trusted create consent");
+    j.start_agent_creating(
+        &f.config,
+        vec![Message::plain(Role::User, "Create generated.txt".into())],
+        &f.grant,
+        &grant,
+        false,
+    )
+    .expect("explicit capability start");
+    grant
+}
+fn write_response() -> ResponseCandidate {
+    tools(vec![call(
+        "write-call",
+        "write_file",
+        json!({"path":"generated.txt","content":"actual created content"}),
+    )])
+}
+async fn approve_creation(f: &Fixture, j: &Journal, grant: &CreateFileGrant) {
+    let op = j
+        .agent_view("alice", "run-1")
+        .expect("preview")
+        .pending
+        .remove(0);
+    j.approve_agent_creation(
+        "alice",
+        "run-1",
+        CreationApproval {
+            operation_id: &op.operation_id,
+            argument_digest: &op.argument_digest,
+            expires_at: now().expect("time") + 60,
+        },
+        &f.grant,
+        grant,
+    )
+    .await
+    .expect("explicit current preview approval");
+}
+#[tokio::test]
+async fn create_agent_requires_opt_in_exact_approval_and_revalidates_created_source() {
+    let f = Fixture::new();
+    let mut j = f.open();
+    let create = creating(&f, &mut j);
+    let model = ScriptedModel::new(vec![write_response(), final_response()]);
+    let (_stop, rx) = watch::channel(false);
+    assert!(f.advance(&mut j, &model, rx.clone()).await.is_err());
+    assert_eq!(
+        model.calls.load(Ordering::SeqCst),
+        0,
+        "readonly entry cannot resume write-capable Run"
+    );
+    let view = j
+        .advance_agent_creating("alice", "run-1", &f.grant, &create, &model, rx.clone())
+        .await
+        .expect("complete proposal");
+    assert_eq!(view.phase, Phase::ToolsPending);
+    assert_eq!(view.pending[0].environment, create.environment());
+    assert!(
+        model.requests.lock().expect("requests")[0]
+            .tools
+            .iter()
+            .any(|t| t.name == "write_file")
+    );
+    assert!(
+        j.approve_agent_tool(
+            "alice",
+            "run-1",
+            &view.pending[0].operation_id,
+            now().expect("time") + 60,
+            &f.grant
+        )
+        .is_err()
+    );
+    assert!(matches!(
+        j.advance_agent_creating("alice", "run-1", &f.grant, &create, &model, rx.clone())
+            .await,
+        Err(EngineError::ApprovalRequired)
+    ));
+    assert!(!f.workspace.path().join("generated.txt").exists());
+    approve_creation(&f, &j, &create).await;
+    let written = j
+        .advance_agent_creating("alice", "run-1", &f.grant, &create, &model, rx.clone())
+        .await
+        .expect("actual write");
+    assert_eq!(written.phase, Phase::Ready);
+    assert_eq!(written.steps, 2);
+    assert_eq!(
+        std::fs::read_to_string(f.workspace.path().join("generated.txt")).expect("actual file"),
+        "actual created content"
+    );
+    let done = j
+        .advance_agent_creating("alice", "run-1", &f.grant, &create, &model, rx.clone())
+        .await
+        .expect("final");
+    assert_eq!(done.phase, Phase::Completed);
+    assert!(
+        model.requests.lock().expect("requests")[1]
+            .messages
+            .iter()
+            .any(|m| m.role == Role::Tool && m.content.contains("write_file"))
+    );
+    std::fs::remove_file(f.workspace.path().join("generated.txt")).expect("source deletion");
+    assert!(
+        j.agent_view_authorized("alice", "run-1", &f.grant)
+            .await
+            .is_err()
+    );
+    assert!(
+        j.advance_agent_creating("alice", "run-1", &f.grant, &create, &model, rx)
+            .await
+            .is_err(),
+        "terminal advance cannot re-expose deleted source context"
+    );
+    assert_eq!(model.calls.load(Ordering::SeqCst), 2);
+}
+#[tokio::test]
+async fn create_agent_legacy_and_mismatched_capabilities_never_gain_write_intents() {
+    let f = Fixture::new();
+    let mut j = f.open();
+    f.start(&mut j);
+    let create = j
+        .authorize_file_creation("alice", "new-cap", &f.config.policy, f.workspace.path())
+        .expect("explicit separate consent");
+    assert!(
+        j.start_agent_creating(
+            &f.config,
+            vec![Message::plain(Role::User, "Read note.txt".into())],
+            &f.grant,
+            &create,
+            false
+        )
+        .is_err()
+    );
+    let model = ScriptedModel::new(vec![write_response()]);
+    let (_stop, rx) = watch::channel(false);
+    assert!(f.advance(&mut j, &model, rx).await.is_err());
+    let effects: i64 = j
+        .connection
+        .query_row("SELECT count(*) FROM operations", [], |r| r.get(0))
+        .expect("effects");
+    assert_eq!(effects, 0);
+    assert!(!f.workspace.path().join("generated.txt").exists());
+}
+#[tokio::test]
+async fn create_agent_revoked_consent_blocks_pending_write_without_revoking_read_rights() {
+    let f = Fixture::new();
+    let mut j = f.open();
+    let create = creating(&f, &mut j);
+    let model = ScriptedModel::new(vec![write_response()]);
+    let (_stop, rx) = watch::channel(false);
+    j.advance_agent_creating("alice", "run-1", &f.grant, &create, &model, rx.clone())
+        .await
+        .expect("proposal");
+    approve_creation(&f, &j, &create).await;
+    j.revoke_file_creation("alice", create.consent_id(), &create.consent_version())
+        .expect("revoke write rights");
+    assert!(!f.grant.is_revoked());
+    assert!(
+        j.advance_agent_creating("alice", "run-1", &f.grant, &create, &model, rx)
+            .await
+            .is_err()
+    );
+    assert!(!f.workspace.path().join("generated.txt").exists());
+    let dispatched: i64 = j
+        .connection
+        .query_row(
+            "SELECT count(*) FROM events WHERE kind='operation.dispatching'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("dispatches");
+    assert_eq!(dispatched, 0);
+}
+#[tokio::test]
+async fn create_agent_deleted_read_source_cannot_be_copied_after_approval() {
+    let f = Fixture::new();
+    let mut j = f.open();
+    let create = creating(&f, &mut j);
+    let model = ScriptedModel::new(vec![
+        tools(vec![call("read", "read_file", json!({"path":"note.txt"}))]),
+        write_response(),
+    ]);
+    let (_stop, rx) = watch::channel(false);
+    j.advance_agent_creating("alice", "run-1", &f.grant, &create, &model, rx.clone())
+        .await
+        .expect("read intent");
+    f.approve(&j);
+    j.advance_agent_creating("alice", "run-1", &f.grant, &create, &model, rx.clone())
+        .await
+        .expect("read");
+    j.advance_agent_creating("alice", "run-1", &f.grant, &create, &model, rx.clone())
+        .await
+        .expect("write proposal");
+    approve_creation(&f, &j, &create).await;
+    std::fs::remove_file(f.workspace.path().join("note.txt")).expect("delete original source");
+    assert!(
+        j.advance_agent_creating("alice", "run-1", &f.grant, &create, &model, rx)
+            .await
+            .is_err()
+    );
+    assert!(!f.workspace.path().join("generated.txt").exists());
+    assert_eq!(model.calls.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn create_agent_reopens_with_fresh_consent_and_never_reexecutes_committed_effect() {
+    let f = Fixture::new();
+    let mut j = f.open();
+    let create = creating(&f, &mut j);
+    let consent_id = create.consent_id().to_owned();
+    let model = ScriptedModel::new(vec![write_response(), final_response()]);
+    let (_stop, rx) = watch::channel(false);
+    j.advance_agent_creating("alice", "run-1", &f.grant, &create, &model, rx.clone())
+        .await
+        .expect("proposal");
+    approve_creation(&f, &j, &create).await;
+    drop(j);
+    let mut j = f.open();
+    assert!(
+        j.advance_agent_creating("alice", "run-1", &f.grant, &create, &model, rx.clone())
+            .await
+            .is_err(),
+        "stale host capability rejected"
+    );
+    let create = j
+        .restore_file_creation("alice", &consent_id)
+        .expect("fresh host capability");
+    j.connection.execute_batch("CREATE TRIGGER fail_context BEFORE UPDATE OF context_applied ON operations BEGIN SELECT RAISE(ABORT,'injected context failure'); END;").expect("inject context failure");
+    assert!(
+        j.advance_agent_creating("alice", "run-1", &f.grant, &create, &model, rx.clone())
+            .await
+            .is_err()
+    );
+    let (state, applied): (String, i64) = j
+        .connection
+        .query_row("SELECT state,context_applied FROM operations", [], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
+        .expect("committed effect");
+    assert_eq!((state.as_str(), applied), ("succeeded", 0));
+    assert_eq!(
+        std::fs::read_to_string(f.workspace.path().join("generated.txt")).expect("published"),
+        "actual created content"
+    );
+    j.connection
+        .execute_batch("DROP TRIGGER fail_context;")
+        .expect("repair injected fault");
+    drop(j);
+    let mut j = f.open();
+    let create = j
+        .restore_file_creation("alice", &consent_id)
+        .expect("fresh host capability");
+    let recovered = j
+        .advance_agent_creating("alice", "run-1", &f.grant, &create, &model, rx.clone())
+        .await
+        .expect("recover context only");
+    assert_eq!(recovered.phase, Phase::Ready);
+    assert_eq!(recovered.steps, 2);
+    let done = j
+        .advance_agent_creating("alice", "run-1", &f.grant, &create, &model, rx)
+        .await
+        .expect("final response");
+    assert_eq!(done.phase, Phase::Completed);
+    assert_eq!(done.steps, 3);
+    assert_eq!(model.calls.load(Ordering::SeqCst), 2);
+    let effects: i64 = j
+        .connection
+        .query_row(
+            "SELECT count(*) FROM events WHERE kind='operation.succeeded'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("effect count");
+    assert_eq!(effects, 1);
+    assert_eq!(
+        model.requests.lock().expect("requests")[1]
+            .messages
+            .iter()
+            .filter(|m| m.role == Role::Tool)
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn create_agent_postpublication_failure_quarantines_reopen_without_overwrite() {
+    let f = Fixture::new();
+    let mut j = f.open();
+    let create = creating(&f, &mut j);
+    let consent_id = create.consent_id().to_owned();
+    let model = ScriptedModel::new(vec![write_response()]);
+    let (_stop, rx) = watch::channel(false);
+    j.advance_agent_creating("alice", "run-1", &f.grant, &create, &model, rx.clone())
+        .await
+        .expect("proposal");
+    approve_creation(&f, &j, &create).await;
+    j.connection.execute_batch("CREATE TRIGGER fail_receipt BEFORE UPDATE OF state ON operations WHEN NEW.state='succeeded' BEGIN SELECT RAISE(ABORT,'injected receipt failure'); END;").expect("fault");
+    let stopped = j
+        .advance_agent_creating("alice", "run-1", &f.grant, &create, &model, rx.clone())
+        .await
+        .expect("unknown reported");
+    assert_eq!(stopped.phase, Phase::RecoveryRequired);
+    assert_eq!(
+        std::fs::read_to_string(f.workspace.path().join("generated.txt"))
+            .expect("published before receipt failure"),
+        "actual created content"
+    );
+    j.connection
+        .execute_batch("DROP TRIGGER fail_receipt;")
+        .expect("repair injected fault");
+    drop(j);
+    let mut j = f.open();
+    assert!(j.restore_file_creation("alice", &consent_id).is_err());
+    assert!(
+        j.authorize_file_creation(
+            "alice",
+            "bypass-unknown",
+            &f.config.policy,
+            f.workspace.path()
+        )
+        .is_err()
+    );
+    std::fs::write(
+        f.workspace.path().join("generated.txt"),
+        "subsequent user edit",
+    )
+    .expect("edit owned fixture");
+    let recovered = j
+        .advance_agent_creating("alice", "run-1", &f.grant, &create, &model, rx)
+        .await
+        .expect("metadata-only recovery view");
+    assert_eq!(recovered.phase, Phase::RecoveryRequired);
+    assert!(recovered.final_text.is_none() && recovered.pending.is_empty());
+    assert_eq!(
+        std::fs::read_to_string(f.workspace.path().join("generated.txt")).expect("no replay"),
+        "subsequent user edit"
+    );
+    assert_eq!(model.calls.load(Ordering::SeqCst), 1);
+    let unknown: i64 = j
+        .connection
+        .query_row(
+            "SELECT count(*) FROM operations WHERE state='unknown'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("unknown count");
+    assert_eq!(unknown, 1);
+}
+
+#[tokio::test]
+async fn create_agent_cancel_and_step_limit_have_no_file_effect() {
+    for cancel in [true, false] {
+        let mut f = Fixture::new();
+        if !cancel {
+            f.config.max_steps = 1;
+        }
+        let mut j = f.open();
+        let create = creating(&f, &mut j);
+        let model = ScriptedModel::new(vec![write_response()]);
+        let (stop, rx) = watch::channel(false);
+        j.advance_agent_creating("alice", "run-1", &f.grant, &create, &model, rx.clone())
+            .await
+            .expect("proposal");
+        approve_creation(&f, &j, &create).await;
+        if cancel {
+            stop.send(true).expect("cancel");
+        }
+        let view = j
+            .advance_agent_creating("alice", "run-1", &f.grant, &create, &model, rx)
+            .await
+            .expect("stopped");
+        assert_eq!(
+            view.phase,
+            if cancel {
+                Phase::Cancelled
+            } else {
+                Phase::Limited
+            }
+        );
+        assert!(!f.workspace.path().join("generated.txt").exists());
+        assert_eq!(view.steps, 1);
+        assert_eq!(model.calls.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[tokio::test]
+async fn create_agent_schema_five_migration_never_upgrades_existing_run() {
+    let f = Fixture::new();
+    let mut j = f.open();
+    f.start(&mut j);
+    let create = j
+        .authorize_file_creation(
+            "alice",
+            "independent-consent",
+            &f.config.policy,
+            f.workspace.path(),
+        )
+        .expect("separate consent");
+    let id = create.consent_id().to_owned();
+    j.connection
+        .execute_batch("DROP TABLE runtime_creation_capabilities; PRAGMA user_version=5;")
+        .expect("actual prior schema fixture");
+    drop(j);
+    let mut j = f.open();
+    let version: i64 = j
+        .connection
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .expect("version");
+    assert_eq!(version, 6);
+    assert_eq!(
+        j.agent_view("alice", "run-1").expect("old run").phase,
+        Phase::Ready
+    );
+    let restored = j
+        .restore_file_creation("alice", &id)
+        .expect("independent consent retained");
+    assert!(
+        j.start_agent_creating(
+            &f.config,
+            vec![Message::plain(Role::User, "Read note.txt".into())],
+            &f.grant,
+            &restored,
+            false
+        )
+        .is_err()
+    );
+    let count: i64 = j
+        .connection
+        .query_row(
+            "SELECT count(*) FROM runtime_creation_capabilities",
+            [],
+            |r| r.get(0),
+        )
+        .expect("binding count");
+    assert_eq!(count, 0);
+    let model = ScriptedModel::new(vec![final_response()]);
+    let (_stop, rx) = watch::channel(false);
+    assert_eq!(
+        f.advance(&mut j, &model, rx)
+            .await
+            .expect("legacy run works")
+            .phase,
+        Phase::Completed
+    );
+    assert!(
+        !model.requests.lock().expect("request")[0]
+            .tools
+            .iter()
+            .any(|t| t.name == "write_file")
     );
 }

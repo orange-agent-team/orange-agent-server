@@ -1,7 +1,7 @@
 //! Trusted local developer CLI. Never auto-approves tool requests.
 use orange_agent_runtime::{
     Journal,
-    engine::{GatewayFailure, ModelFuture, ModelGateway, RunConfig},
+    engine::{CreationApproval, GatewayFailure, ModelFuture, ModelGateway, RunConfig},
     workspace::WorkspaceGrant,
 };
 use orange_model_runtime::llama::LlamaClient;
@@ -30,6 +30,8 @@ struct Config {
     prompt: String,
     #[serde(default)]
     user_questions: bool,
+    #[serde(default)]
+    creation_consent_id: Option<String>,
 }
 struct LocalModel(LlamaClient);
 impl ModelGateway for LocalModel {
@@ -49,16 +51,18 @@ impl ModelGateway for LocalModel {
                     request.tools.iter().any(|t| t.name == "ask_user")
                         && orange_protocol::questions::AskUser::parse(&call.arguments).is_some()
                 } else {
-                    orange_agent_runtime::workspace::WorkspaceRequest::parse(
-                        &call.name,
-                        &call.arguments,
-                    )
-                    .is_ok()
+                    request.tools.iter().any(|t| t.name == call.name)
+                        && orange_agent_runtime::workspace::WorkspaceRequest::parse(
+                            &call.name,
+                            &call.arguments,
+                        )
+                        .is_ok()
                 };
                 if !valid {
                     // Shape-only diagnostics: never log model text, argument
                     // values, unknown field names or identifiers supplied by it.
                     let (name, known): (&str, &[&str]) = match call.name.as_str() {
+                        "write_file" => ("write_file", &["path", "content"]),
                         "read_file" => (
                             "read_file",
                             &[
@@ -146,7 +150,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 3 {
         return Err(
-            "usage: local-agent <private-config.json> <start|show|step|approve OP_ID|answer|cancel>; answer reads bounded AnswerUser JSON from stdin"
+            "usage: local-agent <private-config.json> <start|show|step|approve OP_ID|authorize-create REQUEST_ID|approve-create OP_ID DIGEST|revoke-create VERSION|answer|cancel>; answer reads bounded AnswerUser JSON from stdin"
                 .into(),
         );
     }
@@ -207,10 +211,63 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         None
     };
     let mut journal = Journal::open(&config.journal)?;
+    for root in &private {
+        journal.reserve_private_directory(root)?;
+    }
+    if args[2] == "authorize-create" {
+        if args.len() != 4 {
+            return Err("explicit create consent request ID required".into());
+        }
+        let create = journal.authorize_file_creation(
+            &config.run.owner,
+            &args[3],
+            &config.run.policy,
+            &config.workspace,
+        )?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(
+                &journal.creation_consent(&config.run.owner, create.consent_id())?
+            )?
+        );
+        return Ok(());
+    }
+    if args[2] == "revoke-create" {
+        if args.len() != 4 {
+            return Err("exact consent version required".into());
+        }
+        let id = config
+            .creation_consent_id
+            .as_deref()
+            .ok_or("explicit consent ID required")?;
+        journal.revoke_file_creation(&config.run.owner, id, &args[3])?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&journal.creation_consent(&config.run.owner, id)?)?
+        );
+        return Ok(());
+    }
+    let create = if matches!(args[2].as_str(), "start" | "step" | "approve-create") {
+        config
+            .creation_consent_id
+            .as_deref()
+            .map(|id| journal.restore_file_creation(&config.run.owner, id))
+            .transpose()?
+    } else {
+        None
+    };
     let view = match args[2].as_str() {
         "start" => {
             let messages = vec![Message::plain(Role::User, config.prompt)];
-            if config.user_questions {
+            if let Some(create) = &create {
+                journal.start_agent_creating(
+                    &config.run,
+                    messages,
+                    &grant,
+                    create,
+                    config.user_questions,
+                )?
+            } else if config.user_questions {
                 journal.start_agent_interactive(&config.run, messages, &grant)?
             } else {
                 journal.start_agent(&config.run, messages, &grant)?
@@ -239,6 +296,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .await;
             signal.abort();
             result?
+        }
+        "approve-create" => {
+            if args.len() != 5 {
+                return Err("operation ID and reviewed argument digest required".into());
+            }
+            let create = create.as_ref().ok_or("explicit consent ID required")?;
+            let seconds = i64::try_from(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)?
+                    .as_secs(),
+            )?;
+            journal
+                .approve_agent_creation(
+                    &config.run.owner,
+                    &config.run.run_id,
+                    CreationApproval {
+                        operation_id: &args[3],
+                        argument_digest: &args[4],
+                        expires_at: (seconds + 60).min(config.run.deadline_unix),
+                    },
+                    &grant,
+                    create,
+                )
+                .await?;
+            journal
+                .agent_view_authorized(&config.run.owner, &config.run.run_id, &grant)
+                .await?
         }
         "approve" => {
             let id = args
@@ -289,18 +373,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let _ = tokio::signal::ctrl_c().await;
                 let _ = sender.send(true);
             });
-            let result = journal
-                .advance_agent(
-                    &config.run.owner,
-                    &config.run.run_id,
-                    &grant,
-                    &model,
-                    receiver,
-                )
-                .await;
+            let result = if let Some(create) = &create {
+                journal
+                    .advance_agent_creating(
+                        &config.run.owner,
+                        &config.run.run_id,
+                        &grant,
+                        create,
+                        &model,
+                        receiver,
+                    )
+                    .await
+            } else {
+                journal
+                    .advance_agent(
+                        &config.run.owner,
+                        &config.run.run_id,
+                        &grant,
+                        &model,
+                        receiver,
+                    )
+                    .await
+            };
             signal.abort();
             let view = result?;
             grant.wait_drained().await;
+            if let Some(create) = &create {
+                create.wait_drained().await;
+            }
             view
         }
         _ => return Err("unknown command".into()),

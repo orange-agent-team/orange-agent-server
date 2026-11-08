@@ -68,7 +68,7 @@ impl Journal {
             rusqlite::OpenFlags::default() | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
         )?;
         let version: i64 = connection.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if !(0..=5).contains(&version) {
+        if !(0..=6).contains(&version) {
             return Err(JournalError::UnsupportedVersion);
         }
         if version == 0 {
@@ -109,6 +109,12 @@ impl Journal {
             let tx =
                 connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
             tx.execute_batch(include_str!("schema_v5.sql"))?;
+            tx.commit()?;
+        }
+        if version < 6 {
+            let tx =
+                connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            tx.execute_batch(include_str!("schema_v6.sql"))?;
             tx.commit()?;
         }
         connection.execute_batch("BEGIN IMMEDIATE;
@@ -305,6 +311,14 @@ impl Journal {
     }
     /// Returns only after the dispatch barrier is durable. Unknown is never auto-retried.
     pub fn claim(&mut self, op: &Operation<'_>, now: i64) -> Result<(), JournalError> {
+        self.claim_with_runtime_step(op, now, false)
+    }
+    pub(crate) fn claim_with_runtime_step(
+        &mut self,
+        op: &Operation<'_>,
+        now: i64,
+        count_step: bool,
+    ) -> Result<(), JournalError> {
         self.prepare(op)?;
         let tx = self
             .connection
@@ -321,6 +335,14 @@ impl Journal {
         )? != 1
         {
             return Err(JournalError::AlreadyDispatched);
+        }
+        if count_step {
+            let runtime: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM runtime_runs WHERE run_id=?)",
+                [op.run],
+                |r| r.get(0),
+            )?;
+            if runtime && tx.execute("UPDATE runtime_runs SET steps=steps+1 WHERE run_id=? AND phase='tools_pending' AND steps<json_extract(config,'$.max_steps') AND json_extract(config,'$.deadline_unix')>?",params![op.run,now])?!=1 {return Err(JournalError::Revoked);}
         }
         tx.execute(
             "INSERT INTO events(run_id,operation_id,kind) VALUES(?,?,'operation.dispatching')",

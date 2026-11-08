@@ -681,7 +681,7 @@ fn create_consent_migration_preserves_legacy_data_without_inventing_write_rights
     let read = j
         .authorize_workspace("alice", "prior-read", f.root.path(), "policy")
         .expect("readonly");
-    j.connection.execute_batch("DROP TABLE creation_consent_audit;DROP TABLE creation_request_keys;DROP TABLE creation_consents;PRAGMA user_version=4;").expect("real prior schema fixture");
+    j.connection.execute_batch("DROP TABLE runtime_creation_capabilities; DROP TABLE creation_consent_audit;DROP TABLE creation_request_keys;DROP TABLE creation_consents;PRAGMA user_version=4;").expect("real prior schema fixture");
     drop(j);
     let j = f.open();
     assert!(
@@ -806,4 +806,79 @@ fn create_consent_request_aliases_are_bounded_but_exact_retry_still_resolves() {
             .len(),
         1
     );
+}
+
+#[tokio::test]
+async fn create_publication_observes_read_revocation_and_holds_both_drain_leases() {
+    let f = Fixture::new();
+    let mut j = f.open();
+    let create = f.grant(&mut j);
+    let read = WorkspaceGrant::open(
+        "alice",
+        "read",
+        "policy",
+        f.root.path(),
+        &[f.private.path().into()],
+    )
+    .expect("read grant");
+    let write_permit = create
+        .grant
+        .permit("alice", create.grant.environment(), "policy")
+        .await
+        .expect("write permit");
+    let read_permit = read
+        .permit("alice", read.environment(), "policy")
+        .await
+        .expect("read permit");
+    read.request_revoke();
+    assert!(matches!(
+        publish(
+            write_permit,
+            Some(read_permit),
+            args("forbidden.txt", "never published")
+        ),
+        Err(CreateFileError::Workspace(WorkspaceError::Revoked))
+    ));
+    assert!(!f.root.path().join("forbidden.txt").exists());
+    read.wait_drained().await;
+    assert!(
+        !create.grant.is_revoked(),
+        "read revocation does not rewrite separate write consent"
+    );
+    let read = WorkspaceGrant::open(
+        "alice",
+        "fresh-read",
+        "policy",
+        f.root.path(),
+        &[f.private.path().into()],
+    )
+    .expect("fresh read grant");
+    let write_permit = create
+        .grant
+        .permit("alice", create.grant.environment(), "policy")
+        .await
+        .expect("write permit");
+    let read_permit = read
+        .permit("alice", read.environment(), "policy")
+        .await
+        .expect("read permit");
+    let receipt = publish(
+        write_permit,
+        Some(read_permit),
+        args("created.txt", "actual bytes"),
+    )
+    .expect("publish");
+    assert_eq!(
+        fs::read_to_string(f.root.path().join("created.txt")).expect("file"),
+        "actual bytes"
+    );
+    read.request_revoke();
+    create.request_revoke();
+    assert!(read.is_draining());
+    assert!(create.grant.is_draining());
+    drop(receipt);
+    read.wait_drained().await;
+    create.wait_drained().await;
+    assert!(!read.is_draining());
+    assert!(!create.grant.is_draining());
 }

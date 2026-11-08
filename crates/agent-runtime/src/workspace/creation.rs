@@ -1,6 +1,6 @@
 //! Trusted-host create-only capability. Ordinary WorkspaceGrant cannot be
 //! converted to this type, and it is never constructed from model arguments.
-//! Model-loop and OS-consent integration remain separate from this boundary.
+//! Agent-loop negotiation is explicit; OS-consent remains a host responsibility.
 use super::*;
 mod consent;
 mod intents;
@@ -52,6 +52,16 @@ pub struct CreateFileGrant {
     epoch: i64,
 }
 impl CreateFileGrant {
+    pub fn owner(&self) -> &str {
+        self.grant.owner()
+    }
+    pub fn policy(&self) -> &str {
+        self.grant.policy()
+    }
+    pub fn resource_identity(&self) -> &str {
+        self.grant.resource_identity()
+    }
+
     pub fn consent_id(&self) -> &str {
         &self.consent_id
     }
@@ -84,6 +94,7 @@ pub enum CreateFileError {
 struct Publication {
     result: CreatedFile,
     _permit: Permit,
+    _read_permit: Option<Permit>,
 }
 impl Journal {
     /// Complete response -> exact approval -> durable dispatch -> atomic new
@@ -93,6 +104,31 @@ impl Journal {
         grant: &CreateFileGrant,
         op: &Operation<'_>,
         args: CreateFileArgs,
+    ) -> Result<CreatedFile, CreateFileError> {
+        self.create_file_guarded(grant, op, args, None).await
+    }
+    pub(crate) async fn create_file_for_agent(
+        &mut self,
+        grant: &CreateFileGrant,
+        op: &Operation<'_>,
+        args: CreateFileArgs,
+        read: &WorkspaceGrant,
+    ) -> Result<CreatedFile, CreateFileError> {
+        if read.resource_identity() != grant.resource_identity() {
+            return Err(WorkspaceError::EnvironmentChanged.into());
+        }
+        let read_permit = read
+            .permit(op.owner, read.environment(), op.policy_version)
+            .await?;
+        self.create_file_guarded(grant, op, args, Some(read_permit))
+            .await
+    }
+    async fn create_file_guarded(
+        &mut self,
+        grant: &CreateFileGrant,
+        op: &Operation<'_>,
+        args: CreateFileArgs,
+        read_permit: Option<Permit>,
     ) -> Result<CreatedFile, CreateFileError> {
         validate_binding(grant, op, &args)?;
         self.validate_creation_consent(grant)?;
@@ -142,14 +178,17 @@ impl Journal {
                 .as_secs(),
         )
         .map_err(|_| WorkspaceError::Invalid)?;
-        self.claim(op, now)?;
+        if read_permit.as_ref().is_some_and(|p| p.inner.is_revoked()) {
+            return Err(WorkspaceError::Revoked.into());
+        }
+        self.claim_with_runtime_step(op, now, true)?;
         let mut cancellation = CancellationGuard {
             inner: permit.inner.clone(),
             finished: false,
         };
         let work = tokio::task::spawn_blocking(move || {
             let _slot = slot;
-            publish(permit, args)
+            publish(permit, read_permit, args)
         });
         let result = tokio::time::timeout(grant.grant.inner.deadline, work).await;
         let result = match result {
@@ -158,18 +197,26 @@ impl Journal {
         };
         match result {
             Ok(receipt) => {
-                if grant.grant.is_revoked() {
+                if grant.grant.is_revoked()
+                    || receipt
+                        ._read_permit
+                        .as_ref()
+                        .is_some_and(|p| p.inner.is_revoked())
+                {
                     return Err(CreateFileError::Unknown);
                 }
                 let digest = request_digest("created-file.v1", &receipt.result)
                     .map_err(|_| JournalError::Invalid)?;
                 let body =
                     serde_json::to_string(&receipt.result).map_err(|_| JournalError::Invalid)?;
+                let model =
+                    serde_json::to_string(&json!({"kind":"write_file","data":receipt.result}))
+                        .map_err(|_| JournalError::Invalid)?;
                 let tx = self
                     .connection
                     .transaction_with_behavior(TransactionBehavior::Immediate)
                     .map_err(|_| CreateFileError::Unknown)?;
-                if tx.execute("UPDATE operations SET state='succeeded',result_digest=?,result_json=? WHERE operation_id=? AND owner=? AND state='dispatching' AND EXISTS(SELECT 1 FROM runs WHERE run_id=? AND active=1)",params![digest,body,op.id,op.owner,op.run]).map_err(|_| CreateFileError::Unknown)?!=1{return Err(CreateFileError::Unknown);}
+                if tx.execute("UPDATE operations SET state='succeeded',result_digest=?,result_json=?,model_result=? WHERE operation_id=? AND owner=? AND state='dispatching' AND EXISTS(SELECT 1 FROM runs WHERE run_id=? AND active=1)",params![digest,body,model,op.id,op.owner,op.run]).map_err(|_| CreateFileError::Unknown)?!=1{return Err(CreateFileError::Unknown);}
                 tx.execute("INSERT INTO events(run_id,operation_id,kind) VALUES(?,?,'operation.succeeded')",params![op.run,op.id]).map_err(|_| CreateFileError::Unknown)?;
                 tx.commit().map_err(|_| CreateFileError::Unknown)?;
                 cancellation.finished = true;
@@ -181,7 +228,7 @@ impl Journal {
                     .connection
                     .transaction_with_behavior(TransactionBehavior::Immediate)
                     .map_err(JournalError::from)?;
-                tx.execute("UPDATE operations SET state='failed',error_code='CREATE_REJECTED' WHERE operation_id=? AND state='dispatching'",[op.id]).map_err(JournalError::from)?;
+                tx.execute("UPDATE operations SET state='failed',error_code='CREATE_REJECTED',model_result='{\"error\":\"create_rejected\"}' WHERE operation_id=? AND state='dispatching'",[op.id]).map_err(JournalError::from)?;
                 tx.execute(
                     "INSERT INTO events(run_id,operation_id,kind) VALUES(?,?,'operation.failed')",
                     params![op.run, op.id],
@@ -216,8 +263,12 @@ fn verify_written(file: &mut std::fs::File, expected: &str) -> Result<(), Create
     }
     Ok(())
 }
-fn publish(permit: Permit, args: CreateFileArgs) -> Result<Publication, CreateFileError> {
-    if permit.inner.is_revoked() {
+fn publish(
+    permit: Permit,
+    read_permit: Option<Permit>,
+    args: CreateFileArgs,
+) -> Result<Publication, CreateFileError> {
+    if permit.inner.is_revoked() || read_permit.as_ref().is_some_and(|p| p.inner.is_revoked()) {
         return Err(WorkspaceError::Revoked.into());
     }
     let parts = components(&args.path, false)?;
@@ -253,7 +304,7 @@ fn publish(permit: Permit, args: CreateFileArgs) -> Result<Publication, CreateFi
             return Err(CreateFileError::Unknown);
         }
 
-        if permit.inner.is_revoked() {
+        if permit.inner.is_revoked() || read_permit.as_ref().is_some_and(|p| p.inner.is_revoked()) {
             return Err(WorkspaceError::Revoked.into());
         }
         #[cfg(any(target_vendor = "apple", target_os = "linux", target_os = "android"))]
@@ -290,7 +341,7 @@ fn publish(permit: Permit, args: CreateFileArgs) -> Result<Publication, CreateFi
             .into_std_file()
             .sync_all()
             .map_err(|_| CreateFileError::Unknown)?;
-        if permit.inner.is_revoked() {
+        if permit.inner.is_revoked() || read_permit.as_ref().is_some_and(|p| p.inner.is_revoked()) {
             return Err(CreateFileError::Unknown);
         }
         Ok(CreatedFile {
@@ -308,8 +359,13 @@ fn publish(permit: Permit, args: CreateFileArgs) -> Result<Publication, CreateFi
     result.map(|result| Publication {
         result,
         _permit: permit,
+        _read_permit: read_permit,
     })
 }
 
 #[cfg(test)]
 mod tests;
+
+pub fn definition() -> ToolDefinition {
+    ToolDefinition{name:"write_file".into(),description:"Create one new UTF-8 file in the explicitly create-authorized workspace, after separate exact user approval. Existing files are never replaced and parent directories must exist. Content is limited to65536 UTF-8 bytes; no NUL, credentials or protected paths.".into(),parameters:json!({"type":"object","properties":{"path":{"type":"string","minLength":1,"maxLength":4096},"content":{"type":"string","maxLength":65536}},"required":["path","content"],"additionalProperties":false})}
+}

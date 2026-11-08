@@ -64,6 +64,7 @@ pub enum WorkspaceError {
 #[serde(tag = "tool", content = "arguments", rename_all = "snake_case")]
 pub enum WorkspaceRequest {
     ReadFile(ReadFileArgs),
+    WriteFile(creation::CreateFileArgs),
     ListDirectory(ListDirectoryArgs),
     SearchFiles(SearchFilesArgs),
     SearchText(SearchTextArgs),
@@ -77,6 +78,9 @@ impl WorkspaceRequest {
         let raw = serde_json::to_string(value).map_err(|_| WorkspaceError::Invalid)?;
         let normalized = canonical_tool_arguments(&raw).map_err(|_| WorkspaceError::Invalid)?;
         let request = match name {
+            "write_file" => Self::WriteFile(
+                serde_json::from_slice(&normalized).map_err(|_| WorkspaceError::Invalid)?,
+            ),
             "read_file" => Self::ReadFile(
                 serde_json::from_slice(&normalized).map_err(|_| WorkspaceError::Invalid)?,
             ),
@@ -97,6 +101,7 @@ impl WorkspaceRequest {
     pub fn name(&self) -> &'static str {
         match self {
             Self::ReadFile(_) => "read_file",
+            Self::WriteFile(_) => "write_file",
             Self::ListDirectory(_) => "list_directory",
             Self::SearchFiles(_) => "search_files",
             Self::SearchText(_) => "search_text",
@@ -105,6 +110,7 @@ impl WorkspaceRequest {
     pub fn version(&self) -> &'static str {
         match self {
             Self::ReadFile(_) => "read_file.v1",
+            Self::WriteFile(_) => "write_file.v1",
             Self::ListDirectory(_) => "list_directory.v1",
             Self::SearchFiles(_) => "search_files.v1",
             Self::SearchText(_) => "search_text.v1",
@@ -115,6 +121,7 @@ impl WorkspaceRequest {
     }
     pub fn validate(&self) -> Result<(), WorkspaceError> {
         match self {
+            Self::WriteFile(args) => args.validate()?,
             Self::SearchText(args) => {
                 components(&args.path, true)?;
                 search::validate_glob(args.glob.as_deref().unwrap_or("**/*"))?;
@@ -403,6 +410,9 @@ impl WorkspaceGrant {
         request: WorkspaceRequest,
     ) -> Result<PreparedTool, WorkspaceError> {
         request.validate()?;
+        if matches!(request, WorkspaceRequest::WriteFile(_)) {
+            return Err(WorkspaceError::Forbidden);
+        }
         if self.is_revoked() {
             return Err(WorkspaceError::Revoked);
         }
@@ -455,6 +465,7 @@ impl PreparedTool {
                 return Err(WorkspaceError::Revoked);
             }
             let result = match request {
+                WorkspaceRequest::WriteFile(_) => return Err(WorkspaceError::Forbidden),
                 WorkspaceRequest::ReadFile(args) => {
                     WorkspaceResult::ReadFile(read_file(&permit.inner.directory, &args)?)
                 }

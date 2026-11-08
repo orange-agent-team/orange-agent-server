@@ -274,7 +274,7 @@ impl Journal {
         tx.commit().map_err(JournalError::from)?;
         self.creation_consent(owner, id)
     }
-    pub(super) fn validate_creation_consent(
+    pub(crate) fn check_creation_permission(
         &self,
         grant: &CreateFileGrant,
     ) -> Result<(), CreateFileError> {
@@ -282,6 +282,13 @@ impl Journal {
         if !valid || grant.grant.is_revoked() {
             return Err(WorkspaceError::Revoked.into());
         }
+        Ok(())
+    }
+    pub(crate) fn validate_creation_consent(
+        &self,
+        grant: &CreateFileGrant,
+    ) -> Result<(), CreateFileError> {
+        self.check_creation_permission(grant)?;
         if self.creation_quarantined(grant.grant.owner(), grant.grant.resource_identity())? {
             return Err(CreateFileError::Unknown);
         }

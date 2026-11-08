@@ -164,9 +164,15 @@ impl Journal {
             tool_calls: vec![],
             tool_call_id: Some(call_id),
         });
-        make_request(&stored.config, "answer-validation", messages.clone(), true)
-            .validate()
-            .map_err(|_| EngineError::Invalid)?;
+        make_request_mode(
+            &stored.config,
+            "answer-validation",
+            messages.clone(),
+            true,
+            stored.creation.is_some(),
+        )
+        .validate()
+        .map_err(|_| EngineError::Invalid)?;
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
