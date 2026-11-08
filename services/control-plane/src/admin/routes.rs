@@ -12,6 +12,8 @@ use serde_json::{Value, json};
 use sqlx::Row;
 use std::sync::Arc;
 
+mod audit;
+
 pub fn router(identity: AdminIdentity) -> Router {
     Router::new()
         .route("/admin/v1/auth/start", get(start))
@@ -19,7 +21,13 @@ pub fn router(identity: AdminIdentity) -> Router {
         .route("/admin/v1/auth/step-up", post(step_up))
         .route("/admin/v1/session", get(session).delete(logout))
         .route("/admin/v1/session/revocation", get(revocation_context))
+        .route(
+            "/admin/v1/session/permissions",
+            get(audit::scope_permissions),
+        )
         .route("/admin/v1/overview", get(overview))
+        .route("/admin/v1/audit-events", get(audit::list))
+        .route("/admin/v1/audit-events/{event_id}", get(audit::get_one))
         .route("/admin/v1/nodes/{node_id}", get(super::actions::get_node))
         .route(
             "/admin/v1/actions",
