@@ -329,6 +329,80 @@ async fn dropped_handle_still_joins_model_and_persists_cleanup() {
     f.objects.drain().await.expect("drain");
 }
 
+// This direct-model acceptance driver supervises startup, idle, generation and cleanup,
+// just as spawn_cpu's owner does while its separate engine future is starting.
+// A slow startup/HTTP call cannot be treated as a fast gap between renewals.
+struct LongLeaseDriver<'a> {
+    connection: &'a mut ControlConnection,
+    node: &'a mut NodeJournal,
+    journal: &'a mut ExecutionJournal,
+    broker: &'a mut Broker,
+    supervisor: &'a Supervisor,
+    grant: &'a Grant,
+    command: &'a str,
+    renewals: usize,
+    next_renewal: tokio::time::Instant,
+}
+impl LongLeaseDriver<'_> {
+    async fn drive<F: std::future::Future>(&mut self, operation: F) -> F::Output {
+        tokio::pin!(operation);
+        let mut tick = tokio::time::interval(Duration::from_secs(1));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut completed = None;
+        loop {
+            if tokio::time::Instant::now() >= self.next_renewal {
+                let pending = self
+                    .connection
+                    .prepare_renewal(self.journal, self.command)
+                    .expect("prepare live renewal");
+                let reply = {
+                    let connection = &mut *self.connection;
+                    let node = &mut *self.node;
+                    let exchange = async {
+                        assert!(
+                            connection
+                                .heartbeat_node_control("long-cpu", node)
+                                .await
+                                .expect("heartbeat during wait")
+                                .is_empty()
+                        );
+                        connection
+                            .renew_execution(pending)
+                            .await
+                            .expect("actual renewal during wait")
+                    };
+                    tokio::pin!(exchange);
+                    loop {
+                        tokio::select! {
+                            biased;
+                            _=tick.tick()=>self.broker.renew(self.supervisor,self.grant,None).expect("local supervision during network/startup"),
+                            reply=&mut exchange=>break reply,
+                            value=&mut operation,if completed.is_none()=>completed=Some(value),
+                        }
+                    }
+                };
+                self.connection
+                    .confirm_renewal(self.journal, self.broker, self.supervisor, reply)
+                    .expect("confirmed cloud renewal");
+                self.renewals += 1;
+                self.next_renewal = tokio::time::Instant::now() + Duration::from_secs(10);
+                // Never abandon an in-flight renewal just because the model
+                // future completed first; finish its durable confirmation.
+                if let Some(value) = completed.take() {
+                    return value;
+                }
+            } else {
+                tokio::select! {
+                    biased;
+                    _=tick.tick()=>self.broker.renew(self.supervisor,self.grant,None).expect("local supervision while waiting"),
+                    value=&mut operation=>return value,
+                    _=tokio::time::sleep_until(self.next_renewal)=>{},
+                }
+            }
+        }
+    }
+}
+
 #[tokio::test]
 async fn actual_owned_model_remains_authorized_beyond_original_lease_then_generates() {
     // The real engine is deliberately held idle while renewal/supervision run;
@@ -359,71 +433,82 @@ async fn actual_owned_model_remains_authorized_beyond_original_lease_then_genera
     let request = c
         .fetch_model_input(&mut j, &started, &record.command_id)
         .await
-        .expect("actual input");
-    let original = assignment(&f)
-        .await
-        .lease
-        .expect("lease")
-        .expires_at
-        .expect("expires")
-        .seconds;
+        .expect("actual input before engine ownership");
     let root = runtime();
     let (_cancel, receiver) = tokio::sync::watch::channel(false);
-    let mut model = orange_model_runtime::supervisor::ManagedCpuModel::launch_from_host(
-        root.path(),
-        p,
-        receiver.clone(),
-        Some(Uuid::new_v4().to_string()),
-    )
-    .await
-    .expect("actual owned engine");
-    let until = tokio::time::Instant::now() + Duration::from_secs(48);
-    let mut next = tokio::time::Instant::now();
-    let mut renewals = 0;
-    while tokio::time::Instant::now() < until {
-        b.renew(&s, &grant, None).expect("local supervision");
-        assert!(
-            c.heartbeat_node_control("long-cpu", &mut n)
-                .await
-                .expect("heartbeat")
-                .is_empty()
-        );
-        if tokio::time::Instant::now() >= next {
-            let pending = c
-                .prepare_renewal(&mut j, &record.command_id)
-                .expect("prepare");
-            let reply = c.renew_execution(pending).await.expect("live renewal");
-            c.confirm_renewal(&mut j, &mut b, &s, reply)
-                .expect("Broker renewal");
-            renewals += 1;
-            next = tokio::time::Instant::now() + Duration::from_secs(10);
-        }
-        tokio::time::sleep(Duration::from_secs(2)).await;
-    }
-    let now: i64 =
-        sqlx::query_scalar("SELECT floor(extract(epoch FROM clock_timestamp()))::bigint")
-            .fetch_one(f.d.store.pool())
+    {
+        let mut driver = LongLeaseDriver {
+            connection: &mut c,
+            node: &mut n,
+            journal: &mut j,
+            broker: &mut b,
+            supervisor: &s,
+            grant: &grant,
+            command: &record.command_id,
+            renewals: 0,
+            next_renewal: tokio::time::Instant::now(),
+        };
+        let original = driver
+            .drive(assignment(&f))
+            .await
+            .lease
+            .expect("immutable assigned lease")
+            .expires_at
+            .expect("original expiry")
+            .seconds;
+        let startup = async {
+            // Deliberately exceed the unchanged15-second local supervision
+            // window while startup is pending. This makes the prior gap fail
+            // deterministically instead of depending on host build load.
+            tokio::time::sleep(Duration::from_secs(17)).await;
+            orange_model_runtime::supervisor::ManagedCpuModel::launch_from_host(
+                root.path(),
+                p,
+                receiver.clone(),
+                Some(Uuid::new_v4().to_string()),
+            )
+            .await
+        };
+        let mut model = driver
+            .drive(startup)
+            .await
+            .expect("actual owned engine after supervised startup");
+        let before_idle = driver.renewals;
+        driver
+            .drive(tokio::time::sleep(Duration::from_secs(48)))
+            .await;
+        let now = driver
+            .drive(
+                sqlx::query_scalar::<_, i64>(
+                    "SELECT floor(extract(epoch FROM clock_timestamp()))::bigint",
+                )
+                .fetch_one(f.d.store.pool()),
+            )
             .await
             .expect("actual clock");
-    assert!(
-        now > original,
-        "must exceed original immutable lease expiry"
-    );
-    assert!(renewals >= 4);
-    b.renew(&s, &grant, None)
-        .expect("not expired locally after original lease");
-    let result = model
-        .client()
-        .expect("ready")
-        .generate(&request, receiver)
-        .await;
-    model
-        .shutdown()
-        .await
-        .expect("owned exit even if generation failed");
-    assert_eq!(model.record().phase, "stopped");
-    let result = result.expect("actual post-original-deadline generation");
-    assert!(!result.text.trim().is_empty());
+        assert!(
+            now > original,
+            "must exceed original immutable lease expiry"
+        );
+        assert!(
+            driver.renewals - before_idle >= 4,
+            "the48-second idle phase retains its original renewal assertion"
+        );
+        driver
+            .broker
+            .renew(driver.supervisor, driver.grant, None)
+            .expect("not expired locally after original lease");
+        let result = driver
+            .drive(model.client().expect("ready").generate(&request, receiver))
+            .await;
+        driver
+            .drive(model.shutdown())
+            .await
+            .expect("owned exit even if generation failed");
+        assert_eq!(model.record().phase, "stopped");
+        let result = result.expect("actual post-original-deadline generation");
+        assert!(!result.text.trim().is_empty());
+    }
     let lease = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -595,10 +680,6 @@ async fn changed_policy_without_command_stops_model_without_inventing_applicatio
     assert!(exit.report.cleanup_confirmed);
     assert!(exit.report.node_policy.is_none());
     assert_eq!(
-        exit.report.node_policy_error.as_deref(),
-        Some("POLICY_AUTHORITY_UNCONFIRMED")
-    );
-    assert_eq!(
         exit.resources
             .broker
             .node_policy()
@@ -619,12 +700,78 @@ async fn changed_policy_without_command_stops_model_without_inventing_applicatio
             fencing_token: 99,
         }),
     };
-    assert!(matches!(
-        exit.resources
-            .broker
-            .acquire(&exit.resources.supervisor, &request),
-        Err(BrokerError::RemoteDisabled)
-    ));
+    match exit.report.node_policy_error.as_deref() {
+        Some("POLICY_AUTHORITY_UNCONFIRMED") => {
+            // Heartbeat observed the generation change, but no authenticated
+            // command exists. Preserve the original explicit-policy assertions.
+            assert_eq!(
+                exit.report.node_policy_error.as_deref(),
+                Some("POLICY_AUTHORITY_UNCONFIRMED")
+            );
+            assert!(matches!(
+                exit.resources
+                    .broker
+                    .acquire(&exit.resources.supervisor, &request),
+                Err(BrokerError::RemoteDisabled)
+            ));
+        }
+        None => {
+            // The policy may change after a heartbeat and before the separate
+            // input/renewal authority check. That rejection invalidates the
+            // entire ControlConnection; it is not proof of a node-wide policy.
+            // In particular, customer input revocation must not be interpreted
+            // as permission to disable the provider's whole contribution.
+            assert!(
+                !exit.resources.connection.is_current_locally(),
+                "unconfirmed authority must not survive as a usable connection"
+            );
+            let before = exit
+                .resources
+                .broker
+                .slot("cpu")
+                .expect("actual slot")
+                .state;
+            assert!(matches!(
+                exit.resources.connection.reserve_execution(
+                    &mut exit.resources.journal,
+                    &mut exit.resources.broker,
+                    &exit.resources.supervisor,
+                    "cpu",
+                    "future-untrusted-command"
+                ),
+                Err(orange_worker::control::ControlError::Stale)
+            ));
+            assert!(matches!(
+                exit.resources
+                    .connection
+                    .authorize_execution(
+                        &mut exit.resources.journal,
+                        &mut exit.resources.node_journal,
+                        "missing-policy-command",
+                        "future-untrusted-command"
+                    )
+                    .await,
+                Err(orange_worker::control::ControlError::Stale)
+            ));
+            assert!(
+                exit.resources
+                    .journal
+                    .record("future-untrusted-command")
+                    .expect("journal")
+                    .is_none()
+            );
+            assert_eq!(
+                exit.resources
+                    .broker
+                    .slot("cpu")
+                    .expect("unchanged slot")
+                    .state,
+                before,
+                "denied execution must not reserve the resource"
+            );
+        }
+        other => panic!("unexpected policy result: {other:?}"),
+    }
     exit.resources.connection.close();
     server.stop().await;
     f.objects.drain().await.expect("drain");
