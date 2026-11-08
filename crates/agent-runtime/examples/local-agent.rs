@@ -211,9 +211,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         None
     };
     let mut journal = Journal::open(&config.journal)?;
-    for root in &private {
-        journal.reserve_private_directory(root)?;
-    }
+    // Configured exclusions may include readonly model assets, not writable
+    // private state namespaces. WorkspaceGrant already rejects overlap with
+    // every exclusion; creation must match that independently checked resource.
     if args[2] == "authorize-create" {
         if args.len() != 4 {
             return Err("explicit create consent request ID required".into());
@@ -224,6 +224,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             &config.run.policy,
             &config.workspace,
         )?;
+        if create.resource_identity() != grant.resource_identity() {
+            create.request_revoke();
+            journal.revoke_file_creation(
+                &config.run.owner,
+                create.consent_id(),
+                &create.consent_version(),
+            )?;
+            return Err("workspace identity changed during create authorization".into());
+        }
         println!(
             "{}",
             serde_json::to_string_pretty(

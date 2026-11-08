@@ -88,12 +88,15 @@ try:
         private, workspace = base / 'private', base / 'workspace'
         private.mkdir(mode=0o700)
         workspace.mkdir()
+        assets = base / 'excluded-model-assets'
+        assets.mkdir(mode=0o755)
+        assets.chmod(0o755)
         (workspace / 'source.txt').write_text(proof)
         key = private / 'key'
         key.write_text(key_value)
         key.chmod(0o600)
         config_path, database = private / 'config.json', private / 'journal.sqlite'
-        config = {'run': {'owner': 'create-owner', 'run_id': 'create-run', 'policy': 'fixture-policy', 'environment': 'pending', 'model_version': 'create-fixture', 'max_steps': 12, 'max_invocations': 6, 'max_output_tokens': 512, 'deadline_unix': int(time.time()) + 120}, 'grant_id': 'read-grant', 'workspace': str(workspace), 'journal': str(database), 'private_roots': [str(private)], 'model_endpoint': 'http://127.0.0.1:' + str(server.server_port) + '/', 'model_key_file': str(key), 'context_tokens': 2048, 'prompt': 'Read source.txt and propose a new file after separate approval'}
+        config = {'run': {'owner': 'create-owner', 'run_id': 'create-run', 'policy': 'fixture-policy', 'environment': 'pending', 'model_version': 'create-fixture', 'max_steps': 12, 'max_invocations': 6, 'max_output_tokens': 512, 'deadline_unix': int(time.time()) + 120}, 'grant_id': 'read-grant', 'workspace': str(workspace), 'journal': str(database), 'private_roots': [str(private), str(assets)], 'model_endpoint': 'http://127.0.0.1:' + str(server.server_port) + '/', 'model_key_file': str(key), 'context_tokens': 2048, 'prompt': 'Read source.txt and propose a new file after separate approval'}
         def save():
             config_path.write_text(json.dumps(config))
             config_path.chmod(0o600)
@@ -105,6 +108,13 @@ try:
             if result.returncode:
                 raise RuntimeError('CLI ' + command + ' failed: ' + result.stderr[:500])
             return json.loads(result.stdout)
+        save()
+        # An exclusion is not necessarily a writable private state directory.
+        # Broad root selection must still fail even before durable consent.
+        config['workspace'] = str(base)
+        save()
+        invoke('grant-info', failed=True)
+        config['workspace'] = str(workspace)
         save()
         config['run']['environment'] = invoke('grant-info')['environment']
         save()
