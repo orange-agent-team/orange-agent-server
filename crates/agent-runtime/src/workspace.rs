@@ -1,5 +1,6 @@
 //! Explicit directory capabilities for TK-01/TK-02/TK-03. Never an ambient path or command executor.
 pub mod creation;
+pub mod patch;
 mod search;
 mod text_search;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
