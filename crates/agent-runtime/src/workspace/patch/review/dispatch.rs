@@ -98,7 +98,7 @@ impl Journal {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(JournalError::from)?;
         let (count, bytes): (i64, i64) = tx.query_row(
-            "SELECT count(*),coalesce(sum(reserved_bytes),0) FROM editing_publications WHERE resource_identity=?",
+            "SELECT count(*),coalesce(sum(p.reserved_bytes),0) FROM editing_publications p WHERE p.resource_identity=? AND NOT EXISTS(SELECT 1 FROM patch_retention_archives a WHERE a.operation_id=p.operation_id)",
             [edit.resource_identity()], |r| Ok((r.get(0)?,r.get(1)?)),
         ).map_err(JournalError::from)?;
         if count >= MAX_PUBLICATIONS
