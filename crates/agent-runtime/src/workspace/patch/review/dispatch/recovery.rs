@@ -3,6 +3,8 @@
 use super::*;
 #[cfg(target_vendor = "apple")]
 pub mod inspection;
+#[cfg(target_vendor = "apple")]
+pub mod resolution;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]

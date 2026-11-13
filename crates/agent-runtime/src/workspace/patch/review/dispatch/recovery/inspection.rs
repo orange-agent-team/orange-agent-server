@@ -18,12 +18,13 @@ pub enum RecoveryFileObservation {
         bytes: String,
         sha256: String,
         security_sha256: String,
+        object_digest: String,
         reviewed_original_inode: bool,
         matches_original_content: bool,
         matches_result_content: bool,
     },
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PatchRecoverySnapshot {
     pub journal: PublicationRecoveryView,
     pub target: RecoveryFileObservation,
@@ -55,7 +56,7 @@ fn check_name(name: &str, prefix: &str) -> Result<(), PatchError> {
     }
     Ok(())
 }
-fn observe(
+pub(super) fn observe(
     parent: &Dir,
     name: &str,
     reviewed: &SourceIdentity,
@@ -100,9 +101,14 @@ fn observe(
         return Err(PatchError::VersionChanged);
     }
     let sha256 = hex::encode(sha2::Sha256::digest(&bytes));
+    let mut secured_identity = before.clone();
+    secured_identity.bind_security(security.digest());
+    let object_digest = request_digest("patch-recovery-object.v1", &secured_identity)
+        .map_err(|_| PatchError::Invalid)?;
     Ok(RecoveryFileObservation::Regular {
         bytes: bytes.len().to_string(),
         security_sha256: hex::encode(security.digest()),
+        object_digest,
         reviewed_original_inode: reviewed.same_inode(&before),
         matches_original_content: sha256 == plan.original_sha256,
         matches_result_content: sha256 == plan.result_sha256,

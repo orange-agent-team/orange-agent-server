@@ -434,9 +434,9 @@ pub(crate) fn quarantined(
     resource: &str,
 ) -> Result<bool, rusqlite::Error> {
     connection.query_row("SELECT EXISTS(
-      SELECT 1 FROM operations o LEFT JOIN run_workspaces rw USING(run_id) LEFT JOIN local_workspaces w USING(workspace_id) WHERE o.owner=?1 AND o.state IN('unknown','dispatching') AND (w.resource_identity=?2 OR rw.workspace_id IS NULL)
+      SELECT 1 FROM operations o LEFT JOIN run_workspaces rw USING(run_id) LEFT JOIN local_workspaces w USING(workspace_id) WHERE o.owner=?1 AND o.state IN('unknown','dispatching') AND NOT(o.state='unknown' AND o.tool_version='apply_patch.v1' AND EXISTS(SELECT 1 FROM patch_recovery_resolutions solved WHERE solved.operation_id=o.operation_id)) AND (w.resource_identity=?2 OR rw.workspace_id IS NULL)
       UNION SELECT 1 FROM runtime_invocations i JOIN runs r USING(run_id) LEFT JOIN run_workspaces rw USING(run_id) LEFT JOIN local_workspaces w USING(workspace_id) WHERE r.owner=?1 AND i.state IN('unknown','dispatched') AND (w.resource_identity=?2 OR rw.workspace_id IS NULL)
-      UNION SELECT 1 FROM operations o JOIN editing_consents c ON c.environment=o.environment WHERE c.owner=?1 AND o.owner=?1 AND c.resource_identity=?2 AND o.state IN('unknown','dispatching')
+      UNION SELECT 1 FROM operations o JOIN editing_consents c ON c.environment=o.environment WHERE c.owner=?1 AND o.owner=?1 AND c.resource_identity=?2 AND o.state IN('unknown','dispatching') AND NOT(o.state='unknown' AND o.tool_version='apply_patch.v1' AND EXISTS(SELECT 1 FROM patch_recovery_resolutions solved WHERE solved.operation_id=o.operation_id))
       UNION SELECT 1 FROM runtime_runs rr JOIN runs r USING(run_id) LEFT JOIN run_workspaces rw USING(run_id) LEFT JOIN local_workspaces w USING(workspace_id) WHERE r.owner=?1 AND rr.phase='recovery_required' AND (w.resource_identity=?2 OR rw.workspace_id IS NULL))",params![owner,resource],|r|r.get(0))
 }
 

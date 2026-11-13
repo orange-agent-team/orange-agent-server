@@ -74,7 +74,7 @@ impl Journal {
         {
             return Ok(true);
         }
-        self.connection.query_row("SELECT EXISTS(SELECT 1 FROM operations o JOIN editing_consents c ON c.environment=o.environment WHERE c.owner=? AND c.resource_identity=? AND o.state IN('dispatching','unknown'))",params![owner,resource],|r|r.get(0)).map_err(|e|JournalError::from(e).into())
+        self.connection.query_row("SELECT EXISTS(SELECT 1 FROM operations o JOIN editing_consents c ON c.environment=o.environment WHERE c.owner=? AND c.resource_identity=? AND o.state IN('dispatching','unknown') AND NOT(o.state='unknown' AND o.tool_version='apply_patch.v1' AND EXISTS(SELECT 1 FROM patch_recovery_resolutions solved WHERE solved.operation_id=o.operation_id)))",params![owner,resource],|r|r.get(0)).map_err(|e|JournalError::from(e).into())
     }
     /// Trusted explicit edit consent, separate from readonly/create-only access and
     /// from per-operation approval. Repeating a revoked request never revives it.
