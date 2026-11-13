@@ -288,6 +288,18 @@ impl Journal {
         self.live_patch_dispatch(edit, read, token)?;
         hook(7)?;
         self.live_patch_dispatch(edit, read, token)?;
+        named_file(&parent, name, &staged)?;
+        named_file(&parent, &plan.backup_name, &original)?;
+        verify_bytes(&mut staged, &plan.result_sha256)?;
+        verify_bytes(&mut original, &plan.original_sha256)?;
+        let retained_identity = inspected(&parent, &original)?;
+        let result_identity = inspected(&parent, &staged)?;
+        if !actual.matches_after_rename(&retained_identity)
+            || orange_platform_files::security_metadata(&staged).map_err(io_error)? != security
+            || directory_identity(&open_directory(root, parents)?)? != directory_identity(&parent)?
+        {
+            return Err(PatchError::VersionChanged);
+        }
         let receipt = PublishedPatch {
             path: plan.path.clone(),
             original_sha256: plan.original_sha256.clone(),
@@ -298,6 +310,25 @@ impl Journal {
         let body = serde_json::to_string(&receipt).map_err(|_| PatchError::Invalid)?;
         let digest =
             request_digest("published-patch.v1", &receipt).map_err(|_| PatchError::Invalid)?;
+        let edge = super::super::lineage::VersionEdge {
+            operation_id: plan.operation_id.clone(),
+            owner: record.owner.clone(),
+            run: record.run.clone(),
+            policy: record.policy.clone(),
+            read_environment: record.read_environment.clone(),
+            resource: read.resource_identity().into(),
+            path: plan.path.clone(),
+            preview_digest: plan.preview_digest.clone(),
+            receipt_digest: digest.clone(),
+            original_sha256: plan.original_sha256.clone(),
+            result_sha256: plan.result_sha256.clone(),
+            retained_name: plan.backup_name.clone(),
+            before: actual,
+            retained: retained_identity,
+            after: result_identity,
+        };
+        let edge_body = serde_json::to_string(&edge).map_err(|_| PatchError::Invalid)?;
+        let edge_digest = edge.digest()?;
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -311,6 +342,12 @@ impl Journal {
         tx.execute(
             "INSERT INTO events(run_id,operation_id,kind) VALUES(?,?,'operation.succeeded')",
             params![record.run, plan.operation_id],
+        )
+        .map_err(JournalError::from)?;
+        let event_seq = tx.last_insert_rowid();
+        tx.execute(
+            "INSERT INTO patch_version_edges(operation_id,event_seq,body,digest) VALUES(?,?,?,?)",
+            params![plan.operation_id, event_seq, edge_body, edge_digest],
         )
         .map_err(JournalError::from)?;
         if !token.has_live_directory_access() {

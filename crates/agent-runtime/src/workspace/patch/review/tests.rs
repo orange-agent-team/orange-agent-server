@@ -3,19 +3,22 @@ use crate::{ResponseAuthority, storage::private_temp};
 use orange_domain::ExecutionIdentity;
 use orange_protocol::model::ToolCall;
 use std::fs;
-pub(super) struct Fixture {
-    pub(super) private: tempfile::TempDir,
-    pub(super) root: tempfile::TempDir,
-    pub(super) read: WorkspaceGrant,
-    pub(super) args: PatchArgs,
+pub(in crate::workspace::patch) struct Fixture {
+    pub(in crate::workspace::patch) private: tempfile::TempDir,
+    pub(in crate::workspace::patch) root: tempfile::TempDir,
+    pub(in crate::workspace::patch) read: WorkspaceGrant,
+    pub(in crate::workspace::patch) args: PatchArgs,
 }
 impl Fixture {
-    pub(super) fn new() -> Self {
+    pub(in crate::workspace::patch) fn new() -> Self {
         let private = private_temp();
         let root = tempfile::tempdir().expect("root");
         Self::with_dirs(private, root)
     }
-    pub(super) fn with_dirs(private: tempfile::TempDir, root: tempfile::TempDir) -> Self {
+    pub(in crate::workspace::patch) fn with_dirs(
+        private: tempfile::TempDir,
+        root: tempfile::TempDir,
+    ) -> Self {
         fs::write(root.path().join("file.txt"), b"old\n").expect("source");
         let read = WorkspaceGrant::open(
             "alice",
@@ -37,14 +40,14 @@ impl Fixture {
             args,
         }
     }
-    pub(super) fn journal(&self) -> Journal {
+    pub(in crate::workspace::patch) fn journal(&self) -> Journal {
         Journal::open(&self.private.path().join("journal.sqlite")).expect("journal")
     }
-    pub(super) fn edit(&self, j: &mut Journal) -> EditFileGrant {
+    pub(in crate::workspace::patch) fn edit(&self, j: &mut Journal) -> EditFileGrant {
         j.authorize_file_edit("alice", "explicit-edit", "policy", self.root.path())
             .expect("edit consent")
     }
-    pub(super) fn response(&self, j: &Journal, body: bool) {
+    pub(in crate::workspace::patch) fn response(&self, j: &Journal, body: bool) {
         j.register_run("alice", "run", "policy").expect("run");
         let candidate = ResponseCandidate {
             response_id: "response".into(),
@@ -85,7 +88,10 @@ impl Fixture {
         }
     }
 }
-pub(super) fn op<'a>(edit: &'a EditFileGrant, digest: &'a str) -> Operation<'a> {
+pub(in crate::workspace::patch) fn op<'a>(
+    edit: &'a EditFileGrant,
+    digest: &'a str,
+) -> Operation<'a> {
     Operation {
         id: "op",
         owner: "alice",
@@ -104,7 +110,7 @@ fn count(j: &Journal, table: &str) -> i64 {
         .expect("count")
 }
 
-pub(super) async fn approved_fixture(
+pub(in crate::workspace::patch) async fn approved_fixture(
     f: &Fixture,
     j: &mut Journal,
     edit: &EditFileGrant,

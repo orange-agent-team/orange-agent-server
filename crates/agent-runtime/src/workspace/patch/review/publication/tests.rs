@@ -3,6 +3,83 @@ use super::super::tests::{Fixture, approved_fixture, op};
 use super::*;
 use std::{fs, os::unix::fs::PermissionsExt};
 
+#[tokio::test]
+async fn approved_patch_history_requires_version_aware_validation() {
+    use crate::workspace::{WorkspaceRequest, WorkspaceResult};
+    let mut f = Fixture::new();
+    f.args.patch = "@@ -1 +1 @@\n-old\n+new approved version\n".into();
+    let requests = [
+        WorkspaceRequest::parse("read_file", &serde_json::json!({"path":"file.txt"}))
+            .expect("read"),
+        WorkspaceRequest::parse("list_directory", &serde_json::json!({"path":"."})).expect("list"),
+        WorkspaceRequest::parse(
+            "search_files",
+            &serde_json::json!({"path":".","glob":"**/*"}),
+        )
+        .expect("names"),
+        WorkspaceRequest::parse(
+            "search_text",
+            &serde_json::json!({"path":".","query":"old"}),
+        )
+        .expect("text"),
+    ];
+    let mut j = f.journal();
+    let edit = f.edit(&mut j);
+    f.response(&j, true);
+    let mut before = Vec::new();
+    for (index, request) in requests.iter().enumerate() {
+        before.push(
+            crate::workspace::patch::lineage::tests::source(
+                &mut j,
+                &f,
+                "run",
+                &format!("source-{index}"),
+                request.clone(),
+            )
+            .await,
+        );
+    }
+    let digest = f.args.digest().expect("digest");
+    let operation = op(&edit, &digest);
+    approved_fixture(&f, &mut j, &edit, &operation).await;
+    let token = j
+        .begin_patch_publication(&edit, &f.read, &operation)
+        .await
+        .expect("dispatch");
+    j.publish_patch_dispatch(&edit, &f.read, token)
+        .expect("real approved patch");
+    let mut invalidated = Vec::new();
+    for (request, prior) in requests.iter().zip(&before) {
+        let current = f
+            .read
+            .execute("alice", f.read.environment(), "policy", request.clone())
+            .await
+            .expect("real current read");
+        if let WorkspaceResult::SearchFiles(result) = current.result() {
+            assert_eq!(result.paths, vec!["file.txt"]);
+            assert_eq!(result.scanned_entries, 2);
+            assert!(result.omitted_unsupported);
+        }
+        if serde_json::to_value(current.result()).expect("current result") != *prior {
+            invalidated.push(request.name());
+        }
+    }
+    assert_eq!(
+        invalidated,
+        vec!["read_file", "list_directory", "search_files", "search_text"]
+    );
+    for (index, prior) in before.iter().enumerate() {
+        let validated = j
+            .revalidate_workspace_history("alice", "run", &format!("source-{index}"), &f.read)
+            .await
+            .expect("version-aware source validation");
+        assert_eq!(
+            serde_json::to_value(validated.result()).expect("historical result"),
+            *prior
+        );
+    }
+}
+
 async fn ready(f: &Fixture) -> (Journal, EditFileGrant, PatchDispatch) {
     let mut j = f.journal();
     let edit = f.edit(&mut j);

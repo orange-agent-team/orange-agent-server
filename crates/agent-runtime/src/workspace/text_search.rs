@@ -28,14 +28,22 @@ pub(super) fn execute(
     grant: &GrantInner,
     args: &SearchTextArgs,
 ) -> Result<SearchTextResult, WorkspaceError> {
+    execute_historical(grant, args, &historical::HistoricalOverlay::default())
+}
+pub(super) fn execute_historical(
+    grant: &GrantInner,
+    args: &SearchTextArgs,
+    overlay: &historical::HistoricalOverlay,
+) -> Result<SearchTextResult, WorkspaceError> {
     let expression = compile(args)?;
-    let candidates = search::files(
+    let candidates = search::files_historical(
         grant,
         &SearchFilesArgs {
             path: args.path.clone(),
             glob: args.glob.clone().unwrap_or("**/*".into()),
             limit: Some(200),
         },
+        overlay,
     )?;
     let mut result = SearchTextResult {
         path: args.path.clone(),
@@ -55,7 +63,7 @@ pub(super) fn execute(
             result.truncated = true;
             break;
         }
-        let (bytes, sha256) = match read_bytes(
+        let (bytes, sha256) = match overlay.read(
             &grant.directory,
             &path,
             MAX_SCAN_BYTES - scanned_bytes,

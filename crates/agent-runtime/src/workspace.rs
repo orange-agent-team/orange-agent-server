@@ -1,5 +1,6 @@
 //! Explicit directory capabilities for TK-01/TK-02/TK-03. Never an ambient path or command executor.
 pub mod creation;
+mod historical;
 pub mod patch;
 mod search;
 mod text_search;
@@ -695,6 +696,31 @@ fn read_text(
 }
 fn read_file(root: &Dir, args: &ReadFileArgs) -> Result<ReadFileResult, WorkspaceError> {
     let (text, digest) = read_text(root, &args.path, MAX_FILE, args.expected_sha256.as_deref())?;
+    read_file_result(args, text, digest)
+}
+#[cfg(target_vendor = "apple")]
+fn read_file_historical(
+    root: &Dir,
+    args: &ReadFileArgs,
+    overlay: &historical::HistoricalOverlay,
+) -> Result<ReadFileResult, WorkspaceError> {
+    let (bytes, digest) = overlay
+        .read(root, &args.path, MAX_FILE, args.expected_sha256.as_deref())
+        .map_err(|error| match error {
+            WorkspaceError::FileTooLarge => WorkspaceError::Limit,
+            other => other,
+        })?;
+    let text = String::from_utf8(bytes).map_err(|_| WorkspaceError::NotText)?;
+    if text.contains('\0') {
+        return Err(WorkspaceError::NotText);
+    }
+    read_file_result(args, text, digest)
+}
+fn read_file_result(
+    args: &ReadFileArgs,
+    text: String,
+    digest: String,
+) -> Result<ReadFileResult, WorkspaceError> {
     let (start, requested_end) = if let Some(line) = args.start_line {
         line_range(&text, line, args.end_line)?
     } else {
@@ -793,21 +819,47 @@ fn list_directory(
     environment: &str,
     args: &ListDirectoryArgs,
 ) -> Result<ListDirectoryResult, WorkspaceError> {
+    list_directory_historical(
+        root,
+        environment,
+        args,
+        &historical::HistoricalOverlay::default(),
+    )
+}
+fn list_directory_historical(
+    root: &Dir,
+    environment: &str,
+    args: &ListDirectoryArgs,
+    overlay: &historical::HistoricalOverlay,
+) -> Result<ListDirectoryResult, WorkspaceError> {
     let directory = open_directory(root, &components(&args.path, true)?)?;
     let mut entries = Vec::new();
     let mut omitted = false;
     let mut scanned = 0;
+    let mut physical = 0;
     for entry in directory.entries()? {
-        scanned += 1;
-        if scanned > 10000 {
+        physical += 1;
+        if physical > 10000 + overlay.extra_scan_allowance() {
             return Err(WorkspaceError::Limit);
         }
         let entry = entry?;
         let name = entry.file_name();
         let Some(name) = name.to_str() else {
+            scanned += 1;
+            if scanned > 10000 {
+                return Err(WorkspaceError::Limit);
+            }
             omitted = true;
             continue;
         };
+        let full = historical::joined(&args.path, name);
+        if overlay.hidden(&full) {
+            continue;
+        }
+        scanned += 1;
+        if scanned > 10000 {
+            return Err(WorkspaceError::Limit);
+        }
         if !component_allowed(name) {
             omitted = true;
             continue;
@@ -827,7 +879,7 @@ fn list_directory(
             }
         }
         let size = if kind.is_file() {
-            Some(metadata.len().to_string())
+            Some(overlay.size(&full, metadata.len()).to_string())
         } else {
             None
         };

@@ -18,21 +18,21 @@ pub struct PatchReview {
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Record {
-    operation_id: String,
-    owner: String,
-    run: String,
-    invocation: String,
-    call_id: String,
-    consent_id: String,
-    consent_version: String,
-    environment: String,
-    read_environment: String,
-    policy: String,
-    args: PatchArgs,
-    preview: PatchPreview,
-    source_binding: String,
-    source_identity: SourceIdentity,
+pub(super) struct Record {
+    pub(super) operation_id: String,
+    pub(super) owner: String,
+    pub(super) run: String,
+    pub(super) invocation: String,
+    pub(super) call_id: String,
+    pub(super) consent_id: String,
+    pub(super) consent_version: String,
+    pub(super) environment: String,
+    pub(super) read_environment: String,
+    pub(super) policy: String,
+    pub(super) args: PatchArgs,
+    pub(super) preview: PatchPreview,
+    pub(super) source_binding: String,
+    pub(super) source_identity: SourceIdentity,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -367,4 +367,4 @@ impl Journal {
     }
 }
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;

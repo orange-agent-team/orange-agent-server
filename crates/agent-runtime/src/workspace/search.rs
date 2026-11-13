@@ -67,6 +67,13 @@ pub(super) fn files(
     grant: &GrantInner,
     args: &SearchFilesArgs,
 ) -> Result<SearchFilesResult, WorkspaceError> {
+    files_historical(grant, args, &historical::HistoricalOverlay::default())
+}
+pub(super) fn files_historical(
+    grant: &GrantInner,
+    args: &SearchFilesArgs,
+    overlay: &historical::HistoricalOverlay,
+) -> Result<SearchFilesResult, WorkspaceError> {
     let root = open_directory(&grant.directory, &components(&args.path, true)?)?;
     let mut queue = VecDeque::from([String::new()]);
     let mut result = SearchFilesResult {
@@ -77,6 +84,7 @@ pub(super) fn files(
         omitted_unsupported: false,
     };
     let limit = usize::from(args.limit.unwrap_or(100));
+    let mut physical = 0usize;
     'walk: while let Some(relative) = queue.pop_front() {
         if grant.is_revoked() {
             return Err(WorkspaceError::Revoked);
@@ -94,16 +102,24 @@ pub(super) fn files(
             if grant.is_revoked() {
                 return Err(WorkspaceError::Revoked);
             }
-            if result.scanned_entries == MAX_ENTRIES {
+            if result.scanned_entries == MAX_ENTRIES
+                || physical >= MAX_ENTRIES as usize + overlay.extra_scan_allowance()
+            {
                 result.truncated = true;
                 break;
             }
-            result.scanned_entries += 1;
+            physical += 1;
             let name = entry?.file_name();
             let Some(name) = name.to_str() else {
+                result.scanned_entries += 1;
                 result.omitted_unsupported = true;
                 continue;
             };
+            let full = historical::joined(&historical::joined(&args.path, &relative), name);
+            if overlay.hidden(&full) {
+                continue;
+            }
+            result.scanned_entries += 1;
             if !component_allowed(name) {
                 result.omitted_unsupported = true;
                 continue;
