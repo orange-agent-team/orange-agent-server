@@ -4,6 +4,23 @@ use crate::workspace::patch::review::dispatch::recovery::{
 };
 
 pub(super) async fn resolve(mut j: Journal, f: &Fixture, operation: &str) -> Journal {
+    let unresolved = j
+        .agent_patch_recovery_outcome("alice", "run-1", operation)
+        .expect("unresolved metadata");
+    assert!(unresolved.decision.is_none());
+    assert_eq!(unresolved.original_execution_state, "unknown");
+    assert!(
+        j.agent_patch_recovery_outcome("bob", "run-1", operation)
+            .is_err()
+    );
+    assert!(
+        j.agent_patch_recovery_outcome("alice", "other-run", operation)
+            .is_err()
+    );
+    assert!(
+        j.agent_patch_recovery_outcome("alice", "run-1", "other-operation")
+            .is_err()
+    );
     assert!(
         j.authorize_patch_inspection("bob", "run-1", operation, f.workspace.path())
             .is_err()
@@ -189,6 +206,41 @@ pub(super) async fn resolve(mut j: Journal, f: &Fixture, operation: &str) -> Jou
         .expect("recovery dispatch");
     j.publish_selected_patch_resolution(&read, &write, token)
         .expect("keep actual current target");
+    read.request_revoke();
+    write.request_revoke();
+    let outcome = j
+        .agent_patch_recovery_outcome("alice", "run-1", operation)
+        .expect("receipt despite revoked scopes");
+    assert_eq!(outcome.original_execution_state, "unknown");
+    assert_eq!(
+        outcome
+            .decision
+            .as_ref()
+            .expect("committed decision")
+            .recovery_id,
+        review.recovery_id
+    );
+    assert_eq!(
+        outcome.decision.as_ref().expect("choice").choice,
+        PatchRecoveryChoice::KeepCurrentTarget
+    );
+    let body = serde_json::to_value(&outcome).expect("metadata projection");
+    assert_eq!(body.as_object().expect("object").len(), 4);
+    assert_eq!(
+        body["decision"]
+            .as_object()
+            .expect("decision metadata")
+            .len(),
+        2
+    );
+    assert!(!body.to_string().contains("sha256") && !body.to_string().contains("note.txt"));
+    drop(j);
+    let j = f.open();
+    assert_eq!(
+        j.agent_patch_recovery_outcome("alice", "run-1", operation)
+            .expect("lost reply after reopen"),
+        outcome
+    );
     j
 }
 

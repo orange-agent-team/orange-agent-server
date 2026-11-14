@@ -31,3 +31,9 @@
 ## 尚需验收
 
 桌面API/FRB/native scope/UI、实际重开后授权、恢复批准、取消/撤权/迟到选择、同工作区多操作，以及保留原件管理均未接入。索引只是恢复入口的一部分，不等于恢复产品功能完成。
+
+## 丢失恢复回执的只读核对
+
+`agent_patch_recovery_outcome(owner, run, operation)` 校验拥有者、Run、操作绑定和已存回执摘要，只返回原操作状态及可选的恢复决定ID/choice。没有文件路径、内容或摘要，不恢复任何文件能力。decision为空只表示没有已验证的恢复完成记录，不表示没有发生文件效果。成功处理后原操作仍unknown，旧Run仍停止。
+
+实际测试覆盖处理前无完成记录、错误owner/Run/operation拒绝、权限撤销后查询、Journal重开后恢复同一决定，以及输出字段不包含文件数据。用于后续桌面写入批准丢失响应时核对结果，禁止据此自动重试写入。190项Runtime及严格Clippy通过（recovery-outcome-runtime.log）。

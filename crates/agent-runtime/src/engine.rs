@@ -8,7 +8,7 @@ pub use editing::EditRequirement;
 #[cfg(target_vendor = "apple")]
 pub(crate) use editing::HistoryAccess;
 #[cfg(target_vendor = "apple")]
-pub use editing::{EditingApproval, EditingAuthority};
+pub use editing::{EditingApproval, EditingAuthority, PatchRecoveryOutcome, ResolvedPatchDecision};
 mod questions;
 use crate::workspace::creation::CreateFileGrant;
 pub use creation::{CreationApproval, CreationRequirement};
