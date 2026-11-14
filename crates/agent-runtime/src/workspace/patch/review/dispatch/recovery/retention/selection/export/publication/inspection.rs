@@ -211,7 +211,7 @@ impl Journal {
         Ok(receipt)
     }
 }
-fn observe_export_file(
+pub(super) fn observe_export_file(
     directory: &Dir,
     name: &str,
     expected: &RetentionExportPreview,

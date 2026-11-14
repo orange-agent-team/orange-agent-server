@@ -1,8 +1,14 @@
 use super::*;
 mod inspection;
+mod retirement;
 mod writer;
 pub use inspection::{
     ExportFileObservation, ExportInspectionGrant, ExportInspectionReceipt, ExportInspectionView,
+};
+pub use retirement::{
+    ExportRetirementChoice, ExportRetirementGrant, ExportRetirementInspection,
+    ExportRetirementInspectionReceipt, ExportRetirementOutcome, ExportRetirementReceipt,
+    ExportRetirementReview, PreparedExportRetirement,
 };
 use std::io::{Seek, Write};
 use std::time::Duration;

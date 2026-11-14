@@ -279,6 +279,17 @@ impl WorkspaceGrant {
             return Err(WorkspaceError::Invalid);
         }
         let root = root.canonicalize()?;
+        // Reserved recovery directories are never ordinary model workspaces,
+        // including when explicitly selected as the root rather than traversed.
+        if root.components().any(|c| {
+            c.as_os_str()
+                .to_string_lossy()
+                .to_ascii_lowercase()
+                .starts_with(".orange-agent-tmp-")
+        }) {
+            return Err(WorkspaceError::Forbidden);
+        }
+
         let directory = Dir::open_ambient_dir(&root, cap_std::ambient_authority())?;
         let opened_identity = directory_identity(&directory)?;
         for private in private_roots {

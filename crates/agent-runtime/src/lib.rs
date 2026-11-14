@@ -70,7 +70,7 @@ impl Journal {
             rusqlite::OpenFlags::default() | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
         )?;
         let version: i64 = connection.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if !(0..=19).contains(&version) {
+        if !(0..=20).contains(&version) {
             return Err(JournalError::UnsupportedVersion);
         }
         if version == 0 {
@@ -197,7 +197,14 @@ impl Journal {
             tx.execute_batch(include_str!("schema_v19.sql"))?;
             tx.commit()?;
         }
+        if version < 20 {
+            let tx =
+                connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            tx.execute_batch(include_str!("schema_v20.sql"))?;
+            tx.commit()?;
+        }
         connection.execute_batch("BEGIN IMMEDIATE;
+            UPDATE export_retirements SET state='unknown' WHERE state='dispatching';
             INSERT INTO events(run_id,operation_id,kind) SELECT o.run_id,o.operation_id,'patch.export_unknown' FROM patch_exports e JOIN operations o USING(operation_id) WHERE e.state='dispatching';
             UPDATE patch_exports SET state='unknown' WHERE state='dispatching';
             UPDATE patch_recoveries SET state='unknown' WHERE state='dispatching';
