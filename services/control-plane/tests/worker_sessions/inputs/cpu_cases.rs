@@ -543,6 +543,12 @@ async fn stopped_by_policy(cert: &str, kind: &str) {
     let (connection, node_journal, journal, record) = receiver_mode(&f, &server, true).await;
     let (broker, supervisor) = broker(&f).await;
     let root = runtime();
+    // This case certifies policy-first handling. The distinct execution-first
+    // ordering has a separate fail-closed test below; no response is substituted.
+    let mut gate = orange_worker::cpu::test_gates::Gate::install(
+        &record.command_id,
+        orange_worker::cpu::test_gates::Stage::BeforeHeartbeat,
+    );
     let mut handle = spawn_cpu(
         CpuResources {
             connection,
@@ -560,9 +566,13 @@ async fn stopped_by_policy(cert: &str, kind: &str) {
         },
     );
     generating(&handle).await;
+    tokio::time::timeout(Duration::from_secs(5), gate.reached())
+        .await
+        .expect("policy-first heartbeat gate reached");
     // Accepted Admin intent is an explicit fixture; delivery, policy application
     // and actual model shutdown are real. MFA is certified in its own tests.
     let (command, action) = enqueue_stop(&f.d, 1, kind).await;
+    gate.release();
     let mut exit = tokio::time::timeout(Duration::from_secs(25), handle.wait())
         .await
         .expect("bounded policy stop")
@@ -773,6 +783,82 @@ async fn changed_policy_without_command_stops_model_without_inventing_applicatio
         other => panic!("unexpected policy result: {other:?}"),
     }
     exit.resources.connection.close();
+    server.stop().await;
+    f.objects.drain().await.expect("drain");
+}
+
+#[tokio::test]
+async fn queued_policy_after_heartbeat_cannot_forge_application_from_execution_rejection() {
+    let p = profile();
+    let digest = cpu_profile_digest(&p).expect("digest");
+    let f = setup_model(
+        "client-ej",
+        &p.model_sha256,
+        &digest,
+        "Count from 1 to 10000 without summarizing.".into(),
+        1024,
+    )
+    .await;
+    bind(&f).await;
+    let server = Running::start_with_input(&f.d.store, Some(f.objects.reader())).await;
+    let (connection, node_journal, journal, record) = receiver_mode(&f, &server, true).await;
+    let (broker, supervisor) = broker(&f).await;
+    let root = runtime();
+    let mut gate = orange_worker::cpu::test_gates::Gate::install(
+        &record.command_id,
+        orange_worker::cpu::test_gates::Stage::AfterHeartbeat,
+    );
+    let mut handle = spawn_cpu(
+        CpuResources {
+            connection,
+            node_journal,
+            journal,
+            broker,
+            supervisor,
+        },
+        CpuExecutionSpec {
+            command_id: record.command_id,
+            profile_id: f.profile.clone(),
+            profile: p,
+            runtime_directory: root.path().to_path_buf(),
+            capability_snapshot: "execution-first-policy".into(),
+        },
+    );
+    generating(&handle).await;
+    tokio::time::timeout(Duration::from_secs(5), gate.reached())
+        .await
+        .expect("execution-first heartbeat completed");
+    let (command, _action) = enqueue_stop(&f.d, 1, "node.drain").await;
+    gate.release();
+    let exit = tokio::time::timeout(Duration::from_secs(25), handle.wait())
+        .await
+        .expect("bounded stop")
+        .expect("report");
+    assert_eq!(exit.report.outcome, "authority_lost");
+    assert!(exit.report.response.is_none());
+    assert!(exit.report.cleanup_confirmed);
+    assert!(exit.report.node_policy.is_none());
+    assert!(exit.report.node_policy_error.is_none());
+    assert!(
+        !exit.resources.connection.is_current_locally(),
+        "old execution connection remains unusable"
+    );
+    assert!(
+        exit.resources
+            .broker
+            .applied_node_policy(&command)
+            .expect("policy lookup")
+            .is_none(),
+        "queued command is not proof of authenticated local application"
+    );
+    assert_eq!(
+        exit.resources
+            .broker
+            .node_policy()
+            .expect("policy")
+            .policy_generation,
+        "0"
+    );
     server.stop().await;
     f.objects.drain().await.expect("drain");
 }

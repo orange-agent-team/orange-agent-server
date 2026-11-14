@@ -7,7 +7,7 @@ publish.workspace = true
 
 [features]
 integration-tests = []
-real-worker-tests = ["integration-tests"]
+real-worker-tests = ["integration-tests", "orange-worker/test-control-gates"]
 web-compute-tests = ["real-worker-tests"]
 queue-expiry-tests = ["integration-tests"]
 

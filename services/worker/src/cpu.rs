@@ -19,6 +19,8 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::sync::{mpsc, oneshot, watch};
+#[cfg(feature = "test-control-gates")]
+pub mod test_gates;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CpuError {
@@ -182,9 +184,13 @@ async fn authority_cycle(
     renewal: Option<PendingRenewal>,
 ) -> Result<(bool, Option<VerifiedRenewal>), ControlError> {
     tokio::time::sleep_until(tokio::time::Instant::from_std(not_before)).await;
+    #[cfg(feature = "test-control-gates")]
+    test_gates::wait(&record.command_id, test_gates::Stage::BeforeHeartbeat).await;
     let intents = connection.heartbeat_node_control(snapshot, node).await?;
     let stop = !intents.is_empty()
         || connection.policy_changed_since(record.assignment.node_policy_generation);
+    #[cfg(feature = "test-control-gates")]
+    test_gates::wait(&record.command_id, test_gates::Stage::AfterHeartbeat).await;
     if !stop {
         connection.check_cpu_authority(record).await?;
     }
