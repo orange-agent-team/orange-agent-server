@@ -2,6 +2,8 @@
 //! moved, copied, deleted, or restored; old writable descriptors remain valid.
 use super::*;
 use inspection::{PatchRecoveryReceipt, RecoveryFileObservation};
+mod selection;
+pub use selection::PatchRetentionGrant;
 const ARCHIVE_LIMIT: i64 = 256 * 1024 * 1024;
 const ARCHIVE_RECORDS: i64 = 1000;
 const FILE_RESERVATION: i64 = MAX_TEXT as i64 + 384 * 1024;

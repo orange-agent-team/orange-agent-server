@@ -20,6 +20,58 @@ pub struct PatchRecoveryOutcome {
 }
 
 impl Journal {
+    /// Content-free index for retained-file management, including archived
+    /// operations. Unresolved unknown effects must first use recovery. These
+    /// IDs confer no read capability and do not restore a revoked Run.
+    pub fn agent_retention_patch_ids(
+        &self,
+        owner: &str,
+        run: &str,
+        before: Option<&str>,
+        limit: u16,
+    ) -> Result<Vec<String>, EngineError> {
+        if ![owner, run].iter().all(|id| valid_id(id))
+            || before.is_some_and(|id| !valid_id(id))
+            || !(1..=100).contains(&limit)
+        {
+            return Err(EngineError::Invalid);
+        }
+        let owned: bool = self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM runs JOIN runtime_runs USING(run_id) WHERE run_id=? AND owner=?)",
+            params![run, owner], |r| r.get(0),
+        )?;
+        if !owned {
+            return Err(EngineError::Forbidden);
+        }
+        let mut statement = self.connection.prepare(
+            "SELECT o.operation_id FROM operations o JOIN editing_publications p USING(operation_id)
+             WHERE o.owner=?1 AND o.run_id=?2 AND o.tool_version='apply_patch.v1'
+             AND (o.state='succeeded' OR (o.state='unknown' AND EXISTS(
+                 SELECT 1 FROM patch_recovery_resolutions r WHERE r.operation_id=o.operation_id)))
+             AND (?3 IS NULL OR o.operation_id<?3) ORDER BY o.operation_id DESC LIMIT ?4",
+        )?;
+        statement
+            .query_map(params![owner, run, before, i64::from(limit)], |r| r.get(0))?
+            .collect::<Result<Vec<String>, _>>()
+            .map_err(EngineError::from)
+    }
+
+    /// Query a committed archival review after a lost response, without opening
+    /// retained files or repeating an approval. None is not permission to retry.
+    pub fn agent_retention_review_id(
+        &self,
+        owner: &str,
+        run: &str,
+        operation: &str,
+    ) -> Result<Option<String>, EngineError> {
+        // Reuse the exact owned Run/publication binding, including validation of
+        // the original receipt; this query never resumes the Run.
+        self.agent_patch_recovery_outcome(owner, run, operation)?;
+        self.patch_retention_archive(owner, operation)
+            .map(|archive| archive.map(|value| value.review_id))
+            .map_err(error)
+    }
+
     /// Reconcile a lost recovery reply without restoring filesystem authority.
     /// Only receipt identity/choice leave this method: no file paths, hashes or
     /// retained data. It never claims the original unknown tool succeeded.

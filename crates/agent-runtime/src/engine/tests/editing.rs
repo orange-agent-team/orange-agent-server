@@ -1,5 +1,6 @@
 use super::*;
 mod recovery_scopes;
+mod retention_scopes;
 use crate::workspace::patch::authority::EditFileGrant;
 use sha2::{Digest, Sha256};
 fn edit(j: &mut Journal, f: &Fixture) -> EditFileGrant {
@@ -512,6 +513,16 @@ async fn receipt_failure_never_replays_patch_and_missing_capabilities_are_not_sy
     let mut j = f.open();
     assert!(j.restore_file_edit("alice", &id).is_err());
     let operation = &pending.pending[0].operation_id;
+    assert!(
+        j.authorize_patch_retention("alice", "run-1", operation, f.workspace.path())
+            .is_err(),
+        "unresolved unknown cannot release active reservation"
+    );
+    assert!(
+        j.agent_retention_patch_ids("alice", "run-1", None, 10)
+            .expect("retention index")
+            .is_empty()
+    );
     assert_eq!(
         j.agent_unresolved_patch_ids("alice", "run-1", None, 1)
             .expect("discover unknown"),
@@ -548,6 +559,26 @@ async fn receipt_failure_never_replays_patch_and_missing_capabilities_are_not_sy
         "index cannot restore write access"
     );
     j = recovery_scopes::resolve(j, &f, operation).await;
+    let retention = j
+        .authorize_patch_retention("alice", "run-1", operation, f.workspace.path())
+        .expect("resolved unknown can be managed separately");
+    assert_eq!(
+        j.agent_retention_patch_ids("alice", "run-1", None, 10)
+            .expect("resolved retention index"),
+        vec![operation.clone()]
+    );
+    let review = j
+        .prepare_selected_retention(&retention, "retain-resolved")
+        .await
+        .expect("retention preview");
+    j.approve_selected_retention(&retention, &review.review_id, &review.digest)
+        .await
+        .expect("explicit retention after resolution");
+    assert_eq!(
+        j.agent_retention_review_id("alice", "run-1", operation)
+            .expect("content-free lost-reply lookup"),
+        Some(review.review_id)
+    );
     assert!(
         j.agent_unresolved_patch_ids("alice", "run-1", None, 10)
             .expect("resolved excluded")
