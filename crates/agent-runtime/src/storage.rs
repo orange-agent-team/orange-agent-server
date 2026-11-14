@@ -196,7 +196,7 @@ mod tests {
             .connection
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .expect("version");
-        assert_eq!(version, 18);
+        assert_eq!(version, 19);
         assert_eq!(
             journal.state("alice", "op").expect("state").as_deref(),
             Some("unknown")
@@ -228,7 +228,7 @@ mod tests {
     }
     #[test]
     fn future_and_unknown_schemas_are_not_rewritten() {
-        for version in [0, 19] {
+        for version in [0, 20] {
             let dir = private_temp();
             let path = dir.path().join("future.sqlite");
             drop(private_file(&path).expect("file"));

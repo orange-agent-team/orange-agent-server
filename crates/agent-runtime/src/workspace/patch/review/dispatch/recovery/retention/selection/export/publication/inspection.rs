@@ -3,7 +3,7 @@
 use super::*;
 
 pub struct ExportInspectionGrant {
-    read: WorkspaceGrant,
+    pub(super) read: WorkspaceGrant,
     run: String,
     operation: String,
     export_id: String,
@@ -132,7 +132,7 @@ impl Journal {
         self.connection.execute("INSERT INTO events(run_id,operation_id,kind) VALUES(?,?,'patch.export_inspection_consent')",params![run,operation]).map_err(JournalError::from)?;
         Ok(grant)
     }
-    fn validate_export_inspection(
+    pub(super) fn validate_export_inspection(
         &self,
         grant: &ExportInspectionGrant,
     ) -> Result<(Record, RetentionExportOutcome), PatchError> {

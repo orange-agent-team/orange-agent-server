@@ -1,4 +1,5 @@
 use super::*;
+mod writer_lease;
 use crate::workspace::patch::review::dispatch::recovery::retention::{
     ExportFileObservation, RetentionExportChoice, verify_retention_export,
 };
@@ -482,7 +483,9 @@ async fn export_schema17_upgrade_and_interrupted_dispatch_are_nonreplaying() {
     let f = Fixture::new();
     let (j, op) = edited(&f).await;
     j.connection
-        .execute_batch("DROP TABLE patch_exports; PRAGMA user_version=17;")
+        .execute_batch(
+            "DROP TABLE export_writer_bindings; DROP TABLE patch_exports; PRAGMA user_version=17;",
+        )
         .expect("true prior schema shape");
     drop(j);
     let mut j = f.open();
@@ -490,7 +493,7 @@ async fn export_schema17_upgrade_and_interrupted_dispatch_are_nonreplaying() {
         .connection
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .expect("version");
-    assert_eq!(version, 18);
+    assert_eq!(version, 19);
     let output = tempfile::tempdir().expect("destination");
     let source = j
         .authorize_patch_retention("alice", "run-1", &op, f.workspace.path())

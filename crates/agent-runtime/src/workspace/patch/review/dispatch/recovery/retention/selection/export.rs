@@ -9,7 +9,7 @@ use cap_fs_ext::{FollowSymlinks, OpenOptionsFollowExt, OpenOptionsSyncExt, OsMet
 use cap_std::fs::{Dir, OpenOptions};
 pub use publication::{
     ExportFileObservation, ExportInspectionGrant, ExportInspectionReceipt, ExportInspectionView,
-    PreparedRetentionExport, RetentionExportDestination, RetentionExportOutcome,
+    ExportQuiescence, PreparedRetentionExport, RetentionExportDestination, RetentionExportOutcome,
     RetentionExportReceipt, RetentionExportReview,
 };
 use std::io::Read;

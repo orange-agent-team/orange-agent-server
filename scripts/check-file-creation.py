@@ -182,7 +182,7 @@ try:
         assert invoke('step')['phase'] == 'ready'
         if legacy_binary:
             with sqlite3.connect(database) as db:
-                assert db.execute('PRAGMA user_version').fetchone()[0] == 18
+                assert db.execute('PRAGMA user_version').fetchone()[0] == 19
                 assert db.execute("SELECT count(*) FROM runtime_tool_catalogs WHERE origin='legacy_builtin_v1'").fetchone()[0] == 2
                 assert db.execute('SELECT count(*) FROM approvals').fetchone()[0] == 2
                 assert db.execute('SELECT count(*) FROM runtime_tool_approvals').fetchone()[0] == 1
@@ -193,7 +193,7 @@ try:
         assert invoke('step') == complete and len(observations) == 3
         with sqlite3.connect(database) as db:
             assert db.execute("SELECT count(*) FROM operations WHERE tool_version='write_file.v1' AND state='succeeded' AND context_applied=1").fetchone()[0] == 1
-            assert db.execute('PRAGMA user_version').fetchone()[0] == 18
+            assert db.execute('PRAGMA user_version').fetchone()[0] == 19
         target.unlink()
         invoke('show', failed=True)
         invoke('step', failed=True)

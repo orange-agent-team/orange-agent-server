@@ -1,10 +1,12 @@
 use super::*;
 mod inspection;
+mod writer;
 pub use inspection::{
     ExportFileObservation, ExportInspectionGrant, ExportInspectionReceipt, ExportInspectionView,
 };
 use std::io::{Seek, Write};
 use std::time::Duration;
+pub use writer::ExportQuiescence;
 
 pub struct RetentionExportDestination {
     grant: WorkspaceGrant,
@@ -300,26 +302,31 @@ impl Journal {
         {
             return Err(JournalError::ApprovalRequired.into());
         }
-        let tx = self
-            .connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(JournalError::from)?;
-        let changed=tx.execute("UPDATE patch_exports SET state='dispatching' WHERE export_id=? AND owner=? AND state='prepared' AND digest=? AND body=? AND host_epoch=? AND expires_at>?",params![review.export_id,source.read.owner(),review.digest,serde_json::to_string(record).map_err(|_|PatchError::Invalid)?,source.epoch,now()?]).map_err(JournalError::from)?;
-        if changed != 1 {
-            return Err(JournalError::Conflict.into());
-        }
-        tx.execute(
+        let writer = {
+            let writer_root = self.private_root.clone();
+            let tx = self
+                .connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(JournalError::from)?;
+            let changed=tx.execute("UPDATE patch_exports SET state='dispatching' WHERE export_id=? AND owner=? AND state='prepared' AND digest=? AND body=? AND host_epoch=? AND expires_at>?",params![review.export_id,source.read.owner(),review.digest,serde_json::to_string(record).map_err(|_|PatchError::Invalid)?,source.epoch,now()?]).map_err(JournalError::from)?;
+            if changed != 1 {
+                return Err(JournalError::Conflict.into());
+            }
+            tx.execute(
             "INSERT INTO events(run_id,operation_id,kind) VALUES(?,?,'patch.export_dispatched')",
             params![source.run, source.operation],
         )
         .map_err(JournalError::from)?;
-        prepared.preview()?;
-        tx.commit().map_err(JournalError::from)?;
+            let writer = writer::create(&writer_root, &review.export_id, &tx)?;
+            prepared.preview()?;
+            tx.commit().map_err(JournalError::from)?;
+            writer
+        };
         let mut cancellation = CancellationGuard {
             inner: prepared.destination.inner.clone(),
             finished: false,
         };
-        let work = tokio::task::spawn_blocking(move || publish(prepared));
+        let work = tokio::task::spawn_blocking(move || publish(prepared, writer));
         let result = tokio::time::timeout(Duration::from_secs(30), work).await;
         let result = match result {
             Ok(Ok(result)) => {
@@ -480,7 +487,12 @@ fn same_file(directory: &Dir, name: &str, file: &cap_std::fs::File) -> Result<bo
         && named.dev() == open.dev()
         && named.ino() == open.ino())
 }
-fn publish(prepared: PreparedRetentionExport) -> Result<RetentionExportReceipt, PatchError> {
+fn publish(
+    prepared: PreparedRetentionExport,
+    writer: writer::WriterLease,
+) -> Result<RetentionExportReceipt, PatchError> {
+    let writer = writer;
+    writer.check()?;
     prepared.preview()?;
     let directory = &prepared.destination.inner.directory;
     let mut options = OpenOptions::new();
@@ -523,6 +535,7 @@ fn publish(prepared: PreparedRetentionExport) -> Result<RetentionExportReceipt, 
     if !same_file(directory, &prepared.record.temporary, &file)? {
         return Err(PatchError::VersionChanged);
     }
+    writer.check()?;
     rustix::fs::renameat_with(
         directory,
         &prepared.record.temporary,
@@ -542,6 +555,7 @@ fn publish(prepared: PreparedRetentionExport) -> Result<RetentionExportReceipt, 
         .sync_all()
         .map_err(io)?;
     prepared.preview()?;
+    writer.check()?;
     Ok(RetentionExportReceipt {
         export_id: prepared.review.export_id.clone(),
         review_digest: prepared.review.digest.clone(),
