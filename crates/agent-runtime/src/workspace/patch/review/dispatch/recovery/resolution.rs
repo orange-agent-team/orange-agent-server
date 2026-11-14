@@ -2,6 +2,7 @@
 //! model approvals. An unknown publication is never resumed automatically.
 use super::*;
 use crate::workspace::Permit;
+use inspection::PatchInspectionGrant;
 use inspection::{PatchRecoveryReceipt, PatchRecoverySnapshot, RecoveryFileObservation};
 use std::path::Path;
 mod publish;
@@ -95,6 +96,83 @@ fn valid_choice(choice: PatchRecoveryChoice, snapshot: &PatchRecoverySnapshot) -
     }
 }
 impl Journal {
+    /// A separate native write selection is still mandatory. A read inspection
+    /// capability alone is never converted into a write capability.
+    pub fn authorize_selected_patch_recovery(
+        &self,
+        read: &PatchInspectionGrant,
+        root: &Path,
+    ) -> Result<PatchRecoveryGrant, PatchError> {
+        self.validate_patch_inspection(read)?;
+        let write = self.authorize_patch_recovery(
+            read.read.owner(),
+            read.read.policy(),
+            &read.operation,
+            root,
+        )?;
+        self.check_selected_recovery(read, &write)?;
+        Ok(write)
+    }
+    fn check_selected_recovery(
+        &self,
+        read: &PatchInspectionGrant,
+        write: &PatchRecoveryGrant,
+    ) -> Result<(), PatchError> {
+        self.validate_patch_inspection(read)?;
+        if read.operation != write.operation {
+            return Err(WorkspaceError::Forbidden.into());
+        }
+        self.unresolved_patch(write, &read.read)
+    }
+    pub async fn prepare_selected_patch_resolution(
+        &mut self,
+        read: &PatchInspectionGrant,
+        write: &PatchRecoveryGrant,
+        key: &str,
+        choice: PatchRecoveryChoice,
+    ) -> Result<PatchResolutionReview, PatchError> {
+        self.check_selected_recovery(read, write)?;
+        self.prepare_patch_resolution(write, &read.read, key, choice)
+            .await
+    }
+    pub async fn approve_selected_patch_resolution(
+        &mut self,
+        read: &PatchInspectionGrant,
+        write: &PatchRecoveryGrant,
+        recovery: &str,
+        expected: &str,
+        expires_at: i64,
+    ) -> Result<(), PatchError> {
+        self.check_selected_recovery(read, write)?;
+        self.approve_patch_resolution(
+            write,
+            &read.read,
+            recovery,
+            expected,
+            read.read.owner(),
+            expires_at,
+        )
+        .await
+    }
+    pub async fn dispatch_selected_patch_resolution(
+        &mut self,
+        read: &PatchInspectionGrant,
+        write: &PatchRecoveryGrant,
+        recovery: &str,
+    ) -> Result<PatchResolutionDispatch, PatchError> {
+        self.check_selected_recovery(read, write)?;
+        self.dispatch_patch_resolution(write, &read.read, recovery)
+            .await
+    }
+    pub fn publish_selected_patch_resolution(
+        &mut self,
+        read: &PatchInspectionGrant,
+        write: &PatchRecoveryGrant,
+        token: PatchResolutionDispatch,
+    ) -> Result<PatchResolutionResult, PatchError> {
+        let checked = self.check_selected_recovery(read, write);
+        self.resolve_patch_checked(write, &read.read, token, checked, |_| Ok(()))
+    }
     /// Trusted host only after separate recovery/write directory consent.
     /// Fresh nonce and Host epoch prevent revoked/reopened grants reviving an
     /// old approval. No conversion from read/create/edit capabilities exists.

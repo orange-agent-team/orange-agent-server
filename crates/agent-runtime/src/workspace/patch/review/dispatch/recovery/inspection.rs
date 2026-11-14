@@ -6,6 +6,115 @@ use crate::workspace::{CancellationGuard, Permit, READ_SLOTS, directory_identity
 use cap_fs_ext::{FollowSymlinks, OpenOptionsFollowExt, OpenOptionsSyncExt, OsMetadataExt};
 use cap_std::fs::{Dir, OpenOptions};
 use std::io::Read;
+use std::path::Path;
+
+/// A fresh native read selection for one recovery operation. This type exposes
+/// no ordinary WorkspaceGrant and cannot be used to start an Agent or edit.
+pub struct PatchInspectionGrant {
+    pub(super) read: WorkspaceGrant,
+    pub(super) operation: String,
+    run: String,
+    epoch: i64,
+}
+impl PatchInspectionGrant {
+    pub fn request_revoke(&self) {
+        self.read.request_revoke();
+    }
+    pub async fn wait_drained(&self) {
+        self.read.wait_drained().await;
+    }
+}
+
+impl Journal {
+    /// Trusted host only after an explicit recovery-read directory selection.
+    /// Cancelled Runs remain inspectable by fresh consent; no old scope is
+    /// restored and no normal execution quarantine is removed.
+    pub fn authorize_patch_inspection(
+        &self,
+        owner: &str,
+        run: &str,
+        operation: &str,
+        root: &Path,
+    ) -> Result<PatchInspectionGrant, PatchError> {
+        if ![owner, run, operation].iter().all(|value| valid_id(value)) {
+            return Err(PatchError::Invalid);
+        }
+        let row: Option<(String,String)> = self.connection.query_row(
+            "SELECT o.policy,p.resource_identity FROM operations o JOIN editing_publications p USING(operation_id)
+             JOIN runtime_runs r ON r.run_id=o.run_id
+             WHERE o.owner=? AND o.run_id=? AND o.operation_id=? AND o.tool_version='apply_patch.v1'
+             AND o.state='unknown' AND NOT EXISTS(SELECT 1 FROM patch_recovery_resolutions x WHERE x.operation_id=o.operation_id)",
+            params![owner,run,operation], |r| Ok((r.get(0)?,r.get(1)?)),
+        ).optional().map_err(JournalError::from)?;
+        let (policy, resource) = row.ok_or(WorkspaceError::Forbidden)?;
+        let mut private = self.extra_private_roots.clone();
+        private.push(self.private_root.clone());
+        let read = WorkspaceGrant::open(
+            owner,
+            &uuid::Uuid::new_v4().to_string(),
+            &policy,
+            root,
+            &private,
+        )?;
+        if !read.has_persistent_identity() || read.resource_identity() != resource {
+            return Err(WorkspaceError::EnvironmentChanged.into());
+        }
+        let epoch = self
+            .connection
+            .query_row(
+                "SELECT epoch FROM runtime_host WHERE singleton=1",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(JournalError::from)?;
+        let result = PatchInspectionGrant {
+            read,
+            operation: operation.into(),
+            run: run.into(),
+            epoch,
+        };
+        self.validate_patch_inspection(&result)?;
+        self.connection.execute("INSERT INTO events(run_id,operation_id,kind) VALUES(?,?,'patch.inspection_consent')",params![run,operation]).map_err(JournalError::from)?;
+        Ok(result)
+    }
+    pub(super) fn validate_patch_inspection(
+        &self,
+        grant: &PatchInspectionGrant,
+    ) -> Result<(), PatchError> {
+        let epoch: i64 = self
+            .connection
+            .query_row(
+                "SELECT epoch FROM runtime_host WHERE singleton=1",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(JournalError::from)?;
+        if grant.read.is_revoked() || grant.epoch != epoch {
+            return Err(WorkspaceError::Revoked.into());
+        }
+        let valid: bool = self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM operations o JOIN editing_publications p USING(operation_id)
+             WHERE o.owner=? AND o.run_id=? AND o.operation_id=? AND o.tool_version='apply_patch.v1'
+             AND o.state='unknown' AND o.policy=? AND p.resource_identity=?)",
+            params![grant.read.owner(),grant.run,grant.operation,grant.read.policy(),grant.read.resource_identity()],|r|r.get(0),
+        ).map_err(JournalError::from)?;
+        if !valid {
+            return Err(WorkspaceError::Forbidden.into());
+        }
+        Ok(())
+    }
+    pub async fn inspect_selected_patch(
+        &self,
+        grant: &PatchInspectionGrant,
+    ) -> Result<PatchRecoveryReceipt, PatchError> {
+        self.validate_patch_inspection(grant)?;
+        let receipt = self
+            .inspect_patch_recovery(grant.read.owner(), &grant.operation, &grant.read)
+            .await?;
+        self.validate_patch_inspection(grant)?;
+        Ok(receipt)
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]

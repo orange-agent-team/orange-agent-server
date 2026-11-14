@@ -93,9 +93,23 @@ impl Journal {
         grant: &PatchRecoveryGrant,
         read: &WorkspaceGrant,
         token: PatchResolutionDispatch,
+        hook: impl FnMut(u8) -> Result<(), PatchError>,
+    ) -> Result<PatchResolutionResult, PatchError> {
+        self.resolve_patch_checked(grant, read, token, Ok(()), hook)
+    }
+    pub(super) fn resolve_patch_checked(
+        &mut self,
+        grant: &PatchRecoveryGrant,
+        read: &WorkspaceGrant,
+        token: PatchResolutionDispatch,
+        precheck: Result<(), PatchError>,
         mut hook: impl FnMut(u8) -> Result<(), PatchError>,
     ) -> Result<PatchResolutionResult, PatchError> {
-        let result = self.resolve_patch_inner(grant, read, &token, &mut hook);
+        // A selected scope can be revoked after durable dispatch and before
+        // this call. Run the same unknown-state cleanup even for that early
+        // refusal; never leave a live dispatch marker merely by dropping it.
+        let result =
+            precheck.and_then(|()| self.resolve_patch_inner(grant, read, &token, &mut hook));
         if result.is_err() {
             token
                 .write

@@ -1,4 +1,5 @@
 use super::*;
+mod recovery_scopes;
 use crate::workspace::patch::authority::EditFileGrant;
 use sha2::{Digest, Sha256};
 fn edit(j: &mut Journal, f: &Fixture) -> EditFileGrant {
@@ -546,35 +547,7 @@ async fn receipt_failure_never_replays_patch_and_missing_capabilities_are_not_sy
         j.restore_file_edit("alice", &id).is_err(),
         "index cannot restore write access"
     );
-    use crate::workspace::patch::review::dispatch::recovery::resolution::PatchRecoveryChoice;
-    let recovery = j
-        .authorize_patch_recovery("alice", "policy-v1", operation, f.workspace.path())
-        .expect("independent recovery consent");
-    let review = j
-        .prepare_patch_resolution(
-            &recovery,
-            &f.grant,
-            "confirm-current",
-            PatchRecoveryChoice::KeepCurrentTarget,
-        )
-        .await
-        .expect("actual recovery review");
-    j.approve_patch_resolution(
-        &recovery,
-        &f.grant,
-        &review.recovery_id,
-        &review.digest,
-        "alice",
-        f.config.deadline_unix,
-    )
-    .await
-    .expect("separate exact approval");
-    let token = j
-        .dispatch_patch_resolution(&recovery, &f.grant, &review.recovery_id)
-        .await
-        .expect("recovery dispatch");
-    j.publish_patch_resolution(&recovery, &f.grant, token)
-        .expect("keep actual current target");
+    j = recovery_scopes::resolve(j, &f, operation).await;
     assert!(
         j.agent_unresolved_patch_ids("alice", "run-1", None, 10)
             .expect("resolved excluded")
