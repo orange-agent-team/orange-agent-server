@@ -1,6 +1,6 @@
 # 保留版本导出：实现检查点
 
-当前已实现Runtime导出读取、格式校验和持久发布，尚未接入桌面目的目录选择及导出按钮。主线仍为schema17的保留管理；本候选使用schema18，未合并。不等于完整用户数据退出功能，删除未实现。
+已实现Runtime导出读取、格式校验和持久发布，以及桌面独立目的选择、精确确认和重开记录查询，使用schema18。unknown导出位置核对/清理及原件删除未完成，不等于完整用户数据退出能力。
 
 ## 已实现
 
@@ -45,3 +45,9 @@ Runtime发布新增4项实际文件测试（retention-export-inflight-tests-fixe
 ## 重开后的记录发现
 
 retention_export_outcomes(owner,run,operation,before,limit)返回1—100条已核对元数据，按不可变export ID倒序分页（不是创建时间排序），不返回文件名、路径、内容或任何文件能力。跨owner/Run/operation、无效游标及页大小拒绝；每条记录复用已有回执完整性验证。准备中和已成功记录在撤权及Host重开后仍能由拥有者发现。相关实际文件/分页/重开负例及严格Clippy通过，retention-export-index-tests.log。
+
+## 桌面实际验收
+
+Desktop固定消费c067a3e，并接入目的会话、即时撤权、准备结果缓存与丢失回复查询。9Rust/Clippy/static/52组件以及实际签名macOS/FRB导出通过；原有保留1和恢复4原生回归通过。export-native-acceptance-2.log记录实际文件内容/SHA/0600、目标冲突、回复丢失、真正写入后的SQLite回执故障unknown、未批准缓存不发布、目的先排空再释放源、重开后发现prepared/succeeded/unknown。模型和系统选择器回调明确是替身，人工系统选择器与其他OS不由此认证。
+
+完整Runtime独立验收入口为scripts/check-retention-export.py --legacy-runtime <固定a2cdafb/schema17源码>，81287通过（export-runtime-combined-acceptance.log）；它验证捕获/发布/索引与实际旧CLI升级及非修改式拒绝。当前独立包仍固定c067a3e，后续脚本/文档提交不改变包内源码。
