@@ -2,6 +2,100 @@ use super::*;
 use std::{fs, os::unix::fs::PermissionsExt};
 #[cfg(target_vendor = "apple")]
 #[test]
+fn only_an_unchanged_initial_staging_label_may_supplement_an_unlabelled_source() {
+    let root = tempfile::tempdir().expect("owned fixture");
+    let path = root.path().join("source");
+    fs::write(&path, b"original").expect("source");
+    let file = fs::File::open(path).expect("file");
+    let mut source = security_metadata(&file).expect("source metadata");
+    source
+        .attributes
+        .retain(|(name, _)| name != b"com.apple.quarantine");
+    source.attributes.push((
+        b"com.orangeagent.fixture".to_vec(),
+        b"preserve exactly".to_vec(),
+    ));
+    source.attributes.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut staged = source.clone();
+    staged.attributes.push((
+        b"com.apple.quarantine".to_vec(),
+        b"0086;65000000;MetadataProbe;".to_vec(),
+    ));
+    staged.attributes.sort_by(|a, b| a.0.cmp(&b.0));
+    let initial = staged.clone();
+    assert!(preserves_publication(&source, &staged, Some(&initial)));
+    assert!(
+        !preserves_publication(&source, &source, Some(&initial)),
+        "source equality cannot hide removal of the native staging label"
+    );
+    assert_ne!(
+        source.digest(),
+        staged.digest(),
+        "published target keeps its real label"
+    );
+    assert!(!preserves_publication(&source, &staged, None));
+    assert!(
+        !preserves_publication(&source, &staged, Some(&source)),
+        "label must exist before native copy"
+    );
+    let label = staged
+        .attributes
+        .iter()
+        .position(|(n, _)| n == b"com.apple.quarantine")
+        .expect("label");
+    for changed in [
+        "0086;65000001;MetadataProbe;",
+        "0082;65000000;MetadataProbe;",
+        "0086;65000000;Other;",
+        "invalid",
+    ] {
+        let mut modified = staged.clone();
+        modified.attributes[label].1 = changed.as_bytes().to_vec();
+        assert!(
+            !preserves_publication(&source, &modified, Some(&initial)),
+            "any introduced-label change is refused"
+        );
+    }
+    for invalid_label in [b"invalid".as_slice(), b"0086;ffffffff;MetadataProbe;"] {
+        let mut invalid = staged.clone();
+        invalid.attributes[label].1 = invalid_label.to_vec();
+        assert!(
+            !preserves_publication(&source, &invalid, Some(&invalid)),
+            "initial observation is not permission to accept unknown formats/future times"
+        );
+    }
+    for change in 0..8 {
+        let mut modified = staged.clone();
+        match change {
+            0 => modified.uid += 1,
+            1 => modified.gid += 1,
+            2 => modified.mode ^= 0o111,
+            3 => modified.flags ^= 1,
+            4 => modified.acl.push(1),
+            5 => modified.attributes.push((b"unexpected".to_vec(), vec![1])),
+            6 => {
+                let i = modified
+                    .attributes
+                    .iter()
+                    .position(|(n, _)| n == b"com.orangeagent.fixture")
+                    .expect("attribute");
+                modified.attributes[i].1.push(1);
+            }
+            _ => {
+                modified
+                    .attributes
+                    .retain(|(n, _)| n != b"com.orangeagent.fixture");
+            }
+        }
+        assert!(!preserves_publication(&source, &modified, Some(&initial)));
+    }
+    assert!(
+        !preserves_publication(&staged, &source, Some(&source)),
+        "source quarantine is never removed"
+    );
+}
+#[cfg(target_vendor = "apple")]
+#[test]
 fn publication_timestamp_policy_preserves_all_authority_and_identity_fields() {
     let root = tempfile::tempdir().expect("owned fixture");
     let path = root.path().join("source");
@@ -23,7 +117,7 @@ fn publication_timestamp_policy_preserves_all_authority_and_identity_fields() {
         .expect("label");
     let mut target = source.clone();
     target.attributes[index].1 = b"0086;65000001;Orange Agent;".to_vec();
-    assert!(preserves_publication(&source, &target));
+    assert!(preserves_publication(&source, &target, None));
     assert_ne!(
         source.digest(),
         target.digest(),
@@ -45,7 +139,7 @@ fn publication_timestamp_policy_preserves_all_authority_and_identity_fields() {
         let mut changed = target.clone();
         changed.attributes[index].1 = forbidden.as_bytes().to_vec();
         assert!(
-            !preserves_publication(&source, &changed),
+            !preserves_publication(&source, &changed, None),
             "accepted changed security label: {forbidden}"
         );
     }
@@ -63,16 +157,16 @@ fn publication_timestamp_policy_preserves_all_authority_and_identity_fields() {
             6 => changed.attributes.push((b"new".to_vec(), vec![1])),
             _ => changed.attributes[index].0 = b"unknown".to_vec(),
         }
-        assert!(!preserves_publication(&source, &changed));
+        assert!(!preserves_publication(&source, &changed, None));
     }
     let mut no_label = source.clone();
     no_label.attributes.remove(index);
     assert!(
-        !preserves_publication(&no_label, &target),
-        "label introduction is not certified"
+        !preserves_publication(&no_label, &target, None),
+        "unobserved label introduction is forbidden"
     );
     assert!(
-        !preserves_publication(&target, &no_label),
+        !preserves_publication(&target, &no_label, None),
         "label removal is forbidden"
     );
 }

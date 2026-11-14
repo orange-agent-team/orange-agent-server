@@ -114,7 +114,8 @@ pub fn copy_security_metadata(
     copy_metadata(source, target, false)
 }
 /// Preserve publication security while retaining an OS-generated newer Apple
-/// quarantine timestamp. Returns the actual target snapshot, never the source
+/// quarantine timestamp, or an unchanged initial native staging label when
+/// the source had no such label. Returns the actual target snapshot, never the source
 /// snapshot. Subsequent publication/recovery checks must bind that exact result.
 /// No label is removed, rewritten or silently omitted by this policy.
 pub fn copy_publication_metadata(
@@ -143,6 +144,13 @@ fn copy_metadata(
         ));
     }
     let expected = security_metadata(source)?;
+    // Only the explicit publication policy may retain a label already present
+    // on the caller-owned staging file. Never invent or rewrite that label.
+    let initial_target = if publication {
+        Some(security_metadata(target)?)
+    } else {
+        None
+    };
     #[cfg(target_vendor = "apple")]
     crate::apple::copy_security(source, target)?;
     #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -175,62 +183,110 @@ fn copy_metadata(
         "metadata backend unavailable",
     ));
     let actual = security_metadata(target)?;
-    if security_metadata(source)? != expected
-        || !(actual == expected || (publication && preserves_publication(&expected, &actual)))
-    {
+    let preserved = if publication {
+        preserves_publication(&expected, &actual, initial_target.as_ref())
+    } else {
+        actual == expected
+    };
+    if security_metadata(source)? != expected || !preserved {
         return Err(invalid("security metadata changed or was not preserved"));
     }
     Ok(actual)
 }
-fn preserves_publication(source: &SecurityMetadata, target: &SecurityMetadata) -> bool {
+fn preserves_publication(
+    source: &SecurityMetadata,
+    target: &SecurityMetadata,
+    initial_target: Option<&SecurityMetadata>,
+) -> bool {
     if source.uid != target.uid
         || source.gid != target.gid
         || source.mode != target.mode
         || source.flags != target.flags
         || source.acl != target.acl
-        || source.attributes.len() != target.attributes.len()
     {
         return false;
     }
-    source
-        .attributes
-        .iter()
-        .zip(&target.attributes)
-        .all(|((sn, sv), (tn, tv))| {
-            sn == tn
-                && (sv == tv
+    // The old source's absence of quarantine must not erase the OS label on
+    // newly staged output, even if removing it would make snapshots equal.
+    if cfg!(target_vendor = "apple")
+        && !source
+            .attributes
+            .iter()
+            .any(|(n, _)| n == b"com.apple.quarantine")
+        && let Some((name, value)) = initial_target.and_then(|s| {
+            s.attributes
+                .iter()
+                .find(|(n, _)| n == b"com.apple.quarantine")
+        })
+        && (!recognized_current_quarantine(value)
+            || !target
+                .attributes
+                .iter()
+                .any(|(n, v)| n == name && v == value))
+    {
+        return false;
+    }
+    let source_preserved = source.attributes.iter().all(|(name, value)| {
+        target
+            .attributes
+            .iter()
+            .find(|(n, _)| n == name)
+            .is_some_and(|(_, actual)| {
+                value == actual
                     || (cfg!(target_vendor = "apple")
-                        && sn == b"com.apple.quarantine"
-                        && newer_quarantine_timestamp(sv, tv)))
+                        && name == b"com.apple.quarantine"
+                        && newer_quarantine_timestamp(value, actual))
+            })
+    });
+    source_preserved
+        && target.attributes.iter().all(|(name, value)| {
+            source.attributes.iter().any(|(n, _)| n == name)
+                || (cfg!(target_vendor = "apple")
+                    && name == b"com.apple.quarantine"
+                    && initial_target.is_some_and(|initial| {
+                        initial
+                            .attributes
+                            .iter()
+                            .any(|(n, v)| n == name && v == value)
+                    })
+                    && recognized_current_quarantine(value))
         })
 }
-fn newer_quarantine_timestamp(source: &[u8], target: &[u8]) -> bool {
-    fn parse(value: &[u8]) -> Option<([&[u8]; 4], u32)> {
-        let fields: Vec<_> = value.split(|b| *b == b';').collect();
-        let fields: [&[u8]; 4] = fields.try_into().ok()?;
-        if fields[0].len() != 4
-            || !fields[0].iter().all(u8::is_ascii_hexdigit)
-            || fields[1].len() != 8
-            || !fields[1].iter().all(u8::is_ascii_hexdigit)
-            || fields[2].is_empty()
-            || fields[2].len() > 256
-            || !fields[2].iter().all(|b| b.is_ascii_graphic() || *b == b' ')
-            || (!fields[3].is_empty()
-                && (fields[3].len() != 36
-                    || !fields[3].iter().enumerate().all(|(i, b)| {
-                        if [8, 13, 18, 23].contains(&i) {
-                            *b == b'-'
-                        } else {
-                            b.is_ascii_hexdigit()
-                        }
-                    })))
-        {
-            return None;
-        }
-        let time = u32::from_str_radix(std::str::from_utf8(fields[1]).ok()?, 16).ok()?;
-        Some((fields, time))
+fn recognized_current_quarantine(value: &[u8]) -> bool {
+    parse_quarantine(value).is_some_and(|(_, time)| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .is_ok_and(|now| u64::from(time) <= now.as_secs())
+    })
+}
+fn parse_quarantine(value: &[u8]) -> Option<([&[u8]; 4], u32)> {
+    let fields: Vec<_> = value.split(|b| *b == b';').collect();
+    let fields: [&[u8]; 4] = fields.try_into().ok()?;
+    if fields[0].len() != 4
+        || !fields[0].iter().all(u8::is_ascii_hexdigit)
+        || fields[1].len() != 8
+        || !fields[1].iter().all(u8::is_ascii_hexdigit)
+        || fields[2].is_empty()
+        || fields[2].len() > 256
+        || !fields[2].iter().all(|b| b.is_ascii_graphic() || *b == b' ')
+        || (!fields[3].is_empty()
+            && (fields[3].len() != 36
+                || !fields[3].iter().enumerate().all(|(i, b)| {
+                    if [8, 13, 18, 23].contains(&i) {
+                        *b == b'-'
+                    } else {
+                        b.is_ascii_hexdigit()
+                    }
+                })))
+    {
+        return None;
     }
-    let (Some((a, at)), Some((b, bt))) = (parse(source), parse(target)) else {
+    let time = u32::from_str_radix(std::str::from_utf8(fields[1]).ok()?, 16).ok()?;
+    Some((fields, time))
+}
+fn newer_quarantine_timestamp(source: &[u8], target: &[u8]) -> bool {
+    let (Some((a, at)), Some((b, bt))) = (parse_quarantine(source), parse_quarantine(target))
+    else {
         return false;
     };
     let Ok(now) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) else {

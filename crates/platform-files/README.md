@@ -27,3 +27,11 @@ Darwin 的 `acl_get_fd` 在 FILESEC_ACL 属性不存在时可返回 ENOENT。仅
 本机 macOS 实际临时文件覆盖：普通/扩展 ACL、mode/xattr 复制但内容不复制、同 inode 拒绝、硬链接目标拒绝、超限拒绝且目标不变、无 ACL 的已 unlink 但仍打开文件、ACL/xattr 摘要变化。Runtime 另外验证安全属性改变后旧预览拒绝。
 
 Linux 路径有 fd ownership/xattr/mode 实现，尚未做目标编译或运行验证；尚未覆盖 Linux inode flags、文件能力等完整发布政策，因此不能据此开放 Linux 编辑发布。Windows 尚无此包后端。macOS immutable/append-only flags 等若不能精确保留则拒绝，未以该路径宣称这些 flags 可复制。继承 ACL 不一致也拒绝。各文件系统的并发一致性、配额、断电持久性和跨设备发布保证不由本包提供。
+
+## 外部源文件兼容候选（尚未完成Runtime整合）
+
+发布元数据复制现在可保留新暂存文件复制前已经存在的quarantine标签，条件是源无该标签、目标标签与初始观察完全相同、格式和时间受限，且源/目标其他安全属性严格一致。删除初始标签不会因为使两边快照相等而被接受。严格复制API不变。
+
+本机签名App Sandbox的独立元数据探针通过；但完整Agent发布仍在capture_intent之后拒绝，因为OS也为被重命名的原件添加标签。保留原件的实际字节未丢失，目标暂时缺失，原安全摘要检查仍生效。此候选不能直接合并或宣称外部文件已支持。后续必须把捕获前的原生标签见证、捕获后的实际身份、崩溃恢复与历史源重验一起落实，缺见证继续拒绝。
+
+参照[Apple的隔离属性说明](https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/LaunchServicesKeys.html#//apple_ref/doc/uid/20001431-113253)：系统会为被隔离文件关联时间和应用信息。本候选不推测私有安全位的强弱，不设置排除路径或关闭沙盒，不删除/重写标签。

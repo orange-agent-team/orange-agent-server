@@ -5,6 +5,7 @@ The Rust probe owns and removes its fixtures. No user document is opened.
 This development signature does not qualify production signing or notarization.
 """
 import os
+import argparse
 from pathlib import Path
 import platform
 import plistlib
@@ -13,6 +14,9 @@ import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
+parser = argparse.ArgumentParser()
+parser.add_argument('--bundled-source', action='store_true', help='Read an owned source created outside the sandbox before signing')
+args = parser.parse_args()
 if platform.system() != 'Darwin':
     raise SystemExit('Apple publication metadata qualification requires macOS')
 rustup = shutil.which('rustup') or '/opt/homebrew/opt/rustup/bin/rustup'
@@ -34,6 +38,9 @@ with tempfile.TemporaryDirectory(prefix='qualified-', dir=stage_root) as directo
     binary = Path(env.get('CARGO_TARGET_DIR', ROOT / 'target')) / 'debug/examples/security_probe'
     shutil.copyfile(binary, executable)
     executable.chmod(0o755)
+    resource = app / 'Contents/Resources/owned-source'
+    resource.parent.mkdir()
+    resource.write_bytes(b'owned original')
     (app / 'Contents/Info.plist').write_bytes(plistlib.dumps({
         'CFBundleIdentifier': 'dev.orangeagent.metadataProbe',
         'CFBundleExecutable': 'MetadataProbe', 'CFBundleName': 'MetadataProbe',
@@ -45,11 +52,15 @@ with tempfile.TemporaryDirectory(prefix='qualified-', dir=stage_root) as directo
     subprocess.run(['codesign', '--verify', '--strict', str(app)], check=True, timeout=30)
     signed = subprocess.run(['codesign', '--display', '--entitlements', ':-', str(app)], capture_output=True, check=True, timeout=30)
     assert plistlib.loads(signed.stdout)['com.apple.security.app-sandbox'] is True
-    result = subprocess.run([str(executable)], capture_output=True, text=True, timeout=30)
+    result = subprocess.run([str(executable), *(['--bundled-source'] if args.bundled_source else [])], capture_output=True, text=True, timeout=30)
     print(result.stdout, end='')
     if result.returncode:
         print(result.stderr)
         raise SystemExit(result.returncode)
-    assert 'quarantine_fields_equal=[true, false, true, true]' in result.stdout
+    if args.bundled_source:
+        assert 'source_has_quarantine=false' in result.stdout
+        assert 'initial_target_label_preserved=true' in result.stdout
+    else:
+        assert 'quarantine_fields_equal=[true, false, true, true]' in result.stdout
     assert 'publication_policy=passed exact_target_bound=true source_unchanged=true' in result.stdout
 print('PASS actual App Sandbox: preserve quarantine flags/agent/event and bind actual target timestamp; owned bytes and source metadata unchanged')

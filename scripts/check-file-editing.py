@@ -5,11 +5,14 @@ Every command starts a new Host. Approvals only concern owned temporary files.
 This is not real inference, OS-picker, production signing or GPU certification.
 """
 import hashlib
+import argparse
+import atexit
 import http.server
 import json
 import os
 from pathlib import Path
 import platform
+import plistlib
 import secrets
 import shutil
 import sqlite3
@@ -19,6 +22,9 @@ import threading
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
+parser = argparse.ArgumentParser()
+parser.add_argument('--sandboxed', action='store_true', help='Execute the same real CLI in a signed App Sandbox; fixtures are created by this outside process')
+args = parser.parse_args()
 if platform.system() != 'Darwin':
     raise SystemExit('Actual editing acceptance currently requires the implemented Apple backend')
 rustup = shutil.which('rustup') or '/opt/homebrew/opt/rustup/bin/rustup'
@@ -32,6 +38,35 @@ metadata = json.loads(subprocess.check_output([str(cargo), 'metadata', '--no-dep
 if env.get('CARGO_BUILD_TARGET'):
     raise SystemExit('Native CLI acceptance required')
 binary = Path(metadata['target_directory']) / 'debug/examples/local-agent'
+fixture_parent = None
+if args.sandboxed:
+    parent = ROOT / '.local/sandbox-editing'
+    parent.mkdir(parents=True, exist_ok=True)
+    package = tempfile.TemporaryDirectory(prefix='qualified-', dir=parent)
+    atexit.register(package.cleanup)
+    app = Path(package.name) / 'EditMetadataProbe.app'
+    destination = app / 'Contents/MacOS/EditMetadataProbe'
+    destination.parent.mkdir(parents=True)
+    shutil.copyfile(binary, destination)
+    destination.chmod(0o755)
+    identifier = 'dev.orangeagent.editMetadataProbe'
+    (app / 'Contents/Info.plist').write_bytes(plistlib.dumps({
+        'CFBundleIdentifier': identifier, 'CFBundleExecutable': 'EditMetadataProbe',
+        'CFBundlePackageType': 'APPL', 'CFBundleVersion': '1', 'LSUIElement': True,
+    }))
+    entitlement = Path(package.name) / 'sandbox.entitlements'
+    entitlement.write_bytes(plistlib.dumps({'com.apple.security.app-sandbox': True, 'com.apple.security.network.client': True}))
+    subprocess.run(['codesign', '--force', '--sign', '-', '--entitlements', str(entitlement), str(app)], check=True, timeout=30)
+    subprocess.run(['codesign', '--verify', '--strict', str(app)], check=True, timeout=30)
+    signed = subprocess.run(['codesign', '--display', '--entitlements', ':-', str(app)], capture_output=True, check=True, timeout=30)
+    assert plistlib.loads(signed.stdout)['com.apple.security.app-sandbox'] is True
+    binary = destination
+    # Bootstrap only the dedicated test container. A usage rejection is the
+    # expected result, not an editing-test pass or a permission bypass.
+    bootstrap = subprocess.run([str(binary)], capture_output=True, text=True, env=env, timeout=30)
+    assert bootstrap.returncode != 0 and 'usage: local-agent' in bootstrap.stderr
+    fixture_parent = Path.home() / 'Library/Containers' / identifier / 'Data/tmp'
+    assert fixture_parent.is_dir(), 'Dedicated sandbox container was not initialized'
 key_value = secrets.token_hex(32)
 observations, failures = {}, []
 old = 'owned-source-' + secrets.token_hex(8) + '\n'
@@ -120,7 +155,7 @@ thread = threading.Thread(target=server.serve_forever, daemon=True)
 thread.start()
 summary = []
 try:
-    with tempfile.TemporaryDirectory(prefix='orange-edit-cli-') as directory:
+    with tempfile.TemporaryDirectory(prefix='orange-edit-cli-', dir=fixture_parent) as directory:
         base = Path(directory)
 
         def fixture(scenario):
@@ -129,6 +164,9 @@ try:
             private.mkdir(parents=True, mode=0o700)
             workspace.mkdir()
             (workspace / 'note.txt').write_text(old)
+            if args.sandboxed:
+                names = subprocess.check_output(['/usr/bin/xattr', str(workspace / 'note.txt')], text=True).splitlines()
+                assert 'com.apple.quarantine' not in names, 'Outside-created fixture must genuinely start without quarantine'
             key = private / 'key'
             key.write_text(key_value)
             key.chmod(0o600)
@@ -176,7 +214,24 @@ try:
             with sqlite3.connect(database) as db:
                 assert db.execute('SELECT count(*) FROM approvals WHERE operation_id=?', (pending['operation_id'],)).fetchone()[0] == 0
             invoke('approve-edit', pending['operation_id'], preview['preview_digest'])
-            assert invoke('step')['phase'] == 'ready'
+            actual = invoke('step')
+            if actual['phase'] != 'ready' and args.sandboxed:
+                report = ROOT / '.local/sandbox-editing' / ('failure-' + secrets.token_hex(8))
+                report.mkdir(mode=0o700)
+                with sqlite3.connect(database) as source_db, sqlite3.connect(report / 'journal.sqlite') as copy_db:
+                    source_db.backup(copy_db)
+                    details = {
+                        'phase': actual['phase'], 'failure': actual.get('failure'),
+                        'steps': source_db.execute('SELECT step,body FROM editing_publication_steps ORDER BY rowid').fetchall(),
+                        'files': [{'name': f.name, 'bytes': f.stat().st_size,
+                                   'sha256': hashlib.sha256(f.read_bytes()).hexdigest(),
+                                   'attributes': subprocess.check_output(['/usr/bin/xattr', str(f)], text=True).splitlines()}
+                                  for f in workspace.iterdir() if f.is_file()],
+                    }
+                shutil.copytree(workspace, report / 'workspace')
+                (report / 'diagnosis.json').write_text(json.dumps(details, indent=2) + '\n')
+                print(json.dumps({'owned_diagnostic': str(report), **details}), flush=True)
+            assert actual['phase'] == 'ready'
             assert (workspace / 'note.txt').read_text() == expected
             assert 'note.txt' in {p.name for p in workspace.iterdir()}
             assert len(observations['positive']) == index + 1
@@ -296,4 +351,4 @@ finally:
     server.server_close()
     thread.join(timeout=5)
     assert not thread.is_alive(), 'owned fixture server did not stop'
-print(json.dumps({'result': 'PASS', 'scope': 'actual CLI/HTTP adapter/SQLite/files; scripted model responses, no inference or OS consent certification', 'scenarios': summary, 'fixture_server_stopped': True}, indent=2))
+print(json.dumps({'result': 'PASS', 'app_sandbox': args.sandboxed, 'outside_created_unlabelled_sources': args.sandboxed, 'scope': 'actual CLI/HTTP adapter/SQLite/files; scripted model responses, no inference or OS picker certification', 'scenarios': summary, 'fixture_server_stopped': True}, indent=2))
