@@ -24,7 +24,10 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser()
 parser.add_argument('--sandboxed', action='store_true', help='Execute the same real CLI in a signed App Sandbox; fixtures are created by this outside process')
+parser.add_argument('--legacy-runtime', type=Path, help='Exact fixed64748cd schema16 source; migrate a real approved edit after a prior successful edit')
 args = parser.parse_args()
+if args.sandboxed and args.legacy_runtime:
+    raise SystemExit('Legacy compatibility and sandbox qualification are separate invocations')
 if platform.system() != 'Darwin':
     raise SystemExit('Actual editing acceptance currently requires the implemented Apple backend')
 rustup = shutil.which('rustup') or '/opt/homebrew/opt/rustup/bin/rustup'
@@ -38,6 +41,34 @@ metadata = json.loads(subprocess.check_output([str(cargo), 'metadata', '--no-dep
 if env.get('CARGO_BUILD_TARGET'):
     raise SystemExit('Native CLI acceptance required')
 binary = Path(metadata['target_directory']) / 'debug/examples/local-agent'
+current_binary = binary
+legacy_binary = None
+if args.legacy_runtime:
+    legacy = args.legacy_runtime.resolve()
+    release_path = legacy / 'release-manifest.json'
+    if legacy.is_symlink() or hashlib.sha256(release_path.read_bytes()).hexdigest() != '5f0b1a2c50b0c95ab288a00817926dbc3fa3f928b451547342228a50ccff1266':
+        raise SystemExit('Exact Runtime64748cd source manifest required')
+    release = json.loads(release_path.read_text())
+    assert release['origin_commit'] == '64748cd25940b9bef28d1efd90488a8e8ab76684'
+    actual = set()
+    for directory, folders, names in os.walk(legacy, followlinks=False):
+        if any((Path(directory) / name).is_symlink() for name in folders):
+            raise SystemExit('Linked legacy source directory')
+        folders[:] = [name for name in folders if name != 'target']
+        for name in names:
+            path = Path(directory) / name
+            if path.is_symlink() or not path.is_file():
+                raise SystemExit('Irregular legacy source entry')
+            relative = path.relative_to(legacy).as_posix()
+            actual.add(relative)
+            if relative != 'release-manifest.json' and hashlib.sha256(path.read_bytes()).hexdigest() != release['content_sha256'].get(relative):
+                raise SystemExit('Legacy source bytes differ')
+    assert actual == set(release['content_sha256']) | {'release-manifest.json'}
+    legacy_env = env.copy()
+    legacy_env['CARGO_TARGET_DIR'] = str(ROOT / '.local/schema16-compat-target')
+    subprocess.run([str(cargo), 'build', '--manifest-path', str(legacy / 'Cargo.toml'), '-p', 'orange-agent-runtime', '--example', 'local-agent', '--locked', '--offline'], env=legacy_env, check=True, timeout=300)
+    legacy_binary = Path(legacy_env['CARGO_TARGET_DIR']) / 'debug/examples/local-agent'
+    binary = legacy_binary
 fixture_parent = None
 if args.sandboxed:
     parent = ROOT / '.local/sandbox-editing'
@@ -181,7 +212,7 @@ try:
                 result = subprocess.run([str(binary), str(config_path), command, *arguments], cwd=ROOT, env=env, capture_output=True, text=True, timeout=25)
                 if failed:
                     assert result.returncode != 0, 'invalid command accepted'
-                    return None
+                    return result
                 if result.returncode:
                     raise RuntimeError('CLI ' + command + ' failed: ' + result.stderr[:500])
                 return json.loads(result.stdout)
@@ -214,6 +245,13 @@ try:
             with sqlite3.connect(database) as db:
                 assert db.execute('SELECT count(*) FROM approvals WHERE operation_id=?', (pending['operation_id'],)).fetchone()[0] == 0
             invoke('approve-edit', pending['operation_id'], preview['preview_digest'])
+            if legacy_binary and index == 2:
+                with sqlite3.connect(database) as db:
+                    assert db.execute('PRAGMA user_version').fetchone()[0] == 16
+                    assert db.execute('SELECT count(*) FROM patch_version_edges').fetchone()[0] == 1
+                    assert db.execute("SELECT count(*) FROM sqlite_master WHERE name LIKE 'patch_capture_%'").fetchone()[0] == 0
+                    saved_approvals = db.execute('SELECT * FROM editing_approvals ORDER BY operation_id').fetchall()
+                binary = current_binary
             actual = invoke('step')
             if actual['phase'] != 'ready' and args.sandboxed:
                 report = ROOT / '.local/sandbox-editing' / ('failure-' + secrets.token_hex(8))
@@ -232,6 +270,20 @@ try:
                 (report / 'diagnosis.json').write_text(json.dumps(details, indent=2) + '\n')
                 print(json.dumps({'owned_diagnostic': str(report), **details}), flush=True)
             assert actual['phase'] == 'ready'
+            if legacy_binary and index == 2:
+                with sqlite3.connect(database) as db:
+                    assert db.execute('PRAGMA user_version').fetchone()[0] == 17
+                    assert db.execute('SELECT * FROM editing_approvals ORDER BY operation_id').fetchall() == saved_approvals
+                    assert db.execute('SELECT count(*) FROM patch_capture_witnesses').fetchone()[0] == 0
+                    assert db.execute('SELECT count(*) FROM patch_capture_receipts').fetchone()[0] == 1
+                def durable_bytes():
+                    return {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in [database, database.with_name(database.name + '-wal')] if p.exists()}
+                before_rejected_open = durable_bytes()
+                binary = legacy_binary
+                rejected = invoke('status', failed=True)
+                assert 'UnsupportedVersion' in rejected.stderr or 'unsupported journal format' in rejected.stderr
+                assert durable_bytes() == before_rejected_open, 'old schema16 binary changed newer data'
+                binary = current_binary
             assert (workspace / 'note.txt').read_text() == expected
             assert 'note.txt' in {p.name for p in workspace.iterdir()}
             assert len(observations['positive']) == index + 1
@@ -257,6 +309,8 @@ try:
         invoke('inspect-edit', first, failed=True)
         assert len(observations['positive']) == 4
         summary.append({'scenario': 'positive', 'model_calls': 4, 'actual_edits': 2, 'reopen_no_replay': True})
+        if legacy_binary:
+            summary.append({'scenario': 'schema16-to17', 'actual_old_success_and_approved_edit': True, 'approval_preserved': True, 'no_old_capture_evidence_invented': True, 'historical_source_and_pending_edit_validated': True, 'old_binary_rejected_without_data_mutation': True})
 
         config, save, invoke, workspace, database, _ = fixture('combined')
         create = invoke('authorize-create', 'explicit-create')
