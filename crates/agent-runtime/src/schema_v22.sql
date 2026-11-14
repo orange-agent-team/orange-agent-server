@@ -1,0 +1,19 @@
+-- Memory payloads are mutable/scrubbable; immutable review metadata contains
+-- only hashes and provenance, never the title or body being forgotten.
+CREATE TABLE memory_scopes(scope_id TEXT PRIMARY KEY,owner TEXT NOT NULL,shared INTEGER NOT NULL CHECK(shared IN(0,1)),revision INTEGER NOT NULL CHECK(revision>0),enabled INTEGER NOT NULL CHECK(enabled IN(0,1)));
+CREATE TABLE memory_members(scope_id TEXT NOT NULL REFERENCES memory_scopes(scope_id),principal TEXT NOT NULL,access TEXT NOT NULL CHECK(access IN('read','write','revoked')),PRIMARY KEY(scope_id,principal));
+CREATE TABLE memory_entries(scope_id TEXT NOT NULL REFERENCES memory_scopes(scope_id),entry_id TEXT NOT NULL,version INTEGER NOT NULL CHECK(version>0),state TEXT NOT NULL CHECK(state IN('active','disabled','deleted')),payload TEXT,payload_digest TEXT NOT NULL,source_actor TEXT NOT NULL,source_run TEXT NOT NULL REFERENCES runs(run_id),origin TEXT NOT NULL CHECK(origin IN('user_declaration','model_inference')),PRIMARY KEY(scope_id,entry_id),CHECK((state='deleted' AND payload IS NULL) OR(state!='deleted' AND payload IS NOT NULL AND json_valid(payload))));
+CREATE TABLE memory_drafts(draft_id TEXT PRIMARY KEY,scope_id TEXT NOT NULL REFERENCES memory_scopes(scope_id),entry_id TEXT NOT NULL,actor TEXT NOT NULL,request_key TEXT NOT NULL,body TEXT NOT NULL CHECK(json_valid(body)),digest TEXT NOT NULL,payload TEXT,state TEXT NOT NULL CHECK(state IN('pending','approved','invalidated')),result_version INTEGER,UNIQUE(scope_id,actor,request_key),CHECK((state='pending' AND result_version IS NULL) OR(state='approved' AND payload IS NULL AND result_version>0) OR(state='invalidated' AND payload IS NULL AND result_version IS NULL)));
+CREATE TABLE memory_source_blocks(scope_id TEXT NOT NULL REFERENCES memory_scopes(scope_id),run_id TEXT NOT NULL REFERENCES runs(run_id),PRIMARY KEY(scope_id,run_id));
+CREATE TABLE memory_audit(seq INTEGER PRIMARY KEY,scope_id TEXT NOT NULL REFERENCES memory_scopes(scope_id),actor TEXT NOT NULL,action TEXT NOT NULL,entry_id TEXT,revision INTEGER NOT NULL,digest TEXT);
+CREATE TRIGGER memory_scope_identity BEFORE UPDATE ON memory_scopes WHEN NEW.scope_id!=OLD.scope_id OR NEW.owner!=OLD.owner OR NEW.shared!=OLD.shared OR NEW.revision!=OLD.revision+1 BEGIN SELECT RAISE(ABORT,'immutable scope or invalid revision');END;
+CREATE TRIGGER memory_scope_no_delete BEFORE DELETE ON memory_scopes BEGIN SELECT RAISE(ABORT,'scope retained');END;
+CREATE TRIGGER memory_entry_version BEFORE UPDATE ON memory_entries WHEN NEW.scope_id!=OLD.scope_id OR NEW.entry_id!=OLD.entry_id OR NEW.version!=OLD.version+1 OR OLD.state='deleted' BEGIN SELECT RAISE(ABORT,'memory CAS or tombstone violation');END;
+CREATE TRIGGER memory_entry_no_delete BEFORE DELETE ON memory_entries BEGIN SELECT RAISE(ABORT,'memory tombstone retained');END;
+CREATE TRIGGER memory_draft_binding BEFORE UPDATE ON memory_drafts WHEN NEW.draft_id!=OLD.draft_id OR NEW.scope_id!=OLD.scope_id OR NEW.entry_id!=OLD.entry_id OR NEW.actor!=OLD.actor OR NEW.request_key!=OLD.request_key OR NEW.body!=OLD.body OR NEW.digest!=OLD.digest OR OLD.state!='pending' OR NEW.state NOT IN('approved','invalidated') OR NEW.payload IS NOT NULL BEGIN SELECT RAISE(ABORT,'immutable memory draft metadata');END;
+CREATE TRIGGER memory_draft_no_delete BEFORE DELETE ON memory_drafts BEGIN SELECT RAISE(ABORT,'draft metadata retained');END;
+CREATE TRIGGER memory_audit_no_update BEFORE UPDATE ON memory_audit BEGIN SELECT RAISE(ABORT,'immutable memory audit');END;
+CREATE TRIGGER memory_audit_no_delete BEFORE DELETE ON memory_audit BEGIN SELECT RAISE(ABORT,'immutable memory audit');END;
+CREATE TRIGGER memory_source_no_update BEFORE UPDATE ON memory_source_blocks BEGIN SELECT RAISE(ABORT,'source tombstone retained');END;
+CREATE TRIGGER memory_source_no_delete BEFORE DELETE ON memory_source_blocks BEGIN SELECT RAISE(ABORT,'source tombstone retained');END;
+PRAGMA user_version=22;

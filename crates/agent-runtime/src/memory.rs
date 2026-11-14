@@ -1,0 +1,538 @@
+//! Trusted-host memory store. Grants and drafts are not model authority. Agent
+//! tool registration/context revalidation are separate integration obligations.
+use crate::{Journal, JournalError};
+use orange_protocol::{request_digest, valid_id};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use serde::{Deserialize, Serialize};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+mod drafts;
+#[cfg(test)]
+mod tests;
+pub use drafts::{
+    MemoryDraftOutcome, MemoryMutation, MemoryReview, MemoryWriteRequest, PreparedMemoryDraft,
+};
+const MAX_PAYLOAD: usize = 32 * 1024;
+#[derive(Debug, thiserror::Error)]
+pub enum MemoryError {
+    #[error("invalid memory request")]
+    Invalid,
+    #[error("memory permission is unavailable or revoked")]
+    Denied,
+    #[error("memory version or request conflicts")]
+    Conflict,
+    #[error("memory quota exceeded")]
+    Limit,
+    #[error("exact current user approval required")]
+    ApprovalRequired,
+    #[error(transparent)]
+    Storage(#[from] rusqlite::Error),
+    #[error(transparent)]
+    Journal(#[from] JournalError),
+}
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryAccess {
+    Read,
+    Write,
+    Revoked,
+}
+impl MemoryAccess {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::Write => "write",
+            Self::Revoked => "revoked",
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryOrigin {
+    UserDeclaration,
+    ModelInference,
+}
+impl MemoryOrigin {
+    fn name(self) -> &'static str {
+        match self {
+            Self::UserDeclaration => "user_declaration",
+            Self::ModelInference => "model_inference",
+        }
+    }
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct MemoryPayload {
+    pub title: String,
+    pub content: String,
+    pub enabled: bool,
+}
+impl MemoryPayload {
+    fn validate(&self) -> Result<(), MemoryError> {
+        if self.title.is_empty()
+            || self.title.len() > 128
+            || self.title.chars().any(char::is_control)
+            || self.content.len() > MAX_PAYLOAD
+            || self.content.contains('\0')
+            || encoded(self)?.len() > MAX_PAYLOAD
+        {
+            Err(MemoryError::Invalid)
+        } else {
+            Ok(())
+        }
+    }
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MemoryScope {
+    pub scope_id: String,
+    pub owner: String,
+    pub shared: bool,
+    pub revision: String,
+    pub enabled: bool,
+}
+#[derive(Clone)]
+pub struct MemoryGrant {
+    actor: String,
+    session: String,
+    scope: String,
+    revision: i64,
+    epoch: i64,
+    write: bool,
+    policy: String,
+    closed: Arc<AtomicBool>,
+}
+impl MemoryGrant {
+    /// Signal only. Trusted Host must await its serialized Journal queue barrier
+    /// before acknowledging closure; durable ACL revocation uses set_memory_member.
+    pub fn request_revoke(&self) {
+        self.closed.store(true, Ordering::Release);
+    }
+    pub fn scope_id(&self) -> &str {
+        &self.scope
+    }
+}
+fn encoded<T: Serialize>(v: &T) -> Result<String, MemoryError> {
+    serde_json::to_string(v).map_err(|_| MemoryError::Invalid)
+}
+fn digest<T: Serialize>(kind: &str, v: &T) -> Result<String, MemoryError> {
+    request_digest(kind, v).map_err(|_| MemoryError::Invalid)
+}
+fn version(v: &str) -> Result<i64, MemoryError> {
+    let n = v.parse::<i64>().map_err(|_| MemoryError::Invalid)?;
+    if n < 1 || n.to_string() != v {
+        return Err(MemoryError::Invalid);
+    }
+    Ok(n)
+}
+fn now() -> Result<i64, MemoryError> {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| MemoryError::Invalid)?
+        .as_secs()
+        .try_into()
+        .map_err(|_| MemoryError::Invalid)
+}
+fn check(
+    db: &Connection,
+    grant: &MemoryGrant,
+    write: bool,
+    session: &str,
+) -> Result<(), MemoryError> {
+    if grant.session != session || grant.closed.load(Ordering::Acquire) || write && !grant.write {
+        return Err(MemoryError::Denied);
+    }
+    let permitted:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM memory_scopes s JOIN memory_members m USING(scope_id) JOIN runtime_host h ON h.singleton=1 WHERE s.scope_id=? AND s.enabled=1 AND s.revision=? AND m.principal=? AND m.access IN('read','write') AND (?=0 OR m.access='write') AND h.epoch=?)",params![grant.scope,grant.revision,grant.actor,write,grant.epoch],|r|r.get(0))?;
+    if !permitted {
+        return Err(MemoryError::Denied);
+    }
+    Ok(())
+}
+impl Journal {
+    pub fn create_memory_scope(
+        &mut self,
+        owner: &str,
+        id: &str,
+        shared: bool,
+    ) -> Result<MemoryScope, MemoryError> {
+        if !valid_id(owner) || !valid_id(id) {
+            return Err(MemoryError::Invalid);
+        }
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let old: Option<(String, bool)> = tx
+            .query_row(
+                "SELECT owner,shared FROM memory_scopes WHERE scope_id=?",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        if let Some((actor, kind)) = old {
+            if actor != owner || kind != shared {
+                return Err(MemoryError::Conflict);
+            }
+        } else {
+            let count: i64 = tx.query_row(
+                "SELECT count(*) FROM memory_scopes WHERE owner=?",
+                [owner],
+                |r| r.get(0),
+            )?;
+            if count >= 128 {
+                return Err(MemoryError::Limit);
+            }
+            tx.execute(
+                "INSERT INTO memory_scopes VALUES(?,?,?,1,1)",
+                params![id, owner, shared],
+            )?;
+            tx.execute(
+                "INSERT INTO memory_members VALUES(?,?,'write')",
+                params![id, owner],
+            )?;
+            tx.execute("INSERT INTO memory_audit(scope_id,actor,action,revision) VALUES(?,?,'scope_created',1)",params![id,owner])?;
+        }
+        tx.commit()?;
+        self.memory_scope(owner, id)
+    }
+    pub fn memory_scope(&self, actor: &str, id: &str) -> Result<MemoryScope, MemoryError> {
+        if !valid_id(actor) || !valid_id(id) {
+            return Err(MemoryError::Invalid);
+        }
+        self.connection.query_row("SELECT s.scope_id,s.owner,s.shared,s.revision,s.enabled FROM memory_scopes s JOIN memory_members m USING(scope_id) WHERE s.scope_id=? AND m.principal=? AND m.access!='revoked'",params![id,actor],|r|Ok(MemoryScope{scope_id:r.get(0)?,owner:r.get(1)?,shared:r.get(2)?,revision:r.get::<_,i64>(3)?.to_string(),enabled:r.get(4)?})).optional()?.ok_or(MemoryError::Denied)
+    }
+    /// Authenticated scope-owner administration only; no team-role inheritance.
+    pub fn set_memory_member(
+        &mut self,
+        owner: &str,
+        scope: &str,
+        principal: &str,
+        access: MemoryAccess,
+        expected: &str,
+    ) -> Result<MemoryScope, MemoryError> {
+        if ![owner, scope, principal].iter().all(|v| valid_id(v)) || owner == principal {
+            return Err(MemoryError::Invalid);
+        }
+        let revision = version(expected)?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let allowed:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM memory_scopes WHERE scope_id=? AND owner=? AND shared=1 AND revision=?)",params![scope,owner,revision],|r|r.get(0))?;
+        if !allowed {
+            return Err(MemoryError::Denied);
+        }
+        let count: i64 = tx.query_row(
+            "SELECT count(*) FROM memory_members WHERE scope_id=? AND principal!=?",
+            params![scope, principal],
+            |r| r.get(0),
+        )?;
+        if count >= 64 {
+            return Err(MemoryError::Limit);
+        }
+        tx.execute("INSERT INTO memory_members VALUES(?,?,?) ON CONFLICT(scope_id,principal) DO UPDATE SET access=excluded.access",params![scope,principal,access.name()])?;
+        let next = revision.checked_add(1).ok_or(MemoryError::Limit)?;
+        tx.execute(
+            "UPDATE memory_scopes SET revision=? WHERE scope_id=?",
+            params![next, scope],
+        )?;
+        tx.execute("UPDATE memory_drafts SET state='invalidated',payload=NULL WHERE scope_id=? AND state='pending'",[scope])?;
+        tx.execute("INSERT INTO memory_audit(scope_id,actor,action,revision,digest) VALUES(?,?,'membership_changed',?,?)",params![scope,owner,next,digest("memory-membership.v1",&(principal,access))?])?;
+        tx.commit()?;
+        self.memory_scope(owner, scope)
+    }
+    pub fn set_memory_scope_enabled(
+        &mut self,
+        owner: &str,
+        scope: &str,
+        expected: &str,
+        enabled: bool,
+    ) -> Result<MemoryScope, MemoryError> {
+        if !valid_id(owner) || !valid_id(scope) {
+            return Err(MemoryError::Invalid);
+        }
+        let revision = version(expected)?;
+        let next = revision.checked_add(1).ok_or(MemoryError::Limit)?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if tx.execute("UPDATE memory_scopes SET revision=?,enabled=? WHERE scope_id=? AND owner=? AND revision=?",params![next,enabled,scope,owner,revision])?!=1{return Err(MemoryError::Conflict);}
+        tx.execute("UPDATE memory_drafts SET state='invalidated',payload=NULL WHERE scope_id=? AND state='pending'",[scope])?;
+        tx.execute(
+            "INSERT INTO memory_audit(scope_id,actor,action,revision) VALUES(?,?,?,?)",
+            params![
+                scope,
+                owner,
+                if enabled {
+                    "scope_enabled"
+                } else {
+                    "scope_disabled"
+                },
+                next
+            ],
+        )?;
+        tx.commit()?;
+        self.memory_scope(owner, scope)
+    }
+    pub fn authorize_memory(
+        &self,
+        actor: &str,
+        scope: &str,
+        policy: &str,
+        write: bool,
+    ) -> Result<MemoryGrant, MemoryError> {
+        if ![actor, scope, policy].iter().all(|v| valid_id(v)) {
+            return Err(MemoryError::Invalid);
+        }
+        let snapshot = self.memory_scope(actor, scope)?;
+        let grant = MemoryGrant {
+            actor: actor.into(),
+            session: self.memory_session.clone(),
+            scope: scope.into(),
+            revision: version(&snapshot.revision)?,
+            epoch: self.connection.query_row(
+                "SELECT epoch FROM runtime_host WHERE singleton=1",
+                [],
+                |r| r.get(0),
+            )?,
+            write,
+            policy: policy.into(),
+            closed: Arc::new(AtomicBool::new(false)),
+        };
+        check(&self.connection, &grant, write, &self.memory_session)?;
+        Ok(grant)
+    }
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MemoryValue {
+    pub scope_id: String,
+    pub entry_id: String,
+    pub owner: String,
+    pub version: String,
+    pub title: String,
+    pub content: String,
+    pub enabled: bool,
+    pub origin: MemoryOrigin,
+    pub source_actor: String,
+    pub source_run: String,
+    pub total_bytes: String,
+    pub start_byte: String,
+    pub next_byte: Option<String>,
+}
+pub struct MemoryReadReceipt {
+    grant: MemoryGrant,
+    value: MemoryValue,
+    include_disabled: bool,
+}
+impl MemoryReadReceipt {
+    pub fn view<'a>(&'a self, journal: &'a Journal) -> Result<&'a MemoryValue, MemoryError> {
+        check(
+            &journal.connection,
+            &self.grant,
+            false,
+            &journal.memory_session,
+        )?;
+        let current:bool=journal.connection.query_row("SELECT EXISTS(SELECT 1 FROM memory_entries WHERE scope_id=? AND entry_id=? AND version=? AND (state='active' OR (?=1 AND state='disabled')))",params![self.grant.scope,self.value.entry_id,version(&self.value.version)?,self.include_disabled],|r|r.get(0))?;
+        if !current {
+            return Err(MemoryError::Conflict);
+        }
+        Ok(&self.value)
+    }
+}
+impl Journal {
+    pub fn read_memory(
+        &self,
+        grant: &MemoryGrant,
+        id: &str,
+        expected: Option<&str>,
+        start: u32,
+        limit: u32,
+        include_disabled: bool,
+    ) -> Result<MemoryReadReceipt, MemoryError> {
+        if !valid_id(id) || limit == 0 || limit > 4096 {
+            return Err(MemoryError::Invalid);
+        }
+        check(&self.connection, grant, false, &self.memory_session)?;
+        type Row = (i64, String, String, String, String, String, String);
+        let row:Option<Row>=self.connection.query_row("SELECT e.version,e.payload,e.payload_digest,e.origin,e.source_actor,e.source_run,s.owner FROM memory_entries e JOIN memory_scopes s USING(scope_id) WHERE e.scope_id=? AND e.entry_id=? AND (e.state='active' OR (?=1 AND e.state='disabled'))",params![grant.scope,id,include_disabled],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?))).optional()?;
+        let (revision, raw, expected_digest, origin, actor, run, owner) =
+            row.ok_or(MemoryError::Denied)?;
+        if raw.len() > MAX_PAYLOAD {
+            return Err(MemoryError::Limit);
+        }
+        let payload: MemoryPayload =
+            serde_json::from_str(&raw).map_err(|_| MemoryError::Invalid)?;
+        payload.validate()?;
+        if digest("memory-payload.v1", &payload)? != expected_digest
+            || expected
+                .map(version)
+                .transpose()?
+                .is_some_and(|v| v != revision)
+        {
+            return Err(MemoryError::Conflict);
+        }
+        let start = start as usize;
+        if start > payload.content.len() || !payload.content.is_char_boundary(start) {
+            return Err(MemoryError::Invalid);
+        }
+        let mut end = (start + limit as usize).min(payload.content.len());
+        while !payload.content.is_char_boundary(end) {
+            end -= 1;
+        }
+        if end == start && start < payload.content.len() {
+            return Err(MemoryError::Invalid);
+        }
+        let origin = match origin.as_str() {
+            "user_declaration" => MemoryOrigin::UserDeclaration,
+            "model_inference" => MemoryOrigin::ModelInference,
+            _ => return Err(MemoryError::Invalid),
+        };
+        let value = MemoryValue {
+            scope_id: grant.scope.clone(),
+            entry_id: id.into(),
+            owner,
+            version: revision.to_string(),
+            title: payload.title,
+            content: payload.content[start..end].into(),
+            enabled: payload.enabled,
+            origin,
+            source_actor: actor,
+            source_run: run,
+            total_bytes: payload.content.len().to_string(),
+            start_byte: start.to_string(),
+            next_byte: (end < payload.content.len()).then(|| end.to_string()),
+        };
+        let receipt = MemoryReadReceipt {
+            grant: grant.clone(),
+            value,
+            include_disabled,
+        };
+        receipt.view(self)?;
+        Ok(receipt)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MemorySummary {
+    pub entry_id: String,
+    pub version: String,
+    pub title: String,
+    pub enabled: bool,
+    pub origin: MemoryOrigin,
+    pub content_bytes: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MemoryPage {
+    pub scope_id: String,
+    pub entries: Vec<MemorySummary>,
+    pub next_cursor: Option<String>,
+}
+pub struct MemoryListReceipt {
+    grant: MemoryGrant,
+    page: MemoryPage,
+    include_disabled: bool,
+}
+impl MemoryListReceipt {
+    pub fn view<'a>(&'a self, journal: &'a Journal) -> Result<&'a MemoryPage, MemoryError> {
+        check(
+            &journal.connection,
+            &self.grant,
+            false,
+            &journal.memory_session,
+        )?;
+        for value in &self.page.entries {
+            let current:bool=journal.connection.query_row("SELECT EXISTS(SELECT 1 FROM memory_entries WHERE scope_id=? AND entry_id=? AND version=? AND (state='active' OR (?=1 AND state='disabled')))",params![self.grant.scope,value.entry_id,version(&value.version)?,self.include_disabled],|r|r.get(0))?;
+            if !current {
+                return Err(MemoryError::Conflict);
+            }
+        }
+        Ok(&self.page)
+    }
+}
+impl Journal {
+    pub fn list_memory(
+        &self,
+        grant: &MemoryGrant,
+        after: Option<&str>,
+        limit: u16,
+        include_disabled: bool,
+    ) -> Result<MemoryListReceipt, MemoryError> {
+        if after.is_some_and(|v| !valid_id(v)) || !(1..=100).contains(&limit) {
+            return Err(MemoryError::Invalid);
+        }
+        check(&self.connection, grant, false, &self.memory_session)?;
+        let mut statement=self.connection.prepare("SELECT entry_id,version,payload,payload_digest,origin FROM memory_entries WHERE scope_id=?1 AND (?2 IS NULL OR entry_id>?2) AND (state='active' OR (?3=1 AND state='disabled')) ORDER BY entry_id LIMIT ?4")?;
+        type Row = (String, i64, String, String, String);
+        let rows = statement
+            .query_map(
+                params![grant.scope, after, include_disabled, i64::from(limit) + 1],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )?
+            .collect::<Result<Vec<Row>, _>>()?;
+        let more = rows.len() > usize::from(limit);
+        let mut entries = Vec::new();
+        for (id, revision, body, expected, origin) in rows.into_iter().take(usize::from(limit)) {
+            if body.len() > MAX_PAYLOAD {
+                return Err(MemoryError::Limit);
+            }
+            let payload: MemoryPayload =
+                serde_json::from_str(&body).map_err(|_| MemoryError::Invalid)?;
+            payload.validate()?;
+            if digest("memory-payload.v1", &payload)? != expected {
+                return Err(MemoryError::Invalid);
+            }
+            let origin = match origin.as_str() {
+                "user_declaration" => MemoryOrigin::UserDeclaration,
+                "model_inference" => MemoryOrigin::ModelInference,
+                _ => return Err(MemoryError::Invalid),
+            };
+            entries.push(MemorySummary {
+                entry_id: id,
+                version: revision.to_string(),
+                title: payload.title,
+                enabled: payload.enabled,
+                origin,
+                content_bytes: payload.content.len().to_string(),
+            });
+        }
+        let next_cursor = if more {
+            entries.last().map(|v| v.entry_id.clone())
+        } else {
+            None
+        };
+        let receipt = MemoryListReceipt {
+            grant: grant.clone(),
+            page: MemoryPage {
+                scope_id: grant.scope.clone(),
+                entries,
+                next_cursor,
+            },
+            include_disabled,
+        };
+        receipt.view(self)?;
+        Ok(receipt)
+    }
+    pub fn list_memory_drafts(
+        &self,
+        grant: &MemoryGrant,
+        before: Option<&str>,
+        limit: u16,
+    ) -> Result<Vec<MemoryDraftOutcome>, MemoryError> {
+        if before.is_some_and(|v| !valid_id(v)) || !(1..=100).contains(&limit) {
+            return Err(MemoryError::Invalid);
+        }
+        check(&self.connection, grant, false, &self.memory_session)?;
+        let mut statement=self.connection.prepare("SELECT draft_id FROM memory_drafts WHERE scope_id=?1 AND actor=?2 AND (?3 IS NULL OR draft_id<?3) ORDER BY draft_id DESC LIMIT ?4")?;
+        let ids = statement
+            .query_map(
+                params![grant.scope, grant.actor, before, i64::from(limit)],
+                |r| r.get::<_, String>(0),
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        ids.iter()
+            .map(|id| {
+                self.memory_draft_outcome(grant, id)?
+                    .ok_or(MemoryError::Conflict)
+            })
+            .collect()
+    }
+}

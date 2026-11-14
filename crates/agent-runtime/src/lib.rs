@@ -1,6 +1,7 @@
 //! Durable local operation boundary and controlled, local-only model/tool host.
 pub mod catalog;
 pub mod engine;
+pub mod memory;
 mod storage;
 pub mod workspace;
 pub mod workspaces;
@@ -38,6 +39,7 @@ pub enum JournalError {
 
 pub struct Journal {
     connection: Connection,
+    memory_session: String,
     _host_lock: storage::HostLock,
     private_root: std::path::PathBuf,
     extra_private_roots: Vec<std::path::PathBuf>,
@@ -70,7 +72,7 @@ impl Journal {
             rusqlite::OpenFlags::default() | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
         )?;
         let version: i64 = connection.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if !(0..=21).contains(&version) {
+        if !(0..=22).contains(&version) {
             return Err(JournalError::UnsupportedVersion);
         }
         if version == 0 {
@@ -209,6 +211,12 @@ impl Journal {
             tx.execute_batch(include_str!("schema_v21.sql"))?;
             tx.commit()?;
         }
+        if version < 22 {
+            let tx =
+                connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            tx.execute_batch(include_str!("schema_v22.sql"))?;
+            tx.commit()?;
+        }
         connection.execute_batch("BEGIN IMMEDIATE;
             UPDATE export_restorations SET state='unknown' WHERE state='dispatching';
             UPDATE export_retirements SET state='unknown' WHERE state='dispatching';
@@ -224,6 +232,7 @@ impl Journal {
             COMMIT;")?;
         Ok(Self {
             connection,
+            memory_session: uuid::Uuid::new_v4().to_string(),
             _host_lock: lock,
             private_root: normalized.parent().ok_or(JournalError::Invalid)?.to_owned(),
             workspace_signals: std::collections::HashMap::new(),
