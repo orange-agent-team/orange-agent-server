@@ -1,6 +1,11 @@
 //! Independent read selection for retained-file management. It cannot become
 //! an Agent workspace, an editing grant, or a recovery write grant.
 use super::*;
+mod export;
+pub use export::{
+    RetentionExportCapture, RetentionExportChoice, RetentionExportEntrySummary,
+    RetentionExportPreview, verify_retention_export,
+};
 use std::path::Path;
 
 pub struct PatchRetentionGrant {

@@ -3,7 +3,10 @@
 use super::*;
 use inspection::{PatchRecoveryReceipt, RecoveryFileObservation};
 mod selection;
-pub use selection::PatchRetentionGrant;
+pub use selection::{
+    PatchRetentionGrant, RetentionExportCapture, RetentionExportChoice,
+    RetentionExportEntrySummary, RetentionExportPreview, verify_retention_export,
+};
 const ARCHIVE_LIMIT: i64 = 256 * 1024 * 1024;
 const ARCHIVE_RECORDS: i64 = 1000;
 const FILE_RESERVATION: i64 = MAX_TEXT as i64 + 384 * 1024;
