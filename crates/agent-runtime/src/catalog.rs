@@ -143,6 +143,11 @@ impl ToolCatalog {
     pub fn builtin(questions: bool, creation: bool) -> Result<Self, CatalogError> {
         Self::new(builtin::specs(questions, creation))
     }
+    pub fn builtin_editing(questions: bool, creation: bool) -> Result<Self, CatalogError> {
+        let mut specs = builtin::specs(questions, creation);
+        specs.push(builtin::patch_spec());
+        Self::new(specs)
+    }
     pub fn restore(document: CatalogDocument) -> Result<Self, CatalogError> {
         let catalog = Self::new(document.tools)?;
         if catalog.revision != document.revision {

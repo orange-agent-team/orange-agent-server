@@ -1,5 +1,6 @@
 //! Durable exact review for a trusted adapter. Apple publication lives behind
-//! a separate consumed dispatch token; normal Agent registration is not enabled.
+//! a separate consumed dispatch token. Normal Runs additionally require their
+//! immutable edit capability and engine contract/approval bindings.
 use super::authority::{AuthorizedPatchPreview, EditFileGrant, SourceIdentity};
 use super::*;
 use crate::{Journal, JournalError, Operation, workspace::WorkspaceGrant};
@@ -100,6 +101,10 @@ impl Journal {
             )
             .map_err(JournalError::from)?;
         if normal {
+            #[cfg(target_vendor = "apple")]
+            self.check_runtime_edit_intent(op, edit, false)
+                .map_err(|_| PatchError::RecoveryRequired)?;
+            #[cfg(not(target_vendor = "apple"))]
             return Err(PatchError::RecoveryRequired);
         }
         Ok(())

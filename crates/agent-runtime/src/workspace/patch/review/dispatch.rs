@@ -34,16 +34,7 @@ impl PublicationPlan {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct PublishedPatch {
-    pub path: String,
-    pub original_sha256: String,
-    pub result_sha256: String,
-    pub bytes: String,
-    /// Original inode retained; never delete automatically after confirmation.
-    pub retained_original: String,
-}
+pub use super::super::PublishedPatch;
 
 /// Non-serializable ownership token. A plan read from SQLite is never a token.
 /// Holding this value does not make an expired/revoked approval valid; a future
@@ -109,6 +100,12 @@ impl Journal {
         let body = serde_json::to_string(&plan).map_err(|_| PatchError::Invalid)?;
         let digest =
             request_digest("patch-publication-plan.v1", &plan).map_err(|_| PatchError::Invalid)?;
+        #[cfg(target_vendor = "apple")]
+        let runtime = self
+            .check_runtime_edit_intent(op, edit, true)
+            .map_err(|_| PatchError::RecoveryRequired)?;
+        #[cfg(not(target_vendor = "apple"))]
+        let runtime = false;
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -133,6 +130,7 @@ impl Journal {
         if changed != 1 {
             return Err(JournalError::AlreadyDispatched.into());
         }
+        if runtime && tx.execute("UPDATE runtime_runs SET steps=steps+1 WHERE run_id=? AND phase='tools_pending' AND steps<json_extract(config,'$.max_steps') AND json_extract(config,'$.deadline_unix')>?",params![op.run,now()?]).map_err(JournalError::from)?!=1 {return Err(JournalError::Revoked.into());}
         let inserted = tx.execute(
             "INSERT INTO editing_publications(operation_id,resource_identity,host_epoch,reserved_bytes,body,digest) SELECT ?,?,epoch,?,?,? FROM runtime_host WHERE singleton=1",
             params![op.id,edit.resource_identity(),reserved_bytes,body,digest],

@@ -238,3 +238,41 @@ fn versioned_builtin_execution_pins_and_legacy_model_order_are_fixed() {
         "Catalog integration must not accidentally reorder the fixed model tool prompt"
     );
 }
+
+#[test]
+fn explicit_edit_catalog_adds_one_fixed_write_contract_without_changing_legacy_pins() {
+    let expected: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/fixtures/editing-tool-pins.v1.json"
+    ))
+    .expect("editing contract fixture");
+    let catalog = ToolCatalog::builtin_editing(true, true).expect("editing catalog");
+    let actual: std::collections::BTreeMap<_, _> = catalog
+        .document()
+        .tools
+        .iter()
+        .map(|s| (s.tool_version.clone(), s.execution_digest().expect("pin")))
+        .collect();
+    assert_eq!(
+        serde_json::to_value(actual).expect("pins"),
+        expected["pins"]
+    );
+    let legacy = ToolCatalog::builtin(true, true).expect("legacy catalog");
+    for definition in legacy.definitions().expect("legacy order") {
+        assert_eq!(
+            legacy.pin(&definition.name).expect("old pin"),
+            catalog.pin(&definition.name).expect("unchanged pin")
+        );
+    }
+    let names = catalog
+        .definitions()
+        .expect("definitions")
+        .into_iter()
+        .map(|d| d.name)
+        .collect::<Vec<_>>();
+    assert_eq!(names.last().map(String::as_str), Some("apply_patch"));
+    let spec = catalog.describe("apply_patch").expect("edit contract");
+    assert!(spec.needs_approval());
+    assert_eq!(spec.effect_class, "local_write");
+    assert_eq!(spec.concurrency, "exclusive");
+    assert!(legacy.pin("apply_patch").is_err());
+}

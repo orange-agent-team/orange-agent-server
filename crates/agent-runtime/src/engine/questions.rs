@@ -183,6 +183,7 @@ impl Journal {
             messages.clone(),
             true,
             stored.creation.is_some(),
+            stored.editing.is_some(),
         )
         .validate()
         .map_err(|_| EngineError::Invalid)?;

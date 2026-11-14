@@ -1,6 +1,6 @@
 //! Synchronous trusted-host publisher for the verified Apple backend. The
 //! owning host must run this bounded-file work on its blocking execution lane.
-//! It is not registered as an ordinary Agent tool and never overwrites a name.
+//! The engine opts in with an immutable edit capability; names are never overwritten.
 pub use super::dispatch::PublishedPatch;
 use super::{dispatch::PatchDispatch, *};
 use crate::workspace::{directory_identity, open_directory};
@@ -64,6 +64,7 @@ impl Journal {
         token: &PatchDispatch,
     ) -> Result<Record, PatchError> {
         self.check_edit_permission(edit)?;
+
         let plan = &token.plan;
         if !token.has_live_directory_access()
             || read.is_revoked()
@@ -125,6 +126,8 @@ impl Journal {
             policy_version: &record.policy,
             requires_approval: true,
         };
+        self.check_runtime_edit_intent(&op, edit, true)
+            .map_err(|_| PatchError::RecoveryRequired)?;
         self.patch_response(&op, &record.args, &record.call_id)?;
         Ok(record)
     }
@@ -155,7 +158,7 @@ impl Journal {
     ) -> Result<PublishedPatch, PatchError> {
         self.publish_patch_with_hook(edit, read, token, |_| Ok(()))
     }
-    fn publish_patch_with_hook(
+    pub(crate) fn publish_patch_with_hook(
         &mut self,
         edit: &EditFileGrant,
         read: &WorkspaceGrant,
@@ -312,6 +315,10 @@ impl Journal {
             bytes: token.approved.content().len().to_string(),
             retained_original: plan.backup_name.clone(),
         };
+        self.check_runtime_edit_output(&record.owner, &record.run, &plan.operation_id, &receipt)
+            .map_err(|_| PatchError::RecoveryRequired)?;
+        let model =
+            serde_json::to_string(&receipt.model_value()).map_err(|_| PatchError::Invalid)?;
         let body = serde_json::to_string(&receipt).map_err(|_| PatchError::Invalid)?;
         let digest =
             request_digest("published-patch.v1", &receipt).map_err(|_| PatchError::Invalid)?;
@@ -343,7 +350,7 @@ impl Journal {
             params![plan.operation_id, body],
         )
         .map_err(JournalError::from)?;
-        if tx.execute("UPDATE operations SET state='succeeded',result_digest=?,result_json=? WHERE operation_id=? AND state='dispatching'",params![digest,body,plan.operation_id]).map_err(JournalError::from)? != 1 { return Err(JournalError::Transition.into()); }
+        if tx.execute("UPDATE operations SET state='succeeded',result_digest=?,result_json=?,model_result=? WHERE operation_id=? AND state='dispatching'",params![digest,body,model,plan.operation_id]).map_err(JournalError::from)? != 1 { return Err(JournalError::Transition.into()); }
         tx.execute(
             "INSERT INTO events(run_id,operation_id,kind) VALUES(?,?,'operation.succeeded')",
             params![record.run, plan.operation_id],

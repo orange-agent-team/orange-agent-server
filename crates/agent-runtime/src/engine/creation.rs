@@ -17,9 +17,11 @@ impl CreationRequirement {
         }
     }
 }
+#[derive(Clone, Copy)]
 pub(super) struct Authority<'a> {
     pub read: &'a WorkspaceGrant,
     pub create: Option<&'a CreateFileGrant>,
+    pub edit: editing::EditAuthority<'a>,
 }
 pub struct CreationApproval<'a> {
     pub operation_id: &'a str,
@@ -95,7 +97,14 @@ impl Journal {
         #[cfg(not(any(target_vendor = "apple", target_os = "linux", target_os = "android")))]
         return Err(EngineError::Forbidden);
         self.validate_creation_consent(create).map_err(error)?;
-        self.start_agent_mode(config, messages, read, user_questions, Some(create))
+        self.start_agent_mode(
+            config,
+            messages,
+            read,
+            user_questions,
+            Some(create),
+            editing::EditAuthority::none(),
+        )
     }
     pub async fn advance_agent_creating<G: ModelGateway>(
         &mut self,
@@ -112,6 +121,7 @@ impl Journal {
             Authority {
                 read,
                 create: Some(create),
+                edit: editing::EditAuthority::none(),
             },
             gateway,
             cancel,

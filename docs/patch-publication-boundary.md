@@ -1,6 +1,6 @@
-# 现有文件编辑发布边界（未开放工具）
+# 现有文件编辑发布边界（候选内核，客户端待集成）
 
-当前实现包含实际源预览、独立持久编辑同意、精确批准、安全属性绑定、发布前保留计划，以及 Apple 平台受信 Host 的实际发布。普通 Agent、CLI、Desktop 尚未注册 apply_patch；发布测试只修改自有临时文件，没有操作真实用户目录。
+当前实现包含实际源预览、独立持久编辑同意、精确批准、安全属性绑定、发布前保留计划，以及 Apple 平台受信 Host 的实际发布。普通 Agent 内核已通过 schema16 显式能力方式接入 apply_patch；CLI、真实模型编辑和 Desktop 尚未接线。测试只修改自有临时文件，没有操作真实用户目录。
 
 schema10 的 `editing_publications` 与 operation 的 intended→dispatching 在同一个 SQLite FULL 同步事务中提交。记录包含操作、批准预览摘要、目标路径、两个独立随机且受路径策略保护的暂存/原文件保留名称、原/结果 SHA，以及保留容量；另有资源身份和 Host epoch。记录不可更新或删除，事务失败时操作仍为 intended，原批准保留。
 
@@ -12,7 +12,7 @@ schema10 的 `editing_publications` 与 operation 的 intended→dispatching 在
 
 ## schema11 实际发布
 
-`publish_patch_dispatch` 消费不可复用的 token，先重验当前授权、审批有效期、Host epoch、原完整模型响应和实际源身份。同步 API 必须由拥有 Journal 的阻塞执行通道调用；尚未接入普通 Agent 的异步执行器，不宣称磁盘 I/O 超时或可取消保证。
+`publish_patch_dispatch` 消费不可复用的 token，先重验当前授权、审批有效期、Host epoch、原完整模型响应和实际源身份。同步 API 必须由拥有 Journal 的阻塞执行通道调用；schema16 的普通 Agent 适配使用多线程 Tokio 的 block_in_place 和独立撤权/期限监视任务，不宣称能够中断任意阻塞内核系统调用。
 
 流程依次持久记录 stage_intent、staged、capture_intent、captured、publish_intent、published、confirmed 七个阶段。暂存文件 create_new，复制内容及完整已建模的安全属性并同步。捕获原文件和发布新文件均使用 NOREPLACE；持有 fd、命名对象、父目录、内容和属性多次检查。最终步骤和成功 receipt 在同一事务中提交。
 
@@ -28,10 +28,10 @@ Apple 平台的 `inspect_patch_recovery` 要求当前明确读取能力与计划
 
 ## 后续实现要求
 
-1. 归档池的数据退出/明确处置、跨目标平台及产品界面；Apple 内核已支持恢复及原位置保留归档，不代表普通 Agent/桌面功能已经开放。不能丢弃仍被旧 fd 修改的版本。
+1. 归档池的数据退出/明确处置、跨目标平台及产品界面；Apple 内核已支持恢复及原位置保留归档，不代表桌面或其他客户端已经接线。不能丢弃仍被旧 fd 修改的版本。
 2. 更广的父目录移动、文件系统错误、容量和跨进程权限实验；其他平台只能在真实实现/目标验证后开放。
-3. 正常 Run 的不可变编辑能力集成；schema14/15已实现受信 Host 的历史版本验证及本机别名处理，不得借此宣称普通 Agent 已开放编辑。保持撤权/删除校验。
-4. 接入普通 Agent/CLI/Desktop，独立编辑同意不得从只读或新建权限推导；保持产品逐次审批及完整响应屏障。
+3. 正常 Run 的 CLI、真实模型与桌面消费者验证；内核显式编辑能力已接入，仍需保持撤权/删除校验。
+4. CLI/Desktop/完整Web Agent产品集成，独立编辑同意不得从只读或新建权限推导；保持产品逐次审批及完整响应屏障。
 
 ## schema12：单独授权的恢复决策
 
@@ -45,7 +45,7 @@ Apple 平台的 `inspect_patch_recovery` 要求当前明确读取能力与计划
 
 原模型操作仍为 unknown，不改写为 succeeded。只有确认的单独恢复结果能解除该文件操作自身造成的资源隔离。其他未知操作、未知模型调用和 `recovery_required` Run 的限制继续有效；不会自动恢复旧 Run 或恢复已撤销的普通权限。查看结果使用按 owner 过滤的 `patch_resolution_result`；它是历史结果，当前文件仍需检查。
 
-恢复动作本身不释放保留容量，也不删除任何版本；另行批准的容量交接见 schema13。同步文件效果 API 仍需由拥有 Journal 的阻塞执行通道调用，尚未接入普通 Agent 异步执行器、CLI、Flutter 或其他操作系统。
+恢复动作本身不释放保留容量，也不删除任何版本；另行批准的容量交接见 schema13。同步文件效果 API 仍需由拥有 Journal 的阻塞执行通道调用，普通 Agent 发布适配见 schema16；独立恢复UI、CLI、Flutter和其他OS仍待完成。
 
 本机实际验证包含三种选择、ACL/xattr/mode、旧 fd 后续写入、同字节换 inode、错误 owner/policy/root、审批过期、撤权、旧 Host epoch、双恢复派发、数据库结果故障、保留原未知历史以及其他未知操作继续隔离。真实独立子进程在恢复动作前、rename 后和最终确认前分别直接退出；重开后均为 unknown，文件未被自动重放或删除。证据仅针对可用 macOS 文件系统和进程退出，未扩大为断电、所有文件系统或生产全工具认证。
 
@@ -77,7 +77,7 @@ Apple 平台的 `inspect_patch_recovery` 要求当前明确读取能力与计划
 
 已实测四工具的完整结果一致、连续版本及中间查询边界、中文路径和目录分页、10001个实际目录条目中的受控内部名补偿、未登记保护名仍改变结果、读取后返回前删除拒绝、归档后验证与撤权排空、关联失败事务回滚。源响应为明确标记的受信适配器夹具，文件和SQLite效果是真实的；不是新的真实模型/桌面认证。
 
-该 API 当前明确拒绝 `runtime_runs` 中的普通 Agent Run，普通引擎原 `revalidate_sources` 未放宽。下一步须以 Run 固定编辑能力及工具契约接入。schema14最初的字面路径限制已在schema15处理，见下方。用户文件删除/撤权和外部修改必须持续拒绝；不得通过允许旧 hash、忽略统计或关闭检查绕过这些限制。
+公开低层 API 仍拒绝 `runtime_runs` 中的普通 Agent Run；schema16只允许引擎在固定编辑能力和契约验证后签发内部验证依据，再进入历史校验。只读/仅新建Run仍沿原校验路径。schema14最初的字面路径限制已在schema15处理，见下方。用户文件删除/撤权和外部修改必须持续拒绝；不得通过允许旧 hash、忽略统计或关闭检查绕过这些限制。
 
 ## schema15：真实对象别名与原文件名
 
@@ -94,3 +94,20 @@ Apple 平台的 `inspect_patch_recovery` 要求当前明确读取能力与计划
 一次并发全量测试中出现已关闭 Journal 重开仍 Busy；单独复验通过。随后复制同一锁描述符的确定性用例稳定复现了相同症状，不能据此断言它是那次偶发失败的唯一原因。Rust 文档说明，复制/继承描述符影响锁的最终释放，也可显式 unlock；参见 [File锁语义](https://doc.rust-lang.org/std/fs/struct.File.html#method.unlock)。
 
 现在锁由不可复制的内部 HostLock 持有，在 Connection 析构后显式释放自身锁，字段顺序依据 [Rust析构规则](https://doc.rust-lang.org/reference/destructors.html)。正常活跃宿主仍会拒绝第二个宿主，陈旧副本不能释放新宿主的锁；没有扫描进程、强制解锁路径或重试放行。只把 WouldBlock 映射为 Busy，其他 I/O 错误如实返回；[TryLockError](https://doc.rust-lang.org/std/fs/enum.TryLockError.html) 定义了这两种情况。失败日志、确定性前后用例及新的全量回归均保留。
+
+
+## schema16：普通 Agent 的显式编辑能力
+
+`start_agent_editing`/`advance_agent_editing` 接收独立的 EditingAuthority（read、可选create和必须edit）。Run创建事务保存不可修改/删除的编辑同意ID、版本及环境；旧Run迁移不增加记录。旧只读/仅创建入口、配置摘要、六工具顺序和执行pin保持，不能通过用新入口重复start旧Run来加权。
+
+普通模型响应仍先整体验证并提交，才形成操作。只在协商编辑能力后加入 apply_patch.v1，工具保持local_write/exclusive/逐操作批准；读取能力的prepare/execute直接拒绝写入类型。新增独立editing-tool-pins.v1.json固定七工具契约，原六工具fixture未修改。
+
+用户先通过 `agent_patch_preview` 获取绑定实际文件的预览，再由 `approve_agent_editing` 批准确切预览摘要。普通只读批准接口不接受patch。即使调用低层精确patch批准，也不能绕过正常Run的catalog批准pin；派发同时验证能力、原完整响应、操作身份、审批、步数和期限。结果的原始存储包含保留名称，但固定模型投影只包含path/前后摘要/bytes，不泄露内部备份名；缓存投影即使通过schema也必须等于从原结果确定性生成的投影。
+
+引擎只在intent_contract、checked_cached_result、当前编辑能力和读取环境检查通过后构造不可反序列化的HistoryAccess。公开通用适配器历史接口仍不能读取普通Run历史。创建结果和patch结果自身也参与来源校验，覆盖write_file→apply_patch、连续编辑及最终/重开视图；patch结果的当前身份必须匹配自己的版本锚点或后继已批准链，删除或同字节新inode不被旧备份掩盖。
+
+发布要求多线程Tokio；current-thread环境在持久派发前返回ExecutionEnvironmentUnavailable，不能冻结单线程事件循环。block_in_place期间由独立监视任务处理取消、工具10秒上限及Run期限，撤销实际能力，使后继效果和成功确认停止；监视任务随调用结束取消。若底层内核I/O不返回，仍须等待实际执行排空，不能把逻辑期限当作系统调用被强制中断或资源已经释放的证明。
+
+本机正常引擎测试使用明确标记的ScriptedModel，只替代模型传输，SQLite、目录权限、预览、批准、文件效果和重开都是真实的。覆盖read→patch→patch→final、重开不重放、create→patch→final、旧Run不升级、无效混合响应零操作、缺catalog批准拒绝、预算/撤权/外部变更、结果事务故障unknown、源删除/替换、伪造模型投影，以及阻塞测试阶段中的实际取消和10秒期限。后者使用测试钩子停在明确阶段，不是对任意慢文件系统的延迟认证。
+
+CLI和实际可用模型的编辑场景、桌面固定版本/FRB/界面、其他OS仍须后续验证。当前只是候选源码内核接通，不等于四仓库功能交付或G0—G6完成。

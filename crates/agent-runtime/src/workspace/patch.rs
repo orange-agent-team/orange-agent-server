@@ -16,6 +16,30 @@ const MAX_PATCH: usize = 64 * 1024;
 const MAX_HUNKS: usize = 128;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+pub struct PublishedPatch {
+    pub path: String,
+    pub original_sha256: String,
+    pub result_sha256: String,
+    pub bytes: String,
+    pub retained_original: String,
+}
+impl PublishedPatch {
+    pub fn model_value(&self) -> serde_json::Value {
+        serde_json::json!({"kind":"apply_patch","data":{"path":self.path,"original_sha256":self.original_sha256,"result_sha256":self.result_sha256,"bytes":self.bytes}})
+    }
+}
+pub fn definition() -> orange_protocol::model::ToolDefinition {
+    orange_protocol::model::ToolDefinition {name:"apply_patch".into(),description:"Edit one existing authorized UTF-8 file after explicit exact preview approval. Provide its original full SHA256 and exact unified hunk body (no file headers, no fuzzy matching). No creation, deletion, rename or path escape. Original/result at most1MiB; patch at most65536 bytes and128 hunks; LF-terminated patch with explicit no-newline markers when needed. Retained originals and uncertain effects require reconciliation, never automatic replay.".into(),parameters:serde_json::json!({"type":"object","properties":{"path":{"type":"string","minLength":1,"maxLength":4096},"expected_sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},"patch":{"type":"string","minLength":1,"maxLength":65536}},"required":["path","expected_sha256","patch"],"additionalProperties":false})}
+}
+pub(super) fn argument_error(error: PatchError) -> WorkspaceError {
+    match error {
+        PatchError::Workspace(e) => e,
+        PatchError::Limit => WorkspaceError::Limit,
+        _ => WorkspaceError::Invalid,
+    }
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct PatchArgs {
     pub path: String,
     pub expected_sha256: String,

@@ -102,6 +102,34 @@ fn output(name: &str) -> Value {
     };
     json!({"oneOf":[tagged(name,data),object(json!({"error":{"type":"string","pattern":"^[a-z_]{1,64}$"}}),&["error"])]})
 }
+pub(super) fn patch_spec() -> ToolSpec {
+    let definition = crate::workspace::patch::definition();
+    let public =
+        json!({"path":text(),"original_sha256":hash(),"result_sha256":hash(),"bytes":decimal()});
+    let mut durable = public.clone();
+    durable
+        .as_object_mut()
+        .expect("static schema object")
+        .insert("retained_original".into(), text());
+    ToolSpec {
+        spec_version: 1,
+        name: definition.name,
+        tool_version: "apply_patch.v1".into(),
+        description: definition.description,
+        input_schema: definition.parameters,
+        output_schema: json!({"oneOf":[tagged("apply_patch",object(public,&["path","original_sha256","result_sha256","bytes"])),tagged("apply_patch",object(durable,&["path","original_sha256","result_sha256","bytes","retained_original"]))]}),
+        effect_class: "local_write".into(),
+        concurrency: "exclusive".into(),
+        approval_required: true,
+        execution_environment: "workspace".into(),
+        limits: ToolLimits {
+            execution_timeout_ms: Some(10000),
+            max_argument_bytes: 256 * 1024,
+            max_result_bytes: 2 * 1024 * 1024,
+            max_model_result_bytes: 64 * 1024,
+        },
+    }
+}
 pub(super) fn specs(questions: bool, creation: bool) -> Vec<ToolSpec> {
     let mut definitions = crate::workspace::definitions();
     if questions {

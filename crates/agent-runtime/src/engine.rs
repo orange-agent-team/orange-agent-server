@@ -3,6 +3,12 @@
 //! implementations are injected by the application; no paid fallback is provided.
 mod contracts;
 mod creation;
+mod editing;
+pub use editing::EditRequirement;
+#[cfg(target_vendor = "apple")]
+pub(crate) use editing::HistoryAccess;
+#[cfg(target_vendor = "apple")]
+pub use editing::{EditingApproval, EditingAuthority};
 mod questions;
 use crate::workspace::creation::CreateFileGrant;
 pub use creation::{CreationApproval, CreationRequirement};
@@ -54,6 +60,8 @@ pub enum EngineError {
     ApprovalRequired,
     #[error("prior execution needs reconciliation; automatic replay denied")]
     RecoveryRequired,
+    #[error("host execution environment does not support this operation")]
+    ExecutionEnvironmentUnavailable,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -111,6 +119,7 @@ struct StoredRun {
     active: Option<String>,
     user_questions: bool,
     creation: Option<creation::CreationRequirement>,
+    editing: Option<editing::EditRequirement>,
 }
 type StoredRunRow = (String, String, String, u32, u32, Option<String>, bool);
 #[derive(Debug, Clone)]
@@ -165,7 +174,14 @@ impl Journal {
         messages: Vec<Message>,
         grant: &WorkspaceGrant,
     ) -> Result<RunView, EngineError> {
-        self.start_agent_mode(config, messages, grant, false, None)
+        self.start_agent_mode(
+            config,
+            messages,
+            grant,
+            false,
+            None,
+            editing::EditAuthority::none(),
+        )
     }
     /// Only a trusted host that can present and durably answer questions opts in.
     pub fn start_agent_interactive(
@@ -174,7 +190,14 @@ impl Journal {
         messages: Vec<Message>,
         grant: &WorkspaceGrant,
     ) -> Result<RunView, EngineError> {
-        self.start_agent_mode(config, messages, grant, true, None)
+        self.start_agent_mode(
+            config,
+            messages,
+            grant,
+            true,
+            None,
+            editing::EditAuthority::none(),
+        )
     }
     fn start_agent_mode(
         &mut self,
@@ -183,6 +206,7 @@ impl Journal {
         grant: &WorkspaceGrant,
         user_questions: bool,
         creation: Option<&CreateFileGrant>,
+        edit: editing::EditAuthority<'_>,
     ) -> Result<RunView, EngineError> {
         if ![
             &config.owner,
@@ -213,8 +237,20 @@ impl Journal {
         } else {
             None
         };
+        let edit_binding = self.edit_start_binding(config, grant, edit)?;
         let config_json = encode(config)?;
-        let config_digest = if let Some(binding) = &creation_binding {
+        let config_digest = if let Some(binding) = &edit_binding {
+            digest(
+                "run-config-edit-v1",
+                &(
+                    config,
+                    &messages,
+                    user_questions,
+                    &creation_binding,
+                    binding,
+                ),
+            )?
+        } else if let Some(binding) = &creation_binding {
             digest(
                 "run-config-create-v1",
                 &(config, &messages, user_questions, binding),
@@ -230,6 +266,7 @@ impl Journal {
             messages.clone(),
             user_questions,
             creation_binding.is_some(),
+            edit_binding.is_some(),
         );
         request.validate().map_err(|_| EngineError::Invalid)?;
         let tx = self
@@ -276,6 +313,9 @@ impl Journal {
         if let Some(binding) = &creation_binding {
             tx.execute("INSERT INTO runtime_creation_capabilities(run_id,consent_id,consent_version,environment) VALUES(?,?,?,?)",params![config.run_id,binding.consent_id,binding.version,binding.environment])?;
         }
+        if let Some(binding) = &edit_binding {
+            tx.execute("INSERT INTO runtime_edit_capabilities(run_id,consent_id,consent_version,environment) VALUES(?,?,?,?)",params![config.run_id,binding.consent_id,binding.version,binding.environment])?;
+        }
         if let Some((workspace, _)) = registered {
             tx.execute(
                 "INSERT INTO run_workspaces(run_id,workspace_id) VALUES(?,?)",
@@ -302,6 +342,7 @@ impl Journal {
             active,
             user_questions,
             creation: self.creation_binding(run)?,
+            editing: self.editing_binding(run)?,
         })
     }
     fn pending_operations(&self, run: &str) -> Result<Vec<StoredOperation>, EngineError> {
@@ -453,7 +494,10 @@ impl Journal {
             .into_iter()
             .find(|o| o.id == operation_id && o.state == "intended")
             .ok_or(EngineError::ApprovalRequired)?;
-        if matches!(op.request, WorkspaceRequest::WriteFile(_)) {
+        if matches!(
+            op.request,
+            WorkspaceRequest::WriteFile(_) | WorkspaceRequest::ApplyPatch(_)
+        ) {
             return Err(EngineError::ApprovalRequired);
         }
         let (_, pin) = self.intent_contract(&stored.config, &op)?;
@@ -548,6 +592,7 @@ impl Journal {
             creation::Authority {
                 read: grant,
                 create: None,
+                edit: editing::EditAuthority::none(),
             },
             gateway,
             cancellation,
@@ -576,6 +621,7 @@ impl Journal {
             return Ok(view);
         }
         self.check_creation_binding(&stored, grant, authority.create)?;
+        self.check_edit_binding(&stored, grant, authority.edit)?;
         if *cancellation.borrow() || cancellation.has_changed().is_err() || grant.is_revoked() {
             return self.cancel_agent(owner, run, grant);
         }
@@ -596,8 +642,7 @@ impl Journal {
             return self.agent_view_authorized(owner, run, grant).await;
         }
         if stored.phase == "tools_pending" {
-            self.advance_tool(stored, grant, authority.create, cancellation)
-                .await?;
+            self.advance_tool(stored, authority, cancellation).await?;
             return self.agent_view(owner, run);
         }
         if stored.phase == "model_pending" {
@@ -640,6 +685,7 @@ impl Journal {
             stored.messages.clone(),
             stored.user_questions,
             stored.creation.is_some(),
+            stored.editing.is_some(),
         );
         if request.validate().is_err() {
             self.stop_agent(run, "limited", "context_budget")?;
@@ -680,14 +726,9 @@ impl Journal {
         }
         match result {
             Ok(Ok(candidate)) => {
-                if let Err(error) = self.accept_candidate(
-                    &stored,
-                    &invocation,
-                    epoch,
-                    &candidate,
-                    grant,
-                    authority.create,
-                ) {
+                if let Err(error) =
+                    self.accept_candidate(&stored, &invocation, epoch, &candidate, authority)
+                {
                     self.stop_agent(run, "recovery_required", "invalid_model_response")?;
                     return Err(error);
                 }
@@ -702,11 +743,12 @@ impl Journal {
         invocation: &str,
         epoch: i64,
         candidate: &ResponseCandidate,
-        grant: &WorkspaceGrant,
-        creation: Option<&CreateFileGrant>,
+        authority: creation::Authority<'_>,
     ) -> Result<(), EngineError> {
+        let grant = authority.read;
         check_grant(&stored.config, grant)?;
-        self.check_creation_binding(stored, grant, creation)?;
+        self.check_creation_binding(stored, grant, authority.create)?;
+        self.check_edit_binding(stored, grant, authority.edit)?;
         if !valid_id(&candidate.response_id)
             || candidate.tool_calls.len() > 80
             || encode(candidate)?.len() > 256 * 1024
@@ -752,6 +794,9 @@ impl Journal {
                 if matches!(request, WorkspaceRequest::WriteFile(_)) && stored.creation.is_none() {
                     return Err(EngineError::Forbidden);
                 }
+                if matches!(request, WorkspaceRequest::ApplyPatch(_)) && stored.editing.is_none() {
+                    return Err(EngineError::Forbidden);
+                }
                 requests.push(request);
             }
         }
@@ -788,6 +833,13 @@ impl Journal {
             let environment = if matches!(request, WorkspaceRequest::WriteFile(_)) {
                 stored
                     .creation
+                    .as_ref()
+                    .ok_or(EngineError::Forbidden)?
+                    .environment
+                    .as_str()
+            } else if matches!(request, WorkspaceRequest::ApplyPatch(_)) {
+                stored
+                    .editing
                     .as_ref()
                     .ok_or(EngineError::Forbidden)?
                     .environment
@@ -831,10 +883,10 @@ impl Journal {
     async fn advance_tool(
         &mut self,
         stored: StoredRun,
-        grant: &WorkspaceGrant,
-        creation: Option<&CreateFileGrant>,
+        authority: creation::Authority<'_>,
         mut cancellation: watch::Receiver<bool>,
     ) -> Result<(), EngineError> {
+        let grant = authority.read;
         let c = &stored.config;
         let operations = self.pending_operations(&c.run_id)?;
         let Some(op) = operations.first() else {
@@ -856,16 +908,12 @@ impl Journal {
         self.require_tool_approval_pin(op, &pin)?;
         if let WorkspaceRequest::WriteFile(args) = &op.request {
             return self
-                .advance_creation_tool(
-                    &stored,
-                    op,
-                    args.clone(),
-                    creation::Authority {
-                        read: grant,
-                        create: creation,
-                    },
-                    cancellation,
-                )
+                .advance_creation_tool(&stored, op, args.clone(), authority, cancellation)
+                .await;
+        }
+        if matches!(op.request, WorkspaceRequest::ApplyPatch(_)) {
+            return self
+                .advance_edit_tool(&stored, op, authority, cancellation)
                 .await;
         }
         // Capacity acquisition may wait, but has no filesystem effect before claim.
@@ -1015,6 +1063,20 @@ impl Journal {
             let op = self.operation_record(c, &id)?;
             self.intent_contract(c, &op)?;
             self.checked_cached_result(c, &op)?;
+            if self.editing_binding(&c.run_id)?.is_some() {
+                #[cfg(target_vendor = "apple")]
+                {
+                    let access = self.edit_history_access(c, grant, &op)?;
+                    leases.push(
+                        self.revalidate_agent_history(access, grant)
+                            .await
+                            .map_err(editing::error)?,
+                    );
+                    continue;
+                }
+                #[cfg(not(target_vendor = "apple"))]
+                return Err(EngineError::Forbidden);
+            }
             let request: WorkspaceRequest =
                 serde_json::from_str(&request).map_err(|_| EngineError::Invalid)?;
             if let WorkspaceRequest::WriteFile(args) = &request {
@@ -1041,6 +1103,7 @@ fn make_request_mode(
     messages: Vec<Message>,
     user_questions: bool,
     create_files: bool,
+    edit_files: bool,
 ) -> GenerateRequest {
     let mut tools = workspace::definitions();
     if user_questions {
@@ -1048,6 +1111,9 @@ fn make_request_mode(
     }
     if create_files {
         tools.push(workspace::creation::definition());
+    }
+    if edit_files {
+        tools.push(workspace::patch::definition());
     }
     GenerateRequest {
         invocation_id: invocation.into(),

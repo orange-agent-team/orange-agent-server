@@ -5,7 +5,12 @@ fn incompatible(_: CatalogError) -> EngineError {
     EngineError::RecoveryRequired
 }
 pub(super) fn current(stored: &StoredRun) -> Result<ToolCatalog, EngineError> {
-    ToolCatalog::builtin(stored.user_questions, stored.creation.is_some()).map_err(incompatible)
+    if stored.editing.is_some() {
+        ToolCatalog::builtin_editing(stored.user_questions, stored.creation.is_some())
+            .map_err(incompatible)
+    } else {
+        ToolCatalog::builtin(stored.user_questions, stored.creation.is_some()).map_err(incompatible)
+    }
 }
 pub(super) fn capture(
     tx: &rusqlite::Transaction<'_>,
@@ -300,13 +305,22 @@ impl Journal {
             }
             let raw_value: serde_json::Value =
                 serde_json::from_str(&raw).map_err(|_| EngineError::RecoveryRequired)?;
-            let contract_value = if matches!(op.request, WorkspaceRequest::WriteFile(_)) {
+            let contract_value = if matches!(op.request, WorkspaceRequest::ApplyPatch(_)) {
+                serde_json::json!({"kind":"apply_patch","data":raw_value})
+            } else if matches!(op.request, WorkspaceRequest::WriteFile(_)) {
                 serde_json::json!({"kind":"write_file","data":raw_value})
             } else {
                 raw_value
             };
             self.validate_tool_output(c, op, &contract_value, OutputChannel::Durable)?;
-            if matches!(op.request, WorkspaceRequest::WriteFile(_)) {
+            if matches!(op.request, WorkspaceRequest::ApplyPatch(_)) {
+                let result: crate::workspace::patch::PublishedPatch =
+                    serde_json::from_str(&raw).map_err(|_| EngineError::RecoveryRequired)?;
+                if digest("published-patch.v1", &result)? != expected {
+                    return Err(EngineError::RecoveryRequired);
+                }
+                result.model_value()
+            } else if matches!(op.request, WorkspaceRequest::WriteFile(_)) {
                 let result: crate::workspace::creation::CreatedFile =
                     serde_json::from_str(&raw).map_err(|_| EngineError::RecoveryRequired)?;
                 if digest("created-file.v1", &result)? != expected {

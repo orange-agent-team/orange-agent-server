@@ -67,6 +67,7 @@ pub enum WorkspaceError {
 pub enum WorkspaceRequest {
     ReadFile(ReadFileArgs),
     WriteFile(creation::CreateFileArgs),
+    ApplyPatch(patch::PatchArgs),
     ListDirectory(ListDirectoryArgs),
     SearchFiles(SearchFilesArgs),
     SearchText(SearchTextArgs),
@@ -80,6 +81,9 @@ impl WorkspaceRequest {
         let raw = serde_json::to_string(value).map_err(|_| WorkspaceError::Invalid)?;
         let normalized = canonical_tool_arguments(&raw).map_err(|_| WorkspaceError::Invalid)?;
         let request = match name {
+            "apply_patch" => Self::ApplyPatch(
+                serde_json::from_slice(&normalized).map_err(|_| WorkspaceError::Invalid)?,
+            ),
             "write_file" => Self::WriteFile(
                 serde_json::from_slice(&normalized).map_err(|_| WorkspaceError::Invalid)?,
             ),
@@ -104,6 +108,7 @@ impl WorkspaceRequest {
         match self {
             Self::ReadFile(_) => "read_file",
             Self::WriteFile(_) => "write_file",
+            Self::ApplyPatch(_) => "apply_patch",
             Self::ListDirectory(_) => "list_directory",
             Self::SearchFiles(_) => "search_files",
             Self::SearchText(_) => "search_text",
@@ -113,6 +118,7 @@ impl WorkspaceRequest {
         match self {
             Self::ReadFile(_) => "read_file.v1",
             Self::WriteFile(_) => "write_file.v1",
+            Self::ApplyPatch(_) => "apply_patch.v1",
             Self::ListDirectory(_) => "list_directory.v1",
             Self::SearchFiles(_) => "search_files.v1",
             Self::SearchText(_) => "search_text.v1",
@@ -124,6 +130,7 @@ impl WorkspaceRequest {
     pub fn validate(&self) -> Result<(), WorkspaceError> {
         match self {
             Self::WriteFile(args) => args.validate()?,
+            Self::ApplyPatch(args) => args.validate().map_err(patch::argument_error)?,
             Self::SearchText(args) => {
                 components(&args.path, true)?;
                 search::validate_glob(args.glob.as_deref().unwrap_or("**/*"))?;
@@ -412,7 +419,10 @@ impl WorkspaceGrant {
         request: WorkspaceRequest,
     ) -> Result<PreparedTool, WorkspaceError> {
         request.validate()?;
-        if matches!(request, WorkspaceRequest::WriteFile(_)) {
+        if matches!(
+            request,
+            WorkspaceRequest::WriteFile(_) | WorkspaceRequest::ApplyPatch(_)
+        ) {
             return Err(WorkspaceError::Forbidden);
         }
         if self.is_revoked() {
@@ -467,7 +477,9 @@ impl PreparedTool {
                 return Err(WorkspaceError::Revoked);
             }
             let result = match request {
-                WorkspaceRequest::WriteFile(_) => return Err(WorkspaceError::Forbidden),
+                WorkspaceRequest::WriteFile(_) | WorkspaceRequest::ApplyPatch(_) => {
+                    return Err(WorkspaceError::Forbidden);
+                }
                 WorkspaceRequest::ReadFile(args) => {
                     WorkspaceResult::ReadFile(read_file(&permit.inner.directory, &args)?)
                 }

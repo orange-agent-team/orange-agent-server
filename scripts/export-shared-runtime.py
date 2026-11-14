@@ -22,7 +22,7 @@ members=['crates/domain','crates/protocol','crates/agent-runtime','crates/model-
 # project. Historical commits must still export their original four members.
 if subprocess.run(['git','cat-file','-e',args.commit+':crates/platform-files/Cargo.toml'],cwd=ROOT,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode==0:
     members.append('crates/platform-files')
-roots=['Cargo.toml','Cargo.lock',*members,'contracts/proto','contracts/fixtures/metering-v1.json','contracts/fixtures/builtin-tool-pins.v1.json','config/local-model.lock.json','config/local-tokenizer.lock.json']
+roots=['Cargo.toml','Cargo.lock',*members,'contracts/proto','contracts/fixtures/metering-v1.json','contracts/fixtures/builtin-tool-pins.v1.json','contracts/fixtures/editing-tool-pins.v1.json','config/local-model.lock.json','config/local-tokenizer.lock.json']
 entries=git('ls-tree','-r','-z',args.commit,'--',*roots).split(b'\0')
 files={};modes={}
 for entry in filter(None,entries):
