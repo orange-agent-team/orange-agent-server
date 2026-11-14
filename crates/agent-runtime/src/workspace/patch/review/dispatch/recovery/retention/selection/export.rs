@@ -9,11 +9,13 @@ use cap_fs_ext::{FollowSymlinks, OpenOptionsFollowExt, OpenOptionsSyncExt, OsMet
 use cap_std::fs::{Dir, OpenOptions};
 pub use publication::{
     ExportFileObservation, ExportInspectionGrant, ExportInspectionReceipt, ExportInspectionView,
-    ExportQuiescence, ExportRetirementChoice, ExportRetirementGrant, ExportRetirementInspection,
+    ExportQuiescence, ExportRestorationGrant, ExportRestorationInspection,
+    ExportRestorationInspectionReceipt, ExportRestorationOutcome, ExportRestorationReview,
+    ExportRetirementChoice, ExportRetirementGrant, ExportRetirementInspection,
     ExportRetirementInspectionReceipt, ExportRetirementOutcome, ExportRetirementReceipt,
-    ExportRetirementReview, PreparedExportRetirement, PreparedRetentionExport,
-    RetentionExportDestination, RetentionExportOutcome, RetentionExportReceipt,
-    RetentionExportReview,
+    ExportRetirementReview, PreparedExportRestoration, PreparedExportRetirement,
+    PreparedRetentionExport, RetentionExportDestination, RetentionExportOutcome,
+    RetentionExportReceipt, RetentionExportReview,
 };
 use std::io::Read;
 

@@ -485,7 +485,7 @@ async fn export_schema17_upgrade_and_interrupted_dispatch_are_nonreplaying() {
     let (j, op) = edited(&f).await;
     j.connection
         .execute_batch(
-            "DROP TABLE export_retirement_capsules; DROP TABLE export_retirements; DROP TABLE export_writer_bindings; DROP TABLE patch_exports; PRAGMA user_version=17;",
+            "DROP TABLE export_restorations; DROP TABLE export_retirement_capsules; DROP TABLE export_retirements; DROP TABLE export_writer_bindings; DROP TABLE patch_exports; PRAGMA user_version=17;",
         )
         .expect("true prior schema shape");
     drop(j);
@@ -494,7 +494,7 @@ async fn export_schema17_upgrade_and_interrupted_dispatch_are_nonreplaying() {
         .connection
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .expect("version");
-    assert_eq!(version, 20);
+    assert_eq!(version, 21);
     let output = tempfile::tempdir().expect("destination");
     let source = j
         .authorize_patch_retention("alice", "run-1", &op, f.workspace.path())

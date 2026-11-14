@@ -484,3 +484,280 @@ async fn retirement_inspection_refuses_replaced_capsules_and_markers_without_rep
         assert!(!output.path().join(&name).exists());
     }
 }
+
+async fn retired(f: &Fixture, output: &Path) -> (Journal, String, String, String, Vec<u8>) {
+    let (mut j, op, export, name) = exported(f, output).await;
+    let bytes = fs::read(output.join(name)).expect("bytes");
+    let read = j
+        .authorize_export_inspection("alice", "run-1", &op, &export, output)
+        .expect("reader");
+    let write = j
+        .authorize_export_retirement(&read, output)
+        .expect("writer");
+    let prepared = j
+        .prepare_export_retirement(&read, &write, ExportRetirementChoice::Target, "retire")
+        .await
+        .expect("preview");
+    let digest = prepared.preview().expect("view").digest.clone();
+    let receipt = j
+        .approve_export_retirement(&read, &write, prepared, &digest)
+        .await
+        .expect("retire")
+        .retirement_id;
+    (j, op, export, receipt, bytes)
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn restoration_requires_independent_exact_approval_and_keeps_capsule_after_reopen() {
+    let f = Fixture::new();
+    let output = tempfile::tempdir().expect("output");
+    let (mut j, op, export, id, bytes) = retired(&f, output.path()).await;
+    let read = j
+        .authorize_export_inspection("alice", "run-1", &op, &export, output.path())
+        .expect("reader");
+    assert!(
+        j.authorize_export_restoration(&read, f.workspace.path())
+            .is_err()
+    );
+    let write = j
+        .authorize_export_restoration(&read, output.path())
+        .expect("separate recovery write");
+    assert!(
+        j.prepare_export_restoration(
+            &read,
+            &write,
+            &id,
+            "../escape.orange-retained.json",
+            "invalid"
+        )
+        .await
+        .is_err()
+    );
+    let prepared = j
+        .prepare_export_restoration(
+            &read,
+            &write,
+            &id,
+            "recovered.orange-retained.json",
+            "recover",
+        )
+        .await
+        .expect("preview");
+    let review = prepared.preview().expect("view").clone();
+    assert!(!output.path().join(&review.file_name).exists());
+    assert!(
+        j.approve_export_restoration(&read, &write, prepared, &"0".repeat(64))
+            .await
+            .is_err()
+    );
+    let prepared = j
+        .prepare_export_restoration(&read, &write, &id, &review.file_name, "recover")
+        .await
+        .expect("same preview");
+    assert_eq!(prepared.preview().expect("same"), &review);
+    let outcome = j
+        .approve_export_restoration(&read, &write, prepared, &review.digest)
+        .await
+        .expect("copy");
+    assert_eq!(outcome.state, "succeeded");
+    let capsule = output
+        .path()
+        .join(format!(".orange-agent-tmp-retired-{id}/item"));
+    assert_eq!(fs::read(&capsule).expect("capsule retained"), bytes);
+    assert_eq!(
+        fs::read(output.path().join(&review.file_name)).expect("copy bytes"),
+        bytes
+    );
+    assert!(
+        j.prepare_export_restoration(&read, &write, &id, &review.file_name, "different")
+            .await
+            .is_err()
+    );
+    assert!(
+        j.export_restoration_outcome("bob", "run-1", &op, &review.restoration_id)
+            .expect("owner boundary")
+            .is_none()
+    );
+    read.request_revoke();
+    write.request_revoke();
+    drop(j);
+    let j = f.open();
+    assert_eq!(
+        j.export_restoration_outcome("alice", "run-1", &op, &review.restoration_id)
+            .expect("lookup")
+            .expect("record"),
+        outcome
+    );
+    assert_eq!(
+        j.export_restoration_outcomes("alice", "run-1", &op, &id, None, 100)
+            .expect("index"),
+        vec![outcome]
+    );
+    assert!(
+        j.export_restoration_outcomes(
+            "alice",
+            "run-1",
+            &op,
+            &id,
+            Some(&review.restoration_id),
+            100
+        )
+        .expect("cursor")
+        .is_empty()
+    );
+    assert!(
+        j.export_restoration_outcomes("alice", "run-1", &op, &id, None, 0)
+            .is_err()
+    );
+    let fresh = j
+        .authorize_export_inspection("alice", "run-1", &op, &export, output.path())
+        .expect("fresh");
+    let receipt = j
+        .inspect_export_restoration(&fresh, &review.restoration_id)
+        .await
+        .expect("actual copy");
+    assert!(matches!(
+        receipt.view().expect("view").target,
+        ExportFileObservation::Regular {
+            matches_approved_artifact: true,
+            ..
+        }
+    ));
+    assert_eq!(
+        receipt.view().expect("view").staged,
+        ExportFileObservation::Missing
+    );
+    fresh.request_revoke();
+    assert!(receipt.view().is_err());
+    drop(receipt);
+    assert_eq!(fs::read(capsule).expect("no unlink"), bytes);
+    assert_eq!(
+        j.export_retirement_outcome("alice", "run-1", &op, &id)
+            .expect("parent")
+            .expect("record")
+            .state,
+        "retained"
+    );
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn restoration_faults_preserve_capsule_and_never_overwrite_replay_or_invent_receipts() {
+    for fault in [
+        "occupied",
+        "late-collision",
+        "revoke",
+        "receipt",
+        "source-changed",
+        "stage-replaced",
+    ] {
+        let f = Fixture::new();
+        let output = tempfile::tempdir().expect("output");
+        let (mut j, op, export, id, bytes) = retired(&f, output.path()).await;
+        let read = Arc::new(
+            j.authorize_export_inspection("alice", "run-1", &op, &export, output.path())
+                .expect("reader"),
+        );
+        let write = j
+            .authorize_export_restoration(&read, output.path())
+            .expect("write");
+        let prepared = j
+            .prepare_export_restoration(
+                &read,
+                &write,
+                &id,
+                "recovered.orange-retained.json",
+                "recover",
+            )
+            .await
+            .expect("prepare");
+        let review = prepared.preview().expect("view").clone();
+        let target = output.path().join(&review.file_name);
+        let capsule = output
+            .path()
+            .join(format!(".orange-agent-tmp-retired-{id}/item"));
+        let staged = output.path().join(format!(
+            ".orange-agent-tmp-export-restore-{}",
+            review.restoration_id
+        ));
+        match fault {
+            "occupied"=>fs::write(&target,b"external target").expect("collision"),
+            "late-collision"=>{let target=target.clone();prepared.before_publish_for_test(move||fs::write(target,b"external target").expect("late collision"));},
+            "revoke"=>{let read=read.clone();prepared.before_publish_for_test(move||read.request_revoke());},
+            "receipt"=>j.connection.execute_batch("CREATE TRIGGER restoration_fault BEFORE INSERT ON events WHEN NEW.kind='patch.export_restoration_completed' BEGIN SELECT RAISE(ABORT,'owned failure');END;").expect("fault"),
+            "source-changed"=>{let capsule=capsule.clone();prepared.before_publish_for_test(move||fs::write(capsule,b"external source edit").expect("source edit"));},
+            "stage-replaced"=>{let staged=staged.clone();let moved=output.path().join("external-stage");prepared.before_publish_for_test(move||{fs::rename(&staged,moved).expect("move");fs::write(staged,b"external stage").expect("replacement");});},
+            _=>unreachable!(),
+        }
+        assert!(
+            j.approve_export_restoration(&read, &write, prepared, &review.digest)
+                .await
+                .is_err(),
+            "{fault}"
+        );
+        let outcome = j
+            .export_restoration_outcome("alice", "run-1", &op, &review.restoration_id)
+            .expect("lookup")
+            .expect("record");
+        assert_eq!(
+            outcome.state,
+            if fault == "occupied" {
+                "prepared"
+            } else {
+                "unknown"
+            },
+            "{fault}"
+        );
+        let capsule_expected = if fault == "source-changed" {
+            b"external source edit".to_vec()
+        } else {
+            bytes.clone()
+        };
+        assert_eq!(
+            fs::read(&capsule).expect("capsule remains"),
+            capsule_expected,
+            "{fault}"
+        );
+        match fault {
+            "occupied" | "late-collision" => assert_eq!(
+                fs::read(&target).expect("foreign preserved"),
+                b"external target"
+            ),
+            "receipt" => assert_eq!(fs::read(&target).expect("effect preserved"), bytes),
+            _ => assert!(!target.exists()),
+        }
+        drop(j);
+        let j = f.open();
+        assert_eq!(
+            j.export_restoration_outcome("alice", "run-1", &op, &review.restoration_id)
+                .expect("reopen")
+                .expect("record"),
+            outcome
+        );
+        let fresh = j
+            .authorize_export_inspection("alice", "run-1", &op, &export, output.path())
+            .expect("fresh");
+        let checked = j
+            .inspect_export_restoration(&fresh, &review.restoration_id)
+            .await
+            .expect("actual outcome");
+        assert_eq!(checked.view().expect("view").recorded_state, outcome.state);
+        if fault == "receipt" {
+            assert!(matches!(
+                checked.view().expect("view").target,
+                ExportFileObservation::Regular {
+                    matches_approved_artifact: true,
+                    ..
+                }
+            ));
+        }
+        assert_eq!(
+            fs::read(&capsule).expect("no recovery erasure"),
+            capsule_expected
+        );
+        assert_eq!(
+            j.export_retirement_outcome("alice", "run-1", &op, &id)
+                .expect("parent")
+                .expect("retirement")
+                .state,
+            "retained"
+        );
+    }
+}

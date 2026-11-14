@@ -6,9 +6,11 @@ pub use inspection::{
     ExportFileObservation, ExportInspectionGrant, ExportInspectionReceipt, ExportInspectionView,
 };
 pub use retirement::{
-    ExportRetirementChoice, ExportRetirementGrant, ExportRetirementInspection,
-    ExportRetirementInspectionReceipt, ExportRetirementOutcome, ExportRetirementReceipt,
-    ExportRetirementReview, PreparedExportRetirement,
+    ExportRestorationGrant, ExportRestorationInspection, ExportRestorationInspectionReceipt,
+    ExportRestorationOutcome, ExportRestorationReview, ExportRetirementChoice,
+    ExportRetirementGrant, ExportRetirementInspection, ExportRetirementInspectionReceipt,
+    ExportRetirementOutcome, ExportRetirementReceipt, ExportRetirementReview,
+    PreparedExportRestoration, PreparedExportRetirement,
 };
 use std::io::{Seek, Write};
 use std::time::Duration;

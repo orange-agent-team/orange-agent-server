@@ -53,6 +53,7 @@ if args.legacy_runtime:
         'a2cdafb95fab90bc1ded82d4a4c061be40463d35': (17, '874a60c4b4364ac54f6accb6a004a9975f7476a78f6c031872ab3d8802af7150'),
         '84d797ca3f2eefdfd675e5d905664add292b713a': (18, '786b0156028da1cccfd1f3f197427b37bfc65a905e6f774e4b2afa074bdb85c6'),
         'c60c50290ea901ebeea2a4c0cb4b307d79f3cb4f': (19, '31608d95b636bd9b902484d33aabdbd508120c370d1d3ea7aaea445b81bfc921'),
+        'e77a61e2a213b817770e7e01e38a742043df86b6': (20, '9be2a6f56d187b9bdf48242d75859b2a3e0b96d6eb03b482cdbddf0fa1630070'),
     }
     pinned = known.get(release.get('origin_commit'))
     if legacy.is_symlink() or pinned is None or hashlib.sha256(release_path.read_bytes()).hexdigest() != pinned[1]:
@@ -286,7 +287,7 @@ try:
             assert actual['phase'] == 'ready'
             if legacy_binary and index == 2:
                 with sqlite3.connect(database) as db:
-                    assert db.execute('PRAGMA user_version').fetchone()[0] == 20
+                    assert db.execute('PRAGMA user_version').fetchone()[0] == 21
                     assert db.execute('SELECT * FROM editing_approvals ORDER BY operation_id').fetchall() == saved_approvals
                     assert db.execute('SELECT count(*) FROM patch_capture_witnesses').fetchone()[0] == 0
                     assert db.execute('SELECT count(*) FROM patch_capture_receipts').fetchone()[0] == 1 + len(saved_capture_receipts)
@@ -309,7 +310,7 @@ try:
         assert complete['phase'] == 'completed' and (complete['steps'], complete['invocations']) == (7, 4)
         assert invoke('step') == complete and len(observations['positive']) == 4
         with sqlite3.connect(database) as db:
-            assert db.execute('PRAGMA user_version').fetchone()[0] == 20
+            assert db.execute('PRAGMA user_version').fetchone()[0] == 21
             assert db.execute('SELECT count(*) FROM patch_version_edges').fetchone()[0] == 2
             assert db.execute('SELECT count(*) FROM runtime_tool_approvals').fetchone()[0] == 3
             first = db.execute('SELECT operation_id FROM operations WHERE tool_version=? ORDER BY rowid', ('apply_patch.v1',)).fetchone()[0]
@@ -328,7 +329,7 @@ try:
         assert len(observations['positive']) == 4
         summary.append({'scenario': 'positive', 'model_calls': 4, 'actual_edits': 2, 'reopen_no_replay': True})
         if legacy_binary:
-            summary.append({'scenario': 'schema' + str(legacy_schema) + '-to20', 'actual_old_success_and_approved_edit': True, 'approval_preserved': True, 'no_old_capture_evidence_invented': True, 'historical_source_and_pending_edit_validated': True, 'old_binary_rejected_without_data_mutation': True})
+            summary.append({'scenario': 'schema' + str(legacy_schema) + '-to21', 'actual_old_success_and_approved_edit': True, 'approval_preserved': True, 'no_old_capture_evidence_invented': True, 'historical_source_and_pending_edit_validated': True, 'old_binary_rejected_without_data_mutation': True})
 
         config, save, invoke, workspace, database, _ = fixture('combined')
         create = invoke('authorize-create', 'explicit-create')

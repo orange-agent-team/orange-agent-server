@@ -1,5 +1,9 @@
-//! Explicit, reversible removal from an export's public name. Captured objects
-//! are retained even on mismatch; no unlink or admission-budget release occurs.
+mod restoration;
+pub use restoration::{
+    ExportRestorationGrant, ExportRestorationInspection, ExportRestorationInspectionReceipt,
+    ExportRestorationOutcome, ExportRestorationReview, PreparedExportRestoration,
+};
+// Explicit reversible removal; captured objects remain retained.
 use super::*;
 use cap_std::fs::OpenOptionsExt;
 use inspection::observe_export_file;

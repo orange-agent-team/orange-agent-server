@@ -5,12 +5,15 @@ use inspection::{PatchRecoveryReceipt, RecoveryFileObservation};
 mod selection;
 pub use selection::{
     ExportFileObservation, ExportInspectionGrant, ExportInspectionReceipt, ExportInspectionView,
-    ExportQuiescence, ExportRetirementChoice, ExportRetirementGrant, ExportRetirementInspection,
+    ExportQuiescence, ExportRestorationGrant, ExportRestorationInspection,
+    ExportRestorationInspectionReceipt, ExportRestorationOutcome, ExportRestorationReview,
+    ExportRetirementChoice, ExportRetirementGrant, ExportRetirementInspection,
     ExportRetirementInspectionReceipt, ExportRetirementOutcome, ExportRetirementReceipt,
-    ExportRetirementReview, PatchRetentionGrant, PreparedExportRetirement, PreparedRetentionExport,
-    RetentionExportCapture, RetentionExportChoice, RetentionExportDestination,
-    RetentionExportEntrySummary, RetentionExportOutcome, RetentionExportPreview,
-    RetentionExportReceipt, RetentionExportReview, verify_retention_export,
+    ExportRetirementReview, PatchRetentionGrant, PreparedExportRestoration,
+    PreparedExportRetirement, PreparedRetentionExport, RetentionExportCapture,
+    RetentionExportChoice, RetentionExportDestination, RetentionExportEntrySummary,
+    RetentionExportOutcome, RetentionExportPreview, RetentionExportReceipt, RetentionExportReview,
+    verify_retention_export,
 };
 const ARCHIVE_LIMIT: i64 = 256 * 1024 * 1024;
 const ARCHIVE_RECORDS: i64 = 1000;
