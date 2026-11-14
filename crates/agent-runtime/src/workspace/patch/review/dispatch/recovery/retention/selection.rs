@@ -3,6 +3,7 @@
 use super::*;
 mod export;
 pub use export::{
+    ExportFileObservation, ExportInspectionGrant, ExportInspectionReceipt, ExportInspectionView,
     PreparedRetentionExport, RetentionExportCapture, RetentionExportChoice,
     RetentionExportDestination, RetentionExportEntrySummary, RetentionExportOutcome,
     RetentionExportPreview, RetentionExportReceipt, RetentionExportReview, verify_retention_export,

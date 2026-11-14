@@ -1,6 +1,6 @@
 use super::*;
 use crate::workspace::patch::review::dispatch::recovery::retention::{
-    RetentionExportChoice, verify_retention_export,
+    ExportFileObservation, RetentionExportChoice, verify_retention_export,
 };
 use std::sync::Arc;
 
@@ -327,6 +327,106 @@ async fn export_conflict_revocation_and_lost_receipt_never_overwrite_or_replay()
         let count = std::fs::read_dir(output.path())
             .expect("before reopen")
             .count();
+        assert!(
+            j.authorize_export_inspection("bob", "run-1", &op, &review.export_id, output.path())
+                .is_err()
+        );
+        assert!(
+            j.authorize_export_inspection(
+                "alice",
+                "other-run",
+                &op,
+                &review.export_id,
+                output.path()
+            )
+            .is_err()
+        );
+        assert!(
+            j.authorize_export_inspection(
+                "alice",
+                "run-1",
+                &op,
+                &review.export_id,
+                f.private.path()
+            )
+            .is_err()
+        );
+        assert!(
+            j.authorize_export_inspection(
+                "alice",
+                "run-1",
+                &op,
+                &review.export_id,
+                f.workspace.path()
+            )
+            .is_err()
+        );
+        let inspect = j
+            .authorize_export_inspection("alice", "run-1", &op, &review.export_id, output.path())
+            .expect("independent destination read, even after source revoke");
+        let observed = j
+            .inspect_export_files(&inspect)
+            .await
+            .expect("actual current files");
+        let view = observed.view().expect("live inspection");
+        assert_eq!(view.recorded_state, state);
+        match fault {
+            "target" => {
+                assert!(matches!(
+                    view.target,
+                    ExportFileObservation::Regular {
+                        matches_approved_artifact: false,
+                        valid_export_document: false,
+                        ..
+                    }
+                ));
+                assert!(matches!(
+                    view.staged,
+                    ExportFileObservation::Regular {
+                        matches_approved_artifact: true,
+                        valid_export_document: true,
+                        ..
+                    }
+                ));
+            }
+            "receipt-event" => {
+                assert!(matches!(
+                    view.target,
+                    ExportFileObservation::Regular {
+                        matches_approved_artifact: true,
+                        valid_export_document: true,
+                        ..
+                    }
+                ));
+                assert_eq!(view.staged, ExportFileObservation::Missing);
+            }
+            _ => {
+                assert_eq!(view.target, ExportFileObservation::Missing);
+                assert_eq!(view.staged, ExportFileObservation::Missing);
+            }
+        }
+        let metadata = serde_json::to_string(view).expect("inspection projection");
+        assert!(
+            !metadata.contains("content_base64")
+                && !metadata.contains(".orange-agent-tmp-export-")
+                && !metadata.contains("note.txt")
+        );
+        inspect.request_revoke();
+        assert!(observed.view().is_err());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), inspect.wait_drained())
+                .await
+                .is_err()
+        );
+        drop(observed);
+        tokio::time::timeout(Duration::from_secs(1), inspect.wait_drained())
+            .await
+            .expect("inspection drain");
+        assert!(j.inspect_export_files(&inspect).await.is_err());
+        let old_inspect = j
+            .authorize_export_inspection("alice", "run-1", &op, &review.export_id, output.path())
+            .expect("scope before reopen");
+
         drop(j);
         let mut j = f.open();
         assert_eq!(
@@ -336,6 +436,19 @@ async fn export_conflict_revocation_and_lost_receipt_never_overwrite_or_replay()
                 .state,
             state
         );
+        assert!(
+            j.inspect_export_files(&old_inspect).await.is_err(),
+            "old Host epoch cannot inspect"
+        );
+        let fresh_inspect = j
+            .authorize_export_inspection("alice", "run-1", &op, &review.export_id, output.path())
+            .expect("fresh native read choice after reopen");
+        let observed = j
+            .inspect_export_files(&fresh_inspect)
+            .await
+            .expect("no source permission restoration");
+        assert_eq!(observed.view().expect("snapshot").recorded_state, state);
+        drop(observed);
         let fresh = j
             .authorize_patch_retention("alice", "run-1", &op, f.workspace.path())
             .expect("fresh read");
@@ -516,4 +629,88 @@ async fn revocation_after_actual_export_staging_prevents_final_publication_and_r
             b"new\n"
         );
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn export_inspection_refuses_links_and_oversized_data_without_claiming_delivery() {
+    let f = Fixture::new();
+    let (mut j, op) = edited(&f).await;
+    let output = tempfile::tempdir().expect("destination");
+    let source = j
+        .authorize_patch_retention("alice", "run-1", &op, f.workspace.path())
+        .expect("source");
+    let destination = j
+        .authorize_retention_export_destination(&source, output.path())
+        .expect("write destination");
+    let prepared = j
+        .prepare_retention_export(
+            &source,
+            &destination,
+            RetentionExportChoice::Original,
+            "inspect.orange-retained.json",
+            "one",
+        )
+        .await
+        .expect("preview");
+    let review = prepared.preview().expect("review").clone();
+    j.approve_retention_export(&source, &destination, prepared, &review.digest)
+        .await
+        .expect("publish");
+    source.request_revoke();
+    destination.request_revoke();
+    let selected = j
+        .authorize_export_inspection("alice", "run-1", &op, &review.export_id, output.path())
+        .expect("separate reader");
+    let target = output.path().join(&review.file_name);
+    let link = output.path().join("extra");
+    std::fs::hard_link(&target, &link).expect("external hard link");
+    assert!(matches!(
+        j.inspect_export_files(&selected)
+            .await
+            .expect("refuse hard link")
+            .view()
+            .expect("view")
+            .target,
+        ExportFileObservation::Refused { .. }
+    ));
+    std::fs::remove_file(&link).expect("owned link");
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&target)
+        .expect("external writer")
+        .set_len(3 * 1024 * 1024 + 1)
+        .expect("oversized file");
+    assert!(matches!(
+        j.inspect_export_files(&selected)
+            .await
+            .expect("refuse size")
+            .view()
+            .expect("view")
+            .target,
+        ExportFileObservation::Refused { .. }
+    ));
+    std::fs::remove_file(&target).expect("owned external replacement");
+    std::os::unix::fs::symlink(f.workspace.path().join("note.txt"), &target)
+        .expect("external symlink");
+    assert!(matches!(
+        j.inspect_export_files(&selected)
+            .await
+            .expect("refuse link")
+            .view()
+            .expect("view")
+            .target,
+        ExportFileObservation::Refused { .. }
+    ));
+    assert_eq!(
+        j.retention_export_outcome("alice", "run-1", &op, &review.export_id)
+            .expect("historical receipt")
+            .expect("record")
+            .state,
+        "succeeded",
+        "current file changes neither erase nor invent the immutable delivery receipt"
+    );
+    assert_eq!(
+        std::fs::read(f.workspace.path().join("note.txt")).expect("source not followed or altered"),
+        b"new\n"
+    );
 }

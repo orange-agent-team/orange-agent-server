@@ -4,6 +4,7 @@ use super::*;
 use inspection::{PatchRecoveryReceipt, RecoveryFileObservation};
 mod selection;
 pub use selection::{
+    ExportFileObservation, ExportInspectionGrant, ExportInspectionReceipt, ExportInspectionView,
     PatchRetentionGrant, PreparedRetentionExport, RetentionExportCapture, RetentionExportChoice,
     RetentionExportDestination, RetentionExportEntrySummary, RetentionExportOutcome,
     RetentionExportPreview, RetentionExportReceipt, RetentionExportReview, verify_retention_export,

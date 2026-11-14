@@ -8,6 +8,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use cap_fs_ext::{FollowSymlinks, OpenOptionsFollowExt, OpenOptionsSyncExt, OsMetadataExt};
 use cap_std::fs::{Dir, OpenOptions};
 pub use publication::{
+    ExportFileObservation, ExportInspectionGrant, ExportInspectionReceipt, ExportInspectionView,
     PreparedRetentionExport, RetentionExportDestination, RetentionExportOutcome,
     RetentionExportReceipt, RetentionExportReview,
 };

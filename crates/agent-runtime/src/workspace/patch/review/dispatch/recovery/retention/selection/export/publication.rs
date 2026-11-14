@@ -1,4 +1,8 @@
 use super::*;
+mod inspection;
+pub use inspection::{
+    ExportFileObservation, ExportInspectionGrant, ExportInspectionReceipt, ExportInspectionView,
+};
 use std::io::{Seek, Write};
 use std::time::Duration;
 
