@@ -18,7 +18,7 @@ Darwin 的 `acl_get_fd` 在 FILESEC_ACL 属性不存在时可返回 ENOENT。仅
 
 ## Runtime / 发行集成
 
-现有文件编辑预览绑定 security_digest；重验时 owner/group/mode、ACL 或 xattr 变化都会使旧预览不可复用。此包只处理属性；E03 的独立 Apple publisher 已在真实临时文件上验证发布和保留旧 inode。恢复决策/容量释放、源版本转换及普通 Agent 工具注册仍未完成。
+现有文件编辑预览绑定 security_digest；重验时 owner/group/mode、ACL 或 xattr 变化都会使旧预览不可复用。此包只处理属性；E03 的独立 Apple publisher 已在真实临时文件上验证发布和保留旧 inode。Runtime 已有独立恢复决策、受限原件归档、源版本转换及普通 Agent 编辑调用；桌面恢复批准/原件管理和完整数据退出仍未接线。这里的属性复制成功不代表上述产品流程已全部验收。
 
 共享导出只从不可变 Git 提交提取此包，并以明确成员形式记录；旧提交无此包时仍导出原四成员。消费者必须锁定新归档及清单摘要，普通构建不能引用相邻仓库源码。
 
