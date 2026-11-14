@@ -11,6 +11,7 @@ use std::sync::{
 mod drafts;
 #[cfg(test)]
 mod tests;
+pub mod tools;
 pub use drafts::{
     MemoryDraftOutcome, MemoryMutation, MemoryReview, MemoryWriteRequest, PreparedMemoryDraft,
 };
@@ -102,12 +103,25 @@ pub struct MemoryGrant {
     write: bool,
     policy: String,
     closed: Arc<AtomicBool>,
+    revoked: tokio::sync::watch::Sender<bool>,
 }
 impl MemoryGrant {
     /// Signal only. Trusted Host must await its serialized Journal queue barrier
     /// before acknowledging closure; durable ACL revocation uses set_memory_member.
     pub fn request_revoke(&self) {
         self.closed.store(true, Ordering::Release);
+        self.revoked.send_replace(true);
+    }
+    pub fn is_revoked(&self) -> bool {
+        self.closed.load(Ordering::Acquire)
+    }
+    pub(crate) async fn revoked(&self) {
+        let mut rx = self.revoked.subscribe();
+        while !*rx.borrow() {
+            if rx.changed().await.is_err() {
+                break;
+            }
+        }
     }
     pub fn scope_id(&self) -> &str {
         &self.scope
@@ -297,6 +311,7 @@ impl Journal {
             write,
             policy: policy.into(),
             closed: Arc::new(AtomicBool::new(false)),
+            revoked: tokio::sync::watch::channel(false).0,
         };
         check(&self.connection, &grant, write, &self.memory_session)?;
         Ok(grant)
@@ -535,4 +550,51 @@ impl Journal {
             })
             .collect()
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct MemoryCapability {
+    pub scope_id: String,
+    pub revision: String,
+    pub write: bool,
+    pub environment: String,
+}
+impl Journal {
+    pub fn memory_capability(
+        &self,
+        grant: &MemoryGrant,
+        actor: &str,
+        policy: &str,
+    ) -> Result<MemoryCapability, MemoryError> {
+        if grant.actor != actor || grant.policy != policy {
+            return Err(MemoryError::Denied);
+        }
+        check(&self.connection, grant, grant.write, &self.memory_session)?;
+        Ok(MemoryCapability {
+            scope_id: grant.scope.clone(),
+            revision: grant.revision.to_string(),
+            write: grant.write,
+            environment: digest(
+                "memory-environment.v1",
+                &(actor, policy, &grant.scope, grant.revision, grant.write),
+            )?,
+        })
+    }
+}
+
+pub(crate) fn check_execution_grants(
+    db: &Connection,
+    grants: &[MemoryGrant],
+    actor: &str,
+    policy: &str,
+    session: &str,
+) -> Result<(), MemoryError> {
+    for grant in grants {
+        if grant.actor != actor || grant.policy != policy {
+            return Err(MemoryError::Denied);
+        }
+        check(db, grant, grant.write, session)?;
+    }
+    Ok(())
 }

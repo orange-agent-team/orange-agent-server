@@ -18,10 +18,38 @@ impl CreationRequirement {
     }
 }
 #[derive(Clone, Copy)]
-pub(super) struct Authority<'a> {
-    pub read: &'a WorkspaceGrant,
-    pub create: Option<&'a CreateFileGrant>,
-    pub edit: editing::EditAuthority<'a>,
+pub struct AgentAuthority<'a> {
+    pub(super) read: &'a WorkspaceGrant,
+    pub(super) create: Option<&'a CreateFileGrant>,
+    pub(super) edit: editing::EditAuthority<'a>,
+    pub(super) memories: &'a [crate::memory::MemoryGrant],
+}
+pub(super) type Authority<'a> = AgentAuthority<'a>;
+impl<'a> AgentAuthority<'a> {
+    pub fn read(read: &'a WorkspaceGrant) -> Self {
+        Self {
+            read,
+            create: None,
+            edit: editing::EditAuthority::none(),
+            memories: &[],
+        }
+    }
+    pub fn with_creation(mut self, create: &'a CreateFileGrant) -> Self {
+        self.create = Some(create);
+        self
+    }
+    #[cfg(target_vendor = "apple")]
+    pub fn with_editing(
+        mut self,
+        edit: &'a crate::workspace::patch::authority::EditFileGrant,
+    ) -> Self {
+        self.edit = editing::EditAuthority::from_grant(edit);
+        self
+    }
+    pub fn with_memory(mut self, memories: &'a [crate::memory::MemoryGrant]) -> Self {
+        self.memories = memories;
+        self
+    }
 }
 pub struct CreationApproval<'a> {
     pub operation_id: &'a str,
@@ -100,10 +128,8 @@ impl Journal {
         self.start_agent_mode(
             config,
             messages,
-            read,
+            AgentAuthority::read(read).with_creation(create),
             user_questions,
-            Some(create),
-            editing::EditAuthority::none(),
         )
     }
     pub async fn advance_agent_creating<G: ModelGateway>(
@@ -122,6 +148,7 @@ impl Journal {
                 read,
                 create: Some(create),
                 edit: editing::EditAuthority::none(),
+                memories: &[],
             },
             gateway,
             cancel,
@@ -150,8 +177,10 @@ impl Journal {
             .into_iter()
             .find(|o| o.id == approval.operation_id && o.state == "intended")
             .ok_or(EngineError::ApprovalRequired)?;
-        if !matches!(op.request, WorkspaceRequest::WriteFile(_))
-            || op.digest != approval.argument_digest
+        if !matches!(
+            op.request,
+            AgentRequest::Workspace(WorkspaceRequest::WriteFile(_))
+        ) || op.digest != approval.argument_digest
         {
             return Err(EngineError::ApprovalRequired);
         }

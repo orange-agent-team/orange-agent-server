@@ -2,6 +2,8 @@
 //! at most one model dispatch or one approved filesystem operation. Network model
 //! implementations are injected by the application; no paid fallback is provided.
 mod contracts;
+mod memory;
+pub use memory::{AgentMemoryApproval, AgentMemoryPreview, MemoryRecovery};
 mod creation;
 mod editing;
 pub use editing::EditRequirement;
@@ -11,11 +13,12 @@ pub(crate) use editing::HistoryAccess;
 pub use editing::{EditingApproval, EditingAuthority, PatchRecoveryOutcome, ResolvedPatchDecision};
 mod questions;
 use crate::workspace::creation::CreateFileGrant;
-pub use creation::{CreationApproval, CreationRequirement};
+pub use creation::{AgentAuthority, CreationApproval, CreationRequirement};
 pub use questions::PendingUserQuestion;
 
 use crate::{
     Journal, JournalError, Operation,
+    agent_request::AgentRequest,
     workspace::{self, WorkspaceError, WorkspaceGrant, WorkspaceRequest},
 };
 use orange_protocol::{
@@ -40,6 +43,13 @@ pub trait ModelGateway {
         request: &'a GenerateRequest,
         cancel: watch::Receiver<bool>,
     ) -> ModelFuture<'a>;
+}
+// This signals adapter-owned work; it is not evidence of provider drain.
+struct ModelCallCancellation(watch::Sender<bool>);
+impl Drop for ModelCallCancellation {
+    fn drop(&mut self) {
+        self.0.send_replace(true);
+    }
 }
 #[derive(Debug, thiserror::Error)]
 #[error("model call did not return a validated complete response")]
@@ -93,7 +103,7 @@ pub enum Phase {
 pub struct PendingApproval {
     pub operation_id: String,
     pub call_id: String,
-    pub request: WorkspaceRequest,
+    pub request: AgentRequest,
     pub argument_digest: String,
     pub tool_version: String,
     pub environment: String,
@@ -120,13 +130,14 @@ struct StoredRun {
     user_questions: bool,
     creation: Option<creation::CreationRequirement>,
     editing: Option<editing::EditRequirement>,
+    memories: Vec<crate::memory::MemoryCapability>,
 }
 type StoredRunRow = (String, String, String, u32, u32, Option<String>, bool);
 #[derive(Debug, Clone)]
 struct StoredOperation {
     id: String,
     invocation: String,
-    request: WorkspaceRequest,
+    request: AgentRequest,
     digest: String,
     version: String,
     call_id: String,
@@ -174,14 +185,7 @@ impl Journal {
         messages: Vec<Message>,
         grant: &WorkspaceGrant,
     ) -> Result<RunView, EngineError> {
-        self.start_agent_mode(
-            config,
-            messages,
-            grant,
-            false,
-            None,
-            editing::EditAuthority::none(),
-        )
+        self.start_agent_mode(config, messages, AgentAuthority::read(grant), false)
     }
     /// Only a trusted host that can present and durably answer questions opts in.
     pub fn start_agent_interactive(
@@ -190,24 +194,19 @@ impl Journal {
         messages: Vec<Message>,
         grant: &WorkspaceGrant,
     ) -> Result<RunView, EngineError> {
-        self.start_agent_mode(
-            config,
-            messages,
-            grant,
-            true,
-            None,
-            editing::EditAuthority::none(),
-        )
+        self.start_agent_mode(config, messages, AgentAuthority::read(grant), true)
     }
     fn start_agent_mode(
         &mut self,
         config: &RunConfig,
         messages: Vec<Message>,
-        grant: &WorkspaceGrant,
+        authority: AgentAuthority<'_>,
         user_questions: bool,
-        creation: Option<&CreateFileGrant>,
-        edit: editing::EditAuthority<'_>,
     ) -> Result<RunView, EngineError> {
+        let grant = authority.read;
+        let creation = authority.create;
+        let edit = authority.edit;
+        let memories = self.memory_requirements(config, authority.memories)?;
         if ![
             &config.owner,
             &config.run_id,
@@ -238,8 +237,25 @@ impl Journal {
             None
         };
         let edit_binding = self.edit_start_binding(config, grant, edit)?;
+        // Mixed memory-to-filesystem publication still needs a shared source
+        // lifetime/drain boundary. Keep this unfinished candidate fail-closed.
+        if !memories.is_empty() && (creation_binding.is_some() || edit_binding.is_some()) {
+            return Err(EngineError::ExecutionEnvironmentUnavailable);
+        }
         let config_json = encode(config)?;
-        let config_digest = if let Some(binding) = &edit_binding {
+        let config_digest = if !memories.is_empty() {
+            digest(
+                "run-config-memory-v1",
+                &(
+                    config,
+                    &messages,
+                    user_questions,
+                    &creation_binding,
+                    &edit_binding,
+                    &memories,
+                ),
+            )?
+        } else if let Some(binding) = &edit_binding {
             digest(
                 "run-config-edit-v1",
                 &(
@@ -267,6 +283,7 @@ impl Journal {
             user_questions,
             creation_binding.is_some(),
             edit_binding.is_some(),
+            &memories,
         );
         request.validate().map_err(|_| EngineError::Invalid)?;
         let tx = self
@@ -290,6 +307,12 @@ impl Journal {
             tx.commit()?;
             return self.agent_view(&config.owner, &config.run_id);
         }
+        for binding in memories.iter().filter(|v| v.write) {
+            let unresolved:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM runtime_memory_operations m JOIN operations o USING(operation_id) WHERE m.scope_id=? AND o.owner=? AND o.state IN('dispatching','unknown') AND json_extract(o.request_json,'$.tool')='memory_write')",params![binding.scope_id,config.owner],|r|r.get(0))?;
+            if unresolved {
+                return Err(EngineError::RecoveryRequired);
+            }
+        }
         let quarantine:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM operations WHERE environment=?1 AND state IN('unknown','dispatching') UNION SELECT 1 FROM runtime_runs WHERE environment=?1 AND phase='recovery_required' UNION SELECT 1 FROM runtime_invocations i JOIN runtime_runs r USING(run_id) WHERE r.environment=?1 AND i.state IN('unknown','dispatched'))",[&config.environment],|r|r.get(0))?;
         if quarantine {
             return Err(EngineError::RecoveryRequired);
@@ -304,6 +327,18 @@ impl Journal {
             params![config.run_id, config.owner, config.policy],
         )?;
         tx.execute("INSERT INTO runtime_runs(run_id,config,config_digest,environment,messages,phase) VALUES(?,?,?,?,?,'ready')",params![config.run_id,config_json,config_digest,config.environment,encode(&messages)?])?;
+        for binding in &memories {
+            tx.execute(
+                "INSERT INTO runtime_memory_capabilities VALUES(?,?,?,?,?)",
+                params![
+                    config.run_id,
+                    binding.scope_id,
+                    binding.revision,
+                    binding.write,
+                    binding.environment
+                ],
+            )?;
+        }
         if user_questions {
             tx.execute(
                 "INSERT INTO runtime_capabilities(run_id,user_questions) VALUES(?,1)",
@@ -343,6 +378,7 @@ impl Journal {
             user_questions,
             creation: self.creation_binding(run)?,
             editing: self.editing_binding(run)?,
+            memories: self.memory_bindings(run)?,
         })
     }
     fn pending_operations(&self, run: &str) -> Result<Vec<StoredOperation>, EngineError> {
@@ -386,7 +422,17 @@ impl Journal {
         })
         .collect()
     }
+    /// Legacy/metadata access cannot expose content from a memory-capable Run.
     pub fn agent_view(&self, owner: &str, run: &str) -> Result<RunView, EngineError> {
+        let mut view = self.agent_view_internal(owner, run)?;
+        if !self.memory_bindings(run)?.is_empty() {
+            view.pending.clear();
+            view.final_text = None;
+            view.user_question = None;
+        }
+        Ok(view)
+    }
+    fn agent_view_internal(&self, owner: &str, run: &str) -> Result<RunView, EngineError> {
         let stored = self.stored_run(owner, run)?;
         let pending = self
             .pending_operations(run)?
@@ -435,11 +481,23 @@ impl Journal {
         run: &str,
         grant: &WorkspaceGrant,
     ) -> Result<RunView, EngineError> {
+        self.agent_view_with_memory(owner, run, grant, &[]).await
+    }
+    pub async fn agent_view_with_memory(
+        &self,
+        owner: &str,
+        run: &str,
+        grant: &WorkspaceGrant,
+        memories: &[crate::memory::MemoryGrant],
+    ) -> Result<RunView, EngineError> {
         let stored = self.stored_run(owner, run)?;
         check_grant(&stored.config, grant)?;
-        let view = self.agent_view(owner, run)?;
+        self.check_memory_bindings(&stored, memories)?;
+        let view = self.agent_view_internal(owner, run)?;
         if view.final_text.is_some() || !view.pending.is_empty() || view.user_question.is_some() {
-            let _leases = self.revalidate_sources(&stored.config, grant).await?;
+            let _leases = self
+                .revalidate_sources_with_memory(&stored.config, grant, memories)
+                .await?;
             for op in self
                 .pending_operations(run)?
                 .iter()
@@ -448,7 +506,7 @@ impl Journal {
                 self.intent_contract(&stored.config, op)?;
             }
             check_grant(&stored.config, grant)?;
-            return self.agent_view(owner, run);
+            return self.agent_view_internal(owner, run);
         }
         Ok(view)
     }
@@ -496,7 +554,9 @@ impl Journal {
             .ok_or(EngineError::ApprovalRequired)?;
         if matches!(
             op.request,
-            WorkspaceRequest::WriteFile(_) | WorkspaceRequest::ApplyPatch(_)
+            AgentRequest::Workspace(WorkspaceRequest::WriteFile(_))
+                | AgentRequest::Workspace(WorkspaceRequest::ApplyPatch(_))
+                | AgentRequest::Memory(_)
         ) {
             return Err(EngineError::ApprovalRequired);
         }
@@ -529,6 +589,7 @@ impl Journal {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx.execute("UPDATE runs SET active=0 WHERE run_id=?", [run])?;
+        tx.execute("UPDATE memory_drafts SET state='invalidated',payload=NULL WHERE actor=? AND json_extract(body,'$.source_run')=? AND state='pending'",params![owner,run])?;
         tx.execute(
             "UPDATE runtime_invocations SET state='unknown' WHERE run_id=? AND state='dispatched'",
             [run],
@@ -593,6 +654,7 @@ impl Journal {
                 read: grant,
                 create: None,
                 edit: editing::EditAuthority::none(),
+                memories: &[],
             },
             gateway,
             cancellation,
@@ -620,6 +682,7 @@ impl Journal {
             }
             return Ok(view);
         }
+        self.check_memory_bindings(&stored, authority.memories)?;
         self.check_creation_binding(&stored, grant, authority.create)?;
         self.check_edit_binding(&stored, grant, authority.edit)?;
         if *cancellation.borrow() || cancellation.has_changed().is_err() || grant.is_revoked() {
@@ -661,7 +724,8 @@ impl Journal {
         // remain held through model submission; changed/deleted sources fail closed.
         let lineage = tokio::select! {
             _=cancellation.changed()=>{return self.cancel_agent(owner,run,grant);}
-            result=tokio::time::timeout(Duration::from_secs(stored.config.deadline_unix.saturating_sub(now()?).max(0) as u64),self.revalidate_sources(&stored.config,grant))=>result.unwrap_or(Err(EngineError::RecoveryRequired)),
+            _=memory::wait_revoked(authority.memories)=>{self.stop_agent(run,"recovery_required","memory_permission_revoked")?;return self.agent_view(owner,run);}
+            result=tokio::time::timeout(Duration::from_secs(stored.config.deadline_unix.saturating_sub(now()?).max(0) as u64),self.revalidate_sources_with_memory(&stored.config,grant,authority.memories))=>result.unwrap_or(Err(EngineError::RecoveryRequired)),
         };
         let _leases = match lineage {
             Ok(value) => value,
@@ -686,6 +750,7 @@ impl Journal {
             stored.user_questions,
             stored.creation.is_some(),
             stored.editing.is_some(),
+            &stored.memories,
         );
         if request.validate().is_err() {
             self.stop_agent(run, "limited", "context_budget")?;
@@ -712,9 +777,11 @@ impl Journal {
             .deadline_unix
             .saturating_sub(now()?)
             .clamp(0, 120) as u64;
-        let adapter_cancellation = cancellation.clone();
+        let (adapter_sender, adapter_cancellation) = watch::channel(*cancellation.borrow());
+        let adapter_signal = ModelCallCancellation(adapter_sender);
         let result = tokio::select! {
-            _=cancellation.changed()=>{return self.cancel_agent(owner,run,grant);}
+            _=async{let _=cancellation.changed().await;adapter_signal.0.send_replace(true);}=>{return self.cancel_agent(owner,run,grant);}
+            _=async{memory::wait_revoked(authority.memories).await;adapter_signal.0.send_replace(true);}=>{self.stop_agent(run,"recovery_required","memory_permission_revoked")?;return self.agent_view(owner,run);}
             result=tokio::time::timeout(Duration::from_secs(remaining),gateway.generate(&request,adapter_cancellation))=>result,
         };
         if *cancellation.borrow() || grant.is_revoked() {
@@ -747,6 +814,8 @@ impl Journal {
     ) -> Result<(), EngineError> {
         let grant = authority.read;
         check_grant(&stored.config, grant)?;
+        self.check_memory_bindings(stored, authority.memories)?;
+        self.revalidate_memory_sources(&stored.config, authority.memories)?;
         self.check_creation_binding(stored, grant, authority.create)?;
         self.check_edit_binding(stored, grant, authority.edit)?;
         if !valid_id(&candidate.response_id)
@@ -790,12 +859,32 @@ impl Journal {
                         .ok_or(EngineError::Invalid)?,
                 );
             } else {
-                let request = WorkspaceRequest::parse(&call.name, &call.arguments)?;
-                if matches!(request, WorkspaceRequest::WriteFile(_)) && stored.creation.is_none() {
+                let request = AgentRequest::parse(&call.name, &call.arguments)?;
+                if matches!(
+                    request,
+                    AgentRequest::Workspace(WorkspaceRequest::WriteFile(_))
+                ) && stored.creation.is_none()
+                {
                     return Err(EngineError::Forbidden);
                 }
-                if matches!(request, WorkspaceRequest::ApplyPatch(_)) && stored.editing.is_none() {
+                if matches!(
+                    request,
+                    AgentRequest::Workspace(WorkspaceRequest::ApplyPatch(_))
+                ) && stored.editing.is_none()
+                {
                     return Err(EngineError::Forbidden);
+                }
+                if let AgentRequest::Memory(memory) = &request {
+                    let binding = stored
+                        .memories
+                        .iter()
+                        .find(|v| v.scope_id == memory.scope())
+                        .ok_or(EngineError::Forbidden)?;
+                    if matches!(memory, crate::memory::tools::MemoryRequest::MemoryWrite(_))
+                        && !binding.write
+                    {
+                        return Err(EngineError::Forbidden);
+                    }
                 }
                 requests.push(request);
             }
@@ -830,14 +919,28 @@ impl Journal {
         for (ordinal, (call, request)) in candidate.tool_calls.iter().zip(requests).enumerate() {
             let ordinal = i64::try_from(ordinal).map_err(|_| EngineError::Invalid)?;
             let id = format!("op-{}", uuid::Uuid::new_v4());
-            let environment = if matches!(request, WorkspaceRequest::WriteFile(_)) {
+            let environment = if let AgentRequest::Memory(memory) = &request {
+                stored
+                    .memories
+                    .iter()
+                    .find(|v| v.scope_id == memory.scope())
+                    .ok_or(EngineError::Forbidden)?
+                    .environment
+                    .as_str()
+            } else if matches!(
+                request,
+                AgentRequest::Workspace(WorkspaceRequest::WriteFile(_))
+            ) {
                 stored
                     .creation
                     .as_ref()
                     .ok_or(EngineError::Forbidden)?
                     .environment
                     .as_str()
-            } else if matches!(request, WorkspaceRequest::ApplyPatch(_)) {
+            } else if matches!(
+                request,
+                AgentRequest::Workspace(WorkspaceRequest::ApplyPatch(_))
+            ) {
                 stored
                     .editing
                     .as_ref()
@@ -848,6 +951,16 @@ impl Journal {
                 c.environment.as_str()
             };
             tx.execute("INSERT INTO operations(operation_id,owner,run_id,invocation,argument_digest,tool_version,environment,policy,requires_approval,state,request_json,call_id,ordinal) VALUES(?,?,?,?,?,?,?,?,1,'intended',?,?,?)",params![id,c.owner,c.run_id,invocation,request.digest()?,request.version(),environment,c.policy,encode(&request)?,call.id,ordinal])?;
+            if let AgentRequest::Memory(memory) = &request {
+                let entry = match memory {
+                    crate::memory::tools::MemoryRequest::MemoryRead(v) => v.entry_id.clone(),
+                    crate::memory::tools::MemoryRequest::MemoryWrite(v) => v
+                        .entry_id
+                        .clone()
+                        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+                };
+                tx.execute("INSERT INTO runtime_memory_operations(operation_id,scope_id,entry_id) VALUES(?,?,?)",params![id,memory.scope(),entry])?;
+            }
             tx.execute(
                 "INSERT INTO events(run_id,operation_id,kind) VALUES(?,?,'operation.intended')",
                 params![c.run_id, id],
@@ -877,6 +990,14 @@ impl Journal {
             "INSERT INTO events(run_id,kind) VALUES(?,'model.committed')",
             [&c.run_id],
         )?;
+        crate::memory::check_execution_grants(
+            &tx,
+            authority.memories,
+            &c.owner,
+            &c.policy,
+            &self.memory_session,
+        )
+        .map_err(memory::error)?;
         tx.commit()?;
         Ok(())
     }
@@ -906,12 +1027,20 @@ impl Journal {
         }
         let (_, pin) = self.intent_contract(c, op)?;
         self.require_tool_approval_pin(op, &pin)?;
-        if let WorkspaceRequest::WriteFile(args) = &op.request {
+        if matches!(op.request, AgentRequest::Memory(_)) {
+            return self
+                .advance_memory_tool(&stored, op, authority, cancellation)
+                .await;
+        }
+        if let AgentRequest::Workspace(WorkspaceRequest::WriteFile(args)) = &op.request {
             return self
                 .advance_creation_tool(&stored, op, args.clone(), authority, cancellation)
                 .await;
         }
-        if matches!(op.request, WorkspaceRequest::ApplyPatch(_)) {
+        if matches!(
+            op.request,
+            AgentRequest::Workspace(WorkspaceRequest::ApplyPatch(_))
+        ) {
             return self
                 .advance_edit_tool(&stored, op, authority, cancellation)
                 .await;
@@ -919,7 +1048,7 @@ impl Journal {
         // Capacity acquisition may wait, but has no filesystem effect before claim.
         let prepared = tokio::select! {
             _=cancellation.changed()=>{self.cancel_agent(&c.owner,&c.run_id,grant)?;return Ok(());}
-            result=grant.prepare(&c.owner,&c.environment,&c.policy,op.request.clone())=>result?,
+            result=grant.prepare(&c.owner,&c.environment,&c.policy,op.request.workspace()?.clone())=>result?,
         };
         if *cancellation.borrow() || !prepared.is_authorized() {
             self.cancel_agent(&c.owner, &c.run_id, grant)?;
@@ -1045,6 +1174,15 @@ impl Journal {
         c: &RunConfig,
         grant: &WorkspaceGrant,
     ) -> Result<Vec<workspace::ToolReceipt>, EngineError> {
+        self.revalidate_sources_with_memory(c, grant, &[]).await
+    }
+    async fn revalidate_sources_with_memory(
+        &self,
+        c: &RunConfig,
+        grant: &WorkspaceGrant,
+        memories: &[crate::memory::MemoryGrant],
+    ) -> Result<Vec<workspace::ToolReceipt>, EngineError> {
+        self.revalidate_memory_sources(c, memories)?;
         let rows = {
             let mut statement=self.connection.prepare("SELECT request_json,result_digest,result_json,operation_id FROM operations WHERE run_id=? AND state='succeeded' AND request_json IS NOT NULL")?;
             statement
@@ -1063,6 +1201,9 @@ impl Journal {
             let op = self.operation_record(c, &id)?;
             self.intent_contract(c, &op)?;
             self.checked_cached_result(c, &op)?;
+            if matches!(op.request, AgentRequest::Memory(_)) {
+                continue;
+            }
             if self.editing_binding(&c.run_id)?.is_some() {
                 #[cfg(target_vendor = "apple")]
                 {
@@ -1077,9 +1218,9 @@ impl Journal {
                 #[cfg(not(target_vendor = "apple"))]
                 return Err(EngineError::Forbidden);
             }
-            let request: WorkspaceRequest =
+            let request: AgentRequest =
                 serde_json::from_str(&request).map_err(|_| EngineError::Invalid)?;
-            if let WorkspaceRequest::WriteFile(args) = &request {
+            if let AgentRequest::Workspace(WorkspaceRequest::WriteFile(args)) = &request {
                 leases.push(
                     self.creation_source_lease(c, grant, args, &encoded, &expected)
                         .await?,
@@ -1087,7 +1228,12 @@ impl Journal {
                 continue;
             }
             let receipt = grant
-                .execute(&c.owner, &c.environment, &c.policy, request)
+                .execute(
+                    &c.owner,
+                    &c.environment,
+                    &c.policy,
+                    request.workspace()?.clone(),
+                )
                 .await?;
             if digest("tool-result-v1", receipt.result())? != expected {
                 return Err(WorkspaceError::VersionChanged.into());
@@ -1104,6 +1250,7 @@ fn make_request_mode(
     user_questions: bool,
     create_files: bool,
     edit_files: bool,
+    memories: &[crate::memory::MemoryCapability],
 ) -> GenerateRequest {
     let mut tools = workspace::definitions();
     if user_questions {
@@ -1114,6 +1261,17 @@ fn make_request_mode(
     }
     if edit_files {
         tools.push(workspace::patch::definition());
+    }
+    if !memories.is_empty() {
+        tools.extend(
+            crate::memory::tools::scoped_specs(memories)
+                .into_iter()
+                .map(|v| orange_protocol::model::ToolDefinition {
+                    name: v.name,
+                    description: v.description,
+                    parameters: v.input_schema,
+                }),
+        );
     }
     GenerateRequest {
         invocation_id: invocation.into(),

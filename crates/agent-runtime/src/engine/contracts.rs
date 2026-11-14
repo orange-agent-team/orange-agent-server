@@ -5,7 +5,15 @@ fn incompatible(_: CatalogError) -> EngineError {
     EngineError::RecoveryRequired
 }
 pub(super) fn current(stored: &StoredRun) -> Result<ToolCatalog, EngineError> {
-    if stored.editing.is_some() {
+    if !stored.memories.is_empty() {
+        ToolCatalog::builtin_memory_scoped(
+            stored.user_questions,
+            stored.creation.is_some(),
+            stored.editing.is_some(),
+            &stored.memories,
+        )
+        .map_err(incompatible)
+    } else if stored.editing.is_some() {
         ToolCatalog::builtin_editing(stored.user_questions, stored.creation.is_some())
             .map_err(incompatible)
     } else {
@@ -148,7 +156,7 @@ impl Journal {
             _ => return Err(EngineError::RecoveryRequired),
         };
         if call.name != op.request.name()
-            || WorkspaceRequest::parse(&call.name, &call.arguments)?.digest()? != op.digest
+            || AgentRequest::parse(&call.name, &call.arguments)?.digest()? != op.digest
         {
             return Err(EngineError::RecoveryRequired);
         }
@@ -305,28 +313,47 @@ impl Journal {
             }
             let raw_value: serde_json::Value =
                 serde_json::from_str(&raw).map_err(|_| EngineError::RecoveryRequired)?;
-            let contract_value = if matches!(op.request, WorkspaceRequest::ApplyPatch(_)) {
+            let contract_value = if matches!(
+                op.request,
+                AgentRequest::Workspace(WorkspaceRequest::ApplyPatch(_))
+            ) {
                 serde_json::json!({"kind":"apply_patch","data":raw_value})
-            } else if matches!(op.request, WorkspaceRequest::WriteFile(_)) {
+            } else if matches!(
+                op.request,
+                AgentRequest::Workspace(WorkspaceRequest::WriteFile(_))
+            ) {
                 serde_json::json!({"kind":"write_file","data":raw_value})
             } else {
                 raw_value
             };
             self.validate_tool_output(c, op, &contract_value, OutputChannel::Durable)?;
-            if matches!(op.request, WorkspaceRequest::ApplyPatch(_)) {
+            if matches!(
+                op.request,
+                AgentRequest::Workspace(WorkspaceRequest::ApplyPatch(_))
+            ) {
                 let result: crate::workspace::patch::PublishedPatch =
                     serde_json::from_str(&raw).map_err(|_| EngineError::RecoveryRequired)?;
                 if digest("published-patch.v1", &result)? != expected {
                     return Err(EngineError::RecoveryRequired);
                 }
                 result.model_value()
-            } else if matches!(op.request, WorkspaceRequest::WriteFile(_)) {
+            } else if matches!(
+                op.request,
+                AgentRequest::Workspace(WorkspaceRequest::WriteFile(_))
+            ) {
                 let result: crate::workspace::creation::CreatedFile =
                     serde_json::from_str(&raw).map_err(|_| EngineError::RecoveryRequired)?;
                 if digest("created-file.v1", &result)? != expected {
                     return Err(EngineError::RecoveryRequired);
                 }
                 serde_json::json!({"kind":"write_file","data":result})
+            } else if matches!(op.request, AgentRequest::Memory(_)) {
+                let result: serde_json::Value =
+                    serde_json::from_str(&raw).map_err(|_| EngineError::RecoveryRequired)?;
+                if digest("memory-tool-result.v1", &result)? != expected {
+                    return Err(EngineError::RecoveryRequired);
+                }
+                result
             } else {
                 let result: workspace::WorkspaceResult =
                     serde_json::from_str(&raw).map_err(|_| EngineError::RecoveryRequired)?;
@@ -338,7 +365,10 @@ impl Journal {
             }
         } else if state == "failed" {
             let code = error.ok_or(EngineError::RecoveryRequired)?;
-            if matches!(op.request, WorkspaceRequest::WriteFile(_)) {
+            if matches!(
+                op.request,
+                AgentRequest::Workspace(WorkspaceRequest::WriteFile(_))
+            ) {
                 if code != "CREATE_REJECTED" {
                     return Err(EngineError::RecoveryRequired);
                 }

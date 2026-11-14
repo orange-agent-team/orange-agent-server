@@ -20,7 +20,15 @@ pub(super) struct EditAuthority<'a> {
     grant: Option<&'a EditFileGrant>,
     lifetime: std::marker::PhantomData<&'a ()>,
 }
-impl EditAuthority<'_> {
+impl<'a> EditAuthority<'a> {
+    #[cfg(target_vendor = "apple")]
+    pub(super) fn from_grant(grant: &'a EditFileGrant) -> Self {
+        Self {
+            grant: Some(grant),
+            lifetime: std::marker::PhantomData,
+        }
+    }
+
     pub(super) fn none() -> Self {
         Self {
             #[cfg(target_vendor = "apple")]
@@ -42,6 +50,7 @@ impl<'a> EditingAuthority<'a> {
         creation::Authority {
             read: self.read,
             create: self.create,
+            memories: &[],
             edit: EditAuthority {
                 grant: Some(self.edit),
                 lifetime: std::marker::PhantomData,
@@ -178,14 +187,14 @@ impl Journal {
             return Err(EngineError::Forbidden);
         }
         let expected = match &op.request {
-            WorkspaceRequest::WriteFile(_) => {
+            AgentRequest::Workspace(WorkspaceRequest::WriteFile(_)) => {
                 &stored
                     .creation
                     .as_ref()
                     .ok_or(EngineError::Forbidden)?
                     .environment
             }
-            WorkspaceRequest::ApplyPatch(_) => &binding.environment,
+            AgentRequest::Workspace(WorkspaceRequest::ApplyPatch(_)) => &binding.environment,
             _ => &c.environment,
         };
         if &op.environment != expected {
@@ -212,14 +221,7 @@ impl Journal {
         user_questions: bool,
     ) -> Result<RunView, EngineError> {
         let authority = authority.internal();
-        self.start_agent_mode(
-            c,
-            messages,
-            authority.read,
-            user_questions,
-            authority.create,
-            authority.edit,
-        )
+        self.start_agent_mode(c, messages, authority, user_questions)
     }
     #[cfg(target_vendor = "apple")]
     pub async fn advance_agent_editing<G: ModelGateway>(
@@ -254,7 +256,7 @@ impl Journal {
             .find(|o| o.id == operation && o.state == "intended")
             .ok_or(EngineError::ApprovalRequired)?;
         self.intent_contract(&stored.config, &op)?;
-        let WorkspaceRequest::ApplyPatch(args) = &op.request else {
+        let AgentRequest::Workspace(WorkspaceRequest::ApplyPatch(args)) = &op.request else {
             return Err(EngineError::Forbidden);
         };
         let _sources = self
@@ -332,8 +334,10 @@ impl Journal {
         self.check_edit_permission(edit).map_err(error)?;
         let op = self.operation_record(&stored.config, operation.id)?;
         let (_, pin) = self.intent_contract(&stored.config, &op)?;
-        if !matches!(op.request, WorkspaceRequest::ApplyPatch(_))
-            || op.invocation != operation.invocation
+        if !matches!(
+            op.request,
+            AgentRequest::Workspace(WorkspaceRequest::ApplyPatch(_))
+        ) || op.invocation != operation.invocation
             || op.digest != operation.argument_digest
             || op.version != operation.tool_version
             || op.environment != operation.environment

@@ -6,9 +6,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         [flag] if flag == "--with-editing" => {
             orange_agent_runtime::catalog::ToolCatalog::builtin_editing(true, true)?
         }
+        [flag] if flag == "--with-memory" => {
+            orange_agent_runtime::catalog::ToolCatalog::builtin_memory(true, true, true, true)?
+        }
         _ => {
             return Err(
-                "Expected no arguments or --with-editing for descriptor export only".into(),
+                "Expected no arguments, --with-editing or --with-memory for descriptor export only"
+                    .into(),
             );
         }
     };

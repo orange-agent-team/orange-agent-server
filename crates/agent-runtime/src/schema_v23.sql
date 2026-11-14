@@ -1,0 +1,10 @@
+CREATE TABLE runtime_memory_capabilities(run_id TEXT NOT NULL REFERENCES runtime_runs(run_id),scope_id TEXT NOT NULL REFERENCES memory_scopes(scope_id),scope_revision INTEGER NOT NULL CHECK(scope_revision>0),can_write INTEGER NOT NULL CHECK(can_write IN(0,1)),environment TEXT NOT NULL,PRIMARY KEY(run_id,scope_id));
+CREATE TABLE runtime_memory_operations(operation_id TEXT PRIMARY KEY REFERENCES operations(operation_id),scope_id TEXT NOT NULL REFERENCES memory_scopes(scope_id),entry_id TEXT NOT NULL,draft_id TEXT UNIQUE REFERENCES memory_drafts(draft_id),approval_digest TEXT);
+CREATE TABLE runtime_memory_sources(operation_id TEXT PRIMARY KEY REFERENCES operations(operation_id),scope_id TEXT NOT NULL,entry_id TEXT NOT NULL,entry_version INTEGER NOT NULL CHECK(entry_version>0),FOREIGN KEY(scope_id,entry_id) REFERENCES memory_entries(scope_id,entry_id));
+CREATE TRIGGER memory_run_binding BEFORE UPDATE ON runtime_memory_capabilities BEGIN SELECT RAISE(ABORT,'immutable Run memory requirement');END;
+CREATE TRIGGER memory_run_no_delete BEFORE DELETE ON runtime_memory_capabilities BEGIN SELECT RAISE(ABORT,'Run memory requirement retained');END;
+CREATE TRIGGER memory_operation_binding BEFORE UPDATE ON runtime_memory_operations WHEN NEW.operation_id!=OLD.operation_id OR NEW.scope_id!=OLD.scope_id OR NEW.entry_id!=OLD.entry_id OR (OLD.draft_id IS NOT NULL AND NEW.draft_id IS NOT OLD.draft_id) OR (OLD.approval_digest IS NOT NULL AND NEW.approval_digest IS NOT OLD.approval_digest) BEGIN SELECT RAISE(ABORT,'immutable memory operation binding');END;
+CREATE TRIGGER memory_operation_no_delete BEFORE DELETE ON runtime_memory_operations BEGIN SELECT RAISE(ABORT,'memory operation retained');END;
+CREATE TRIGGER memory_read_binding BEFORE UPDATE ON runtime_memory_sources BEGIN SELECT RAISE(ABORT,'immutable memory source version');END;
+CREATE TRIGGER memory_read_no_delete BEFORE DELETE ON runtime_memory_sources BEGIN SELECT RAISE(ABORT,'memory source reference retained');END;
+PRAGMA user_version=23;

@@ -1,6 +1,7 @@
 mod contracts;
 #[cfg(target_vendor = "apple")]
 mod editing;
+mod memory;
 use super::*;
 use crate::storage::private_temp;
 use orange_protocol::model::ToolCall;
@@ -472,7 +473,7 @@ async fn committed_result_is_applied_once_without_dispatch_after_crash() {
             "alice",
             f.grant.environment(),
             "policy-v1",
-            op.request.clone(),
+            op.request.workspace().expect("filesystem request").clone(),
         )
         .await
         .expect("read");
@@ -1017,7 +1018,7 @@ fn user_question_migration_preserves_sparse_run_cursor_and_denies_implicit_capab
     let f = Fixture::new();
     let mut j = f.open();
     f.start(&mut j);
-    j.connection.execute_batch("UPDATE runtime_runs SET rowid=37; DROP TABLE memory_source_blocks; DROP TABLE memory_audit; DROP TABLE memory_drafts; DROP TABLE memory_entries; DROP TABLE memory_members; DROP TABLE memory_scopes; DROP TABLE export_restorations; DROP TABLE export_retirement_capsules; DROP TABLE export_retirements; DROP TABLE export_writer_bindings; DROP TABLE patch_exports; DROP TABLE patch_capture_receipts; DROP TABLE patch_capture_witnesses; DROP TABLE runtime_edit_capabilities; DROP TABLE patch_version_edges; DROP TABLE patch_retention_archives; DROP TABLE patch_retention_reviews; DROP TABLE patch_recovery_resolutions; DROP TABLE patch_recovery_results; DROP TABLE patch_recovery_approvals; DROP TABLE patch_recoveries; DROP TABLE editing_publication_steps; DROP TABLE editing_publications; DROP TABLE editing_approvals; DROP TABLE editing_previews; DROP TABLE editing_consent_audit; DROP TABLE editing_request_keys; DROP TABLE editing_consents; DROP TABLE runtime_tool_approvals; DROP TABLE runtime_tool_catalogs; DROP TABLE runtime_catalog_legacy_approvals; DROP TABLE runtime_catalog_legacy; DROP TABLE runtime_creation_capabilities; DROP TABLE creation_consent_audit; DROP TABLE creation_request_keys; DROP TABLE creation_consents; DROP TABLE runtime_questions; DROP TABLE runtime_capabilities; PRAGMA user_version=3;").expect("prior-version fixture with sparse cursor");
+    j.connection.execute_batch("UPDATE runtime_runs SET rowid=37; DROP TABLE runtime_memory_sources; DROP TABLE runtime_memory_operations; DROP TABLE runtime_memory_capabilities; DROP TABLE memory_source_blocks; DROP TABLE memory_audit; DROP TABLE memory_drafts; DROP TABLE memory_entries; DROP TABLE memory_members; DROP TABLE memory_scopes; DROP TABLE export_restorations; DROP TABLE export_retirement_capsules; DROP TABLE export_retirements; DROP TABLE export_writer_bindings; DROP TABLE patch_exports; DROP TABLE patch_capture_receipts; DROP TABLE patch_capture_witnesses; DROP TABLE runtime_edit_capabilities; DROP TABLE patch_version_edges; DROP TABLE patch_retention_archives; DROP TABLE patch_retention_reviews; DROP TABLE patch_recovery_resolutions; DROP TABLE patch_recovery_results; DROP TABLE patch_recovery_approvals; DROP TABLE patch_recoveries; DROP TABLE editing_publication_steps; DROP TABLE editing_publications; DROP TABLE editing_approvals; DROP TABLE editing_previews; DROP TABLE editing_consent_audit; DROP TABLE editing_request_keys; DROP TABLE editing_consents; DROP TABLE runtime_tool_approvals; DROP TABLE runtime_tool_catalogs; DROP TABLE runtime_catalog_legacy_approvals; DROP TABLE runtime_catalog_legacy; DROP TABLE runtime_creation_capabilities; DROP TABLE creation_consent_audit; DROP TABLE creation_request_keys; DROP TABLE creation_consents; DROP TABLE runtime_questions; DROP TABLE runtime_capabilities; PRAGMA user_version=3;").expect("prior-version fixture with sparse cursor");
     drop(j);
     let mut j = f.open();
     let rowid: i64 = j
@@ -1899,7 +1900,7 @@ async fn create_agent_schema_five_migration_never_upgrades_existing_run() {
         .expect("separate consent");
     let id = create.consent_id().to_owned();
     j.connection
-        .execute_batch("DROP TABLE memory_source_blocks; DROP TABLE memory_audit; DROP TABLE memory_drafts; DROP TABLE memory_entries; DROP TABLE memory_members; DROP TABLE memory_scopes; DROP TABLE export_restorations; DROP TABLE export_retirement_capsules; DROP TABLE export_retirements; DROP TABLE export_writer_bindings; DROP TABLE patch_exports; DROP TABLE patch_capture_receipts; DROP TABLE patch_capture_witnesses; DROP TABLE runtime_edit_capabilities; DROP TABLE patch_version_edges; DROP TABLE patch_retention_archives; DROP TABLE patch_retention_reviews; DROP TABLE patch_recovery_resolutions; DROP TABLE patch_recovery_results; DROP TABLE patch_recovery_approvals; DROP TABLE patch_recoveries; DROP TABLE editing_publication_steps; DROP TABLE editing_publications; DROP TABLE editing_approvals; DROP TABLE editing_previews; DROP TABLE editing_consent_audit; DROP TABLE editing_request_keys; DROP TABLE editing_consents; DROP TABLE runtime_tool_approvals; DROP TABLE runtime_tool_catalogs; DROP TABLE runtime_catalog_legacy_approvals; DROP TABLE runtime_catalog_legacy; DROP TABLE runtime_creation_capabilities; PRAGMA user_version=5;")
+        .execute_batch("DROP TABLE runtime_memory_sources; DROP TABLE runtime_memory_operations; DROP TABLE runtime_memory_capabilities; DROP TABLE memory_source_blocks; DROP TABLE memory_audit; DROP TABLE memory_drafts; DROP TABLE memory_entries; DROP TABLE memory_members; DROP TABLE memory_scopes; DROP TABLE export_restorations; DROP TABLE export_retirement_capsules; DROP TABLE export_retirements; DROP TABLE export_writer_bindings; DROP TABLE patch_exports; DROP TABLE patch_capture_receipts; DROP TABLE patch_capture_witnesses; DROP TABLE runtime_edit_capabilities; DROP TABLE patch_version_edges; DROP TABLE patch_retention_archives; DROP TABLE patch_retention_reviews; DROP TABLE patch_recovery_resolutions; DROP TABLE patch_recovery_results; DROP TABLE patch_recovery_approvals; DROP TABLE patch_recoveries; DROP TABLE editing_publication_steps; DROP TABLE editing_publications; DROP TABLE editing_approvals; DROP TABLE editing_previews; DROP TABLE editing_consent_audit; DROP TABLE editing_request_keys; DROP TABLE editing_consents; DROP TABLE runtime_tool_approvals; DROP TABLE runtime_tool_catalogs; DROP TABLE runtime_catalog_legacy_approvals; DROP TABLE runtime_catalog_legacy; DROP TABLE runtime_creation_capabilities; PRAGMA user_version=5;")
         .expect("actual prior schema fixture");
     drop(j);
     let mut j = f.open();
@@ -1907,7 +1908,7 @@ async fn create_agent_schema_five_migration_never_upgrades_existing_run() {
         .connection
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .expect("version");
-    assert_eq!(version, 22);
+    assert_eq!(version, 23);
     assert_eq!(
         j.agent_view("alice", "run-1").expect("old run").phase,
         Phase::Ready

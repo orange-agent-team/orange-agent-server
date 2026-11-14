@@ -223,6 +223,22 @@ impl Journal {
         prepared: PreparedMemoryDraft,
         expected_digest: &str,
     ) -> Result<MemoryDraftOutcome, MemoryError> {
+        let bound: bool = self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM runtime_memory_operations WHERE draft_id=?)",
+            [&prepared.review.draft_id],
+            |r| r.get(0),
+        )?;
+        if bound {
+            return Err(MemoryError::ApprovalRequired);
+        }
+        self.approve_memory_write_checked(prepared, expected_digest, |_| Ok(()))
+    }
+    pub(crate) fn approve_memory_write_checked(
+        &mut self,
+        prepared: PreparedMemoryDraft,
+        expected_digest: &str,
+        additional_check: impl Fn(&Connection) -> Result<(), MemoryError>,
+    ) -> Result<MemoryDraftOutcome, MemoryError> {
         prepared.view(self)?;
         let record = &prepared.record;
         let review = &prepared.review;
@@ -235,6 +251,7 @@ impl Journal {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         validate(&tx, grant, record, &self.memory_session)?;
+        additional_check(&tx)?;
         let live:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM memory_drafts WHERE draft_id=? AND body=? AND digest=? AND state='pending' AND payload IS ?)",params![review.draft_id,encoded(record)?,expected_digest,review.payload.as_ref().map(encoded).transpose()?],|r|r.get(0))?;
         if !live {
             return Err(MemoryError::Conflict);
@@ -291,6 +308,7 @@ impl Journal {
         // Delete fences its own source Run, so revalidate authority rather than the
         // now intentionally invalidated proposal source at the commit boundary.
         check(&tx, grant, true, &self.memory_session)?;
+        additional_check(&tx)?;
         tx.commit()?;
         self.memory_draft_outcome(grant, &review.draft_id)?
             .ok_or(MemoryError::Conflict)
@@ -300,12 +318,20 @@ impl Journal {
         grant: &MemoryGrant,
         id: &str,
     ) -> Result<Option<MemoryDraftOutcome>, MemoryError> {
-        if !valid_id(id) {
+        check(&self.connection, grant, false, &self.memory_session)?;
+        self.owned_memory_draft_metadata(&grant.actor, &grant.scope, id)
+    }
+    pub(crate) fn owned_memory_draft_metadata(
+        &self,
+        actor: &str,
+        scope: &str,
+        id: &str,
+    ) -> Result<Option<MemoryDraftOutcome>, MemoryError> {
+        if ![actor, scope, id].iter().all(|v| valid_id(v)) {
             return Err(MemoryError::Invalid);
         }
-        check(&self.connection, grant, false, &self.memory_session)?;
         type Row = (String, String, String, String, Option<i64>);
-        let row:Option<Row>=self.connection.query_row("SELECT entry_id,body,digest,state,result_version FROM memory_drafts WHERE draft_id=? AND scope_id=? AND actor=?",params![id,grant.scope,grant.actor],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional()?;
+        let row:Option<Row>=self.connection.query_row("SELECT entry_id,body,digest,state,result_version FROM memory_drafts WHERE draft_id=? AND scope_id=? AND actor=?",params![id,scope,actor],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional()?;
         let Some((entry, body, sha, state, result)) = row else {
             return Ok(None);
         };
@@ -313,8 +339,8 @@ impl Journal {
             return Err(MemoryError::Limit);
         }
         let record: Draft = serde_json::from_str(&body).map_err(|_| MemoryError::Invalid)?;
-        if record.actor != grant.actor
-            || record.scope != grant.scope
+        if record.actor != actor
+            || record.scope != scope
             || record.entry_id != entry
             || digest("memory-draft.v1", &record)? != sha
         {
@@ -343,7 +369,7 @@ impl Journal {
         }
         Ok(Some(MemoryDraftOutcome {
             draft_id: id.into(),
-            scope_id: grant.scope.clone(),
+            scope_id: scope.to_owned(),
             entry_id: entry,
             digest: sha,
             state,

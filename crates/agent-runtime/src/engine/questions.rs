@@ -100,12 +100,31 @@ impl Journal {
         run: &str,
         answer: &AnswerUser,
         grant: &WorkspaceGrant,
+        cancellation: watch::Receiver<bool>,
+    ) -> Result<RunView, EngineError> {
+        self.answer_agent_question_authorized(
+            owner,
+            run,
+            answer,
+            AgentAuthority::read(grant),
+            cancellation,
+        )
+        .await
+    }
+    pub async fn answer_agent_question_authorized(
+        &mut self,
+        owner: &str,
+        run: &str,
+        answer: &AnswerUser,
+        authority: AgentAuthority<'_>,
         mut cancellation: watch::Receiver<bool>,
     ) -> Result<RunView, EngineError> {
+        let grant = authority.read;
         if !valid_id(&answer.question_id) || !valid_digest(&answer.argument_digest) {
             return Err(EngineError::Invalid);
         }
         let stored = self.stored_run(owner, run)?;
+        self.check_memory_bindings(&stored, authority.memories)?;
         check_grant(&stored.config, grant)?;
         if !stored.user_questions {
             return Err(EngineError::Forbidden);
@@ -143,7 +162,9 @@ impl Journal {
             if prior.as_deref() != Some(answered.as_str()) {
                 return Err(JournalError::Conflict.into());
             }
-            return self.agent_view_authorized(owner, run, grant).await;
+            return self
+                .agent_view_with_memory(owner, run, grant, authority.memories)
+                .await;
         }
         if state != "pending"
             || stored.phase != "awaiting_user"
@@ -165,7 +186,7 @@ impl Journal {
         }
         let _leases = tokio::select! {
             _=cancellation.changed()=>return self.cancel_agent(owner,run,grant),
-            result=tokio::time::timeout(Duration::from_secs(stored.config.deadline_unix.saturating_sub(now()?).max(0) as u64),self.revalidate_sources(&stored.config,grant))=>result.map_err(|_|EngineError::RecoveryRequired)??,
+            result=tokio::time::timeout(Duration::from_secs(stored.config.deadline_unix.saturating_sub(now()?).max(0) as u64),self.revalidate_sources_with_memory(&stored.config,grant,authority.memories))=>result.map_err(|_|EngineError::RecoveryRequired)??,
         };
         if *cancellation.borrow() || grant.is_revoked() {
             return self.cancel_agent(owner, run, grant);
@@ -184,6 +205,7 @@ impl Journal {
             true,
             stored.creation.is_some(),
             stored.editing.is_some(),
+            &stored.memories,
         )
         .validate()
         .map_err(|_| EngineError::Invalid)?;
@@ -206,6 +228,14 @@ impl Journal {
             "INSERT INTO events(run_id,kind) VALUES(?,'question.answered')",
             [run],
         )?;
+        crate::memory::check_execution_grants(
+            &tx,
+            authority.memories,
+            owner,
+            &stored.config.policy,
+            &self.memory_session,
+        )
+        .map_err(memory::error)?;
         tx.commit()?;
         self.agent_view(owner, run)
     }

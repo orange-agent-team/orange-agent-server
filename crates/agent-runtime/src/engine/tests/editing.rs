@@ -116,7 +116,11 @@ async fn normal_read_edit_edit_final_and_reopen_preserve_context_without_replayi
                 "alice",
                 f.grant.environment(),
                 "policy-v1",
-                first.pending[0].request.clone()
+                first.pending[0]
+                    .request
+                    .workspace()
+                    .expect("filesystem request")
+                    .clone()
             )
             .await
             .is_err()
