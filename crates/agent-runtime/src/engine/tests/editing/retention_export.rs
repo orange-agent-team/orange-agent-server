@@ -148,6 +148,65 @@ async fn native_export_requires_exact_approval_creates_verified_artifact_once_an
             .expect("run boundary")
             .is_none()
     );
+    let other = j
+        .prepare_retention_export(
+            &source,
+            &destination,
+            RetentionExportChoice::Both,
+            "pending.orange-retained.json",
+            "another-review",
+        )
+        .await
+        .expect("another explicit preview");
+    let other_id = other.preview().expect("id").export_id.clone();
+    drop(other);
+    let mut expected_ids = vec![review.export_id.clone(), other_id];
+    expected_ids.sort_by(|a, b| b.cmp(a));
+    let listed = j
+        .retention_export_outcomes("alice", "run-1", &op, None, 100)
+        .expect("owned export index");
+    assert_eq!(
+        listed
+            .iter()
+            .map(|r| r.export_id.clone())
+            .collect::<Vec<_>>(),
+        expected_ids
+    );
+    assert_eq!(
+        j.retention_export_outcomes("alice", "run-1", &op, None, 1)
+            .expect("first page")
+            .len(),
+        1
+    );
+    assert_eq!(
+        j.retention_export_outcomes("alice", "run-1", &op, Some(&expected_ids[0]), 1)
+            .expect("next page")[0]
+            .export_id,
+        expected_ids[1]
+    );
+    assert!(
+        j.retention_export_outcomes("alice", "run-1", &op, Some(&expected_ids[1]), 1)
+            .expect("end")
+            .is_empty()
+    );
+    for (owner, run, cursor, limit) in [
+        ("bob", "run-1", None, 1),
+        ("alice", "other-run", None, 1),
+        ("alice", "run-1", None, 0),
+        ("alice", "run-1", None, 101),
+        ("alice", "run-1", Some("bad cursor"), 1),
+    ] {
+        assert!(
+            j.retention_export_outcomes(owner, run, &op, cursor, limit)
+                .is_err()
+        );
+    }
+    let encoded = serde_json::to_string(&listed).expect("metadata");
+    assert!(
+        !encoded.contains("proof.orange-retained.json")
+            && !encoded.contains("content_base64")
+            && !encoded.contains("note.txt")
+    );
     source.request_revoke();
     destination.request_revoke();
     assert_eq!(
@@ -159,6 +218,11 @@ async fn native_export_requires_exact_approval_creates_verified_artifact_once_an
     );
     drop(j);
     let j = f.open();
+    assert_eq!(
+        j.retention_export_outcomes("alice", "run-1", &op, None, 100)
+            .expect("discover after restart without file scopes"),
+        listed
+    );
     assert_eq!(
         j.retention_export_outcome("alice", "run-1", &op, &review.export_id)
             .expect("reopen receipt")

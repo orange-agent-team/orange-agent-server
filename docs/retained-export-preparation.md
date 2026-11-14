@@ -41,3 +41,7 @@ schema18的patch_exports绑定与终态不可改写/删除；重开将dispatchin
 Runtime发布新增4项实际文件测试（retention-export-inflight-tests-fixed.log）：排他新建、0600权限、精确摘要确认、重复批准拒绝、源/目标预先及暂存后撤权、晚到目标、派发事务失败、实际写入后回执失败、重开unknown不重放及schema17形状迁移。派发中撤权钩子仅cfg(test)编译，正式API没有故障注入方法。
 
 真实固定a2cdafb/schema17旧CLI先成功编辑、再批准第二次编辑；新schema18继续执行并保留批准、版本边及旧捕获证据，旧CLI再打开明确拒绝且DB/WAL摘要不变（retention-export-schema17-compatibility.log，72356 exit0）。199项Runtime全量测试曾通过；随后增加第200项暂存后撤权用例，相关4项及严格Clippy通过。共享发布前再执行全部共享测试。
+
+## 重开后的记录发现
+
+retention_export_outcomes(owner,run,operation,before,limit)返回1—100条已核对元数据，按不可变export ID倒序分页（不是创建时间排序），不返回文件名、路径、内容或任何文件能力。跨owner/Run/operation、无效游标及页大小拒绝；每条记录复用已有回执完整性验证。准备中和已成功记录在撤权及Host重开后仍能由拥有者发现。相关实际文件/分页/重开负例及严格Clippy通过，retention-export-index-tests.log。

@@ -361,6 +361,46 @@ impl Journal {
         }
         Ok(receipt)
     }
+    /// Bounded metadata discovery after restart. No paths, contents or restored
+    /// filesystem capabilities. Each returned outcome is independently verified.
+    pub fn retention_export_outcomes(
+        &self,
+        owner: &str,
+        run: &str,
+        operation: &str,
+        before: Option<&str>,
+        limit: u16,
+    ) -> Result<Vec<RetentionExportOutcome>, PatchError> {
+        if ![owner, run, operation].iter().all(|id| valid_id(id))
+            || before.is_some_and(|id| !valid_id(id))
+            || !(1..=100).contains(&limit)
+        {
+            return Err(PatchError::Invalid);
+        }
+        let owned: bool = self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM operations o JOIN runtime_runs r ON r.run_id=o.run_id JOIN editing_publications p USING(operation_id) WHERE o.owner=? AND o.run_id=? AND o.operation_id=?)",
+            params![owner, run, operation], |r| r.get(0),
+        ).map_err(JournalError::from)?;
+        if !owned {
+            return Err(WorkspaceError::Forbidden.into());
+        }
+        let mut statement = self.connection.prepare(
+            "SELECT export_id FROM patch_exports WHERE owner=?1 AND operation_id=?2 AND (?3 IS NULL OR export_id<?3) ORDER BY export_id DESC LIMIT ?4",
+        ).map_err(JournalError::from)?;
+        let ids = statement
+            .query_map(params![owner, operation, before, i64::from(limit)], |r| {
+                r.get::<_, String>(0)
+            })
+            .map_err(JournalError::from)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(JournalError::from)?;
+        ids.iter()
+            .map(|id| {
+                self.retention_export_outcome(owner, run, operation, id)?
+                    .ok_or(PatchError::Invalid)
+            })
+            .collect()
+    }
     pub fn retention_export_outcome(
         &self,
         owner: &str,
