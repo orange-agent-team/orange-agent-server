@@ -8,7 +8,7 @@
 
 `copy_security_metadata` 要求不同的单链接普通文件。调用方只能把目标设为尚未发布的自有暂存文件；失败可能已修改暂存文件的部分属性，不能将其视作可发布结果。文件内容不复制。完成后比较源与目标的全部已建模属性；不一致则拒绝。调用方写入内容后仍须重新验证，不能将一次成功视作永久保证，也不能把这个函数当作文件内容原子 CAS。
 
-`copy_publication_metadata` 是显式的暂存发布政策，严格复制 API 的逐字节语义不变。它保留沙盒为新文件生成的较新 quarantine 时间戳，仅接受已识别的四字段标签格式，安全标记、隔离应用及事件标识必须原样相等，时间不能倒退或在未来。owner/group/mode/flags/ACL 和所有其他 xattr 仍须精确一致。源文件的完整快照必须未变；返回的是目标的真实完整快照，其摘要绑定后续发布与恢复，绝不把源摘要冒充为目标摘要。标签新增、移除、未知格式或任何安全位变化均拒绝；因此某些外部来源文件仍可能不受支持，不能声称所有 macOS 文件都可编辑。
+`copy_publication_metadata` 是显式的暂存发布政策，严格复制 API 的逐字节语义不变。它保留沙盒为新文件生成的较新 quarantine 时间戳，仅接受已识别的四字段标签格式，安全标记、隔离应用及事件标识必须原样相等，时间不能倒退或在未来。owner/group/mode/flags/ACL 和所有其他 xattr 仍须精确一致。源文件的完整快照必须未变；返回的是目标的真实完整快照，其摘要绑定后续发布与恢复，绝不把源摘要冒充为目标摘要。对于无标签源，只允许保留复制前已观察到的原生暂存标签；移除、改写、未知格式或安全位变化均拒绝。仍不能声称所有macOS文件属性均受支持。
 
 2026-11-14 的独立签名 App Sandbox 探针复现：`fcopyfile(SECURITY|XATTR)` 后只有 quarantine 时间戳改变，直接原样设置被系统以 EPERM 拒绝。实现保留系统结果，不调用属性删除或改写作为补救。Apple 的 [时间戳定义](https://developer.apple.com/documentation/coreservices/klsquarantinetimestampkey?language=objc)、[Launch Services 属性说明](https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/LaunchServicesKeys.html)及 [copyfile 源码](https://github.com/apple-oss-distributions/copyfile/blob/main/copyfile.c)支持对时间信息和安全标记分别处理；四字段编码的兼容范围由本机探针与严格解析限定，未宣称它是 Apple 保证永不变化的公开格式。
 
@@ -18,7 +18,7 @@ Darwin 的 `acl_get_fd` 在 FILESEC_ACL 属性不存在时可返回 ENOENT。仅
 
 ## Runtime / 发行集成
 
-现有文件编辑预览绑定 security_digest；重验时 owner/group/mode、ACL 或 xattr 变化都会使旧预览不可复用。此包只处理属性；E03 的独立 Apple publisher 已在真实临时文件上验证发布和保留旧 inode。Runtime 已有独立恢复决策、受限原件归档、源版本转换及普通 Agent 编辑调用；桌面恢复批准/原件管理和完整数据退出仍未接线。这里的属性复制成功不代表上述产品流程已全部验收。
+现有文件编辑预览绑定 security_digest；重验时 owner/group/mode、ACL 或 xattr 变化都会使旧预览不可复用。此包只处理属性；E03 的独立 Apple publisher 已在真实临时文件上验证发布和保留旧 inode。Runtime 已有独立恢复决策、受限原件归档、源版本转换及普通 Agent 编辑调用；桌面恢复批准已在主线64748cd的消费者接入；原件管理和完整数据退出仍待完成。这里的属性复制成功不代表上述产品流程已全部验收。
 
 共享导出只从不可变 Git 提交提取此包，并以明确成员形式记录；旧提交无此包时仍导出原四成员。消费者必须锁定新归档及清单摘要，普通构建不能引用相邻仓库源码。
 
@@ -28,10 +28,14 @@ Darwin 的 `acl_get_fd` 在 FILESEC_ACL 属性不存在时可返回 ENOENT。仅
 
 Linux 路径有 fd ownership/xattr/mode 实现，尚未做目标编译或运行验证；尚未覆盖 Linux inode flags、文件能力等完整发布政策，因此不能据此开放 Linux 编辑发布。Windows 尚无此包后端。macOS immutable/append-only flags 等若不能精确保留则拒绝，未以该路径宣称这些 flags 可复制。继承 ACL 不一致也拒绝。各文件系统的并发一致性、配额、断电持久性和跨设备发布保证不由本包提供。
 
-## 外部源文件兼容候选（尚未完成Runtime整合）
+## 外部源文件与原件捕获见证（schema17候选）
 
-发布元数据复制现在可保留新暂存文件复制前已经存在的quarantine标签，条件是源无该标签、目标标签与初始观察完全相同、格式和时间受限，且源/目标其他安全属性严格一致。删除初始标签不会因为使两边快照相等而被接受。严格复制API不变。
+发布复制保留新暂存复制前已存在的quarantine标签；源与所有其他安全属性严格一致，删除初始标签不会因为让两边快照相等而通过。完整沙盒实测还发现rename原件时OS也会添加标签，所以Runtime在捕获前持久化NativeCaptureWitness，并在捕获后记录实际安全摘要。
 
-本机签名App Sandbox的独立元数据探针通过；但完整Agent发布仍在capture_intent之后拒绝，因为OS也为被重命名的原件添加标签。保留原件的实际字节未丢失，目标暂时缺失，原安全摘要检查仍生效。此候选不能直接合并或宣称外部文件已支持。后续必须把捕获前的原生标签见证、捕获后的实际身份、崩溃恢复与历史源重验一起落实，缺见证继续拒绝。
+见证只含已批准源安全摘要、原生标签权限字段摘要与时间下界，不存属性明文；它不是读写能力。源原本有标签时不能生成“新增标签”见证。验证要求当前对象移除新增标签后的完整安全摘要等于原源摘要，标签flags/agent/event身份摘要匹配，时间不倒退或位于未来。inode、内容、mtime等由Runtime既有身份校验继续约束。
 
-参照[Apple的隔离属性说明](https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/LaunchServicesKeys.html#//apple_ref/doc/uid/20001431-113253)：系统会为被隔离文件关联时间和应用信息。本候选不推测私有安全位的强弱，不设置排除路径或关闭沙盒，不删除/重写标签。
+schema17的不可变表把见证与stage2原子提交、把实际保留原件摘要与stage4原子提交。版本边同时绑定实际原件身份；恢复和历史重验均使用同一证据，不能忽略quarantine。stage3后中断、尚无stage4时仍可凭先存见证识别原件；缺证据或其他安全属性变化则拒绝。恢复发布暂存也要求安全摘要等于stage2记录，不以内容匹配替代权限校验。
+
+194项Runtime、9项metadata及严格Clippy通过。实际签名沙盒CLI覆盖六场景，包括连续编辑/重开、读取权限不升级、撤权、实际效果后回执失败不重放、捕获后立刻中断不自动恢复。模型HTTP为明确替身；专用测试容器中的源文件由沙盒外驱动创建，无原生标签。仍需固定制品导出、桌面消费及目标环境验证，未声称人工系统选择器或所有文件系统兼容。
+
+参照[Apple隔离属性说明](https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/LaunchServicesKeys.html#//apple_ref/doc/uid/20001431-113253)。实现没有关闭沙盒、设置隔离排除路径或删除/重写安全标签。

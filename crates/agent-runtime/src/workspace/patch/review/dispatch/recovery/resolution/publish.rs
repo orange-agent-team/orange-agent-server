@@ -180,7 +180,7 @@ impl Journal {
             return Err(WorkspaceError::EnvironmentChanged.into());
         }
         let observe=|| ->Result<(RecoveryFileObservation,RecoveryFileObservation,RecoveryFileObservation),PatchError>{
-            Ok((inspection::observe(&parent,target,&reviewed.source_identity,plan)?,inspection::observe(&parent,&plan.staged_name,&reviewed.source_identity,plan)?,inspection::observe(&parent,&plan.backup_name,&reviewed.source_identity,plan)?))
+            Ok((inspection::observe(&parent,target,&reviewed.source_identity,plan,token.record.snapshot.journal.capture_security.as_ref())?,inspection::observe(&parent,&plan.staged_name,&reviewed.source_identity,plan,token.record.snapshot.journal.capture_security.as_ref())?,inspection::observe(&parent,&plan.backup_name,&reviewed.source_identity,plan,token.record.snapshot.journal.capture_security.as_ref())?))
         };
         let (before_target, before_staged, before_original) = observe()?;
         if (&before_target, &before_staged, &before_original)

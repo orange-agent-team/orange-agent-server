@@ -296,5 +296,75 @@ fn newer_quarantine_timestamp(source: &[u8], target: &[u8]) -> bool {
     // Never guess whether changed flag bits are stronger or weaker.
     a[0] == b[0] && a[2] == b[2] && a[3] == b[3] && bt >= at && u64::from(bt) <= now.as_secs()
 }
+
+/// Evidence captured from a newly created staging object before a namespace
+/// move. Not a filesystem capability; callers must durably bind it to their
+/// reviewed source and operation before performing that move.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeCaptureWitness {
+    pub source_digest: [u8; 32],
+    pub authority_digest: [u8; 32],
+    pub not_before: u32,
+}
+fn quarantine_authority(fields: [&[u8]; 4]) -> [u8; 32] {
+    let mut hash = Sha256::new();
+    hash.update(b"orange-native-quarantine-authority.v1");
+    for value in [fields[0], fields[2], fields[3]] {
+        hash.update((value.len() as u64).to_be_bytes());
+        hash.update(value);
+    }
+    hash.finalize().into()
+}
+impl NativeCaptureWitness {
+    pub fn observe(source: &SecurityMetadata, staged: &SecurityMetadata) -> Option<Self> {
+        if !cfg!(target_vendor = "apple")
+            || source
+                .attributes
+                .iter()
+                .any(|(n, _)| n == b"com.apple.quarantine")
+        {
+            return None;
+        }
+        let (_, label) = staged
+            .attributes
+            .iter()
+            .find(|(n, _)| n == b"com.apple.quarantine")?;
+        if !recognized_current_quarantine(label) {
+            return None;
+        }
+        let (fields, time) = parse_quarantine(label)?;
+        Some(Self {
+            source_digest: source.digest(),
+            authority_digest: quarantine_authority(fields),
+            not_before: time,
+        })
+    }
+    pub fn verifies(&self, current: &SecurityMetadata) -> bool {
+        if !cfg!(target_vendor = "apple") {
+            return false;
+        }
+        let Some((_, label)) = current
+            .attributes
+            .iter()
+            .find(|(n, _)| n == b"com.apple.quarantine")
+        else {
+            return false;
+        };
+        if !recognized_current_quarantine(label) {
+            return false;
+        }
+        let Some((fields, time)) = parse_quarantine(label) else {
+            return false;
+        };
+        if time < self.not_before || quarantine_authority(fields) != self.authority_digest {
+            return false;
+        }
+        let mut without = current.clone();
+        without
+            .attributes
+            .retain(|(n, _)| n != b"com.apple.quarantine");
+        without.digest() == self.source_digest
+    }
+}
 #[cfg(test)]
 mod tests;

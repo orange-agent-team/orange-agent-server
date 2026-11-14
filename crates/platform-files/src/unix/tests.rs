@@ -2,6 +2,63 @@ use super::*;
 use std::{fs, os::unix::fs::PermissionsExt};
 #[cfg(target_vendor = "apple")]
 #[test]
+fn capture_witness_allows_only_added_native_label_and_exact_other_security() {
+    let root = tempfile::tempdir().expect("fixture");
+    let path = root.path().join("source");
+    fs::write(&path, b"owned").expect("source");
+    let file = fs::File::open(path).expect("fd");
+    let mut before = security_metadata(&file).expect("metadata");
+    before
+        .attributes
+        .retain(|(n, _)| n != b"com.apple.quarantine");
+    let mut staged = before.clone();
+    staged.attributes.push((
+        b"com.apple.quarantine".to_vec(),
+        b"0086;65000000;NativeFixture;".to_vec(),
+    ));
+    staged.attributes.sort_by(|a, b| a.0.cmp(&b.0));
+    let witness = NativeCaptureWitness::observe(&before, &staged).expect("native witness");
+    assert!(witness.verifies(&staged));
+    assert!(!witness.verifies(&before));
+    assert!(
+        NativeCaptureWitness::observe(&staged, &staged).is_none(),
+        "existing source labels cannot be reinterpreted as additions"
+    );
+    let index = staged
+        .attributes
+        .iter()
+        .position(|(n, _)| n == b"com.apple.quarantine")
+        .expect("label");
+    let mut later = staged.clone();
+    later.attributes[index].1 = b"0086;65000001;NativeFixture;".to_vec();
+    assert!(witness.verifies(&later));
+    for value in [
+        "0082;65000001;NativeFixture;",
+        "00c6;65000001;NativeFixture;",
+        "0086;65000001;Other;",
+        "0086;64000000;NativeFixture;",
+        "0086;ffffffff;NativeFixture;",
+        "bad",
+    ] {
+        let mut changed = later.clone();
+        changed.attributes[index].1 = value.as_bytes().to_vec();
+        assert!(!witness.verifies(&changed));
+    }
+    for field in 0..6 {
+        let mut changed = later.clone();
+        match field {
+            0 => changed.uid += 1,
+            1 => changed.gid += 1,
+            2 => changed.mode ^= 1,
+            3 => changed.flags ^= 1,
+            4 => changed.acl.push(1),
+            _ => changed.attributes.push((b"new".to_vec(), vec![1])),
+        };
+        assert!(!witness.verifies(&changed));
+    }
+}
+#[cfg(target_vendor = "apple")]
+#[test]
 fn only_an_unchanged_initial_staging_label_may_supplement_an_unlabelled_source() {
     let root = tempfile::tempdir().expect("owned fixture");
     let path = root.path().join("source");

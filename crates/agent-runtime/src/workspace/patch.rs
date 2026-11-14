@@ -4,6 +4,8 @@
 #[cfg(unix)]
 pub mod authority;
 #[cfg(target_vendor = "apple")]
+pub mod capture;
+#[cfg(target_vendor = "apple")]
 pub mod lineage;
 #[cfg(unix)]
 pub mod review;

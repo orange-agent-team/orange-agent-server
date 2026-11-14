@@ -126,7 +126,7 @@ class ModelFixture(http.server.BaseHTTPRequestHandler):
                         name, arguments = None, None
                     else:
                         raise AssertionError('unexpected combined replay')
-                elif scenario in {'readonly', 'revoked', 'unknown'}:
+                elif scenario in {'readonly', 'revoked', 'unknown', 'capture-unknown'}:
                     assert index == 0
                     name, arguments = 'apply_patch', patch('note.txt', old, final)
                 else:
@@ -239,7 +239,7 @@ try:
         assert complete['phase'] == 'completed' and (complete['steps'], complete['invocations']) == (7, 4)
         assert invoke('step') == complete and len(observations['positive']) == 4
         with sqlite3.connect(database) as db:
-            assert db.execute('PRAGMA user_version').fetchone()[0] == 16
+            assert db.execute('PRAGMA user_version').fetchone()[0] == 17
             assert db.execute('SELECT count(*) FROM patch_version_edges').fetchone()[0] == 2
             assert db.execute('SELECT count(*) FROM runtime_tool_approvals').fetchone()[0] == 3
             first = db.execute('SELECT operation_id FROM operations WHERE tool_version=? ORDER BY rowid', ('apply_patch.v1',)).fetchone()[0]
@@ -345,6 +345,30 @@ try:
             assert db.execute('SELECT count(*) FROM patch_version_edges').fetchone()[0] == 0
             assert db.execute("SELECT count(*) FROM operations WHERE state='unknown'").fetchone()[0] == 1
         summary.append({'scenario': 'unknown', 'actual_effect_retained': True, 'automatic_replay': False, 'bounded_metadata_discovery_without_workspace_or_key': True})
+        config, save, invoke, workspace, database, key = fixture('capture-unknown')
+        edit = invoke('authorize-edit', 'explicit-capture-edit')
+        config['editing_consent_id'] = edit['consent_id']
+        save()
+        invoke('start')
+        pending = invoke('step')['pending'][0]
+        preview = invoke('preview-edit', pending['operation_id'])
+        invoke('approve-edit', pending['operation_id'], preview['preview_digest'])
+        with sqlite3.connect(database) as db:
+            db.execute("CREATE TRIGGER fixture_capture_failure BEFORE INSERT ON editing_publication_steps WHEN NEW.step=4 BEGIN SELECT RAISE(ABORT,'owned captured-stage fault');END;")
+        invoke('step')
+        assert not (workspace / 'note.txt').exists()
+        assert invoke('status')['phase'] == 'recovery_required'
+        inspected = invoke('inspect-edit', pending['operation_id'])
+        assert inspected['journal']['last_durable_stage'] == 'capture_intent'
+        assert inspected['original']['reviewed_original_inode'] and inspected['original']['matches_original_content']
+        assert inspected['staged']['matches_result_content']
+        with sqlite3.connect(database) as db:
+            assert db.execute('SELECT count(*) FROM patch_capture_receipts').fetchone()[0] == 0
+            assert db.execute('SELECT count(*) FROM patch_capture_witnesses').fetchone()[0] == (1 if args.sandboxed else 0)
+        invoke('step', failed=True)
+        assert len(observations['capture-unknown']) == 1
+        assert not (workspace / 'note.txt').exists(), 'inspection/reopen must not silently restore or publish'
+        summary.append({'scenario': 'capture-unknown', 'original_recognized_after_reopen': True, 'no_capture_receipt_invented': True, 'no_automatic_restore_or_replay': True})
         assert not failures, failures
 finally:
     server.shutdown()

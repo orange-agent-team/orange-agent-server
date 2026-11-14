@@ -217,6 +217,11 @@ impl Journal {
             return Err(PatchError::VersionChanged);
         }
         verify_bytes(&mut original, &plan.original_sha256)?;
+        let source_security =
+            orange_platform_files::security_metadata(&original).map_err(io_error)?;
+        if hex::encode(source_security.digest()) != actual.security_digest() {
+            return Err(PatchError::VersionChanged);
+        }
         self.patch_stage(token, 1, serde_json::json!({"kind":"stage_intent"}))?;
         let mut options = OpenOptions::new();
         options
@@ -232,17 +237,37 @@ impl Journal {
         staged
             .write_all(token.approved.content())
             .map_err(io_error)?;
+        hook(1)?;
         let security = orange_platform_files::copy_publication_metadata(&original, &staged)
             .map_err(io_error)?;
         staged.sync_all().map_err(io_error)?;
         verify_bytes(&mut staged, &plan.result_sha256)?;
         named_file(&parent, &plan.staged_name, &staged)?;
         sync_directory(&parent)?;
-        self.patch_stage(
-            token,
-            2,
-            serde_json::json!({"kind":"staged","security_digest":hex::encode(security.digest())}),
-        )?;
+        let mut capture = crate::workspace::patch::capture::CaptureEvidence {
+            witness: crate::workspace::patch::capture::CaptureWitness::observe(
+                &plan.operation_id,
+                &source_security,
+                &security,
+            ),
+            retained_security_digest: None,
+        };
+        {
+            let tx = self
+                .connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(JournalError::from)?;
+            if let Some(witness) = &capture.witness {
+                let body = serde_json::to_string(witness).map_err(|_| PatchError::Invalid)?;
+                tx.execute(
+                    "INSERT INTO patch_capture_witnesses(operation_id,body,digest) VALUES(?,?,?)",
+                    params![plan.operation_id, body, witness.digest()?],
+                )
+                .map_err(JournalError::from)?;
+            }
+            tx.execute("INSERT INTO editing_publication_steps(operation_id,step,body) VALUES(?,2,?)",params![plan.operation_id,serde_json::json!({"kind":"staged","security_digest":hex::encode(security.digest())}).to_string()]).map_err(JournalError::from)?;
+            tx.commit().map_err(JournalError::from)?;
+        }
         hook(2)?;
         self.live_patch_dispatch(edit, read, token)?;
         let (_, current_identity, current_name) =
@@ -260,11 +285,34 @@ impl Journal {
         hook(3)?;
         sync_directory(&parent)?;
         named_file(&parent, &plan.backup_name, &original)?;
-        if !actual.matches_after_rename(&inspected(&parent, &original)?) {
+        let captured_identity = inspected(&parent, &original)?;
+        let captured_security =
+            orange_platform_files::security_metadata(&original).map_err(io_error)?;
+        if !capture.accepts_identity(&actual, &captured_identity, &captured_security) {
             return Err(PatchError::VersionChanged);
         }
         verify_bytes(&mut original, &plan.original_sha256)?;
-        self.patch_stage(token, 4, serde_json::json!({"kind":"captured"}))?;
+        capture.retained_security_digest = Some(hex::encode(captured_security.digest()));
+        {
+            let tx = self
+                .connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(JournalError::from)?;
+            tx.execute(
+                "INSERT INTO patch_capture_receipts(operation_id,security_digest) VALUES(?,?)",
+                params![plan.operation_id, capture.retained_security_digest],
+            )
+            .map_err(JournalError::from)?;
+            tx.execute(
+                "INSERT INTO editing_publication_steps(operation_id,step,body) VALUES(?,4,?)",
+                params![
+                    plan.operation_id,
+                    serde_json::json!({"kind":"captured"}).to_string()
+                ],
+            )
+            .map_err(JournalError::from)?;
+            tx.commit().map_err(JournalError::from)?;
+        }
         hook(4)?;
         self.live_patch_dispatch(edit, read, token)?;
         if directory_identity(&open_directory(root, parents)?)? != directory_identity(&parent)? {
@@ -274,7 +322,9 @@ impl Journal {
         named_file(&parent, &plan.backup_name, &original)?;
         verify_bytes(&mut original, &plan.original_sha256)?;
         verify_bytes(&mut staged, &plan.result_sha256)?;
-        if orange_platform_files::security_metadata(&staged).map_err(io_error)? != security {
+        if orange_platform_files::security_metadata(&staged).map_err(io_error)? != security
+            || !captured_identity.matches_after_rename(&inspected(&parent, &original)?)
+        {
             return Err(PatchError::VersionChanged);
         }
         self.patch_stage(token, 5, serde_json::json!({"kind":"publish_intent"}))?;
@@ -287,7 +337,7 @@ impl Journal {
         named_file(&parent, &plan.backup_name, &original)?;
         verify_bytes(&mut staged, &plan.result_sha256)?;
         verify_bytes(&mut original, &plan.original_sha256)?;
-        if !actual.matches_after_rename(&inspected(&parent, &original)?)
+        if !captured_identity.matches_after_rename(&inspected(&parent, &original)?)
             || orange_platform_files::security_metadata(&staged).map_err(io_error)? != security
             || directory_identity(&open_directory(root, parents)?)? != directory_identity(&parent)?
         {
@@ -302,7 +352,7 @@ impl Journal {
         verify_bytes(&mut original, &plan.original_sha256)?;
         let retained_identity = inspected(&parent, &original)?;
         let result_identity = inspected(&parent, &staged)?;
-        if !actual.matches_after_rename(&retained_identity)
+        if !captured_identity.matches_after_rename(&retained_identity)
             || orange_platform_files::security_metadata(&staged).map_err(io_error)? != security
             || directory_identity(&open_directory(root, parents)?)? != directory_identity(&parent)?
         {
@@ -338,6 +388,7 @@ impl Journal {
             before: actual,
             retained: retained_identity,
             after: result_identity,
+            capture: Some(capture),
         };
         let edge_body = serde_json::to_string(&edge).map_err(|_| PatchError::Invalid)?;
         let edge_digest = edge.digest()?;

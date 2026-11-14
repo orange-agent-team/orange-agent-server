@@ -25,6 +25,37 @@ async fn interrupted(f: &Fixture) -> Journal {
     assert!(!f.root.path().join(&f.args.path).exists());
     j
 }
+#[tokio::test]
+async fn staged_content_match_cannot_authorize_changed_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = Fixture::new();
+    let mut j = interrupted(&f).await;
+    let plan = j
+        .patch_publication_plan("alice", "op")
+        .expect("plan")
+        .expect("present");
+    fs::set_permissions(
+        f.root.path().join(&plan.staged_name),
+        fs::Permissions::from_mode(0o777),
+    )
+    .expect("owned metadata change");
+    let grant = recovery_grant(&j, &f);
+    assert!(
+        j.prepare_patch_resolution(
+            &grant,
+            &f.read,
+            "changed-permissions",
+            PatchRecoveryChoice::PublishStagedToMissingTarget
+        )
+        .await
+        .is_err()
+    );
+    assert!(!f.root.path().join(&f.args.path).exists());
+    assert_eq!(
+        fs::read(f.root.path().join(&plan.backup_name)).expect("original retained"),
+        b"old\n"
+    );
+}
 fn recovery_grant(j: &Journal, f: &Fixture) -> PatchRecoveryGrant {
     j.authorize_patch_recovery("alice", "policy", "op", f.root.path())
         .expect("separate explicit recovery consent")

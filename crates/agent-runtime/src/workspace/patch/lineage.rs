@@ -37,6 +37,8 @@ pub(super) struct VersionEdge {
     pub(super) before: SourceIdentity,
     pub(super) retained: SourceIdentity,
     pub(super) after: SourceIdentity,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) capture: Option<super::capture::CaptureEvidence>,
 }
 impl VersionEdge {
     pub(super) fn digest(&self) -> Result<String, PatchError> {
@@ -129,7 +131,12 @@ fn overlay(root: &Dir, edges: &[VersionEdge]) -> Result<HistoricalOverlay, Patch
             &edge.retained,
             &edge.original_sha256,
         )?;
-        if !edge.before.matches_after_rename(&edge.retained) {
+        let security = orange_platform_files::security_metadata(&old).map_err(io_error)?;
+        let accepted = match &edge.capture {
+            Some(evidence) => evidence.accepts_identity(&edge.before, &edge.retained, &security),
+            None => edge.before.matches_after_rename(&edge.retained),
+        };
+        if !accepted {
             return Err(invalid());
         }
         if let Some(index) = preceding {
@@ -407,6 +414,16 @@ impl Journal {
                 || review.preview.original_sha256 != edge.original_sha256
                 || review.preview.result_sha256 != edge.result_sha256
                 || review.args.path != edge.path
+                || edge
+                    .capture
+                    .as_ref()
+                    .is_some_and(|e| !e.source_bound(&edge.before))
+            {
+                return Err(invalid());
+            }
+            let saved = self.capture_evidence(owner, &id)?;
+            if edge.capture.as_ref().is_some_and(|e| e != &saved)
+                || (edge.capture.is_none() && saved != super::capture::CaptureEvidence::default())
             {
                 return Err(invalid());
             }

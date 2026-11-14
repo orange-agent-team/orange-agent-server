@@ -5,7 +5,8 @@
 mod unix;
 #[cfg(unix)]
 pub use unix::{
-    SecurityMetadata, copy_publication_metadata, copy_security_metadata, security_metadata,
+    NativeCaptureWitness, SecurityMetadata, copy_publication_metadata, copy_security_metadata,
+    security_metadata,
 };
 #[cfg(target_vendor = "apple")]
 #[allow(unsafe_code)]

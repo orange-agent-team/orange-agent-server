@@ -170,6 +170,7 @@ pub(super) fn observe(
     name: &str,
     reviewed: &SourceIdentity,
     plan: &PublicationPlan,
+    capture: Option<&crate::workspace::patch::capture::CaptureEvidence>,
 ) -> Result<RecoveryFileObservation, PatchError> {
     let named = match parent.symlink_metadata(name) {
         Ok(metadata) => metadata,
@@ -218,7 +219,12 @@ pub(super) fn observe(
         bytes: bytes.len().to_string(),
         security_sha256: hex::encode(security.digest()),
         object_digest,
-        reviewed_original_inode: reviewed.same_inode(&before),
+        reviewed_original_inode: reviewed.same_inode(&before)
+            && capture.cloned().unwrap_or_default().accepts_security(
+                reviewed,
+                &security,
+                name == plan.backup_name,
+            ),
         matches_original_content: sha256 == plan.original_sha256,
         matches_result_content: sha256 == plan.result_sha256,
         sha256,
@@ -281,18 +287,33 @@ impl Journal {
                 if !record.source_identity.same_parent(&parent)? {
                     return Err(WorkspaceError::EnvironmentChanged.into());
                 }
-                let target = observe(&parent, name, &record.source_identity, &journal.plan)?;
+                if journal
+                    .capture_security
+                    .as_ref()
+                    .is_some_and(|e| !e.source_bound(&record.source_identity))
+                {
+                    return Err(PatchError::Invalid);
+                }
+                let target = observe(
+                    &parent,
+                    name,
+                    &record.source_identity,
+                    &journal.plan,
+                    journal.capture_security.as_ref(),
+                )?;
                 let staged = observe(
                     &parent,
                     &journal.plan.staged_name,
                     &record.source_identity,
                     &journal.plan,
+                    journal.capture_security.as_ref(),
                 )?;
                 let original = observe(
                     &parent,
                     &journal.plan.backup_name,
                     &record.source_identity,
                     &journal.plan,
+                    journal.capture_security.as_ref(),
                 )?;
                 if directory_identity(&open_directory(root, parents)?)?
                     != directory_identity(&parent)?

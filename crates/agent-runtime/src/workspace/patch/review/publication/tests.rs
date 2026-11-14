@@ -2,6 +2,7 @@ use super::super::dispatch::recovery::inspection::RecoveryFileObservation;
 use super::super::tests::{Fixture, approved_fixture, op};
 use super::*;
 use std::{fs, os::unix::fs::PermissionsExt};
+mod capture_security;
 
 #[tokio::test]
 async fn approved_patch_history_requires_version_aware_validation() {

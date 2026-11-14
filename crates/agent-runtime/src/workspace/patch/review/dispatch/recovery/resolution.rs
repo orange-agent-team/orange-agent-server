@@ -96,6 +96,40 @@ fn valid_choice(choice: PatchRecoveryChoice, snapshot: &PatchRecoverySnapshot) -
     }
 }
 impl Journal {
+    fn validate_staged_recovery_security(
+        &self,
+        operation: &str,
+        choice: PatchRecoveryChoice,
+        snapshot: &PatchRecoverySnapshot,
+    ) -> Result<(), PatchError> {
+        if choice != PatchRecoveryChoice::PublishStagedToMissingTarget {
+            return Ok(());
+        }
+        let body: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT body FROM editing_publication_steps WHERE operation_id=? AND step=2",
+                [operation],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(JournalError::from)?;
+        let body = body
+            .filter(|s| s.len() <= 16 * 1024)
+            .ok_or(PatchError::RecoveryRequired)?;
+        let value: serde_json::Value =
+            serde_json::from_str(&body).map_err(|_| PatchError::Invalid)?;
+        let expected = value
+            .get("security_digest")
+            .and_then(|v| v.as_str())
+            .filter(|s| orange_protocol::valid_digest(s))
+            .ok_or(PatchError::RecoveryRequired)?;
+        if !matches!(&snapshot.staged,RecoveryFileObservation::Regular{security_sha256,..} if security_sha256==expected)
+        {
+            return Err(PatchError::VersionChanged);
+        }
+        Ok(())
+    }
     /// A separate native write selection is still mandatory. A read inspection
     /// capability alone is never converted into a write capability.
     pub fn authorize_selected_patch_recovery(
@@ -266,6 +300,7 @@ impl Journal {
         if !valid_choice(choice, &snapshot) {
             return Err(PatchError::VersionChanged);
         }
+        self.validate_staged_recovery_security(&grant.operation, choice, &snapshot)?;
         let write = grant
             .grant
             .permit(
@@ -377,6 +412,7 @@ impl Journal {
             choice: record.choice,
             snapshot: record.snapshot.clone(),
         };
+        self.validate_staged_recovery_security(&grant.operation, record.choice, &record.snapshot)?;
         Ok((record, review))
     }
     pub async fn approve_patch_resolution(

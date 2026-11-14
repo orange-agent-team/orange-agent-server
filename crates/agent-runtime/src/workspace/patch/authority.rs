@@ -379,6 +379,10 @@ impl SourceIdentity {
         self.security_digest = hex::encode(digest);
     }
     #[cfg(target_vendor = "apple")]
+    pub(super) fn security_digest(&self) -> &str {
+        &self.security_digest
+    }
+    #[cfg(target_vendor = "apple")]
     pub(super) fn matches_after_rename(&self, current: &Self) -> bool {
         let mut current = current.clone();
         current.change_seconds = self.change_seconds;

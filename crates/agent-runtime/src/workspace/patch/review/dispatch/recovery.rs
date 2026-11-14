@@ -26,6 +26,9 @@ pub struct PublicationRecoveryView {
     pub execution_state: String,
     pub last_durable_stage: Option<PublicationStage>,
     pub committed_receipt: Option<PublishedPatch>,
+    #[cfg(target_vendor = "apple")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture_security: Option<crate::workspace::patch::capture::CaptureEvidence>,
 }
 impl Journal {
     pub fn patch_recovery_view(
@@ -117,6 +120,12 @@ impl Journal {
             execution_state: state,
             last_durable_stage: last,
             committed_receipt: receipt,
+            #[cfg(target_vendor = "apple")]
+            capture_security: {
+                let evidence = self.capture_evidence(owner, operation)?;
+                (evidence != crate::workspace::patch::capture::CaptureEvidence::default())
+                    .then_some(evidence)
+            },
         }))
     }
 }
