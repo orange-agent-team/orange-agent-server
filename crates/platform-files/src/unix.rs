@@ -111,6 +111,23 @@ pub fn copy_security_metadata(
     source: &impl AsFd,
     target: &impl AsFd,
 ) -> io::Result<SecurityMetadata> {
+    copy_metadata(source, target, false)
+}
+/// Preserve publication security while retaining an OS-generated newer Apple
+/// quarantine timestamp. Returns the actual target snapshot, never the source
+/// snapshot. Subsequent publication/recovery checks must bind that exact result.
+/// No label is removed, rewritten or silently omitted by this policy.
+pub fn copy_publication_metadata(
+    source: &impl AsFd,
+    target: &impl AsFd,
+) -> io::Result<SecurityMetadata> {
+    copy_metadata(source, target, cfg!(target_vendor = "apple"))
+}
+fn copy_metadata(
+    source: &impl AsFd,
+    target: &impl AsFd,
+    publication: bool,
+) -> io::Result<SecurityMetadata> {
     let a = rustix::fs::fstat(source)?;
     let b = rustix::fs::fstat(target)?;
     if a.st_dev == b.st_dev && a.st_ino == b.st_ino {
@@ -157,10 +174,71 @@ pub fn copy_security_metadata(
         io::ErrorKind::Unsupported,
         "metadata backend unavailable",
     ));
-    if security_metadata(source)? != expected || security_metadata(target)? != expected {
+    let actual = security_metadata(target)?;
+    if security_metadata(source)? != expected
+        || !(actual == expected || (publication && preserves_publication(&expected, &actual)))
+    {
         return Err(invalid("security metadata changed or was not preserved"));
     }
-    Ok(expected)
+    Ok(actual)
+}
+fn preserves_publication(source: &SecurityMetadata, target: &SecurityMetadata) -> bool {
+    if source.uid != target.uid
+        || source.gid != target.gid
+        || source.mode != target.mode
+        || source.flags != target.flags
+        || source.acl != target.acl
+        || source.attributes.len() != target.attributes.len()
+    {
+        return false;
+    }
+    source
+        .attributes
+        .iter()
+        .zip(&target.attributes)
+        .all(|((sn, sv), (tn, tv))| {
+            sn == tn
+                && (sv == tv
+                    || (cfg!(target_vendor = "apple")
+                        && sn == b"com.apple.quarantine"
+                        && newer_quarantine_timestamp(sv, tv)))
+        })
+}
+fn newer_quarantine_timestamp(source: &[u8], target: &[u8]) -> bool {
+    fn parse(value: &[u8]) -> Option<([&[u8]; 4], u32)> {
+        let fields: Vec<_> = value.split(|b| *b == b';').collect();
+        let fields: [&[u8]; 4] = fields.try_into().ok()?;
+        if fields[0].len() != 4
+            || !fields[0].iter().all(u8::is_ascii_hexdigit)
+            || fields[1].len() != 8
+            || !fields[1].iter().all(u8::is_ascii_hexdigit)
+            || fields[2].is_empty()
+            || fields[2].len() > 256
+            || !fields[2].iter().all(|b| b.is_ascii_graphic() || *b == b' ')
+            || (!fields[3].is_empty()
+                && (fields[3].len() != 36
+                    || !fields[3].iter().enumerate().all(|(i, b)| {
+                        if [8, 13, 18, 23].contains(&i) {
+                            *b == b'-'
+                        } else {
+                            b.is_ascii_hexdigit()
+                        }
+                    })))
+        {
+            return None;
+        }
+        let time = u32::from_str_radix(std::str::from_utf8(fields[1]).ok()?, 16).ok()?;
+        Some((fields, time))
+    }
+    let (Some((a, at)), Some((b, bt))) = (parse(source), parse(target)) else {
+        return false;
+    };
+    let Ok(now) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) else {
+        return false;
+    };
+    // Flags, quarantining agent and event identity remain byte-for-byte equal.
+    // Never guess whether changed flag bits are stronger or weaker.
+    a[0] == b[0] && a[2] == b[2] && a[3] == b[3] && bt >= at && u64::from(bt) <= now.as_secs()
 }
 #[cfg(test)]
 mod tests;

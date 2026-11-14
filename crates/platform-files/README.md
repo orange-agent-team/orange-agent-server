@@ -8,6 +8,10 @@
 
 `copy_security_metadata` 要求不同的单链接普通文件。调用方只能把目标设为尚未发布的自有暂存文件；失败可能已修改暂存文件的部分属性，不能将其视作可发布结果。文件内容不复制。完成后比较源与目标的全部已建模属性；不一致则拒绝。调用方写入内容后仍须重新验证，不能将一次成功视作永久保证，也不能把这个函数当作文件内容原子 CAS。
 
+`copy_publication_metadata` 是显式的暂存发布政策，严格复制 API 的逐字节语义不变。它保留沙盒为新文件生成的较新 quarantine 时间戳，仅接受已识别的四字段标签格式，安全标记、隔离应用及事件标识必须原样相等，时间不能倒退或在未来。owner/group/mode/flags/ACL 和所有其他 xattr 仍须精确一致。源文件的完整快照必须未变；返回的是目标的真实完整快照，其摘要绑定后续发布与恢复，绝不把源摘要冒充为目标摘要。标签新增、移除、未知格式或任何安全位变化均拒绝；因此某些外部来源文件仍可能不受支持，不能声称所有 macOS 文件都可编辑。
+
+2026-11-14 的独立签名 App Sandbox 探针复现：`fcopyfile(SECURITY|XATTR)` 后只有 quarantine 时间戳改变，直接原样设置被系统以 EPERM 拒绝。实现保留系统结果，不调用属性删除或改写作为补救。Apple 的 [时间戳定义](https://developer.apple.com/documentation/coreservices/klsquarantinetimestampkey?language=objc)、[Launch Services 属性说明](https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/LaunchServicesKeys.html)及 [copyfile 源码](https://github.com/apple-oss-distributions/copyfile/blob/main/copyfile.c)支持对时间信息和安全标记分别处理；四字段编码的兼容范围由本机探针与严格解析限定，未宣称它是 Apple 保证永不变化的公开格式。
+
 macOS 使用公开 `fcopyfile` 的 SECURITY/XATTR 标志，通过独占 RAII 状态调用，不设置 DATA。ACL 只在极小的 Apple FFI 模块内读取；缓冲区按 C long 对齐、限制容量，native allocation 在所有返回路径释放。包默认 deny unsafe，只有该模块允许逐处说明的 unsafe；其他 workspace 包保持 forbid unsafe。
 
 Darwin 的 `acl_get_fd` 在 FILESEC_ACL 属性不存在时可返回 ENOENT。仅在该 fd API 返回 ENOENT 且同一个借用 fd 再次 fstat 成功时表示无扩展 ACL；其他 errno 原样报错，路径 API 不适用此规则。依据是 Apple 的 [acl_file.c](https://github.com/apple-oss-distributions/Libc/blob/main/posix1e/acl_file.c) 与 [filesec.c](https://github.com/apple-oss-distributions/Libc/blob/main/gen/filesec.c)，于 2026-11-08 查阅；仅使用公开 ABI 和行为，未复制实现代码。

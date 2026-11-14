@@ -232,8 +232,8 @@ impl Journal {
         staged
             .write_all(token.approved.content())
             .map_err(io_error)?;
-        let security =
-            orange_platform_files::copy_security_metadata(&original, &staged).map_err(io_error)?;
+        let security = orange_platform_files::copy_publication_metadata(&original, &staged)
+            .map_err(io_error)?;
         staged.sync_all().map_err(io_error)?;
         verify_bytes(&mut staged, &plan.result_sha256)?;
         named_file(&parent, &plan.staged_name, &staged)?;

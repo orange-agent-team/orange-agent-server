@@ -1,5 +1,81 @@
 use super::*;
 use std::{fs, os::unix::fs::PermissionsExt};
+#[cfg(target_vendor = "apple")]
+#[test]
+fn publication_timestamp_policy_preserves_all_authority_and_identity_fields() {
+    let root = tempfile::tempdir().expect("owned fixture");
+    let path = root.path().join("source");
+    fs::write(&path, b"original").expect("write");
+    let file = fs::File::open(path).expect("open");
+    let mut source = security_metadata(&file).expect("metadata");
+    source
+        .attributes
+        .retain(|(n, _)| n != b"com.apple.quarantine");
+    source.attributes.push((
+        b"com.apple.quarantine".to_vec(),
+        b"0086;65000000;Orange Agent;".to_vec(),
+    ));
+    source.attributes.sort_by(|a, b| a.0.cmp(&b.0));
+    let index = source
+        .attributes
+        .iter()
+        .position(|(n, _)| n == b"com.apple.quarantine")
+        .expect("label");
+    let mut target = source.clone();
+    target.attributes[index].1 = b"0086;65000001;Orange Agent;".to_vec();
+    assert!(preserves_publication(&source, &target));
+    assert_ne!(
+        source.digest(),
+        target.digest(),
+        "actual target digest must retain changed timestamp"
+    );
+    for forbidden in [
+        "0082;65000001;Orange Agent;", // dropped flag
+        "00c6;65000001;Orange Agent;", // added flag: do not infer its meaning
+        "0086;65000001;Other Agent;",
+        "0086;65000001;Orange Agent;00000000-0000-0000-0000-000000000000",
+        "0086;64000000;Orange Agent;", // older
+        "0086;ffffffff;Orange Agent;", // future
+        "0086;65000001;Orange Agent",
+        "0086;65000001;Orange Agent;;",
+        "0086;invalid!;Orange Agent;",
+        "0086;65000001;;",
+        "0086;65000001;Orange Agent;unknown",
+    ] {
+        let mut changed = target.clone();
+        changed.attributes[index].1 = forbidden.as_bytes().to_vec();
+        assert!(
+            !preserves_publication(&source, &changed),
+            "accepted changed security label: {forbidden}"
+        );
+    }
+    for dimension in 0..8 {
+        let mut changed = target.clone();
+        match dimension {
+            0 => changed.uid += 1,
+            1 => changed.gid += 1,
+            2 => changed.mode ^= 0o111,
+            3 => changed.flags ^= 1,
+            4 => changed.acl.push(1),
+            5 => {
+                changed.attributes.remove(index);
+            }
+            6 => changed.attributes.push((b"new".to_vec(), vec![1])),
+            _ => changed.attributes[index].0 = b"unknown".to_vec(),
+        }
+        assert!(!preserves_publication(&source, &changed));
+    }
+    let mut no_label = source.clone();
+    no_label.attributes.remove(index);
+    assert!(
+        !preserves_publication(&no_label, &target),
+        "label introduction is not certified"
+    );
+    assert!(
+        !preserves_publication(&target, &no_label),
+        "label removal is forbidden"
+    );
+}
 #[test]
 fn distinct_file_metadata_copy_preserves_mode_and_xattr_without_copying_content() {
     let root = tempfile::tempdir().expect("fixture");
