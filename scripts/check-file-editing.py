@@ -215,6 +215,7 @@ try:
         pending = invoke('step')['pending'][0]
         preview = invoke('preview-edit', pending['operation_id'])
         invoke('approve-edit', pending['operation_id'], preview['preview_digest'])
+        assert invoke('pending-edits') == {'operation_ids': [], 'next_before': None}
         invoke('step')
         assert invoke('step')['phase'] == 'completed'
         assert (workspace / '新建.txt').read_text() == final
@@ -278,10 +279,17 @@ try:
         assert inspected['original']['matches_original_content']
         assert invoke('cancel')['phase'] == 'cancelled'
         assert len(observations['unknown']) == 1
+        assert invoke('pending-edits') == {'operation_ids': [pending['operation_id']], 'next_before': None}
+        assert invoke('pending-edits', pending['operation_id']) == {'operation_ids': [], 'next_before': None}
+        invoke('pending-edits', 'invalid cursor', failed=True)
+        hidden_workspace = workspace.with_name(workspace.name + '-closed')
+        workspace.rename(hidden_workspace)
+        assert invoke('pending-edits') == {'operation_ids': [pending['operation_id']], 'next_before': None}
+        assert (hidden_workspace / 'note.txt').read_text() == final
         with sqlite3.connect(database) as db:
             assert db.execute('SELECT count(*) FROM patch_version_edges').fetchone()[0] == 0
             assert db.execute("SELECT count(*) FROM operations WHERE state='unknown'").fetchone()[0] == 1
-        summary.append({'scenario': 'unknown', 'actual_effect_retained': True, 'automatic_replay': False})
+        summary.append({'scenario': 'unknown', 'actual_effect_retained': True, 'automatic_replay': False, 'bounded_metadata_discovery_without_workspace_or_key': True})
         assert not failures, failures
 finally:
     server.shutdown()

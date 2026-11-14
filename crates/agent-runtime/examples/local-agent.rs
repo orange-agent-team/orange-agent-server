@@ -153,6 +153,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     let command=args.get(2).map(String::as_str).ok_or("usage: local-agent PRIVATE_CONFIG COMMAND; editing requires separate authorize-edit, preview-edit and approve-edit")?;
     let expected = match command {
+        "pending-edits" if args.len() == 4 => 4,
+        "pending-edits" => 3,
         "start" | "show" | "status" | "step" | "answer" | "cancel" | "grant-info" => 3,
         "approve" | "authorize-create" | "revoke-create" | "authorize-edit" | "revoke-edit"
         | "preview-edit" | "inspect-edit" => 4,
@@ -174,11 +176,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         return Ok(());
     }
+    #[cfg(target_vendor = "apple")]
+    if command == "pending-edits" {
+        let journal = Journal::open(&config.journal)?;
+        let ids = journal.agent_unresolved_patch_ids(
+            &config.run.owner,
+            &config.run.run_id,
+            args.get(3).map(String::as_str),
+            100,
+        )?;
+        let next = if ids.len() == 100 { ids.last() } else { None };
+        println!(
+            "{}",
+            serde_json::json!({"operation_ids":ids,"next_before":next})
+        );
+        return Ok(());
+    }
     #[cfg(not(target_vendor = "apple"))]
     if config.editing_consent_id.is_some()
         || matches!(
             command,
-            "authorize-edit" | "revoke-edit" | "preview-edit" | "approve-edit" | "inspect-edit"
+            "authorize-edit"
+                | "revoke-edit"
+                | "preview-edit"
+                | "approve-edit"
+                | "inspect-edit"
+                | "pending-edits"
         )
     {
         return Err("editing is unavailable on this target".into());

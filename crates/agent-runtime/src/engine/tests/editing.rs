@@ -489,6 +489,11 @@ async fn receipt_failure_never_replays_patch_and_missing_capabilities_are_not_sy
     let (_tx, rx) = watch::channel(false);
     let pending = advance(&mut j, &f, &edit, &model, rx.clone()).await;
     approve_patch(&mut j, &f, &edit, &pending).await;
+    assert!(
+        j.agent_unresolved_patch_ids("alice", "run-1", None, 10)
+            .expect("intended is not unknown")
+            .is_empty()
+    );
     j.connection.execute_batch("CREATE TRIGGER fail_edit_edge BEFORE INSERT ON patch_version_edges BEGIN SELECT RAISE(ABORT,'owned receipt fixture');END;").expect("fault");
     let failed = advance(&mut j, &f, &edit, &model, rx).await;
     assert_eq!(failed.phase, Phase::RecoveryRequired);
@@ -505,6 +510,86 @@ async fn receipt_failure_never_replays_patch_and_missing_capabilities_are_not_sy
     drop(j);
     let mut j = f.open();
     assert!(j.restore_file_edit("alice", &id).is_err());
+    let operation = &pending.pending[0].operation_id;
+    assert_eq!(
+        j.agent_unresolved_patch_ids("alice", "run-1", None, 1)
+            .expect("discover unknown"),
+        vec![operation.clone()]
+    );
+    assert!(
+        j.agent_unresolved_patch_ids("bob", "run-1", None, 10)
+            .is_err()
+    );
+    assert!(
+        j.agent_unresolved_patch_ids("alice", "other-run", None, 10)
+            .is_err()
+    );
+    for (cursor, limit) in [(None, 0), (None, 101), (Some("bad cursor"), 1)] {
+        assert!(
+            j.agent_unresolved_patch_ids("alice", "run-1", cursor, limit)
+                .is_err()
+        );
+    }
+    assert!(
+        j.agent_unresolved_patch_ids("alice", "run-1", Some(operation), 1)
+            .expect("strict cursor")
+            .is_empty()
+    );
+    j.revoke_run("alice", "run-1")
+        .expect("cancel must not hide unresolved effects");
+    assert_eq!(
+        j.agent_unresolved_patch_ids("alice", "run-1", None, 1)
+            .expect("revoked metadata only"),
+        vec![operation.clone()]
+    );
+    assert!(
+        j.restore_file_edit("alice", &id).is_err(),
+        "index cannot restore write access"
+    );
+    use crate::workspace::patch::review::dispatch::recovery::resolution::PatchRecoveryChoice;
+    let recovery = j
+        .authorize_patch_recovery("alice", "policy-v1", operation, f.workspace.path())
+        .expect("independent recovery consent");
+    let review = j
+        .prepare_patch_resolution(
+            &recovery,
+            &f.grant,
+            "confirm-current",
+            PatchRecoveryChoice::KeepCurrentTarget,
+        )
+        .await
+        .expect("actual recovery review");
+    j.approve_patch_resolution(
+        &recovery,
+        &f.grant,
+        &review.recovery_id,
+        &review.digest,
+        "alice",
+        f.config.deadline_unix,
+    )
+    .await
+    .expect("separate exact approval");
+    let token = j
+        .dispatch_patch_resolution(&recovery, &f.grant, &review.recovery_id)
+        .await
+        .expect("recovery dispatch");
+    j.publish_patch_resolution(&recovery, &f.grant, token)
+        .expect("keep actual current target");
+    assert!(
+        j.agent_unresolved_patch_ids("alice", "run-1", None, 10)
+            .expect("resolved excluded")
+            .is_empty()
+    );
+    assert_eq!(
+        j.state("alice", operation)
+            .expect("original operation still unknown")
+            .as_deref(),
+        Some("unknown")
+    );
+    assert_eq!(
+        std::fs::read(f.workspace.path().join("note.txt")).expect("no original operation replay"),
+        b"new\n"
+    );
     assert_eq!(model.calls.load(Ordering::SeqCst), 1);
     assert_eq!(
         std::fs::read_dir(f.workspace.path())

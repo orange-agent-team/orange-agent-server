@@ -4,6 +4,8 @@ use crate::workspace::patch::PatchError;
 use crate::workspace::patch::PublishedPatch;
 #[cfg(target_vendor = "apple")]
 use crate::workspace::patch::authority::EditFileGrant;
+#[cfg(target_vendor = "apple")]
+mod recovery;
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct EditRequirement {
     pub consent_id: String,
