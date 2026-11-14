@@ -1,11 +1,16 @@
 //! Bounded export capture only. Destination consent, exact approval and durable
 //! publication are separate: capturing this artifact never writes or deletes.
 use super::*;
+mod publication;
 use crate::workspace::patch::authority;
 use crate::workspace::{CancellationGuard, Permit, READ_SLOTS, directory_identity, open_directory};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use cap_fs_ext::{FollowSymlinks, OpenOptionsFollowExt, OpenOptionsSyncExt, OsMetadataExt};
 use cap_std::fs::{Dir, OpenOptions};
+pub use publication::{
+    PreparedRetentionExport, RetentionExportDestination, RetentionExportOutcome,
+    RetentionExportReceipt, RetentionExportReview,
+};
 use std::io::Read;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

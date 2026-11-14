@@ -24,7 +24,7 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser()
 parser.add_argument('--sandboxed', action='store_true', help='Execute the same real CLI in a signed App Sandbox; fixtures are created by this outside process')
-parser.add_argument('--legacy-runtime', type=Path, help='Exact fixed64748cd schema16 source; migrate a real approved edit after a prior successful edit')
+parser.add_argument('--legacy-runtime', type=Path, help='Exact fixed schema16/64748cd or schema17/a2cdafb source; migrate actual successful and approved edits')
 args = parser.parse_args()
 if args.sandboxed and args.legacy_runtime:
     raise SystemExit('Legacy compatibility and sandbox qualification are separate invocations')
@@ -43,13 +43,19 @@ if env.get('CARGO_BUILD_TARGET'):
 binary = Path(metadata['target_directory']) / 'debug/examples/local-agent'
 current_binary = binary
 legacy_binary = None
+legacy_schema = None
 if args.legacy_runtime:
     legacy = args.legacy_runtime.resolve()
     release_path = legacy / 'release-manifest.json'
-    if legacy.is_symlink() or hashlib.sha256(release_path.read_bytes()).hexdigest() != '5f0b1a2c50b0c95ab288a00817926dbc3fa3f928b451547342228a50ccff1266':
-        raise SystemExit('Exact Runtime64748cd source manifest required')
     release = json.loads(release_path.read_text())
-    assert release['origin_commit'] == '64748cd25940b9bef28d1efd90488a8e8ab76684'
+    known = {
+        '64748cd25940b9bef28d1efd90488a8e8ab76684': (16, '5f0b1a2c50b0c95ab288a00817926dbc3fa3f928b451547342228a50ccff1266'),
+        'a2cdafb95fab90bc1ded82d4a4c061be40463d35': (17, '874a60c4b4364ac54f6accb6a004a9975f7476a78f6c031872ab3d8802af7150'),
+    }
+    pinned = known.get(release.get('origin_commit'))
+    if legacy.is_symlink() or pinned is None or hashlib.sha256(release_path.read_bytes()).hexdigest() != pinned[1]:
+        raise SystemExit('Exact supported schema16/17 Runtime source manifest required')
+    legacy_schema = pinned[0]
     actual = set()
     for directory, folders, names in os.walk(legacy, followlinks=False):
         if any((Path(directory) / name).is_symlink() for name in folders):
@@ -65,7 +71,7 @@ if args.legacy_runtime:
                 raise SystemExit('Legacy source bytes differ')
     assert actual == set(release['content_sha256']) | {'release-manifest.json'}
     legacy_env = env.copy()
-    legacy_env['CARGO_TARGET_DIR'] = str(ROOT / '.local/schema16-compat-target')
+    legacy_env['CARGO_TARGET_DIR'] = str(ROOT / ('.local/schema' + str(legacy_schema) + '-compat-target'))
     subprocess.run([str(cargo), 'build', '--manifest-path', str(legacy / 'Cargo.toml'), '-p', 'orange-agent-runtime', '--example', 'local-agent', '--locked', '--offline'], env=legacy_env, check=True, timeout=300)
     legacy_binary = Path(legacy_env['CARGO_TARGET_DIR']) / 'debug/examples/local-agent'
     binary = legacy_binary
@@ -247,9 +253,15 @@ try:
             invoke('approve-edit', pending['operation_id'], preview['preview_digest'])
             if legacy_binary and index == 2:
                 with sqlite3.connect(database) as db:
-                    assert db.execute('PRAGMA user_version').fetchone()[0] == 16
+                    assert db.execute('PRAGMA user_version').fetchone()[0] == legacy_schema
                     assert db.execute('SELECT count(*) FROM patch_version_edges').fetchone()[0] == 1
-                    assert db.execute("SELECT count(*) FROM sqlite_master WHERE name LIKE 'patch_capture_%'").fetchone()[0] == 0
+                    if legacy_schema == 16:
+                        assert db.execute("SELECT count(*) FROM sqlite_master WHERE name LIKE 'patch_capture_%'").fetchone()[0] == 0
+                        saved_capture_receipts = []
+                    else:
+                        saved_capture_receipts = db.execute('SELECT * FROM patch_capture_receipts ORDER BY operation_id').fetchall()
+                        assert len(saved_capture_receipts) == 1
+                        assert db.execute("SELECT count(*) FROM sqlite_master WHERE name='patch_exports'").fetchone()[0] == 0
                     saved_approvals = db.execute('SELECT * FROM editing_approvals ORDER BY operation_id').fetchall()
                 binary = current_binary
             actual = invoke('step')
@@ -272,17 +284,20 @@ try:
             assert actual['phase'] == 'ready'
             if legacy_binary and index == 2:
                 with sqlite3.connect(database) as db:
-                    assert db.execute('PRAGMA user_version').fetchone()[0] == 17
+                    assert db.execute('PRAGMA user_version').fetchone()[0] == 18
                     assert db.execute('SELECT * FROM editing_approvals ORDER BY operation_id').fetchall() == saved_approvals
                     assert db.execute('SELECT count(*) FROM patch_capture_witnesses').fetchone()[0] == 0
-                    assert db.execute('SELECT count(*) FROM patch_capture_receipts').fetchone()[0] == 1
+                    assert db.execute('SELECT count(*) FROM patch_capture_receipts').fetchone()[0] == 1 + len(saved_capture_receipts)
+                    for saved in saved_capture_receipts:
+                        assert db.execute('SELECT * FROM patch_capture_receipts WHERE operation_id=?', (saved[0],)).fetchone() == saved
+                    assert db.execute('SELECT count(*) FROM patch_exports').fetchone()[0] == 0
                 def durable_bytes():
                     return {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in [database, database.with_name(database.name + '-wal')] if p.exists()}
                 before_rejected_open = durable_bytes()
                 binary = legacy_binary
                 rejected = invoke('status', failed=True)
                 assert 'UnsupportedVersion' in rejected.stderr or 'unsupported journal format' in rejected.stderr
-                assert durable_bytes() == before_rejected_open, 'old schema16 binary changed newer data'
+                assert durable_bytes() == before_rejected_open, 'old pinned binary changed newer data'
                 binary = current_binary
             assert (workspace / 'note.txt').read_text() == expected
             assert 'note.txt' in {p.name for p in workspace.iterdir()}
@@ -291,7 +306,7 @@ try:
         assert complete['phase'] == 'completed' and (complete['steps'], complete['invocations']) == (7, 4)
         assert invoke('step') == complete and len(observations['positive']) == 4
         with sqlite3.connect(database) as db:
-            assert db.execute('PRAGMA user_version').fetchone()[0] == 17
+            assert db.execute('PRAGMA user_version').fetchone()[0] == 18
             assert db.execute('SELECT count(*) FROM patch_version_edges').fetchone()[0] == 2
             assert db.execute('SELECT count(*) FROM runtime_tool_approvals').fetchone()[0] == 3
             first = db.execute('SELECT operation_id FROM operations WHERE tool_version=? ORDER BY rowid', ('apply_patch.v1',)).fetchone()[0]
@@ -310,7 +325,7 @@ try:
         assert len(observations['positive']) == 4
         summary.append({'scenario': 'positive', 'model_calls': 4, 'actual_edits': 2, 'reopen_no_replay': True})
         if legacy_binary:
-            summary.append({'scenario': 'schema16-to17', 'actual_old_success_and_approved_edit': True, 'approval_preserved': True, 'no_old_capture_evidence_invented': True, 'historical_source_and_pending_edit_validated': True, 'old_binary_rejected_without_data_mutation': True})
+            summary.append({'scenario': 'schema' + str(legacy_schema) + '-to18', 'actual_old_success_and_approved_edit': True, 'approval_preserved': True, 'no_old_capture_evidence_invented': True, 'historical_source_and_pending_edit_validated': True, 'old_binary_rejected_without_data_mutation': True})
 
         config, save, invoke, workspace, database, _ = fixture('combined')
         create = invoke('authorize-create', 'explicit-create')

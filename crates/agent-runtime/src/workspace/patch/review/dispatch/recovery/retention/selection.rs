@@ -3,8 +3,9 @@
 use super::*;
 mod export;
 pub use export::{
-    RetentionExportCapture, RetentionExportChoice, RetentionExportEntrySummary,
-    RetentionExportPreview, verify_retention_export,
+    PreparedRetentionExport, RetentionExportCapture, RetentionExportChoice,
+    RetentionExportDestination, RetentionExportEntrySummary, RetentionExportOutcome,
+    RetentionExportPreview, RetentionExportReceipt, RetentionExportReview, verify_retention_export,
 };
 use std::path::Path;
 

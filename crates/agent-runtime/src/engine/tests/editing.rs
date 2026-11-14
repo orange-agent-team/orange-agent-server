@@ -1,5 +1,6 @@
 use super::*;
 mod recovery_scopes;
+mod retention_export;
 mod retention_scopes;
 use crate::workspace::patch::authority::EditFileGrant;
 use sha2::{Digest, Sha256};
