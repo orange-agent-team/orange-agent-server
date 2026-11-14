@@ -32,6 +32,8 @@ struct Config {
     user_questions: bool,
     #[serde(default)]
     creation_consent_id: Option<String>,
+    #[serde(default)]
+    editing_consent_id: Option<String>,
 }
 struct LocalModel(LlamaClient);
 impl ModelGateway for LocalModel {
@@ -63,6 +65,7 @@ impl ModelGateway for LocalModel {
                     // values, unknown field names or identifiers supplied by it.
                     let (name, known): (&str, &[&str]) = match call.name.as_str() {
                         "write_file" => ("write_file", &["path", "content"]),
+                        "apply_patch" => ("apply_patch", &["path", "expected_sha256", "patch"]),
                         "read_file" => (
                             "read_file",
                             &[
@@ -148,13 +151,38 @@ fn private_read(path: &Path) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
-    if args.len() < 3 {
+    let command=args.get(2).map(String::as_str).ok_or("usage: local-agent PRIVATE_CONFIG COMMAND; editing requires separate authorize-edit, preview-edit and approve-edit")?;
+    let expected = match command {
+        "start" | "show" | "status" | "step" | "answer" | "cancel" | "grant-info" => 3,
+        "approve" | "authorize-create" | "revoke-create" | "authorize-edit" | "revoke-edit"
+        | "preview-edit" | "inspect-edit" => 4,
+        "approve-create" | "approve-edit" => 5,
+        _ => return Err("unknown command".into()),
+    };
+    if args.len() != expected {
         return Err(
-            "usage: local-agent <private-config.json> <start|show|step|approve OP_ID|authorize-create REQUEST_ID|approve-create OP_ID DIGEST|revoke-create VERSION|answer|cancel>; answer reads bounded AnswerUser JSON from stdin"
-                .into(),
+            "wrong command argument count; approval requires the exact displayed digest".into(),
         );
     }
     let config: Config = serde_json::from_slice(&private_read(Path::new(&args[1]))?)?;
+    if command == "status" {
+        let journal = Journal::open(&config.journal)?;
+        let view = journal.agent_view(&config.run.owner, &config.run.run_id)?;
+        println!(
+            "{}",
+            serde_json::json!({"run_id":view.run_id,"phase":view.phase,"steps":view.steps,"invocations":view.invocations,"pending_operations":view.pending.len(),"awaiting_user":view.user_question.is_some(),"failure":view.failure})
+        );
+        return Ok(());
+    }
+    #[cfg(not(target_vendor = "apple"))]
+    if config.editing_consent_id.is_some()
+        || matches!(
+            command,
+            "authorize-edit" | "revoke-edit" | "preview-edit" | "approve-edit" | "inspect-edit"
+        )
+    {
+        return Err("editing is unavailable on this target".into());
+    }
     if config.model_endpoint.is_some() == config.model_socket.is_some() {
         return Err("Exactly one local model transport is required".into());
     }
@@ -256,7 +284,59 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         return Ok(());
     }
-    let create = if matches!(args[2].as_str(), "start" | "step" | "approve-create") {
+    #[cfg(target_vendor = "apple")]
+    match command {
+        "authorize-edit" => {
+            let edit = journal.authorize_file_edit(
+                &config.run.owner,
+                &args[3],
+                &config.run.policy,
+                &config.workspace,
+            )?;
+            if edit.resource_identity() != grant.resource_identity() {
+                edit.request_revoke();
+                journal.revoke_file_edit(
+                    &config.run.owner,
+                    edit.consent_id(),
+                    &edit
+                        .consent_version()
+                        .ok_or("durable consent version required")?,
+                )?;
+                return Err("workspace identity changed during edit authorization".into());
+            }
+            println!(
+                "{}",
+                serde_json::to_string_pretty(
+                    &journal.editing_consent(&config.run.owner, edit.consent_id())?
+                )?
+            );
+            return Ok(());
+        }
+        "revoke-edit" => {
+            let id = config
+                .editing_consent_id
+                .as_deref()
+                .ok_or("explicit edit consent ID required")?;
+            journal.revoke_file_edit(&config.run.owner, id, &args[3])?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&journal.editing_consent(&config.run.owner, id)?)?
+            );
+            return Ok(());
+        }
+        "inspect-edit" => {
+            let observed = journal
+                .inspect_patch_recovery(&config.run.owner, &args[3], &grant)
+                .await?;
+            println!("{}", serde_json::to_string_pretty(observed.snapshot()?)?);
+            return Ok(());
+        }
+        _ => {}
+    }
+    let create = if matches!(
+        command,
+        "start" | "step" | "approve-create" | "preview-edit" | "approve-edit"
+    ) {
         config
             .creation_consent_id
             .as_deref()
@@ -265,22 +345,90 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         None
     };
-    let view = match args[2].as_str() {
+    #[cfg(target_vendor = "apple")]
+    let edit = if matches!(command, "start" | "step" | "preview-edit" | "approve-edit") {
+        config
+            .editing_consent_id
+            .as_deref()
+            .map(|id| journal.restore_file_edit(&config.run.owner, id))
+            .transpose()?
+    } else {
+        None
+    };
+    #[cfg(target_vendor = "apple")]
+    if command == "preview-edit" || command == "approve-edit" {
+        let edit = edit.as_ref().ok_or("explicit edit consent ID required")?;
+        let authority = orange_agent_runtime::engine::EditingAuthority {
+            read: &grant,
+            create: create.as_ref(),
+            edit,
+        };
+        if command == "preview-edit" {
+            let preview = journal
+                .agent_patch_preview(&config.run.owner, &config.run.run_id, &args[3], authority)
+                .await?;
+            println!("{}", serde_json::to_string_pretty(&preview)?);
+            return Ok(());
+        }
+        let seconds = i64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_secs(),
+        )?;
+        journal
+            .approve_agent_editing(
+                &config.run.owner,
+                &config.run.run_id,
+                orange_agent_runtime::engine::EditingApproval {
+                    operation_id: &args[3],
+                    preview_digest: &args[4],
+                    expires_at: (seconds + 60).min(config.run.deadline_unix),
+                },
+                authority,
+            )
+            .await?;
+        let view = journal
+            .agent_view_authorized(&config.run.owner, &config.run.run_id, &grant)
+            .await?;
+        println!("{}", serde_json::to_string_pretty(&view)?);
+        return Ok(());
+    }
+    let view = match command {
         "start" => {
             let messages = vec![Message::plain(Role::User, config.prompt)];
-            if let Some(create) = &create {
-                journal.start_agent_creating(
-                    &config.run,
-                    messages,
-                    &grant,
-                    create,
-                    config.user_questions,
-                )?
-            } else if config.user_questions {
-                journal.start_agent_interactive(&config.run, messages, &grant)?
-            } else {
-                journal.start_agent(&config.run, messages, &grant)?
+            #[cfg(target_vendor = "apple")]
+            {
+                if let Some(edit) = &edit {
+                    journal.start_agent_editing(
+                        &config.run,
+                        messages,
+                        orange_agent_runtime::engine::EditingAuthority {
+                            read: &grant,
+                            create: create.as_ref(),
+                            edit,
+                        },
+                        config.user_questions,
+                    )?
+                } else {
+                    start_base(
+                        &mut journal,
+                        &config.run,
+                        messages,
+                        &grant,
+                        create.as_ref(),
+                        config.user_questions,
+                    )?
+                }
             }
+            #[cfg(not(target_vendor = "apple"))]
+            start_base(
+                &mut journal,
+                &config.run,
+                messages,
+                &grant,
+                create.as_ref(),
+                config.user_questions,
+            )?
         }
         "show" => {
             journal
@@ -382,29 +530,47 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let _ = tokio::signal::ctrl_c().await;
                 let _ = sender.send(true);
             });
-            let result = if let Some(create) = &create {
+            #[cfg(target_vendor = "apple")]
+            let result = if let Some(edit) = &edit {
                 journal
-                    .advance_agent_creating(
+                    .advance_agent_editing(
                         &config.run.owner,
                         &config.run.run_id,
-                        &grant,
-                        create,
+                        orange_agent_runtime::engine::EditingAuthority {
+                            read: &grant,
+                            create: create.as_ref(),
+                            edit,
+                        },
                         &model,
                         receiver,
                     )
                     .await
             } else {
-                journal
-                    .advance_agent(
-                        &config.run.owner,
-                        &config.run.run_id,
-                        &grant,
-                        &model,
-                        receiver,
-                    )
-                    .await
+                advance_base(
+                    &mut journal,
+                    &config.run,
+                    &grant,
+                    create.as_ref(),
+                    &model,
+                    receiver,
+                )
+                .await
             };
+            #[cfg(not(target_vendor = "apple"))]
+            let result = advance_base(
+                &mut journal,
+                &config.run,
+                &grant,
+                create.as_ref(),
+                &model,
+                receiver,
+            )
+            .await;
             signal.abort();
+            #[cfg(target_vendor = "apple")]
+            if let Some(edit) = &edit {
+                edit.wait_drained().await;
+            }
             let view = result?;
             grant.wait_drained().await;
             if let Some(create) = &create {
@@ -424,4 +590,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
     println!("{}", serde_json::to_string_pretty(&view)?);
     Ok(())
+}
+
+fn start_base(
+    journal: &mut Journal,
+    run: &RunConfig,
+    messages: Vec<Message>,
+    read: &WorkspaceGrant,
+    create: Option<&orange_agent_runtime::workspace::creation::CreateFileGrant>,
+    questions: bool,
+) -> Result<orange_agent_runtime::engine::RunView, orange_agent_runtime::engine::EngineError> {
+    if let Some(create) = create {
+        journal.start_agent_creating(run, messages, read, create, questions)
+    } else if questions {
+        journal.start_agent_interactive(run, messages, read)
+    } else {
+        journal.start_agent(run, messages, read)
+    }
+}
+async fn advance_base(
+    journal: &mut Journal,
+    run: &RunConfig,
+    read: &WorkspaceGrant,
+    create: Option<&orange_agent_runtime::workspace::creation::CreateFileGrant>,
+    model: &impl ModelGateway,
+    cancel: watch::Receiver<bool>,
+) -> Result<orange_agent_runtime::engine::RunView, orange_agent_runtime::engine::EngineError> {
+    if let Some(create) = create {
+        journal
+            .advance_agent_creating(&run.owner, &run.run_id, read, create, model, cancel)
+            .await
+    } else {
+        journal
+            .advance_agent(&run.owner, &run.run_id, read, model, cancel)
+            .await
+    }
 }
