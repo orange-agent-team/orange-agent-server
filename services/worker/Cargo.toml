@@ -5,6 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+[features]
+# Explicit integration-test scheduling; absent from production/default builds.
+test-control-gates = []
+
 [dependencies]
 orange-domain.workspace = true
 orange-model-runtime.workspace = true
