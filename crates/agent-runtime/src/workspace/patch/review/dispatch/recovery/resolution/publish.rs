@@ -149,7 +149,18 @@ impl Journal {
         }
         let root = &token.write.inner.directory;
         let names = components(&plan.path, false)?;
-        let (target, parents) = names.split_last().ok_or(PatchError::Invalid)?;
+        let (provided_target, parents) = names.split_last().ok_or(PatchError::Invalid)?;
+        // Legacy plans remain readable, but a missing native target must not
+        // be guessed when restoring a namespace. Keeping a current file has
+        // no rename effect and can still be explicitly acknowledged.
+        let native_target = if plan.target_entry_name.is_some() {
+            plan.native_target()?
+        } else if token.record.choice == PatchRecoveryChoice::KeepCurrentTarget {
+            *provided_target
+        } else {
+            return Err(PatchError::RecoveryRequired);
+        };
+        let target = &native_target;
         let parent = open_directory(root, parents)?;
         if !reviewed.source_identity.same_parent(&parent)? {
             return Err(WorkspaceError::EnvironmentChanged.into());

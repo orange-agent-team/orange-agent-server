@@ -110,6 +110,29 @@ fn count(j: &Journal, table: &str) -> i64 {
         .expect("count")
 }
 
+#[test]
+fn legacy_publication_payload_does_not_invent_a_native_target() {
+    use super::dispatch::PublicationPlan;
+    let original = serde_json::json!({"operation_id":"op","preview_digest":"0".repeat(64),"path":"FILE.TXT","staged_name":".orange-agent-tmp-patch-new-old","backup_name":".orange-agent-tmp-patch-old-old","original_sha256":"1".repeat(64),"result_sha256":"2".repeat(64),"reserved_bytes":"786440"});
+    let parsed: PublicationPlan =
+        serde_json::from_value(original.clone()).expect("legacy metadata remains readable");
+    assert!(parsed.target_entry_name.is_none());
+    assert!(parsed.native_target().is_err());
+    assert_eq!(
+        serde_json::to_value(&parsed).expect("preserved payload"),
+        original
+    );
+    assert_eq!(
+        request_digest("patch-publication-plan.v1", &parsed).expect("digest"),
+        request_digest("patch-publication-plan.v1", &original).expect("legacy digest")
+    );
+    let mut dangerous = parsed;
+    dangerous.target_entry_name = Some("../outside.txt".into());
+    assert!(dangerous.native_target().is_err());
+    dangerous.target_entry_name = Some(".env".into());
+    assert!(dangerous.native_target().is_err());
+}
+
 pub(in crate::workspace::patch) async fn approved_fixture(
     f: &Fixture,
     j: &mut Journal,

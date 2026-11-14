@@ -97,6 +97,7 @@ pub(super) fn files_historical(
         // Reopen only through no-follow directory capabilities. A concurrent
         // replacement fails this search instead of turning it into an ambient walk.
         let directory = open_directory(&root, &names)?;
+        let directory_key = overlay.directory_key(&directory)?;
         let mut entries = Vec::new();
         for entry in directory.entries()? {
             if grant.is_revoked() {
@@ -115,8 +116,7 @@ pub(super) fn files_historical(
                 result.omitted_unsupported = true;
                 continue;
             };
-            let full = historical::joined(&historical::joined(&args.path, &relative), name);
-            if overlay.hidden(&full) {
+            if overlay.hidden(directory_key, name) {
                 continue;
             }
             result.scanned_entries += 1;

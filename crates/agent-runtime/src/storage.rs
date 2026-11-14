@@ -5,8 +5,23 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// The lock belongs to the Journal, never to accidentally inherited/duplicated
+/// descriptors. Journal declares this field after its Connection so graceful
+/// destruction closes SQLite before explicitly releasing the owned lock.
+pub(crate) struct HostLock {
+    file: File,
+}
+impl Drop for HostLock {
+    fn drop(&mut self) {
+        // Unlock only this owned open-file description. A failure is still
+        // fail-closed: the descriptor closes next and a new owner must acquire
+        // its own lock normally. No forced unlock of another process/path.
+        let _ = self.file.unlock();
+    }
+}
+
 /// A private trusted host directory is required; never silently chmod caller data.
-pub(crate) fn open_private(path: &Path) -> Result<(PathBuf, File), JournalError> {
+pub(crate) fn open_private(path: &Path) -> Result<(PathBuf, HostLock), JournalError> {
     let parent = path.parent().ok_or(JournalError::Invalid)?.canonicalize()?;
     let metadata = fs::metadata(&parent)?;
     #[cfg(unix)]
@@ -22,7 +37,11 @@ pub(crate) fn open_private(path: &Path) -> Result<(PathBuf, File), JournalError>
     let normalized = parent.join(path.file_name().ok_or(JournalError::Invalid)?);
     normalized.to_str().ok_or(JournalError::Invalid)?;
     let lock = private_file(&normalized.with_extension("host-lock"))?;
-    lock.try_lock().map_err(|_| JournalError::Busy)?;
+    lock.try_lock().map_err(|error| match error {
+        std::fs::TryLockError::WouldBlock => JournalError::Busy,
+        std::fs::TryLockError::Error(error) => JournalError::Io(error),
+    })?;
+    let lock = HostLock { file: lock };
     // Sidecars must also be regular private files, never links into another location.
     for suffix in ["-wal", "-shm", "-journal"] {
         let sidecar = PathBuf::from(format!("{}{suffix}", normalized.to_string_lossy()));
@@ -132,6 +151,28 @@ mod tests {
     use super::*;
     use crate::Journal;
     #[test]
+    fn graceful_journal_close_releases_its_lock_despite_a_duplicate_descriptor() {
+        let dir = private_temp();
+        let path = dir.path().join("journal.sqlite");
+        let first = Journal::open(&path).expect("first host");
+        let duplicate = first
+            ._host_lock
+            .file
+            .try_clone()
+            .expect("duplicate open-file description fixture");
+        assert!(matches!(Journal::open(&path), Err(JournalError::Busy)));
+        drop(first);
+        let second = Journal::open(&path).expect("closed Journal no longer owns the host lock");
+        // A stale duplicate must not release another host's distinct lock.
+        // Releasing an already-unlocked descriptor may succeed or report an
+        // error depending on the OS; neither may unlock the next owner.
+        let _ = duplicate.unlock();
+        drop(duplicate);
+        assert!(matches!(Journal::open(&path), Err(JournalError::Busy)));
+        drop(second);
+        Journal::open(&path).expect("subsequent owner");
+    }
+    #[test]
     fn v1_migration_preserves_approval_and_unknown_and_foreign_keys() {
         let dir = private_temp();
         let path = dir.path().join("old.sqlite");
@@ -155,7 +196,7 @@ mod tests {
             .connection
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .expect("version");
-        assert_eq!(version, 14);
+        assert_eq!(version, 15);
         assert_eq!(
             journal.state("alice", "op").expect("state").as_deref(),
             Some("unknown")
@@ -187,7 +228,7 @@ mod tests {
     }
     #[test]
     fn future_and_unknown_schemas_are_not_rewritten() {
-        for version in [0, 15] {
+        for version in [0, 16] {
             let dir = private_temp();
             let path = dir.path().join("future.sqlite");
             drop(private_file(&path).expect("file"));

@@ -8,7 +8,7 @@ pub mod workspaces;
 use orange_domain::{ExecutionIdentity, validate_response};
 use orange_protocol::{valid_digest, valid_id};
 use rusqlite::{Connection, OptionalExtension, params};
-use std::{fs::File, path::Path};
+use std::path::Path;
 
 #[derive(Debug, thiserror::Error)]
 pub enum JournalError {
@@ -38,7 +38,7 @@ pub enum JournalError {
 
 pub struct Journal {
     connection: Connection,
-    _host_lock: File,
+    _host_lock: storage::HostLock,
     private_root: std::path::PathBuf,
     extra_private_roots: Vec<std::path::PathBuf>,
     workspace_signals:
@@ -70,7 +70,7 @@ impl Journal {
             rusqlite::OpenFlags::default() | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
         )?;
         let version: i64 = connection.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if !(0..=14).contains(&version) {
+        if !(0..=15).contains(&version) {
             return Err(JournalError::UnsupportedVersion);
         }
         if version == 0 {
@@ -165,6 +165,12 @@ impl Journal {
             let tx =
                 connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
             tx.execute_batch(include_str!("schema_v14.sql"))?;
+            tx.commit()?;
+        }
+        if version < 15 {
+            let tx =
+                connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            tx.execute_batch(include_str!("schema_v15.sql"))?;
             tx.commit()?;
         }
         connection.execute_batch("BEGIN IMMEDIATE;

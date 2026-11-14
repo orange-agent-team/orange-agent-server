@@ -22,7 +22,7 @@ async fn interrupted(f: &Fixture) -> Journal {
         j.state("alice", "op").expect("state").as_deref(),
         Some("unknown")
     );
-    assert!(!f.root.path().join("file.txt").exists());
+    assert!(!f.root.path().join(&f.args.path).exists());
     j
 }
 fn recovery_grant(j: &Journal, f: &Fixture) -> PatchRecoveryGrant {
@@ -750,4 +750,53 @@ fn process_exit_during_recovery_never_replays_or_clears_quarantine() {
         }
         assert_eq!(fs::read_dir(root).expect("no deletion/replay").count(), 2);
     }
+}
+
+#[tokio::test]
+async fn recovery_restores_native_spelling_from_the_durable_plan() {
+    use std::os::unix::fs::MetadataExt;
+    let mut f = Fixture::new();
+    f.args.path = "FILE.TXT".into();
+    if !f.root.path().join("FILE.TXT").exists() {
+        fs::write(f.root.path().join("FILE.TXT"), b"old\n")
+            .expect("independent case-sensitive fixture");
+    }
+    let target_inode = fs::metadata(f.root.path().join("FILE.TXT"))
+        .expect("target")
+        .ino();
+    let native = fs::read_dir(f.root.path())
+        .expect("entries")
+        .map(|e| e.expect("entry").file_name())
+        .find(|n| fs::metadata(f.root.path().join(n)).is_ok_and(|m| m.ino() == target_inode))
+        .expect("native name");
+    let mut j = interrupted(&f).await;
+    let plan = j
+        .patch_publication_plan("alice", "op")
+        .expect("plan")
+        .expect("present");
+    assert_eq!(plan.target_entry_name.as_deref(), native.to_str());
+    let grant = recovery_grant(&j, &f);
+    let review = approved(
+        &mut j,
+        &f,
+        &grant,
+        "restore-alias",
+        PatchRecoveryChoice::RestoreOriginalToMissingTarget,
+    )
+    .await;
+    let token = j
+        .dispatch_patch_resolution(&grant, &f.read, &review.recovery_id)
+        .await
+        .expect("dispatch");
+    j.publish_patch_resolution(&grant, &f.read, token)
+        .expect("restore");
+    assert!(
+        fs::read_dir(f.root.path())
+            .expect("entries")
+            .any(|e| e.expect("entry").file_name() == native)
+    );
+    assert_eq!(
+        fs::read(f.root.path().join(native)).expect("restored bytes"),
+        b"old\n"
+    );
 }

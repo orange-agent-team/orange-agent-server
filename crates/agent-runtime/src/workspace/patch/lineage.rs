@@ -4,7 +4,7 @@
 use super::authority::SourceIdentity;
 use super::review::{Record, dispatch::PublishedPatch};
 use super::*;
-use crate::workspace::historical::{HistoricalFile, HistoricalOverlay, joined};
+use crate::workspace::historical::{HistoricalFile, HistoricalOverlay};
 use crate::workspace::{
     self, CancellationGuard, READ_SLOTS, ToolReceipt, WorkspaceGrant, WorkspaceRequest,
     WorkspaceResult, directory_identity, open_directory,
@@ -14,10 +14,7 @@ use cap_fs_ext::{FollowSymlinks, OpenOptionsFollowExt, OpenOptionsSyncExt};
 use cap_std::fs::{Dir, File, OpenOptions};
 use orange_protocol::{model::ResponseCandidate, valid_id};
 use rusqlite::{OptionalExtension, params};
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    io::Read,
-};
+use std::{collections::BTreeSet, io::Read};
 const MAX_EDGES: usize = 128;
 #[cfg(test)]
 pub(super) mod tests;
@@ -97,15 +94,19 @@ fn object(
 }
 fn overlay(root: &Dir, edges: &[VersionEdge]) -> Result<HistoricalOverlay, PatchError> {
     let mut result = HistoricalOverlay::default();
-    let mut last: BTreeMap<&str, &VersionEdge> = BTreeMap::new();
+    let mut chains: Vec<(HistoricalFile, &VersionEdge)> = Vec::new();
     for edge in edges {
-        if let Some(previous) = last.get(edge.path.as_str())
-            && (previous.after != edge.before || previous.result_sha256 != edge.original_sha256)
-        {
-            return Err(PatchError::VersionChanged);
+        let preceding = chains
+            .iter()
+            .position(|(_, previous)| previous.after.object_key() == edge.before.object_key());
+        if let Some(index) = preceding {
+            let previous = chains[index].1;
+            if previous.after != edge.before || previous.result_sha256 != edge.original_sha256 {
+                return Err(PatchError::VersionChanged);
+            }
         }
         let names = components(&edge.path, false)?;
-        let (name, parents) = names.split_last().ok_or(PatchError::Invalid)?;
+        let (_, parents) = names.split_last().ok_or(PatchError::Invalid)?;
         let parent = open_directory(root, parents)?;
         if !edge.before.same_parent(&parent)? {
             return Err(WorkspaceError::EnvironmentChanged.into());
@@ -130,35 +131,36 @@ fn overlay(root: &Dir, edges: &[VersionEdge]) -> Result<HistoricalOverlay, Patch
         if !edge.before.matches_after_rename(&edge.retained) {
             return Err(invalid());
         }
-        if !result.files.contains_key(&edge.path) {
+        if let Some(index) = preceding {
+            chains[index].1 = edge;
+        } else {
             let bytes = old.metadata().map_err(io_error)?.len();
-            result.files.insert(
-                edge.path.clone(),
+            chains.push((
                 HistoricalFile {
                     file: old,
                     bytes,
                     sha256: edge.original_sha256.clone(),
                 },
-            );
+                edge,
+            ));
         }
-        let parent_path = edge
-            .path
-            .strip_suffix(name)
-            .ok_or(PatchError::Invalid)?
-            .trim_end_matches('/');
         result
             .hidden
-            .insert(joined(parent_path, &edge.retained_name));
+            .entry(directory_identity(&parent)?)
+            .or_default()
+            .insert(edge.retained_name.clone());
         if directory_identity(&open_directory(root, parents)?)? != directory_identity(&parent)? {
             return Err(WorkspaceError::EnvironmentChanged.into());
         }
-        last.insert(&edge.path, edge);
     }
-    for edge in last.values() {
+    for (old, edge) in chains {
         let names = components(&edge.path, false)?;
         let (name, parents) = names.split_last().ok_or(PatchError::Invalid)?;
         let parent = open_directory(root, parents)?;
         object(&parent, name, &edge.after, &edge.result_sha256)?;
+        if result.files.insert(edge.after.object_key(), old).is_some() {
+            return Err(PatchError::VersionChanged);
+        }
         if directory_identity(&open_directory(root, parents)?)? != directory_identity(&parent)? {
             return Err(WorkspaceError::EnvironmentChanged.into());
         }

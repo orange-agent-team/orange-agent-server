@@ -12,11 +12,26 @@ pub struct PublicationPlan {
     pub operation_id: String,
     pub preview_digest: String,
     pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_entry_name: Option<String>,
     pub staged_name: String,
     pub backup_name: String,
     pub original_sha256: String,
     pub result_sha256: String,
     pub reserved_bytes: String,
+}
+impl PublicationPlan {
+    #[cfg(any(target_vendor = "apple", test))]
+    pub(crate) fn native_target(&self) -> Result<&str, PatchError> {
+        let name = self
+            .target_entry_name
+            .as_deref()
+            .ok_or(PatchError::RecoveryRequired)?;
+        if components(name, false)?.len() != 1 {
+            return Err(PatchError::Invalid);
+        }
+        Ok(name)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -84,6 +99,7 @@ impl Journal {
             operation_id: op.id.into(),
             preview_digest: digest,
             path: record.args.path,
+            target_entry_name: Some(approved.actual.native_name.clone()),
             staged_name: format!(".orange-agent-tmp-patch-new-{}", uuid::Uuid::new_v4()),
             backup_name: format!(".orange-agent-tmp-patch-old-{}", uuid::Uuid::new_v4()),
             original_sha256: record.preview.original_sha256,

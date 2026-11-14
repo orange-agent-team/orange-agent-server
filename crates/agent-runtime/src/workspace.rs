@@ -833,6 +833,7 @@ fn list_directory_historical(
     overlay: &historical::HistoricalOverlay,
 ) -> Result<ListDirectoryResult, WorkspaceError> {
     let directory = open_directory(root, &components(&args.path, true)?)?;
+    let directory_key = overlay.directory_key(&directory)?;
     let mut entries = Vec::new();
     let mut omitted = false;
     let mut scanned = 0;
@@ -852,8 +853,7 @@ fn list_directory_historical(
             omitted = true;
             continue;
         };
-        let full = historical::joined(&args.path, name);
-        if overlay.hidden(&full) {
+        if overlay.hidden(directory_key, name) {
             continue;
         }
         scanned += 1;
@@ -879,7 +879,7 @@ fn list_directory_historical(
             }
         }
         let size = if kind.is_file() {
-            Some(overlay.size(&full, metadata.len()).to_string())
+            Some(overlay.size(&metadata)?.to_string())
         } else {
             None
         };

@@ -596,3 +596,126 @@ async fn changed_source_response_or_missing_version_evidence_is_not_adopted() {
         );
     }
 }
+
+#[tokio::test]
+async fn filesystem_aliases_preserve_native_names_and_historical_queries() {
+    use std::os::unix::fs::MetadataExt;
+    for (native, alias) in [
+        ("file.txt", "FILE.TXT"),
+        ("café.txt", "cafe\u{301}.txt"),
+        ("Folder/café.txt", "FOLDER/cafe\u{301}.txt"),
+    ] {
+        let f = Fixture::new();
+        let mut j = f.journal();
+        let edit = f.edit(&mut j);
+        if native.contains('/') {
+            fs::create_dir(f.root.path().join("Folder")).expect("folder");
+        }
+        fs::write(f.root.path().join(native), b"old\n").expect("source");
+        // Exercise the actual filesystem's alias behavior. If spellings are
+        // distinct there, both are real independent files and must stay so.
+        let aliases = f.root.path().join(alias).metadata().is_ok_and(|m| {
+            m.ino()
+                == fs::metadata(f.root.path().join(native))
+                    .expect("native")
+                    .ino()
+        });
+        if !aliases {
+            if alias.contains('/') && !f.root.path().join("FOLDER").exists() {
+                fs::create_dir(f.root.path().join("FOLDER")).expect("distinct folder");
+            }
+            fs::write(f.root.path().join(alias), b"old\n").expect("distinct source");
+        }
+        let parent = std::path::Path::new(native)
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .map_or(".", |p| p.to_str().expect("UTF8"));
+        let original_name = fs::read_dir(f.root.path().join(parent))
+            .expect("entries")
+            .map(|e| e.expect("entry").file_name())
+            .find(|n| {
+                fs::metadata(f.root.path().join(parent).join(n)).is_ok_and(|m| {
+                    m.ino()
+                        == fs::metadata(f.root.path().join(native))
+                            .expect("source")
+                            .ino()
+                })
+            })
+            .expect("actual leaf name");
+        let mut sources = Vec::new();
+        for (i, (name, args)) in [
+            ("read_file", serde_json::json!({"path":native})),
+            ("read_file", serde_json::json!({"path":alias})),
+            ("list_directory", serde_json::json!({"path":parent})),
+            (
+                "search_files",
+                serde_json::json!({"path":".","glob":"**/*"}),
+            ),
+            ("search_text", serde_json::json!({"path":".","query":"old"})),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            sources.push(
+                source(
+                    &mut j,
+                    &f,
+                    "run",
+                    &format!("source-{i}"),
+                    WorkspaceRequest::parse(name, &args).expect("request"),
+                )
+                .await,
+            );
+        }
+        patch_args(
+            &mut j,
+            &f,
+            &edit,
+            "run",
+            "alias-edit",
+            PatchArgs {
+                path: alias.into(),
+                expected_sha256: hex::encode(Sha256::digest(b"old\n")),
+                patch: "@@ -1 +1 @@\n-old\n+middle text\n".into(),
+            },
+        )
+        .await
+        .expect("alias patch");
+        if aliases {
+            let names = fs::read_dir(f.root.path().join(parent))
+                .expect("entries")
+                .map(|e| e.expect("entry").file_name())
+                .collect::<Vec<_>>();
+            assert!(
+                names.contains(&original_name),
+                "approved content patch must preserve native spelling: {native}/{alias}"
+            );
+        }
+        let current = fs::read(f.root.path().join(native)).expect("native current bytes");
+        let old = String::from_utf8(current.clone()).expect("UTF8");
+        patch_args(
+            &mut j,
+            &f,
+            &edit,
+            "run",
+            "native-edit",
+            PatchArgs {
+                path: native.into(),
+                expected_sha256: hex::encode(Sha256::digest(&current)),
+                patch: format!(
+                    "@@ -1 +1 @@\n-{}\n+latest text\n",
+                    old.trim_end_matches('\n')
+                ),
+            },
+        )
+        .await
+        .expect("second edit through native spelling");
+        for (i, expected) in sources.iter().enumerate() {
+            assert_eq!(
+                validate(&j, &f, "run", &format!("source-{i}")).await,
+                *expected,
+                "{native}/{alias}"
+            );
+        }
+    }
+}

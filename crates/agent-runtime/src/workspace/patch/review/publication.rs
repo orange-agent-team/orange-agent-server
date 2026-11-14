@@ -103,6 +103,7 @@ impl Journal {
             || record.operation_id != plan.operation_id
             || record.source_identity != token.approved.actual.identity
             || record.preview != *token.approved.actual.preview()
+            || plan.native_target()? != token.approved.actual.native_name
         {
             return Err(JournalError::Conflict.into());
         }
@@ -198,12 +199,13 @@ impl Journal {
         let record = self.live_patch_dispatch(edit, read, token)?;
         let root = &token.approved.actual._edit.inner.directory;
         let plan = &token.plan;
-        let (_, actual) = super::super::authority::read_source(root, &record.args)?;
-        if actual != record.source_identity {
+        let (_, actual, native_name) = super::super::authority::read_source(root, &record.args)?;
+        if actual != record.source_identity || native_name != plan.native_target()? {
             return Err(PatchError::VersionChanged);
         }
         let names = components(&plan.path, false)?;
-        let (name, parents) = names.split_last().ok_or(PatchError::Invalid)?;
+        let (_, parents) = names.split_last().ok_or(PatchError::Invalid)?;
+        let name = plan.native_target()?;
         let parent = open_directory(root, parents)?;
         let mut options = OpenOptions::new();
         options.read(true).follow(FollowSymlinks::No).nonblock(true);
@@ -240,7 +242,10 @@ impl Journal {
         )?;
         hook(2)?;
         self.live_patch_dispatch(edit, read, token)?;
-        if super::super::authority::read_source(root, &record.args)?.1 != actual
+        let (_, current_identity, current_name) =
+            super::super::authority::read_source(root, &record.args)?;
+        if current_identity != actual
+            || current_name != plan.native_target()?
             || inspected(&parent, &original)? != actual
             || directory_identity(&open_directory(root, parents)?)? != directory_identity(&parent)?
         {

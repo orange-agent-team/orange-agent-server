@@ -43,6 +43,7 @@ pub struct AuthorizedPatchPreview {
     pub(super) args: PatchArgs,
     binding_digest: String,
     pub(super) identity: SourceIdentity,
+    pub(super) native_name: String,
     pub(super) _read: Permit,
     pub(super) _edit: Permit,
 }
@@ -167,17 +168,18 @@ impl EditFileGrant {
                 if read.inner.is_revoked() || edit.inner.is_revoked() {
                     return Err(WorkspaceError::Revoked.into());
                 }
-                let (original, identity) = read_source(&edit.inner.directory, &args)?;
+                let (original, identity, native_name) = read_source(&edit.inner.directory, &args)?;
                 let prepared = prepare(&args, &original)?;
                 if read.inner.is_revoked() || edit.inner.is_revoked() {
                     return Err(WorkspaceError::Revoked.into());
                 }
                 let binding_digest = request_digest(
-                    "patch-source-binding.v1",
+                    "patch-source-binding.v2",
                     &(
                         &environment,
                         &read.inner.environment,
                         &identity,
+                        &native_name,
                         &prepared.preview,
                     ),
                 )
@@ -187,6 +189,7 @@ impl EditFileGrant {
                     prepared,
                     binding_digest,
                     identity,
+                    native_name,
                     _read: read,
                     _edit: edit,
                 })
@@ -240,7 +243,7 @@ pub(super) fn identity(
 pub(super) fn read_source(
     root: &Dir,
     args: &PatchArgs,
-) -> Result<(Vec<u8>, SourceIdentity), PatchError> {
+) -> Result<(Vec<u8>, SourceIdentity, String), PatchError> {
     let names = components(&args.path, false)?;
     let (name, parents) = names.split_last().ok_or(PatchError::Invalid)?;
     let parent = open_directory(root, parents)?;
@@ -286,10 +289,81 @@ pub(super) fn read_source(
     if orange_platform_files::security_metadata(&file).map_err(WorkspaceError::Io)? != security {
         return Err(PatchError::VersionChanged);
     }
+    let native_name = native_entry_name(&parent, &file, &opened)?;
+    if identity(&parent, &file.metadata().map_err(WorkspaceError::Io)?)? != opened
+        || identity(
+            &parent,
+            &parent.symlink_metadata(name).map_err(WorkspaceError::Io)?,
+        )? != opened
+    {
+        return Err(PatchError::VersionChanged);
+    }
     opened.security_digest = hex::encode(security.digest());
-    Ok((bytes, opened))
+    Ok((bytes, opened, native_name))
+}
+fn native_entry_name(
+    parent: &Dir,
+    file: &cap_std::fs::File,
+    expected: &SourceIdentity,
+) -> Result<String, PatchError> {
+    #[cfg(target_vendor = "apple")]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        // Only use the leaf spelling from the live descriptor. Never open or
+        // expose the ambient path returned by F_GETPATH.
+        let native = rustix::fs::getpath(file).map_err(|e| WorkspaceError::Io(e.into()))?;
+        let name = Path::new(std::ffi::OsStr::from_bytes(native.as_bytes()))
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or(WorkspaceError::Forbidden)?
+            .to_owned();
+        components(&name, false)?;
+        if identity(
+            parent,
+            &parent.symlink_metadata(&name).map_err(WorkspaceError::Io)?,
+        )? != *expected
+        {
+            return Err(PatchError::VersionChanged);
+        }
+        Ok(name)
+    }
+    #[cfg(not(target_vendor = "apple"))]
+    {
+        let _ = file;
+        for (count, entry) in parent.entries().map_err(WorkspaceError::Io)?.enumerate() {
+            if count >= 10000 {
+                return Err(PatchError::Limit);
+            }
+            let name = entry.map_err(WorkspaceError::Io)?.file_name();
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            let metadata = parent.symlink_metadata(name).map_err(WorkspaceError::Io)?;
+            if !metadata.is_file()
+                || metadata.nlink() != 1
+                || metadata.dev() != expected.device
+                || metadata.ino() != expected.inode
+            {
+                continue;
+            }
+            components(name, false)?;
+            if identity(parent, &metadata)? != *expected {
+                return Err(PatchError::VersionChanged);
+            }
+            return Ok(name.into());
+        }
+        Err(PatchError::VersionChanged)
+    }
 }
 impl SourceIdentity {
+    #[cfg(target_vendor = "apple")]
+    pub(super) fn object_key(&self) -> crate::workspace::historical::ObjectKey {
+        crate::workspace::historical::ObjectKey {
+            device: self.device,
+            inode: self.inode,
+            created: self.created_nanos.clone(),
+        }
+    }
     #[cfg(target_vendor = "apple")]
     pub(super) fn same_inode(&self, other: &Self) -> bool {
         self.device == other.device
