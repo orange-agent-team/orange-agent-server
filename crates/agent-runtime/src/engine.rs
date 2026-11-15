@@ -135,6 +135,7 @@ struct StoredRun {
     creation: Option<creation::CreationRequirement>,
     editing: Option<editing::EditRequirement>,
     memories: Vec<crate::memory::MemoryCapability>,
+    memory_read_version: u8,
 }
 type StoredRunRow = (String, String, String, u32, u32, Option<String>, bool);
 #[derive(Debug, Clone)]
@@ -207,6 +208,21 @@ impl Journal {
         authority: AgentAuthority<'_>,
         user_questions: bool,
     ) -> Result<RunView, EngineError> {
+        self.start_agent_protocol(config, messages, authority, user_questions, 1)
+    }
+    fn start_agent_protocol(
+        &mut self,
+        config: &RunConfig,
+        messages: Vec<Message>,
+        authority: AgentAuthority<'_>,
+        user_questions: bool,
+        memory_read_version: u8,
+    ) -> Result<RunView, EngineError> {
+        if !matches!(memory_read_version, 1 | 2)
+            || (memory_read_version == 2 && authority.memories.is_empty())
+        {
+            return Err(EngineError::Invalid);
+        }
         let grant = authority.read;
         let creation = authority.create;
         let edit = authority.edit;
@@ -243,7 +259,20 @@ impl Journal {
         };
         let edit_binding = self.edit_start_binding(config, grant, edit)?;
         let config_json = encode(config)?;
-        let config_digest = if !memories.is_empty() {
+        let config_digest = if memory_read_version == 2 {
+            digest(
+                "run-config-memory-discovery-v2",
+                &(
+                    config,
+                    &messages,
+                    user_questions,
+                    &creation_binding,
+                    &edit_binding,
+                    &memories,
+                    memory_read_version,
+                ),
+            )?
+        } else if !memories.is_empty() {
             digest(
                 "run-config-memory-v1",
                 &(
@@ -283,7 +312,10 @@ impl Journal {
             user_questions,
             creation_binding.is_some(),
             edit_binding.is_some(),
-            &memories,
+            MemoryToolSelection {
+                bindings: &memories,
+                version: memory_read_version,
+            },
         );
         request.validate().map_err(|_| EngineError::Invalid)?;
         let tx = self
@@ -327,6 +359,10 @@ impl Journal {
             params![config.run_id, config.owner, config.policy],
         )?;
         tx.execute("INSERT INTO runtime_runs(run_id,config,config_digest,environment,messages,phase) VALUES(?,?,?,?,?,'ready')",params![config.run_id,config_json,config_digest,config.environment,encode(&messages)?])?;
+        tx.execute(
+            "INSERT INTO runtime_memory_protocol VALUES(?,?)",
+            params![config.run_id, memory_read_version],
+        )?;
         for binding in &memories {
             tx.execute(
                 "INSERT INTO runtime_memory_capabilities VALUES(?,?,?,?,?)",
@@ -417,6 +453,11 @@ impl Journal {
             creation: self.creation_binding(run)?,
             editing: self.editing_binding(run)?,
             memories: self.memory_bindings(run)?,
+            memory_read_version: self.connection.query_row(
+                "SELECT read_version FROM runtime_memory_protocol WHERE run_id=?",
+                [run],
+                |r| r.get(0),
+            )?,
         })
     }
     fn pending_operations(&self, run: &str) -> Result<Vec<StoredOperation>, EngineError> {
@@ -807,7 +848,10 @@ impl Journal {
             stored.user_questions,
             stored.creation.is_some(),
             stored.editing.is_some(),
-            &stored.memories,
+            MemoryToolSelection {
+                bindings: &stored.memories,
+                version: stored.memory_read_version,
+            },
         );
         if request.validate().is_err() {
             self.stop_agent(run, "limited", "context_budget")?;
@@ -1025,6 +1069,10 @@ impl Journal {
             if let AgentRequest::Memory(memory) = &request {
                 let entry = match memory {
                     crate::memory::tools::MemoryRequest::MemoryRead(v) => v.entry_id.clone(),
+                    crate::memory::tools::MemoryRequest::MemoryReadV2(v) => v
+                        .entry()
+                        .map(|v| v.entry_id)
+                        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
                     crate::memory::tools::MemoryRequest::MemoryWrite(v) => v
                         .entry_id
                         .clone()
@@ -1318,6 +1366,10 @@ impl Journal {
         Ok(proof)
     }
 }
+struct MemoryToolSelection<'a> {
+    bindings: &'a [crate::memory::MemoryCapability],
+    version: u8,
+}
 fn make_request_mode(
     c: &RunConfig,
     invocation: &str,
@@ -1325,7 +1377,7 @@ fn make_request_mode(
     user_questions: bool,
     create_files: bool,
     edit_files: bool,
-    memories: &[crate::memory::MemoryCapability],
+    memory: MemoryToolSelection<'_>,
 ) -> GenerateRequest {
     let mut tools = workspace::definitions();
     if user_questions {
@@ -1337,9 +1389,14 @@ fn make_request_mode(
     if edit_files {
         tools.push(workspace::patch::definition());
     }
-    if !memories.is_empty() {
+    if !memory.bindings.is_empty() {
+        let specs = if memory.version == 2 {
+            crate::memory::tools::discovery_scoped_specs(memory.bindings)
+        } else {
+            crate::memory::tools::scoped_specs(memory.bindings)
+        };
         tools.extend(
-            crate::memory::tools::scoped_specs(memories)
+            specs
                 .into_iter()
                 .map(|v| orange_protocol::model::ToolDefinition {
                     name: v.name,

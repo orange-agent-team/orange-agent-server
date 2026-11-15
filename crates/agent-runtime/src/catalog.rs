@@ -174,6 +174,32 @@ impl ToolCatalog {
         specs.extend(crate::memory::tools::scoped_specs(bindings));
         Self::new(specs)
     }
+    pub fn builtin_memory_discovery(
+        questions: bool,
+        creation: bool,
+        editing: bool,
+        write: bool,
+    ) -> Result<Self, CatalogError> {
+        let mut specs = builtin::specs(questions, creation);
+        if editing {
+            specs.push(builtin::patch_spec());
+        }
+        specs.extend(crate::memory::tools::discovery_specs(write));
+        Self::new(specs)
+    }
+    pub fn builtin_memory_discovery_scoped(
+        questions: bool,
+        creation: bool,
+        editing: bool,
+        bindings: &[crate::memory::MemoryCapability],
+    ) -> Result<Self, CatalogError> {
+        let mut specs = builtin::specs(questions, creation);
+        if editing {
+            specs.push(builtin::patch_spec());
+        }
+        specs.extend(crate::memory::tools::discovery_scoped_specs(bindings));
+        Self::new(specs)
+    }
     pub fn restore(document: CatalogDocument) -> Result<Self, CatalogError> {
         let catalog = Self::new(document.tools)?;
         if catalog.revision != document.revision {

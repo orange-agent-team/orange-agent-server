@@ -208,7 +208,7 @@ mod tests {
             .connection
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .expect("version");
-        assert_eq!(version, 26);
+        assert_eq!(version, 27);
         assert_eq!(
             journal.state("alice", "op").expect("state").as_deref(),
             Some("unknown")

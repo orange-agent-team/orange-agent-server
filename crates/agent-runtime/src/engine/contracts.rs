@@ -5,7 +5,15 @@ fn incompatible(_: CatalogError) -> EngineError {
     EngineError::RecoveryRequired
 }
 pub(super) fn current(stored: &StoredRun) -> Result<ToolCatalog, EngineError> {
-    if !stored.memories.is_empty() {
+    if stored.memory_read_version == 2 {
+        ToolCatalog::builtin_memory_discovery_scoped(
+            stored.user_questions,
+            stored.creation.is_some(),
+            stored.editing.is_some(),
+            &stored.memories,
+        )
+        .map_err(incompatible)
+    } else if !stored.memories.is_empty() {
         ToolCatalog::builtin_memory_scoped(
             stored.user_questions,
             stored.creation.is_some(),

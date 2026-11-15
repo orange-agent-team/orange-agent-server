@@ -1,3 +1,4 @@
+mod discovery;
 mod management;
 pub use management::{
     ManagedMemoryPage, MemoryManagementAuthority, MemoryReadSelection, VerifiedMemoryPage,
@@ -146,6 +147,19 @@ impl Journal {
     ) -> Result<RunView, EngineError> {
         self.start_agent_mode(c, messages, authority, user_questions)
     }
+    /// Host opt-in; persisted per Run. Existing Run registrations remain v1.
+    pub fn start_agent_discovering(
+        &mut self,
+        c: &RunConfig,
+        messages: Vec<Message>,
+        authority: AgentAuthority<'_>,
+        user_questions: bool,
+    ) -> Result<RunView, EngineError> {
+        self.start_agent_protocol(c, messages, authority, user_questions, 2)
+    }
+    pub fn agent_memory_read_version(&self, owner: &str, run: &str) -> Result<u8, EngineError> {
+        Ok(self.stored_run(owner, run)?.memory_read_version)
+    }
     pub async fn advance_agent_authorized<G: ModelGateway>(
         &mut self,
         owner: &str,
@@ -242,7 +256,9 @@ impl Journal {
             .await?;
         let (_, pin) = self.intent_contract(&stored.config, &op)?;
         let expected = match &op.request {
-            AgentRequest::Memory(MemoryRequest::MemoryRead(_)) => op.digest.clone(),
+            AgentRequest::Memory(MemoryRequest::MemoryRead(_) | MemoryRequest::MemoryReadV2(_)) => {
+                op.digest.clone()
+            }
             AgentRequest::Memory(MemoryRequest::MemoryWrite(_)) => {
                 let id: String = self.connection.query_row(
                     "SELECT draft_id FROM runtime_memory_operations WHERE operation_id=?",
@@ -328,6 +344,14 @@ impl Journal {
             AgentRequest::Memory(v) => v,
             _ => return Err(EngineError::Invalid),
         };
+        if matches!(request, MemoryRequest::MemoryReadV2(_)) {
+            if approved != op.digest {
+                return Err(EngineError::ApprovalRequired);
+            }
+            return self
+                .advance_memory_discovery(stored, op, authority, cancel)
+                .await;
+        }
         let mut provenance_proof = SourceProof::default();
         let prepared = if matches!(request, MemoryRequest::MemoryWrite(_)) {
             let draft: String = self.connection.query_row(
@@ -410,6 +434,7 @@ impl Journal {
         )?;
         let result: Result<(serde_json::Value, Option<(String, String)>), EngineError> =
             match request {
+                MemoryRequest::MemoryReadV2(_) => return Err(EngineError::Invalid),
                 MemoryRequest::MemoryRead(args) => self
                     .read_memory_for_agent(
                         grant,
@@ -585,6 +610,11 @@ impl Journal {
             || matches!(request,MemoryRequest::MemoryWrite(v) if v.mutation==crate::memory::MemoryMutation::Delete)
         {
             Vec::new()
+        } else if let MemoryRequest::MemoryReadV2(args) = request {
+            if op.state != "succeeded" {
+                return Err(EngineError::RecoveryRequired);
+            }
+            discovery::expected_sources(args, &cached)?
         } else {
             if op.state != "succeeded" {
                 return Err(EngineError::RecoveryRequired);
@@ -601,6 +631,7 @@ impl Journal {
                     data["version"].as_str()
                 }
                 MemoryRequest::MemoryWrite(_) => data["result_version"].as_str(),
+                MemoryRequest::MemoryReadV2(_) => return Err(EngineError::Invalid),
             }
             .ok_or(EngineError::RecoveryRequired)?
             .parse::<i64>()
@@ -687,37 +718,77 @@ impl Journal {
         let stored = self.stored_run(&c.owner, &c.run_id)?;
         self.check_memory_bindings(&stored, grants)?;
         let ids = {
-            let mut query = self.connection.prepare("SELECT operation_id FROM operations WHERE run_id=? AND state IN('succeeded','failed') AND json_extract(request_json,'$.tool') IN('memory_read','memory_write')")?;
+            let mut query = self.connection.prepare("SELECT operation_id FROM operations WHERE run_id=? AND state IN('succeeded','failed') AND json_extract(request_json,'$.tool') IN('memory_read','memory_read_v2','memory_write')")?;
             query
                 .query_map([&c.run_id], |r| r.get::<_, String>(0))?
                 .collect::<Result<Vec<_>, _>>()?
         };
-        for id in ids {
-            self.checked_memory_source_rows(c, &self.operation_record(c, &id)?)?;
+        let unexpected:bool=self.connection.query_row("SELECT EXISTS(SELECT 1 FROM runtime_memory_sources s JOIN operations o USING(operation_id) WHERE o.run_id=? AND o.state NOT IN('succeeded','failed'))",[&c.run_id],|r|r.get(0))?;
+        if unexpected {
+            return Err(EngineError::RecoveryRequired);
         }
-        let mut statement=self.connection.prepare("SELECT operation_id,scope_id,entry_id,entry_version FROM runtime_memory_sources JOIN operations USING(operation_id) WHERE run_id=?")?;
-        let rows = statement
-            .query_map([&c.run_id], |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, String>(2)?,
-                    r.get::<_, i64>(3)?,
-                ))
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-        for (operation, scope, entry, version) in rows {
-            let op = self.operation_record(c, &operation)?;
-            self.intent_contract(c, &op)?;
+        for id in ids {
+            let op = self.operation_record(c, &id)?;
+            let rows = self.checked_memory_source_rows(c, &op)?;
             let cached = self.checked_cached_result(c, &op)?;
-            let grant = grants
-                .iter()
-                .find(|v| v.scope_id() == scope)
-                .ok_or(EngineError::Forbidden)?;
-            match &op.request {
-                AgentRequest::Memory(MemoryRequest::MemoryRead(args)) => {
-                    let current = self.memory_history_version(c, &scope, &entry, version)?;
-                    if current != version {
+            for (scope, entry, version) in rows {
+                let grant = grants
+                    .iter()
+                    .find(|v| v.scope_id() == scope)
+                    .ok_or(EngineError::Forbidden)?;
+                match &op.request {
+                    AgentRequest::Memory(MemoryRequest::MemoryRead(args)) => {
+                        let current = self.memory_history_version(c, &scope, &entry, version)?;
+                        if current != version {
+                            self.read_memory_for_agent(
+                                grant,
+                                &entry,
+                                Some(&current.to_string()),
+                                0,
+                                4096,
+                                false,
+                            )
+                            .map_err(error)?
+                            .view(self)
+                            .map_err(error)?;
+                            continue;
+                        }
+                        let receipt = self
+                            .read_memory_for_agent(
+                                grant,
+                                &entry,
+                                Some(&version.to_string()),
+                                args.start_byte.unwrap_or(0),
+                                args.max_bytes.unwrap_or(4096),
+                                false,
+                            )
+                            .map_err(error)?;
+                        if serde_json::json!({"kind":"memory_read","data":receipt.view(self).map_err(error)?})
+                            != cached
+                        {
+                            return Err(EngineError::RecoveryRequired);
+                        }
+                    }
+                    AgentRequest::Memory(MemoryRequest::MemoryReadV2(args)) => {
+                        let current = self.memory_history_version(c, &scope, &entry, version)?;
+                        let selection = args.entry();
+                        let receipt = self
+                            .read_memory_for_agent(
+                                grant,
+                                &entry,
+                                Some(&current.to_string()),
+                                selection.as_ref().and_then(|v| v.start_byte).unwrap_or(0),
+                                selection.as_ref().and_then(|v| v.max_bytes).unwrap_or(4096),
+                                false,
+                            )
+                            .map_err(error)?;
+                        let value = receipt.view(self).map_err(error)?;
+                        if current == version {
+                            discovery::check_current_projection(args, &cached, value)?;
+                        }
+                    }
+                    AgentRequest::Memory(MemoryRequest::MemoryWrite(_)) => {
+                        let current = self.memory_history_version(c, &scope, &entry, version)?;
                         self.read_memory_for_agent(
                             grant,
                             &entry,
@@ -729,52 +800,23 @@ impl Journal {
                         .map_err(error)?
                         .view(self)
                         .map_err(error)?;
-                        continue;
+                        let outcome: MemoryDraftOutcome =
+                            serde_json::from_value(cached["data"].clone())
+                                .map_err(|_| EngineError::RecoveryRequired)?;
+                        if outcome.entry_id != entry
+                            || outcome.result_version.as_deref()
+                                != Some(version.to_string().as_str())
+                            || self
+                                .memory_draft_outcome(grant, &outcome.draft_id)
+                                .map_err(error)?
+                                .as_ref()
+                                != Some(&outcome)
+                        {
+                            return Err(EngineError::RecoveryRequired);
+                        }
                     }
-                    let receipt = self
-                        .read_memory_for_agent(
-                            grant,
-                            &entry,
-                            Some(&version.to_string()),
-                            args.start_byte.unwrap_or(0),
-                            args.max_bytes.unwrap_or(4096),
-                            false,
-                        )
-                        .map_err(error)?;
-                    if serde_json::json!({"kind":"memory_read","data":receipt.view(self).map_err(error)?})
-                        != cached
-                    {
-                        return Err(EngineError::RecoveryRequired);
-                    }
+                    _ => return Err(EngineError::RecoveryRequired),
                 }
-                AgentRequest::Memory(MemoryRequest::MemoryWrite(_)) => {
-                    let current = self.memory_history_version(c, &scope, &entry, version)?;
-                    self.read_memory_for_agent(
-                        grant,
-                        &entry,
-                        Some(&current.to_string()),
-                        0,
-                        4096,
-                        false,
-                    )
-                    .map_err(error)?
-                    .view(self)
-                    .map_err(error)?;
-                    let outcome: MemoryDraftOutcome =
-                        serde_json::from_value(cached["data"].clone())
-                            .map_err(|_| EngineError::RecoveryRequired)?;
-                    if outcome.entry_id != entry
-                        || outcome.result_version.as_deref() != Some(version.to_string().as_str())
-                        || self
-                            .memory_draft_outcome(grant, &outcome.draft_id)
-                            .map_err(error)?
-                            .as_ref()
-                            != Some(&outcome)
-                    {
-                        return Err(EngineError::RecoveryRequired);
-                    }
-                }
-                _ => return Err(EngineError::RecoveryRequired),
             }
         }
         Ok(())

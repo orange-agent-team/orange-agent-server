@@ -9,9 +9,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         [flag] if flag == "--with-memory" => {
             orange_agent_runtime::catalog::ToolCatalog::builtin_memory(true, true, true, true)?
         }
+        [flag] if flag == "--with-memory-discovery" => {
+            orange_agent_runtime::catalog::ToolCatalog::builtin_memory_discovery(
+                true, true, true, true,
+            )?
+        }
         _ => {
             return Err(
-                "Expected no arguments, --with-editing or --with-memory for descriptor export only"
+                "Expected no arguments, --with-editing --with-memory or --with-memory-discovery for descriptor export only"
                     .into(),
             );
         }

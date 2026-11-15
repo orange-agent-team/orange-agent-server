@@ -92,7 +92,7 @@ impl Journal {
         authority: MemoryManagementAuthority<'_>,
         selection: MemoryReadSelection,
     ) -> Result<VerifiedMemoryRead, EngineError> {
-        if authority.workspaces.len() > 16 || authority.memories.len() > 16 {
+        if authority.workspaces.len() > 17 || authority.memories.len() > 23 {
             return Err(EngineError::Invalid);
         }
         let receipt = self
@@ -111,8 +111,9 @@ impl Journal {
             value.entry_id.clone(),
             value.version.clone(),
         );
-        let proof = tokio::time::timeout(
-            Duration::from_secs(10),
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        let proof = tokio::time::timeout_at(
+            deadline,
             self.verify_memory_provenance_scoped(
                 authority.sources(selection.include_disabled),
                 vec![MemorySource::Memory {
@@ -125,6 +126,9 @@ impl Journal {
         )
         .await
         .map_err(|_| EngineError::RecoveryRequired)??;
+        if tokio::time::Instant::now() >= deadline {
+            return Err(EngineError::RecoveryRequired);
+        }
         let result = VerifiedMemoryRead { receipt, proof };
         result.view(self)?;
         Ok(result)
@@ -138,8 +142,8 @@ impl Journal {
     ) -> Result<VerifiedMemoryPage, EngineError> {
         if !(1..=100).contains(&limit)
             || cursor.is_some_and(|v| !valid_id(v))
-            || authority.workspaces.len() > 16
-            || authority.memories.len() > 16
+            || authority.workspaces.len() > 17
+            || authority.memories.len() > 23
         {
             return Err(EngineError::Invalid);
         }
@@ -192,6 +196,9 @@ impl Journal {
         let mut scanned = 0;
         let mut cursor = None;
         for (id, version) in rows.iter().take(200) {
+            if tokio::time::Instant::now() >= deadline {
+                return Err(EngineError::RecoveryRequired);
+            }
             if entries.len() >= usize::from(limit) {
                 break;
             }
@@ -212,6 +219,9 @@ impl Journal {
             )
             .await
             .map_err(|_| EngineError::RecoveryRequired)?;
+            if tokio::time::Instant::now() >= deadline {
+                return Err(EngineError::RecoveryRequired);
+            }
             match read {
                 Ok(read) => {
                     let value = read.view(self)?;

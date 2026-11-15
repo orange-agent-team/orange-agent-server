@@ -205,7 +205,10 @@ impl Journal {
             true,
             stored.creation.is_some(),
             stored.editing.is_some(),
-            &stored.memories,
+            MemoryToolSelection {
+                bindings: &stored.memories,
+                version: stored.memory_read_version,
+            },
         )
         .validate()
         .map_err(|_| EngineError::Invalid)?;
