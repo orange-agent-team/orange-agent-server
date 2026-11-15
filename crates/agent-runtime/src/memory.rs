@@ -24,6 +24,8 @@ pub enum MemoryError {
     Denied,
     #[error("memory version or request conflicts")]
     Conflict,
+    #[error("memory source authorization required")]
+    SourceRequired,
     #[error("memory quota exceeded")]
     Limit,
     #[error("exact current user approval required")]
@@ -339,22 +341,51 @@ pub struct MemoryReadReceipt {
     include_disabled: bool,
 }
 impl MemoryReadReceipt {
-    pub fn view<'a>(&'a self, journal: &'a Journal) -> Result<&'a MemoryValue, MemoryError> {
-        check(
-            &journal.connection,
-            &self.grant,
-            false,
-            &journal.memory_session,
-        )?;
-        let current:bool=journal.connection.query_row("SELECT EXISTS(SELECT 1 FROM memory_entries WHERE scope_id=? AND entry_id=? AND version=? AND (state='active' OR (?=1 AND state='disabled')))",params![self.grant.scope,self.value.entry_id,version(&self.value.version)?,self.include_disabled],|r|r.get(0))?;
+    pub(crate) fn check_connection(
+        &self,
+        db: &Connection,
+        session: &str,
+        changed: Option<(&str, &str, i64)>,
+    ) -> Result<(), MemoryError> {
+        check(db, &self.grant, false, session)?;
+        if let Some((scope, entry, next)) = changed
+            && scope == self.grant.scope
+            && entry == self.value.entry_id
+            && version(&self.value.version)?.checked_add(1) == Some(next)
+        {
+            let valid:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM memory_entries WHERE scope_id=? AND entry_id=? AND version=?)",params![scope,entry,next],|r|r.get(0))?;
+            if valid {
+                return Ok(());
+            }
+        }
+        let current:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM memory_entries WHERE scope_id=? AND entry_id=? AND version=? AND (state='active' OR (?=1 AND state='disabled')))",params![self.grant.scope,self.value.entry_id,version(&self.value.version)?,self.include_disabled],|r|r.get(0))?;
         if !current {
             return Err(MemoryError::Conflict);
         }
+        Ok(())
+    }
+    pub fn view<'a>(&'a self, journal: &'a Journal) -> Result<&'a MemoryValue, MemoryError> {
+        self.check_connection(&journal.connection, &journal.memory_session, None)?;
         Ok(&self.value)
     }
 }
+
 impl Journal {
     pub fn read_memory(
+        &self,
+        grant: &MemoryGrant,
+        id: &str,
+        expected: Option<&str>,
+        start: u32,
+        limit: u32,
+        include_disabled: bool,
+    ) -> Result<MemoryReadReceipt, MemoryError> {
+        let receipt =
+            self.read_memory_for_agent(grant, id, expected, start, limit, include_disabled)?;
+        self.require_source_free_memory(&grant.scope, id, &receipt.value.version)?;
+        Ok(receipt)
+    }
+    pub(crate) fn read_memory_for_agent(
         &self,
         grant: &MemoryGrant,
         id: &str,
@@ -509,6 +540,9 @@ impl Journal {
                 content_bytes: payload.content.len().to_string(),
             });
         }
+        for entry in &entries {
+            self.require_source_free_memory(&grant.scope, &entry.entry_id, &entry.version)?;
+        }
         let next_cursor = if more {
             entries.last().map(|v| v.entry_id.clone())
         } else {
@@ -597,4 +631,90 @@ pub(crate) fn check_execution_grants(
         check(db, grant, grant.write, session)?;
     }
     Ok(())
+}
+
+impl Journal {
+    fn require_source_free_memory(
+        &self,
+        scope: &str,
+        entry: &str,
+        version: &str,
+    ) -> Result<(), MemoryError> {
+        let (origin,run):(String,String)=self.connection.query_row("SELECT origin,source_run FROM memory_entries WHERE scope_id=? AND entry_id=? AND version=?",params![scope,entry,version],|r|Ok((r.get(0)?,r.get(1)?)))?;
+        if origin == "user_declaration" {
+            return Ok(());
+        }
+        type Row = (String, String, String, String, String, String);
+        let row:Option<Row>=self.connection.query_row("SELECT l.body,l.digest,i.request_digest,m.operation_id,i.request,o.run_id FROM memory_drafts d JOIN runtime_memory_operations m USING(draft_id) JOIN runtime_memory_lineage l USING(operation_id) JOIN operations o USING(operation_id) JOIN runtime_invocations i USING(invocation) WHERE d.scope_id=? AND d.entry_id=? AND d.result_version=? AND d.state='approved'",params![scope,entry,version],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?))).optional()?;
+        if let Some((body, sha, invocation, operation, request, run)) = row {
+            if body.len() > 64 * 1024 {
+                return Err(MemoryError::Limit);
+            }
+            let graph: serde_json::Value =
+                serde_json::from_str(&body).map_err(|_| MemoryError::Invalid)?;
+            if digest("memory-provenance.v1", &graph)? != sha
+                || graph.as_object().is_none_or(|o| o.len() != 3)
+                || graph["operation_id"] != operation
+                || graph["invocation_digest"] != invocation
+            {
+                return Err(MemoryError::Invalid);
+            }
+            if graph["sources"].as_array().is_some_and(Vec::is_empty) {
+                if request.len() > 2 * 1024 * 1024 {
+                    return Err(MemoryError::Limit);
+                }
+                let request: orange_protocol::model::GenerateRequest =
+                    serde_json::from_str(&request).map_err(|_| MemoryError::Invalid)?;
+                if digest("model-request-v1", &request)? != invocation {
+                    return Err(MemoryError::Invalid);
+                }
+                for message in request
+                    .messages
+                    .iter()
+                    .filter(|v| v.role == orange_protocol::model::Role::Tool)
+                {
+                    let call = message
+                        .tool_call_id
+                        .as_deref()
+                        .ok_or(MemoryError::Invalid)?;
+                    let row:Option<(String,Option<String>,String)>=self.connection.query_row("SELECT state,model_result,request_json FROM operations WHERE run_id=? AND call_id=?",params![run,call],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
+                    if let Some((state, result, request)) = row {
+                        if result.as_deref() != Some(&message.content) {
+                            return Err(MemoryError::Invalid);
+                        }
+                        let data: serde_json::Value = serde_json::from_str(&message.content)
+                            .map_err(|_| MemoryError::Invalid)?;
+                        let request: serde_json::Value =
+                            serde_json::from_str(&request).map_err(|_| MemoryError::Invalid)?;
+                        let no_data = state == "failed"
+                            && data.as_object().is_some_and(|o| {
+                                o.len() == 1
+                                    && o.get("error").is_some_and(serde_json::Value::is_string)
+                            });
+                        let deletion = state == "succeeded"
+                            && request["tool"] == "memory_write"
+                            && request["arguments"]["mutation"] == "delete";
+                        if !no_data && !deletion {
+                            return Err(MemoryError::SourceRequired);
+                        }
+                    } else {
+                        let answers:Option<String>=self.connection.query_row("SELECT answers FROM runtime_questions WHERE run_id=? AND call_id=? AND state='answered'",params![run,call],|r|r.get(0)).optional()?;
+                        let answers: Vec<String> =
+                            serde_json::from_str(&answers.ok_or(MemoryError::SourceRequired)?)
+                                .map_err(|_| MemoryError::Invalid)?;
+                        if encoded(&serde_json::json!({"answers":answers}))? != message.content {
+                            return Err(MemoryError::Invalid);
+                        }
+                    }
+                }
+                return Ok(());
+            }
+        } else {
+            let derived:bool=self.connection.query_row("SELECT EXISTS(SELECT 1 FROM runtime_runs WHERE run_id=?1 UNION SELECT 1 FROM operations WHERE run_id=?1)",[run],|r|r.get(0))?;
+            if !derived {
+                return Ok(());
+            }
+        }
+        Err(MemoryError::SourceRequired)
+    }
 }

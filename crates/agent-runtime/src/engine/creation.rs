@@ -23,6 +23,8 @@ pub struct AgentAuthority<'a> {
     pub(super) create: Option<&'a CreateFileGrant>,
     pub(super) edit: editing::EditAuthority<'a>,
     pub(super) memories: &'a [crate::memory::MemoryGrant],
+    pub(super) source_workspaces: &'a [WorkspaceGrant],
+    pub(super) source_memories: &'a [crate::memory::MemoryGrant],
 }
 pub(super) type Authority<'a> = AgentAuthority<'a>;
 impl<'a> AgentAuthority<'a> {
@@ -32,7 +34,17 @@ impl<'a> AgentAuthority<'a> {
             create: None,
             edit: editing::EditAuthority::none(),
             memories: &[],
+            source_workspaces: &[],
+            source_memories: &[],
         }
+    }
+    pub fn with_source_workspaces(mut self, grants: &'a [WorkspaceGrant]) -> Self {
+        self.source_workspaces = grants;
+        self
+    }
+    pub fn with_source_memories(mut self, grants: &'a [crate::memory::MemoryGrant]) -> Self {
+        self.source_memories = grants;
+        self
     }
     pub fn with_creation(mut self, create: &'a CreateFileGrant) -> Self {
         self.create = Some(create);
@@ -149,6 +161,8 @@ impl Journal {
                 create: Some(create),
                 edit: editing::EditAuthority::none(),
                 memories: &[],
+                source_workspaces: &[],
+                source_memories: &[],
             },
             gateway,
             cancel,

@@ -1,8 +1,11 @@
+mod lineage;
 use super::*;
 use crate::memory::{
     MemoryCapability, MemoryDraftOutcome, MemoryError, MemoryGrant, MemoryOrigin, MemoryReview,
     MemoryWriteRequest, tools::MemoryRequest,
 };
+pub(in crate::engine) use lineage::SourceProof;
+pub use lineage::{MemoryProvenance, MemorySource};
 pub struct AgentMemoryApproval<'a> {
     pub operation_id: &'a str,
     pub preview_digest: &'a str,
@@ -13,15 +16,25 @@ pub struct AgentMemoryPreview {
     pub operation_id: String,
     pub argument_digest: String,
     pub review: MemoryReview,
+    pub approval_digest: String,
+    pub provenance: MemoryProvenance,
 }
 pub(super) fn error(e: MemoryError) -> EngineError {
     match e {
         MemoryError::Denied => EngineError::Forbidden,
         MemoryError::ApprovalRequired => EngineError::ApprovalRequired,
         MemoryError::Conflict => EngineError::RecoveryRequired,
+        MemoryError::SourceRequired => EngineError::ExecutionEnvironmentUnavailable,
         MemoryError::Storage(e) => EngineError::Storage(e),
         MemoryError::Journal(e) => EngineError::Journal(e),
         _ => EngineError::Invalid,
+    }
+}
+pub(in crate::engine) async fn wait_authority_revoked(authority: AgentAuthority<'_>) {
+    tokio::select! {
+        _=wait_revoked(authority.memories)=>{},
+        _=wait_revoked(authority.source_memories)=>{},
+        _=async {loop {if authority.read.is_revoked()||authority.source_workspaces.iter().any(|g|g.is_revoked()){break;}tokio::time::sleep(Duration::from_millis(25)).await;}}=>{},
     }
 }
 pub(super) async fn wait_revoked(grants: &[MemoryGrant]) {
@@ -39,17 +52,6 @@ pub(super) async fn wait_revoked(grants: &[MemoryGrant]) {
     waits.join_next().await;
 }
 impl Journal {
-    // Until the cross-workspace/knowledge provenance graph is connected, this
-    // candidate cannot learn from such tool outputs. Do not expose it as full
-    // TK16/17 support or silently copy data out of those permission domains.
-    fn require_independent_memory_source(&self, run: &str) -> Result<(), EngineError> {
-        let dependent:bool=self.connection.query_row("SELECT EXISTS(SELECT 1 FROM operations WHERE run_id=? AND state='succeeded' AND request_json IS NOT NULL AND json_extract(request_json,'$.tool') NOT IN('memory_read','memory_write'))",[run],|r|r.get(0))?;
-        if dependent {
-            return Err(EngineError::ExecutionEnvironmentUnavailable);
-        }
-        Ok(())
-    }
-
     pub fn agent_memory_requirements(
         &self,
         owner: &str,
@@ -149,7 +151,7 @@ impl Journal {
     ) -> Result<RunView, EngineError> {
         self.advance_agent_mode(owner, run, authority, gateway, cancel)
             .await?;
-        self.agent_view_with_memory(owner, run, authority.read, authority.memories)
+        self.agent_view_authorized_scopes(owner, run, authority)
             .await
     }
     pub async fn agent_memory_preview(
@@ -172,16 +174,19 @@ impl Journal {
         };
         self.intent_contract(&stored.config, &op)?;
         let _leases = self
-            .revalidate_sources_with_memory(&stored.config, authority.read, authority.memories)
+            .revalidate_sources_authority(&stored.config, authority)
             .await?;
         let entry: String = self.connection.query_row(
             "SELECT entry_id FROM runtime_memory_operations WHERE operation_id=? AND scope_id=?",
             params![op.id, args.scope_id],
             |r| r.get(0),
         )?;
-        self.require_independent_memory_source(run)?;
+        let provenance = self.bind_memory_provenance(&stored.config, &op)?;
+        let proof = self
+            .verify_memory_provenance(&stored.config, authority, provenance.sources.clone(), None)
+            .await?;
         let prepared = self
-            .prepare_memory_write(
+            .prepare_memory_write_for_agent(
                 grant,
                 &op.id,
                 MemoryWriteRequest {
@@ -195,12 +200,15 @@ impl Journal {
             )
             .map_err(error)?;
         let review = prepared.view(self).map_err(error)?.clone();
-        if self.connection.execute("UPDATE runtime_memory_operations SET draft_id=? WHERE operation_id=? AND (draft_id IS NULL OR draft_id=?)",params![review.draft_id,op.id,review.draft_id])?!=1{return Err(EngineError::RecoveryRequired);}
         prepared.view(self).map_err(error)?;
+        proof.check(self)?;
+        let approval_digest = self.memory_preview_digest(&op, &review, &provenance)?;
         Ok(AgentMemoryPreview {
             operation_id: op.id,
             argument_digest: op.digest,
             review,
+            approval_digest,
+            provenance,
         })
     }
     pub async fn approve_agent_memory(
@@ -225,7 +233,7 @@ impl Journal {
             .ok_or(EngineError::ApprovalRequired)?;
         let grant = self.memory_grant_for(&stored, &op, authority.memories)?;
         let _leases = self
-            .revalidate_sources_with_memory(&stored.config, authority.read, authority.memories)
+            .revalidate_sources_authority(&stored.config, authority)
             .await?;
         let (_, pin) = self.intent_contract(&stored.config, &op)?;
         let expected = match &op.request {
@@ -236,19 +244,59 @@ impl Journal {
                     [&op.id],
                     |r| r.get(0),
                 )?;
-                let prepared = self.review_memory_draft(grant, &id).map_err(error)?;
-                prepared.view(self).map_err(error)?.digest.clone()
+                let prepared = self
+                    .review_memory_draft_for_agent(grant, &id)
+                    .map_err(error)?;
+                let review = prepared.view(self).map_err(error)?;
+                let graph = self.memory_provenance(&stored.config, &op)?;
+                self.memory_preview_digest(&op, review, &graph)?
             }
             _ => return Err(EngineError::Forbidden),
         };
         if expected != approval.preview_digest {
             return Err(EngineError::ApprovalRequired);
         }
+        let source_proof = if matches!(
+            op.request,
+            AgentRequest::Memory(MemoryRequest::MemoryWrite(_))
+        ) {
+            let graph = self.memory_provenance(&stored.config, &op)?;
+            Some(
+                self.verify_memory_provenance(&stored.config, authority, graph.sources, None)
+                    .await?,
+            )
+        } else {
+            None
+        };
+        let core_digest = if matches!(
+            op.request,
+            AgentRequest::Memory(MemoryRequest::MemoryWrite(_))
+        ) {
+            let id: String = self.connection.query_row(
+                "SELECT draft_id FROM runtime_memory_operations WHERE operation_id=?",
+                [&op.id],
+                |r| r.get(0),
+            )?;
+            self.review_memory_draft_for_agent(grant, &id)
+                .map_err(error)?
+                .view(self)
+                .map_err(error)?
+                .digest
+                .clone()
+        } else {
+            expected.clone()
+        };
         let tx =
             rusqlite::Transaction::new_unchecked(&self.connection, TransactionBehavior::Immediate)?;
         self.approve(&op.operation(&stored.config), owner, approval.expires_at)?;
         self.record_tool_approval_pin(&op, &pin)?;
-        if self.connection.execute("UPDATE runtime_memory_operations SET approval_digest=? WHERE operation_id=? AND (approval_digest IS NULL OR approval_digest=?)",params![expected,op.id,expected])?!=1{return Err(EngineError::ApprovalRequired);}
+        if self.connection.execute("UPDATE runtime_memory_operations SET approval_digest=? WHERE operation_id=? AND (approval_digest IS NULL OR approval_digest=?)",params![core_digest,op.id,core_digest])?!=1{return Err(EngineError::ApprovalRequired);}
+        if let Some(proof) = source_proof {
+            proof.check(self)?;
+            if tx.execute("UPDATE runtime_memory_lineage SET approval_digest=? WHERE operation_id=? AND approval_digest IS NULL",params![expected,op.id])?!=1 {
+                let old:String=tx.query_row("SELECT approval_digest FROM runtime_memory_lineage WHERE operation_id=?",[&op.id],|r|r.get(0))?;if old!=expected{return Err(EngineError::ApprovalRequired);}
+            }
+        }
         self.memory_grant_for(&stored, &op, authority.memories)?;
         tx.commit()?;
         Ok(())
@@ -262,9 +310,7 @@ impl Journal {
     ) -> Result<(), EngineError> {
         let c = &stored.config;
         let grant = self.memory_grant_for(stored, op, authority.memories)?;
-        let _leases = self
-            .revalidate_sources_with_memory(c, authority.read, authority.memories)
-            .await?;
+        let _leases = self.revalidate_sources_authority(c, authority).await?;
         if *cancel.borrow() || cancel.has_changed().is_err() || grant.is_revoked() {
             return Err(EngineError::Forbidden);
         }
@@ -277,23 +323,81 @@ impl Journal {
             AgentRequest::Memory(v) => v,
             _ => return Err(EngineError::Invalid),
         };
+        let mut provenance_proof = SourceProof::default();
         let prepared = if matches!(request, MemoryRequest::MemoryWrite(_)) {
             let draft: String = self.connection.query_row(
                 "SELECT draft_id FROM runtime_memory_operations WHERE operation_id=?",
                 [&op.id],
                 |r| r.get(0),
             )?;
-            let value = self.review_memory_draft(grant, &draft).map_err(error)?;
+            let value = self
+                .review_memory_draft_for_agent(grant, &draft)
+                .map_err(error)?;
             if value.view(self).map_err(error)?.digest != approved {
                 return Err(EngineError::ApprovalRequired);
             }
+            let graph = self.memory_provenance(c, op)?;
+            let expected =
+                self.memory_preview_digest(op, value.view(self).map_err(error)?, &graph)?;
+            let approved_graph: Option<String> = self
+                .connection
+                .query_row(
+                    "SELECT approval_digest FROM runtime_memory_lineage WHERE operation_id=?",
+                    [&op.id],
+                    |r| r.get(0),
+                )
+                .optional()?
+                .flatten();
+            if approved_graph.as_deref() != Some(&expected) {
+                return Err(EngineError::ApprovalRequired);
+            }
+            provenance_proof = self
+                .verify_memory_provenance(c, authority, graph.sources, None)
+                .await?;
             Some(value)
         } else {
             if approved != op.digest {
                 return Err(EngineError::ApprovalRequired);
             }
+            if let MemoryRequest::MemoryRead(args) = request {
+                // Lookup and version/ACL validation happens under the already
+                // recorded user read approval, before model-visible content.
+                let receipt = self.read_memory_for_agent(
+                    grant,
+                    &args.entry_id,
+                    args.expected_version.as_deref(),
+                    args.start_byte.unwrap_or(0),
+                    args.max_bytes.unwrap_or(4096),
+                    false,
+                );
+                if let Ok(receipt) = receipt {
+                    let v = receipt.view(self).map_err(error)?;
+                    provenance_proof = self
+                        .verify_memory_fact(
+                            c,
+                            authority,
+                            &args.scope_id,
+                            &args.entry_id,
+                            &v.version,
+                        )
+                        .await?;
+                }
+            }
             None
         };
+        provenance_proof.check(self)?;
+        let changed = match request {
+            MemoryRequest::MemoryWrite(v) => v
+                .expected_version
+                .as_deref()
+                .map(|s| s.parse::<i64>().map_err(|_| EngineError::Invalid))
+                .transpose()?
+                .and_then(|n| n.checked_add(1))
+                .zip(v.entry_id.as_deref())
+                .map(|(n, id)| (v.scope_id.as_str(), id, n)),
+            _ => None,
+        };
+        let journal_session = self.memory_session.clone();
         self.claim(&op.operation(c), now()?)?;
         self.connection.execute(
             "UPDATE runtime_runs SET steps=steps+1 WHERE run_id=?",
@@ -302,7 +406,7 @@ impl Journal {
         let result: Result<(serde_json::Value, Option<(String, String)>), EngineError> =
             match request {
                 MemoryRequest::MemoryRead(args) => self
-                    .read_memory(
+                    .read_memory_for_agent(
                         grant,
                         &args.entry_id,
                         args.expected_version.as_deref(),
@@ -313,9 +417,6 @@ impl Journal {
                     .map_err(error)
                     .and_then(|receipt| {
                         let value = receipt.view(self).map_err(error)?.clone();
-                        if value.origin == MemoryOrigin::ModelInference {
-                            self.require_independent_memory_source(&value.source_run)?;
-                        }
 
                         let source = (value.entry_id.clone(), value.version.clone());
                         Ok((
@@ -326,6 +427,7 @@ impl Journal {
                 MemoryRequest::MemoryWrite(args) => self
                     .approve_memory_write_checked(prepared.ok_or(EngineError::Invalid)?, &approved,|db|{
                         let time=now().map_err(|_|MemoryError::Invalid)?;
+                        provenance_proof.check_db(db,&journal_session,changed).map_err(|_|MemoryError::Denied)?;
                         if time>=c.deadline_unix||*cancel.borrow()||cancel.has_changed().is_err()||authority.read.is_revoked(){return Err(MemoryError::Denied);}
                         let allowed:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM operations o JOIN approvals a USING(operation_id) JOIN runs r USING(run_id) WHERE o.operation_id=? AND o.owner=? AND o.run_id=? AND o.environment=? AND o.policy=? AND o.state='dispatching' AND r.active=1 AND a.argument_digest=o.argument_digest AND a.environment=o.environment AND a.policy=o.policy AND a.expires_at>?)",params![op.id,c.owner,c.run_id,op.environment,c.policy,time],|r|r.get(0))?;
                         if !allowed{return Err(MemoryError::ApprovalRequired);}Ok(())
@@ -402,7 +504,7 @@ impl Journal {
                 "INSERT INTO runtime_memory_sources VALUES(?,?,?,?)",
                 params![op.id, request.scope(), id, version],
             )?;
-            self.read_memory(
+            self.read_memory_for_agent(
                 grant,
                 &id,
                 Some(&version),
@@ -420,6 +522,7 @@ impl Journal {
             params![c.run_id, op.id],
         )?;
         self.memory_grant_for(stored, op, authority.memories)?;
+        provenance_proof.check_after(self, changed)?;
         if *cancel.borrow() {
             return Err(EngineError::Forbidden);
         }
@@ -475,7 +578,7 @@ impl Journal {
             match &op.request {
                 AgentRequest::Memory(MemoryRequest::MemoryRead(args)) => {
                     let receipt = self
-                        .read_memory(
+                        .read_memory_for_agent(
                             grant,
                             &entry,
                             Some(&version.to_string()),
@@ -484,11 +587,6 @@ impl Journal {
                             false,
                         )
                         .map_err(error)?;
-                    if receipt.view(self).map_err(error)?.origin == MemoryOrigin::ModelInference {
-                        self.require_independent_memory_source(
-                            &receipt.view(self).map_err(error)?.source_run,
-                        )?;
-                    }
                     if serde_json::json!({"kind":"memory_read","data":receipt.view(self).map_err(error)?})
                         != cached
                     {
@@ -496,10 +594,17 @@ impl Journal {
                     }
                 }
                 AgentRequest::Memory(MemoryRequest::MemoryWrite(_)) => {
-                    self.read_memory(grant, &entry, Some(&version.to_string()), 0, 4096, false)
-                        .map_err(error)?
-                        .view(self)
-                        .map_err(error)?;
+                    self.read_memory_for_agent(
+                        grant,
+                        &entry,
+                        Some(&version.to_string()),
+                        0,
+                        4096,
+                        false,
+                    )
+                    .map_err(error)?
+                    .view(self)
+                    .map_err(error)?;
                     let outcome: MemoryDraftOutcome =
                         serde_json::from_value(cached["data"].clone())
                             .map_err(|_| EngineError::RecoveryRequired)?;
@@ -609,7 +714,7 @@ impl Journal {
                 && args.mutation == crate::memory::MemoryMutation::Put
             {
                 let grant = self.memory_grant_for(&stored, &op, authority.memories)?;
-                self.read_memory(
+                self.read_memory_for_agent(
                     grant,
                     &entry,
                     outcome.result_version.as_deref(),
@@ -621,9 +726,7 @@ impl Journal {
                 .view(self)
                 .map_err(error)?;
             }
-            let _leases = self
-                .revalidate_sources_with_memory(c, authority.read, authority.memories)
-                .await?;
+            let _leases = self.revalidate_sources_authority(c, authority).await?;
         }
         let value = if applied {
             serde_json::json!({"kind":"memory_write","data":outcome})
@@ -686,8 +789,7 @@ impl Journal {
             if now()? >= c.deadline_unix {
                 self.stop_agent(run, "limited", "deadline_after_memory_reconciliation")?;
             }
-            self.agent_view_with_memory(owner, run, auth.read, auth.memories)
-                .await
+            self.agent_view_authorized_scopes(owner, run, auth).await
         } else {
             self.cancel_agent_run(owner, run)
         }

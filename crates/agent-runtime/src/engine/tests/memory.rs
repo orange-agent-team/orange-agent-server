@@ -85,9 +85,14 @@ async fn agent_memory_requires_committed_intent_exact_approval_and_revalidates_d
             .parameters["properties"]["scope_id"]["enum"],
         json!(["personal"])
     );
+    assert!(
+        j.review_memory_draft(&grants[0], &preview.review.draft_id)
+            .is_err(),
+        "Runtime review requires source-aware authorization"
+    );
     let direct = j
-        .review_memory_draft(&grants[0], &preview.review.draft_id)
-        .expect("management may inspect own draft");
+        .review_memory_draft_for_agent(&grants[0], &preview.review.draft_id)
+        .expect("internal reviewed draft");
     assert!(
         j.approve_memory_write(direct, &preview.review.digest)
             .is_err(),
@@ -112,7 +117,7 @@ async fn agent_memory_requires_committed_intent_exact_approval_and_revalidates_d
         "run-1",
         AgentMemoryApproval {
             operation_id: &op.operation_id,
-            preview_digest: &preview.review.digest,
+            preview_digest: &preview.approval_digest,
             expires_at: now().expect("time") + 60,
         },
         authority,
@@ -418,7 +423,7 @@ async fn late_approval_loss_rolls_back_memory_fact_and_never_replays_unknown_ope
         "run-1",
         AgentMemoryApproval {
             operation_id: &op.operation_id,
-            preview_digest: &preview.review.digest,
+            preview_digest: &preview.approval_digest,
             expires_at: now().expect("time") + 60,
         },
         authority,
@@ -660,7 +665,7 @@ async fn ambiguous_memory_effect_is_quarantined_and_requires_exact_explicit_reso
             "run-1",
             AgentMemoryApproval {
                 operation_id: &op,
-                preview_digest: &preview.review.digest,
+                preview_digest: &preview.approval_digest,
                 expires_at: now().expect("time") + 60,
             },
             auth,
@@ -784,7 +789,7 @@ async fn confirmed_memory_effect_can_be_finished_without_restoring_scope_or_work
         "run-1",
         AgentMemoryApproval {
             operation_id: &op,
-            preview_digest: &preview.review.digest,
+            preview_digest: &preview.approval_digest,
             expires_at: now().expect("time") + 60,
         },
         auth,

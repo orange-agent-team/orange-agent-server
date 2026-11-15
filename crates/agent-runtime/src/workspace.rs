@@ -246,6 +246,9 @@ pub struct PreparedTool {
     request: WorkspaceRequest,
 }
 impl ToolReceipt {
+    pub(crate) fn is_authorized(&self) -> bool {
+        !self._permit.inner.is_revoked()
+    }
     pub fn result(&self) -> &WorkspaceResult {
         &self.result
     }

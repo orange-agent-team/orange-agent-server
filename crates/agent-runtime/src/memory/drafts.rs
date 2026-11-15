@@ -142,6 +142,31 @@ impl Journal {
         key: &str,
         request: MemoryWriteRequest,
     ) -> Result<PreparedMemoryDraft, MemoryError> {
+        let runtime: bool = self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM runtime_runs WHERE run_id=?)",
+            [&request.source_run],
+            |r| r.get(0),
+        )?;
+        if runtime {
+            return Err(MemoryError::SourceRequired);
+        }
+        self.prepare_memory_write_bound(grant, key, request, None)
+    }
+    pub(crate) fn prepare_memory_write_for_agent(
+        &mut self,
+        grant: &MemoryGrant,
+        key: &str,
+        request: MemoryWriteRequest,
+    ) -> Result<PreparedMemoryDraft, MemoryError> {
+        self.prepare_memory_write_bound(grant, key, request, Some(key))
+    }
+    fn prepare_memory_write_bound(
+        &mut self,
+        grant: &MemoryGrant,
+        key: &str,
+        request: MemoryWriteRequest,
+        operation: Option<&str>,
+    ) -> Result<PreparedMemoryDraft, MemoryError> {
         if !valid_id(key) {
             return Err(MemoryError::Invalid);
         }
@@ -168,6 +193,26 @@ impl Journal {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let Some(op) = operation {
+            let raw:Option<String>=tx.query_row("SELECT o.request_json FROM operations o JOIN runtime_memory_operations m USING(operation_id) JOIN runtime_memory_lineage l USING(operation_id) JOIN runtime_invocations i USING(invocation) WHERE o.operation_id=? AND o.owner=? AND o.run_id=? AND o.state='intended' AND m.scope_id=? AND m.entry_id=? AND i.state='committed'",params![op,grant.actor,request.source_run,grant.scope,request.entry_id],|r|r.get(0)).optional()?;
+            let parsed: crate::agent_request::AgentRequest =
+                serde_json::from_str(&raw.ok_or(MemoryError::Denied)?)
+                    .map_err(|_| MemoryError::Invalid)?;
+            let crate::agent_request::AgentRequest::Memory(
+                super::tools::MemoryRequest::MemoryWrite(args),
+            ) = parsed
+            else {
+                return Err(MemoryError::Denied);
+            };
+            if args.scope_id != grant.scope
+                || args.expected_version != request.expected_version
+                || args.mutation != request.mutation
+                || args.payload != request.payload
+                || request.origin != MemoryOrigin::ModelInference
+            {
+                return Err(MemoryError::Denied);
+            }
+        }
         // Expired payloads are scrubbed; hashes and source metadata remain auditable.
         tx.execute("UPDATE memory_drafts SET state='invalidated',payload=NULL WHERE scope_id=? AND state='pending' AND CAST(json_extract(body,'$.expires_at') AS INTEGER)<=?",params![grant.scope,now()?])?;
         type Prior = (String, String, String, String, Option<String>);
@@ -195,6 +240,9 @@ impl Journal {
             tx.execute("INSERT INTO memory_audit(scope_id,actor,action,entry_id,revision,digest) VALUES(?,?,'draft_prepared',?,?,?)",params![grant.scope,grant.actor,record.entry_id,grant.revision,digest("memory-draft.v1",&record)?])?;
             id
         };
+        if let Some(op) = operation
+            && tx.execute("UPDATE runtime_memory_operations SET draft_id=? WHERE operation_id=? AND (draft_id IS NULL OR draft_id=?)",params![id,op,id])?!=1
+        {return Err(MemoryError::Conflict);}
         validate(&tx, grant, &record, &self.memory_session)?;
         tx.commit()?;
         let review = MemoryReview {
@@ -405,6 +453,21 @@ impl Journal {
     /// Fresh management review of a persisted draft; does not restore an old
     /// process grant, grant approval, refresh expiry or change the original hash.
     pub fn review_memory_draft(
+        &self,
+        grant: &MemoryGrant,
+        id: &str,
+    ) -> Result<PreparedMemoryDraft, MemoryError> {
+        let runtime: bool = self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM runtime_memory_operations WHERE draft_id=?)",
+            [id],
+            |r| r.get(0),
+        )?;
+        if runtime {
+            return Err(MemoryError::SourceRequired);
+        }
+        self.review_memory_draft_for_agent(grant, id)
+    }
+    pub(crate) fn review_memory_draft_for_agent(
         &self,
         grant: &MemoryGrant,
         id: &str,

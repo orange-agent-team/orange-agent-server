@@ -3,7 +3,9 @@
 //! implementations are injected by the application; no paid fallback is provided.
 mod contracts;
 mod memory;
-pub use memory::{AgentMemoryApproval, AgentMemoryPreview, MemoryRecovery};
+pub use memory::{
+    AgentMemoryApproval, AgentMemoryPreview, MemoryProvenance, MemoryRecovery, MemorySource,
+};
 mod creation;
 mod editing;
 pub use editing::EditRequirement;
@@ -228,6 +230,7 @@ impl Journal {
             return Err(EngineError::Invalid);
         }
         check_grant(config, grant)?;
+        self.check_registered_run_root(config, grant)?;
         let creation_binding = if let Some(cap) = creation {
             self.check_creation_permission(cap)
                 .map_err(creation::error)?;
@@ -351,6 +354,28 @@ impl Journal {
         if let Some(binding) = &edit_binding {
             tx.execute("INSERT INTO runtime_edit_capabilities(run_id,consent_id,consent_version,environment) VALUES(?,?,?,?)",params![config.run_id,binding.consent_id,binding.version,binding.environment])?;
         }
+        let consent = registered.as_ref().map(|(id, _)| id.clone());
+        let consent_version: Option<i64> = if let Some(id) = &consent {
+            Some(tx.query_row(
+                "SELECT version FROM local_workspaces WHERE workspace_id=?",
+                [id],
+                |r| r.get(0),
+            )?)
+        } else {
+            None
+        };
+        tx.execute(
+            "INSERT INTO runtime_workspace_roots VALUES(?,?,?,?,?,?,?)",
+            params![
+                config.run_id,
+                config.owner,
+                config.environment,
+                config.policy,
+                grant.resource_identity(),
+                consent,
+                consent_version
+            ],
+        )?;
         if let Some((workspace, _)) = registered {
             tx.execute(
                 "INSERT INTO run_workspaces(run_id,workspace_id) VALUES(?,?)",
@@ -363,6 +388,22 @@ impl Journal {
         )?;
         tx.commit()?;
         self.agent_view(&config.owner, &config.run_id)
+    }
+    fn check_registered_run_root(
+        &self,
+        c: &RunConfig,
+        grant: &WorkspaceGrant,
+    ) -> Result<(), EngineError> {
+        let value:Option<(String,String,String,String)>=self.connection.query_row("SELECT owner,environment,policy,resource FROM runtime_workspace_roots WHERE run_id=?",[&c.run_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional()?;
+        if value.is_some_and(|(owner, environment, policy, resource)| {
+            owner != c.owner
+                || environment != c.environment
+                || policy != c.policy
+                || resource != grant.resource_identity()
+        }) {
+            return Err(EngineError::Forbidden);
+        }
+        Ok(())
     }
     fn stored_run(&self, owner: &str, run: &str) -> Result<StoredRun, EngineError> {
         let row:Option<StoredRunRow>=self.connection.query_row("SELECT config,messages,phase,invocations,steps,active_invocation,COALESCE((SELECT user_questions FROM runtime_capabilities c WHERE c.run_id=runtime_runs.run_id),0) FROM runtime_runs JOIN runs USING(run_id) WHERE run_id=? AND owner=?",params![run,owner],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?))).optional()?;
@@ -490,13 +531,29 @@ impl Journal {
         grant: &WorkspaceGrant,
         memories: &[crate::memory::MemoryGrant],
     ) -> Result<RunView, EngineError> {
+        self.agent_view_authorized_scopes(
+            owner,
+            run,
+            AgentAuthority::read(grant).with_memory(memories),
+        )
+        .await
+    }
+    pub async fn agent_view_authorized_scopes(
+        &self,
+        owner: &str,
+        run: &str,
+        authority: AgentAuthority<'_>,
+    ) -> Result<RunView, EngineError> {
+        let grant = authority.read;
+        let memories = authority.memories;
         let stored = self.stored_run(owner, run)?;
         check_grant(&stored.config, grant)?;
+        self.check_registered_run_root(&stored.config, grant)?;
         self.check_memory_bindings(&stored, memories)?;
         let view = self.agent_view_internal(owner, run)?;
         if view.final_text.is_some() || !view.pending.is_empty() || view.user_question.is_some() {
             let _leases = self
-                .revalidate_sources_with_memory(&stored.config, grant, memories)
+                .revalidate_sources_authority(&stored.config, authority)
                 .await?;
             for op in self
                 .pending_operations(run)?
@@ -655,6 +712,8 @@ impl Journal {
                 create: None,
                 edit: editing::EditAuthority::none(),
                 memories: &[],
+                source_workspaces: &[],
+                source_memories: &[],
             },
             gateway,
             cancellation,
@@ -671,6 +730,7 @@ impl Journal {
     ) -> Result<RunView, EngineError> {
         let grant = authority.read;
         let stored = self.stored_run(owner, run)?;
+        self.check_registered_run_root(&stored.config, grant)?;
         if !matches!(
             stored.phase.as_str(),
             "ready" | "model_pending" | "tools_pending" | "awaiting_user"
@@ -724,8 +784,8 @@ impl Journal {
         // remain held through model submission; changed/deleted sources fail closed.
         let lineage = tokio::select! {
             _=cancellation.changed()=>{return self.cancel_agent(owner,run,grant);}
-            _=memory::wait_revoked(authority.memories)=>{self.stop_agent(run,"recovery_required","memory_permission_revoked")?;return self.agent_view(owner,run);}
-            result=tokio::time::timeout(Duration::from_secs(stored.config.deadline_unix.saturating_sub(now()?).max(0) as u64),self.revalidate_sources_with_memory(&stored.config,grant,authority.memories))=>result.unwrap_or(Err(EngineError::RecoveryRequired)),
+            _=memory::wait_authority_revoked(authority)=>{if authority.read.is_revoked(){return self.cancel_agent(owner,run,grant);}self.stop_agent(run,"recovery_required","memory_permission_revoked")?;return self.agent_view(owner,run);}
+            result=tokio::time::timeout(Duration::from_secs(stored.config.deadline_unix.saturating_sub(now()?).max(0) as u64),self.revalidate_sources_authority(&stored.config,authority))=>result.unwrap_or(Err(EngineError::RecoveryRequired)),
         };
         let _leases = match lineage {
             Ok(value) => value,
@@ -781,7 +841,7 @@ impl Journal {
         let adapter_signal = ModelCallCancellation(adapter_sender);
         let result = tokio::select! {
             _=async{let _=cancellation.changed().await;adapter_signal.0.send_replace(true);}=>{return self.cancel_agent(owner,run,grant);}
-            _=async{memory::wait_revoked(authority.memories).await;adapter_signal.0.send_replace(true);}=>{self.stop_agent(run,"recovery_required","memory_permission_revoked")?;return self.agent_view(owner,run);}
+            _=async{memory::wait_authority_revoked(authority).await;adapter_signal.0.send_replace(true);}=>{if authority.read.is_revoked(){return self.cancel_agent(owner,run,grant);}self.stop_agent(run,"recovery_required","memory_permission_revoked")?;return self.agent_view(owner,run);}
             result=tokio::time::timeout(Duration::from_secs(remaining),gateway.generate(&request,adapter_cancellation))=>result,
         };
         if *cancellation.borrow() || grant.is_revoked() {
@@ -793,6 +853,20 @@ impl Journal {
         }
         match result {
             Ok(Ok(candidate)) => {
+                let _response_sources = match self
+                    .revalidate_sources_authority(&stored.config, authority)
+                    .await
+                {
+                    Ok(v) => v,
+                    Err(_) => {
+                        self.stop_agent(run, "recovery_required", "source_changed_during_model")?;
+                        return self.agent_view(owner, run);
+                    }
+                };
+                if now()? >= stored.config.deadline_unix {
+                    self.stop_agent(run, "limited", "deadline")?;
+                    return self.agent_view(owner, run);
+                }
                 if let Err(error) =
                     self.accept_candidate(&stored, &invocation, epoch, &candidate, authority)
                 {
@@ -1173,7 +1247,7 @@ impl Journal {
         &self,
         c: &RunConfig,
         grant: &WorkspaceGrant,
-    ) -> Result<Vec<workspace::ToolReceipt>, EngineError> {
+    ) -> Result<memory::SourceProof, EngineError> {
         self.revalidate_sources_with_memory(c, grant, &[]).await
     }
     async fn revalidate_sources_with_memory(
@@ -1181,8 +1255,20 @@ impl Journal {
         c: &RunConfig,
         grant: &WorkspaceGrant,
         memories: &[crate::memory::MemoryGrant],
-    ) -> Result<Vec<workspace::ToolReceipt>, EngineError> {
+    ) -> Result<memory::SourceProof, EngineError> {
+        self.revalidate_sources_authority(c, AgentAuthority::read(grant).with_memory(memories))
+            .await
+    }
+    async fn revalidate_sources_authority(
+        &self,
+        c: &RunConfig,
+        authority: AgentAuthority<'_>,
+    ) -> Result<memory::SourceProof, EngineError> {
+        let grant = authority.read;
+        let memories = authority.memories;
+        self.check_registered_run_root(c, grant)?;
         self.revalidate_memory_sources(c, memories)?;
+        let mut proof = self.verify_run_memory_provenance(c, authority).await?;
         let rows = {
             let mut statement=self.connection.prepare("SELECT request_json,result_digest,result_json,operation_id FROM operations WHERE run_id=? AND state='succeeded' AND request_json IS NOT NULL")?;
             statement
@@ -1240,7 +1326,9 @@ impl Journal {
             }
             leases.push(receipt);
         }
-        Ok(leases)
+        proof.files.extend(leases);
+        proof.check(self)?;
+        Ok(proof)
     }
 }
 fn make_request_mode(

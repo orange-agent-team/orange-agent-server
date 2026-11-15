@@ -186,7 +186,7 @@ impl Journal {
         }
         let _leases = tokio::select! {
             _=cancellation.changed()=>return self.cancel_agent(owner,run,grant),
-            result=tokio::time::timeout(Duration::from_secs(stored.config.deadline_unix.saturating_sub(now()?).max(0) as u64),self.revalidate_sources_with_memory(&stored.config,grant,authority.memories))=>result.map_err(|_|EngineError::RecoveryRequired)??,
+            result=tokio::time::timeout(Duration::from_secs(stored.config.deadline_unix.saturating_sub(now()?).max(0) as u64),self.revalidate_sources_authority(&stored.config,authority))=>result.map_err(|_|EngineError::RecoveryRequired)??,
         };
         if *cancellation.borrow() || grant.is_revoked() {
             return self.cancel_agent(owner, run, grant);

@@ -51,6 +51,8 @@ impl<'a> EditingAuthority<'a> {
             read: self.read,
             create: self.create,
             memories: &[],
+            source_workspaces: &[],
+            source_memories: &[],
             edit: EditAuthority {
                 grant: Some(self.edit),
                 lifetime: std::marker::PhantomData,
