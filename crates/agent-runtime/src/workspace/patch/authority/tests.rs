@@ -461,7 +461,7 @@ async fn schema_seven_migration_preserves_existing_rights_without_inventing_edit
         .connection
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .expect("version");
-    assert_eq!(version, 25);
+    assert_eq!(version, 26);
     assert!(
         j.preview_file_edit(&f.edit, &f.read, input(b"old\n"))
             .await

@@ -24,7 +24,7 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser()
 parser.add_argument('--sandboxed', action='store_true', help='Execute the same real CLI in a signed App Sandbox; fixtures are created by this outside process')
-parser.add_argument('--legacy-runtime', type=Path, help='Exact fixed schema16/64748cd, schema17/a2cdafb or schema18/84d797c source; migrate actual successful and approved edits')
+parser.add_argument('--legacy-runtime', type=Path, help='Exact supported fixed source manifest; migrate actual successful and approved edits')
 args = parser.parse_args()
 if args.sandboxed and args.legacy_runtime:
     raise SystemExit('Legacy compatibility and sandbox qualification are separate invocations')
@@ -58,10 +58,11 @@ if args.legacy_runtime:
         '303c9cbd3f7f5692a7b46f8b2119c3ccdd3f2efc': (22, 'a630dea610f3bac028c35d98f1bdd0bc8762874977673eba5cdc89233d27b5d5'),
         'ffb6d402aea406368caf7bef46ca1f8728249788': (23, '70994442163b30930f70e74da173b4392dad399c952500ace166a4473d8b44bb'),
         '6784cf368a5d1a05140eaba4ec12242c95a8a14b': (24, '394895ee1a19b8912bdc6ca1ee78707edb9905427c57f7490d030b0f5d5ed3e6'),
+        '71941fdb165b8d85563206788b69651992280d85': (25, '7f5a71e707a19771ca004c8332236075e1da67d918a3cbebf4770212c8097e9e'),
     }
     pinned = known.get(release.get('origin_commit'))
     if legacy.is_symlink() or pinned is None or hashlib.sha256(release_path.read_bytes()).hexdigest() != pinned[1]:
-        raise SystemExit('Exact supported schema16/17/18/19 Runtime source manifest required')
+        raise SystemExit('Exact supported schema16 through schema25 Runtime source manifest required')
     legacy_schema = pinned[0]
     actual = set()
     for directory, folders, names in os.walk(legacy, followlinks=False):
@@ -291,7 +292,7 @@ try:
             assert actual['phase'] == 'ready'
             if legacy_binary and index == 2:
                 with sqlite3.connect(database) as db:
-                    assert db.execute('PRAGMA user_version').fetchone()[0] == 25
+                    assert db.execute('PRAGMA user_version').fetchone()[0] == 26
                     assert db.execute('SELECT * FROM editing_approvals ORDER BY operation_id').fetchall() == saved_approvals
                     assert db.execute('SELECT count(*) FROM patch_capture_witnesses').fetchone()[0] == 0
                     assert db.execute('SELECT count(*) FROM patch_capture_receipts').fetchone()[0] == 1 + len(saved_capture_receipts)
@@ -314,7 +315,7 @@ try:
         assert complete['phase'] == 'completed' and (complete['steps'], complete['invocations']) == (7, 4)
         assert invoke('step') == complete and len(observations['positive']) == 4
         with sqlite3.connect(database) as db:
-            assert db.execute('PRAGMA user_version').fetchone()[0] == 25
+            assert db.execute('PRAGMA user_version').fetchone()[0] == 26
             assert db.execute('SELECT count(*) FROM patch_version_edges').fetchone()[0] == 2
             assert db.execute('SELECT count(*) FROM runtime_tool_approvals').fetchone()[0] == 3
             first = db.execute('SELECT operation_id FROM operations WHERE tool_version=? ORDER BY rowid', ('apply_patch.v1',)).fetchone()[0]
@@ -333,7 +334,7 @@ try:
         assert len(observations['positive']) == 4
         summary.append({'scenario': 'positive', 'model_calls': 4, 'actual_edits': 2, 'reopen_no_replay': True})
         if legacy_binary:
-            summary.append({'scenario': 'schema' + str(legacy_schema) + '-to25', 'actual_old_success_and_approved_edit': True, 'approval_preserved': True, 'no_old_capture_evidence_invented': True, 'historical_source_and_pending_edit_validated': True, 'old_binary_rejected_without_data_mutation': True})
+            summary.append({'scenario': 'schema' + str(legacy_schema) + '-to26', 'actual_old_success_and_approved_edit': True, 'approval_preserved': True, 'no_old_capture_evidence_invented': True, 'historical_source_and_pending_edit_validated': True, 'old_binary_rejected_without_data_mutation': True})
 
         config, save, invoke, workspace, database, _ = fixture('combined')
         create = invoke('authorize-create', 'explicit-create')

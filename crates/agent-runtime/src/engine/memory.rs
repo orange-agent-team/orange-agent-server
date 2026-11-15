@@ -554,6 +554,67 @@ impl Journal {
             .transpose()
             .map(Option::flatten)
     }
+    /// The retained reference set must exactly describe the committed result.
+    /// Loading only the first row would silently discard a discovery dependency.
+    pub(super) fn checked_memory_source_rows(
+        &self,
+        c: &RunConfig,
+        op: &StoredOperation,
+    ) -> Result<Vec<(String, String, i64)>, EngineError> {
+        self.intent_contract(c, op)?;
+        let cached = self.checked_cached_result(c, op)?;
+        let rows = {
+            let mut query = self.connection.prepare("SELECT scope_id,entry_id,entry_version FROM runtime_memory_sources WHERE operation_id=? ORDER BY scope_id,entry_id LIMIT 101")?;
+            query
+                .query_map([&op.id], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, i64>(2)?,
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        if rows.len() > 100 {
+            return Err(EngineError::RecoveryRequired);
+        }
+        let AgentRequest::Memory(request) = &op.request else {
+            return Err(EngineError::Invalid);
+        };
+        let expected = if op.state == "failed"
+            || matches!(request,MemoryRequest::MemoryWrite(v) if v.mutation==crate::memory::MemoryMutation::Delete)
+        {
+            Vec::new()
+        } else {
+            if op.state != "succeeded" {
+                return Err(EngineError::RecoveryRequired);
+            }
+            let data = &cached["data"];
+            let entry = data["entry_id"]
+                .as_str()
+                .ok_or(EngineError::RecoveryRequired)?;
+            let version = match request {
+                MemoryRequest::MemoryRead(args) => {
+                    if args.entry_id != entry {
+                        return Err(EngineError::RecoveryRequired);
+                    }
+                    data["version"].as_str()
+                }
+                MemoryRequest::MemoryWrite(_) => data["result_version"].as_str(),
+            }
+            .ok_or(EngineError::RecoveryRequired)?
+            .parse::<i64>()
+            .map_err(|_| EngineError::RecoveryRequired)?;
+            if data["scope_id"].as_str() != Some(request.scope()) || version <= 0 {
+                return Err(EngineError::RecoveryRequired);
+            }
+            vec![(request.scope().to_owned(), entry.to_owned(), version)]
+        };
+        if rows != expected {
+            return Err(EngineError::RecoveryRequired);
+        }
+        Ok(rows)
+    }
     pub(super) fn memory_history_version(
         &self,
         c: &RunConfig,
@@ -625,6 +686,15 @@ impl Journal {
     ) -> Result<(), EngineError> {
         let stored = self.stored_run(&c.owner, &c.run_id)?;
         self.check_memory_bindings(&stored, grants)?;
+        let ids = {
+            let mut query = self.connection.prepare("SELECT operation_id FROM operations WHERE run_id=? AND state IN('succeeded','failed') AND json_extract(request_json,'$.tool') IN('memory_read','memory_write')")?;
+            query
+                .query_map([&c.run_id], |r| r.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        for id in ids {
+            self.checked_memory_source_rows(c, &self.operation_record(c, &id)?)?;
+        }
         let mut statement=self.connection.prepare("SELECT operation_id,scope_id,entry_id,entry_version FROM runtime_memory_sources JOIN operations USING(operation_id) WHERE run_id=?")?;
         let rows = statement
             .query_map([&c.run_id], |r| {

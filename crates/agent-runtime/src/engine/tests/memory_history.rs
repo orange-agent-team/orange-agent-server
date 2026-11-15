@@ -450,3 +450,225 @@ async fn own_update_keeps_transitive_file_dependency_and_source_withdrawal_block
         "old file input never reused for model submission"
     );
 }
+
+#[tokio::test]
+async fn source_set_missing_or_extra_reference_blocks_cached_result_before_model() {
+    for missing in [true, false] {
+        let f = Fixture::new();
+        let mut j = f.open();
+        let grants = vec![seed(&mut j)];
+        let auth = AgentAuthority::read(&f.grant).with_memory(&grants);
+        let model = ScriptedModel::new(vec![]);
+        let (_tx, rx) = watch::channel(false);
+        start_read(&f, &mut j, auth, &model, rx.clone()).await;
+        if missing {
+            j.connection
+                .execute_batch(
+                    "DROP TRIGGER memory_read_no_delete; DELETE FROM runtime_memory_sources;",
+                )
+                .expect("explicit durable-corruption fixture");
+        } else {
+            let draft = j
+                .prepare_memory_write(
+                    &grants[0],
+                    "second-user-entry",
+                    MemoryWriteRequest {
+                        entry_id: "other".into(),
+                        expected_version: None,
+                        source_run: "user-seed".into(),
+                        origin: MemoryOrigin::UserDeclaration,
+                        mutation: MemoryMutation::Put,
+                        payload: Some(MemoryPayload {
+                            title: "Other".into(),
+                            content: "Another fact".into(),
+                            enabled: true,
+                        }),
+                    },
+                )
+                .expect("new entry");
+            let hash = draft.view(&j).expect("review").digest.clone();
+            j.approve_memory_write(draft, &hash).expect("approve");
+            j.connection.execute("INSERT INTO runtime_memory_sources SELECT operation_id,scope_id,'other',1 FROM runtime_memory_sources",[]).expect("explicit extra-reference corruption fixture");
+        }
+        model
+            .responses
+            .lock()
+            .expect("queue")
+            .push_back(final_response());
+        let view = j
+            .advance_agent_authorized("alice", "run-1", auth, &model, rx)
+            .await
+            .expect("content-free recovery");
+        assert_eq!(view.phase, Phase::RecoveryRequired);
+        assert!(view.final_text.is_none());
+        assert_eq!(model.calls.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[tokio::test]
+async fn source_set_migration_preserves_actual_v25_read_and_immutable_bindings() {
+    let f = Fixture::new();
+    let mut j = f.open();
+    let grants = vec![seed(&mut j)];
+    let auth = AgentAuthority::read(&f.grant).with_memory(&grants);
+    let model = ScriptedModel::new(vec![]);
+    let (_tx, rx) = watch::channel(false);
+    start_read(&f, &mut j, auth, &model, rx.clone()).await;
+    let original: String = j
+        .connection
+        .query_row(
+            "SELECT model_result FROM operations WHERE call_id='read-original'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("immutable payload");
+    // Reconstruct precisely the previous table layout, retaining real effects
+    // and snapshots. Actual old-binary compatibility is additionally checked by
+    // scripts/check-file-editing.py; this fixture specifically carries memory.
+    j.connection.execute_batch("DROP TRIGGER memory_read_source_scope; DROP TRIGGER memory_read_source_bound; DROP TRIGGER memory_read_binding; DROP TRIGGER memory_read_no_delete; ALTER TABLE runtime_memory_sources RENAME TO source_fixture;").expect("prior layout fixture");
+    let legacy = include_str!("../../schema_v23.sql");
+    for line in legacy.lines().filter(|line| {
+        line.starts_with("CREATE TABLE runtime_memory_sources")
+            || line.starts_with("CREATE TRIGGER memory_read_")
+    }) {
+        j.connection.execute_batch(line).expect("exact prior DDL");
+    }
+    j.connection.execute_batch("INSERT INTO runtime_memory_sources SELECT * FROM source_fixture; DROP TABLE source_fixture; PRAGMA user_version=25;").expect("retain v25 references");
+    drop(j);
+    let mut j = f.open();
+    assert_eq!(
+        j.connection
+            .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+            .expect("schema"),
+        26
+    );
+    assert_eq!(
+        j.connection
+            .query_row(
+                "SELECT model_result FROM operations WHERE call_id='read-original'",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .expect("immutable payload"),
+        original
+    );
+    assert!(
+        j.connection
+            .execute("UPDATE runtime_memory_sources SET entry_version=2", [])
+            .is_err()
+    );
+    assert!(
+        j.connection
+            .execute("DELETE FROM runtime_memory_sources", [])
+            .is_err()
+    );
+    j.create_memory_scope("alice", "another-scope", false)
+        .expect("other scope");
+    assert!(j.connection.execute("INSERT INTO runtime_memory_sources SELECT operation_id,'another-scope',entry_id,entry_version FROM runtime_memory_sources",[]).is_err(),"operation scope cannot expand");
+    let fresh = vec![
+        j.authorize_memory("alice", "personal", "policy-v1", true)
+            .expect("fresh explicit memory grant"),
+    ];
+    let auth = AgentAuthority::read(&f.grant).with_memory(&fresh);
+    model
+        .responses
+        .lock()
+        .expect("queue")
+        .push_back(final_response());
+    assert_eq!(
+        j.advance_agent_authorized("alice", "run-1", auth, &model, rx)
+            .await
+            .expect("old committed read continues")
+            .phase,
+        Phase::Completed
+    );
+    assert_eq!(model.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        j.connection
+            .query_row(
+                "SELECT count(*) FROM operations WHERE call_id='read-original'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .expect("no read replay"),
+        1
+    );
+}
+
+#[tokio::test]
+async fn source_set_database_bound_is_one_hundred_and_cannot_change_scope() {
+    let f = Fixture::new();
+    let mut j = f.open();
+    let grants = vec![seed(&mut j)];
+    let auth = AgentAuthority::read(&f.grant).with_memory(&grants);
+    let model = ScriptedModel::new(vec![]);
+    let (_tx, rx) = watch::channel(false);
+    start_read(&f, &mut j, auth, &model, rx).await;
+    // Deliberate extra-reference corruption: test only the database bound, not
+    // valid discovery results. Runtime separately rejects this v1 result set.
+    // Reuse an existing FK entry with distinct owned fixture scopes and prove
+    // scope binding is enforced before exercising the bound in the real scope.
+    let op: String = j
+        .connection
+        .query_row("SELECT operation_id FROM runtime_memory_sources", [], |r| {
+            r.get(0)
+        })
+        .expect("operation");
+    j.create_memory_scope("alice", "foreign", false)
+        .expect("other scope");
+    assert!(
+        j.connection
+            .execute(
+                "INSERT INTO runtime_memory_sources VALUES(?,'foreign','preference',1)",
+                [&op]
+            )
+            .is_err()
+    );
+    for n in 1..=100 {
+        let id = format!("bounded-{n}");
+        let draft = j
+            .prepare_memory_write(
+                &grants[0],
+                &id,
+                MemoryWriteRequest {
+                    entry_id: id.clone(),
+                    expected_version: None,
+                    source_run: "user-seed".into(),
+                    origin: MemoryOrigin::UserDeclaration,
+                    mutation: MemoryMutation::Put,
+                    payload: Some(MemoryPayload {
+                        title: "Owned fixture".into(),
+                        content: "Bound check".into(),
+                        enabled: true,
+                    }),
+                },
+            )
+            .expect("actual entry");
+        let hash = draft.view(&j).expect("review").digest.clone();
+        j.approve_memory_write(draft, &hash).expect("approve");
+        let inserted = j.connection.execute(
+            "INSERT INTO runtime_memory_sources VALUES(?,'personal',?,1)",
+            params![op, id],
+        );
+        if n < 100 {
+            assert_eq!(inserted.expect("within table bound"), 1);
+        } else {
+            assert!(inserted.is_err(), "101st reference must fail");
+        }
+    }
+    assert_eq!(
+        j.connection
+            .query_row(
+                "SELECT count(*) FROM runtime_memory_sources WHERE operation_id=?",
+                [&op],
+                |r| r.get::<_, i64>(0)
+            )
+            .expect("bounded total"),
+        100
+    );
+    assert!(
+        j.checked_memory_source_rows(&f.config, &j.operation_record(&f.config, &op).expect("op"))
+            .is_err(),
+        "multi-row table cannot upgrade an old single-entry tool result"
+    );
+}

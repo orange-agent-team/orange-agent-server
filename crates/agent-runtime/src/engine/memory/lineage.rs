@@ -216,8 +216,7 @@ impl Journal {
                     });
                 }
                 AgentRequest::Memory(request) => {
-                    let row:Option<(String,String,i64)>=self.connection.query_row("SELECT scope_id,entry_id,entry_version FROM runtime_memory_sources WHERE operation_id=?",[&id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
-                    if let Some((scope, entry, version)) = row {
+                    for (scope, entry, version) in self.checked_memory_source_rows(c, &source)? {
                         if scope != request.scope() {
                             return Err(EngineError::RecoveryRequired);
                         }
@@ -226,9 +225,6 @@ impl Journal {
                             entry,
                             version: version.to_string(),
                         });
-                    } else if !matches!(request,MemoryRequest::MemoryWrite(v) if v.mutation==crate::memory::MemoryMutation::Delete)
-                    {
-                        return Err(EngineError::RecoveryRequired);
                     }
                 }
             }
