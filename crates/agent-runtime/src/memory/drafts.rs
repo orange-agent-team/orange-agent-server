@@ -562,3 +562,74 @@ impl Journal {
             .ok_or(MemoryError::Conflict)
     }
 }
+
+/// Collapse only the consecutive human-confirmation suffix. The first model
+/// result keeps its actual immutable invocation graph; independent declarations
+/// terminate without acquiring any ambient source authority.
+pub(crate) struct MemoryContinuity {
+    pub root_origin: MemoryOrigin,
+    pub root_source_run: String,
+    pub root_actor: String,
+    pub model_ancestor: Option<(String, String)>,
+}
+impl Journal {
+    pub(crate) fn memory_continuity(
+        &self,
+        scope: &str,
+        entry: &str,
+        at: &str,
+    ) -> Result<MemoryContinuity, MemoryError> {
+        let mut expected = version(at)?;
+        let mut statement=self.connection.prepare("SELECT actor,body,digest,result_version FROM memory_drafts WHERE scope_id=? AND entry_id=? AND state='approved' AND result_version<=? ORDER BY result_version DESC LIMIT 10001")?;
+        let mut rows = statement.query(params![scope, entry, expected])?;
+        let mut root = None;
+        let mut count = 0;
+        while let Some(row) = rows.next()? {
+            count += 1;
+            if count > 10000 {
+                return Err(MemoryError::Limit);
+            }
+            let actor: String = row.get(0)?;
+            let body: String = row.get(1)?;
+            let sha: String = row.get(2)?;
+            let actual: i64 = row.get(3)?;
+            if actual != expected || body.len() > 8192 {
+                return Err(MemoryError::Conflict);
+            }
+            let record: Draft = serde_json::from_str(&body).map_err(|_| MemoryError::Invalid)?;
+            let previous = record
+                .expected_version
+                .as_deref()
+                .map(version)
+                .transpose()?;
+            if digest("memory-draft.v1", &record)? != sha
+                || record.scope != scope
+                || record.entry_id != entry
+                || record.actor != actor
+                || record.mutation != MemoryMutation::Put
+                || previous.unwrap_or(0).checked_add(1) != Some(actual)
+                || !valid_id(&record.source_run)
+                || !valid_id(&record.policy)
+                || record.scope_revision < 1
+                || record.expires_at < 1
+            {
+                return Err(MemoryError::Invalid);
+            }
+            let initial = root.get_or_insert_with(|| MemoryContinuity {
+                root_origin: record.origin,
+                root_source_run: record.source_run.clone(),
+                root_actor: actor,
+                model_ancestor: None,
+            });
+            if record.origin == MemoryOrigin::ModelInference {
+                initial.model_ancestor = Some((actual.to_string(), record.source_run));
+                return root.ok_or(MemoryError::Invalid);
+            }
+            match previous {
+                None => return root.ok_or(MemoryError::Invalid),
+                Some(n) => expected = n,
+            }
+        }
+        Err(MemoryError::Conflict)
+    }
+}

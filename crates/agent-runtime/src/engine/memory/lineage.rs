@@ -333,10 +333,22 @@ impl Journal {
             return Err(EngineError::RecoveryRequired);
         }
         if record["origin"] == "user_declaration" {
+            let continuity = self
+                .memory_continuity(scope, entry, version)
+                .map_err(error)?;
+            let sources = continuity
+                .model_ancestor
+                .into_iter()
+                .map(|(version, _)| MemorySource::Memory {
+                    scope: scope.into(),
+                    entry: entry.into(),
+                    version,
+                })
+                .collect();
             return Ok(MemoryProvenance {
                 operation_id: String::new(),
                 invocation_digest: String::new(),
-                sources: vec![],
+                sources,
             });
         }
         let source_run = record["source_run"].as_str().ok_or(EngineError::Invalid)?;

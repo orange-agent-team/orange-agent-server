@@ -82,7 +82,7 @@ impl Journal {
             rusqlite::OpenFlags::default() | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
         )?;
         let version: i64 = connection.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if !(0..=27).contains(&version) {
+        if !(0..=28).contains(&version) {
             return Err(JournalError::UnsupportedVersion);
         }
         if version >= 25 {
@@ -92,6 +92,16 @@ impl Journal {
                 |r| r.get::<_, String>(0),
             );
             if !matches!(policy,Ok(ref value) if value=="source-lifetime.v1") {
+                return Err(JournalError::UnsupportedVersion);
+            }
+        }
+        if version >= 28 {
+            let policy = connection.query_row(
+                "SELECT policy FROM runtime_memory_continuity_policy WHERE singleton=1",
+                [],
+                |r| r.get::<_, String>(0),
+            );
+            if !matches!(policy,Ok(ref value) if value=="human-source-continuity.v1") {
                 return Err(JournalError::UnsupportedVersion);
             }
         }
@@ -265,6 +275,12 @@ impl Journal {
             let tx =
                 connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
             tx.execute_batch(include_str!("schema_v27.sql"))?;
+            tx.commit()?;
+        }
+        if version < 28 {
+            let tx =
+                connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            tx.execute_batch(include_str!("schema_v28.sql"))?;
             tx.commit()?;
         }
         connection.execute_batch("BEGIN IMMEDIATE;

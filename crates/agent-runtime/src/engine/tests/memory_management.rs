@@ -387,3 +387,188 @@ async fn human_edit_late_source_acl_change_rolls_back_fact_and_delete_is_explici
             .is_err()
     );
 }
+
+#[tokio::test]
+async fn confirmed_human_edit_keeps_known_source_dependencies_after_commit() {
+    let f = Fixture::new();
+    let mut j = f.open();
+    let grant = setup(&mut j, "alice", "personal");
+    let grants = vec![grant.clone()];
+    let id = super::memory_provenance::learn_file(&mut j, &f.config, &f.grant, &grants).await;
+    j.register_run("alice", "human-confirmation", "policy-v1")
+        .expect("human operation");
+    let sources = vec![f.grant.clone()];
+    let auth = MemoryManagementAuthority::new(&grant).with_source_workspaces(&sources);
+    let preview = j
+        .prepare_user_memory_write(
+            auth,
+            "confirm",
+            MemoryWriteRequest {
+                entry_id: id.clone(),
+                expected_version: Some("1".into()),
+                source_run: "human-confirmation".into(),
+                origin: MemoryOrigin::UserDeclaration,
+                mutation: MemoryMutation::Put,
+                payload: Some(MemoryPayload {
+                    title: "Confirmed note".into(),
+                    content: "allowed data, confirmed by user".into(),
+                    enabled: true,
+                }),
+            },
+        )
+        .await
+        .expect("verified prior source");
+    j.approve_user_memory_write(auth, &preview.review.draft_id, &preview.approval_digest)
+        .await
+        .expect("exact human confirmation");
+    assert!(
+        j.read_memory_verified(MemoryManagementAuthority::new(&grant), select(&id, false))
+            .await
+            .is_err(),
+        "human confirmation cannot erase a known file dependency"
+    );
+    assert!(
+        j.read_memory(&grant, &id, Some("2"), 0, 4096, false)
+            .is_err(),
+        "raw Store cannot bypass inherited sources"
+    );
+    j.read_memory_verified(auth, select(&id, false))
+        .await
+        .expect("original source still authorized");
+    f.grant.request_revoke();
+    assert!(
+        j.read_memory_verified(auth, select(&id, false))
+            .await
+            .is_err(),
+        "withdrawn source cannot reappear as an independent user declaration"
+    );
+}
+
+#[tokio::test]
+async fn long_human_confirmation_suffix_preserves_model_source_without_exhausting_graph_depth() {
+    let f = Fixture::new();
+    let mut j = f.open();
+    let grant = setup(&mut j, "alice", "personal");
+    let grants = vec![grant.clone()];
+    let derived = super::memory_provenance::learn_file(&mut j, &f.config, &f.grant, &grants).await;
+    put(&mut j, &grant, "independent", true);
+    j.register_run("alice", "human-batch", "policy-v1")
+        .expect("owned user action batch");
+    let sources = vec![f.grant.clone()];
+    let verified = MemoryManagementAuthority::new(&grant).with_source_workspaces(&sources);
+    let plain = MemoryManagementAuthority::new(&grant);
+    for (id, auth) in [(&derived, verified), (&"independent".to_owned(), plain)] {
+        for n in 1..=40 {
+            let preview = j
+                .prepare_user_memory_write(
+                    auth,
+                    &format!("{id}-update-{n}"),
+                    MemoryWriteRequest {
+                        entry_id: id.clone(),
+                        expected_version: Some(n.to_string()),
+                        source_run: "human-batch".into(),
+                        origin: MemoryOrigin::UserDeclaration,
+                        mutation: MemoryMutation::Put,
+                        payload: Some(MemoryPayload {
+                            title: "Human confirmation".into(),
+                            content: format!("Confirmed version {}", n + 1),
+                            enabled: true,
+                        }),
+                    },
+                )
+                .await
+                .expect("bounded edit preview");
+            j.approve_user_memory_write(auth, &preview.review.draft_id, &preview.approval_digest)
+                .await
+                .expect("exact update");
+        }
+    }
+    assert_eq!(
+        j.read_memory_verified(verified, select(&derived, false))
+            .await
+            .expect("collapsed inheritance")
+            .view(&j)
+            .expect("view")
+            .version,
+        "41"
+    );
+    assert!(
+        j.read_memory_verified(plain, select(&derived, false))
+            .await
+            .is_err()
+    );
+    assert!(
+        j.read_memory(&grant, &derived, None, 0, 4096, false)
+            .is_err()
+    );
+    assert_eq!(
+        j.read_memory(&grant, "independent", Some("41"), 0, 4096, false)
+            .expect("source-free independent declarations")
+            .view(&j)
+            .expect("view")
+            .content,
+        "Confirmed version 41"
+    );
+    f.grant.request_revoke();
+    assert!(
+        j.read_memory_verified(verified, select(&derived, false))
+            .await
+            .is_err()
+    );
+    j.read_memory_verified(plain, select("independent", false))
+        .await
+        .expect("unrelated declaration remains available");
+}
+#[tokio::test]
+async fn missing_human_history_is_not_treated_as_an_independent_declaration() {
+    let f = Fixture::new();
+    let mut j = f.open();
+    let grant = setup(&mut j, "alice", "personal");
+    put(&mut j, &grant, "note", true);
+    let auth = MemoryManagementAuthority::new(&grant);
+    for n in 1..=2 {
+        let preview = j
+            .prepare_user_memory_write(
+                auth,
+                &format!("update-{n}"),
+                MemoryWriteRequest {
+                    entry_id: "note".into(),
+                    expected_version: Some(n.to_string()),
+                    source_run: "alice-seed".into(),
+                    origin: MemoryOrigin::UserDeclaration,
+                    mutation: MemoryMutation::Put,
+                    payload: Some(MemoryPayload {
+                        title: "Note".into(),
+                        content: "Current user body".into(),
+                        enabled: true,
+                    }),
+                },
+            )
+            .await
+            .expect("preview");
+        j.approve_user_memory_write(auth, &preview.review.draft_id, &preview.approval_digest)
+            .await
+            .expect("approve");
+    }
+    j.connection.execute_batch("DROP TRIGGER memory_draft_no_delete; DELETE FROM memory_drafts WHERE scope_id='personal' AND entry_id='note' AND result_version=2;").expect("owned history corruption fixture");
+    assert!(
+        j.read_memory_verified(auth, select("note", false))
+            .await
+            .is_err()
+    );
+    assert!(j.read_memory(&grant, "note", None, 0, 4096, false).is_err());
+}
+#[test]
+fn unknown_human_continuity_policy_refuses_open_without_rewriting() {
+    let f = Fixture::new();
+    let j = f.open();
+    j.connection.execute_batch("DROP TABLE runtime_memory_continuity_policy; CREATE TABLE runtime_memory_continuity_policy(singleton INTEGER PRIMARY KEY,policy TEXT); INSERT INTO runtime_memory_continuity_policy VALUES(1,'unknown-policy');").expect("explicit future-policy fixture");
+    drop(j);
+    let path = f.private.path().join("journal.sqlite");
+    let before = std::fs::read(&path).expect("bytes");
+    assert!(matches!(
+        Journal::open(&path),
+        Err(crate::JournalError::UnsupportedVersion)
+    ));
+    assert_eq!(before, std::fs::read(path).expect("unchanged bytes"));
+}

@@ -164,7 +164,7 @@ async fn writer_identity_replacement_is_refused_and_legacy_records_are_not_certi
     );
     // Explicit prior schema shape: v18 never contained writer bindings.
     j.connection
-        .execute_batch("DROP TABLE runtime_memory_protocol; DROP TABLE runtime_effect_policy; DROP TABLE runtime_memory_lineage; DROP TABLE runtime_workspace_roots; DROP TABLE runtime_memory_sources; DROP TABLE runtime_memory_operations; DROP TABLE runtime_memory_capabilities; DROP TABLE memory_source_blocks; DROP TABLE memory_audit; DROP TABLE memory_drafts; DROP TABLE memory_entries; DROP TABLE memory_members; DROP TABLE memory_scopes; DROP TABLE export_restorations; DROP TABLE export_retirement_capsules; DROP TABLE export_retirements; DROP TABLE export_writer_bindings; PRAGMA user_version=18;")
+        .execute_batch("DROP TABLE runtime_memory_continuity_policy; DROP INDEX memory_approved_version; DROP TABLE runtime_memory_protocol; DROP TABLE runtime_effect_policy; DROP TABLE runtime_memory_lineage; DROP TABLE runtime_workspace_roots; DROP TABLE runtime_memory_sources; DROP TABLE runtime_memory_operations; DROP TABLE runtime_memory_capabilities; DROP TABLE memory_source_blocks; DROP TABLE memory_audit; DROP TABLE memory_drafts; DROP TABLE memory_entries; DROP TABLE memory_members; DROP TABLE memory_scopes; DROP TABLE export_restorations; DROP TABLE export_retirement_capsules; DROP TABLE export_retirements; DROP TABLE export_writer_bindings; PRAGMA user_version=18;")
         .expect("legacy fixture");
     drop(j);
     let j = f.open();

@@ -759,10 +759,18 @@ impl Journal {
         entry: &str,
         version: &str,
     ) -> Result<(), MemoryError> {
-        let (origin,run):(String,String)=self.connection.query_row("SELECT origin,source_run FROM memory_entries WHERE scope_id=? AND entry_id=? AND version=?",params![scope,entry,version],|r|Ok((r.get(0)?,r.get(1)?)))?;
-        if origin == "user_declaration" {
-            return Ok(());
+        let (origin,run,actor):(String,String,String)=self.connection.query_row("SELECT origin,source_run,source_actor FROM memory_entries WHERE scope_id=? AND entry_id=? AND version=?",params![scope,entry,version],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
+        let continuity = self.memory_continuity(scope, entry, version)?;
+        if continuity.root_origin.name() != origin
+            || continuity.root_source_run != run
+            || continuity.root_actor != actor
+        {
+            return Err(MemoryError::Invalid);
         }
+        let Some((ancestor, run)) = continuity.model_ancestor else {
+            return Ok(());
+        };
+        let version = ancestor.as_str();
         type Row = (String, String, String, String, String, String);
         let row:Option<Row>=self.connection.query_row("SELECT l.body,l.digest,i.request_digest,m.operation_id,i.request,o.run_id FROM memory_drafts d JOIN runtime_memory_operations m USING(draft_id) JOIN runtime_memory_lineage l USING(operation_id) JOIN operations o USING(operation_id) JOIN runtime_invocations i USING(invocation) WHERE d.scope_id=? AND d.entry_id=? AND d.result_version=? AND d.state='approved'",params![scope,entry,version],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?))).optional()?;
         if let Some((body, sha, invocation, operation, request, run)) = row {
