@@ -4,7 +4,7 @@ use crate::memory::{MemoryReadReceipt, MemorySummary, MemoryValue};
 use lineage::{SourceAccess, SourceProof};
 #[derive(Clone, Copy)]
 pub struct MemoryManagementAuthority<'a> {
-    grant: &'a MemoryGrant,
+    pub(super) grant: &'a MemoryGrant,
     workspaces: &'a [WorkspaceGrant],
     memories: &'a [MemoryGrant],
 }
@@ -51,6 +51,17 @@ pub struct VerifiedMemoryRead {
     proof: SourceProof,
 }
 impl VerifiedMemoryRead {
+    pub(super) fn check_after_db(
+        &self,
+        db: &rusqlite::Connection,
+        session: &str,
+        changed: Option<(&str, &str, i64)>,
+    ) -> Result<(), EngineError> {
+        self.proof.check_db(db, session, changed)?;
+        self.receipt
+            .check_connection(db, session, changed)
+            .map_err(error)
+    }
     pub fn view<'a>(&'a self, journal: &'a Journal) -> Result<&'a MemoryValue, EngineError> {
         self.proof.check(journal)?;
         self.receipt.view(journal).map_err(error)

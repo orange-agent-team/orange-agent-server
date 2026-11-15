@@ -1,0 +1,15 @@
+# 桌面用户记忆管理的Core接口（schema27）
+
+此切片补齐桌面需要的scope/member目录及人类编辑提交边界。没有新增持久表或模型工具版本，schema27和v1/v2执行pins保持不变。
+
+list_memory_scopes使用认证actor过滤当前显式成员关系，支持1–100项有界分页，返回scope元数据、实际read/write权限与owner管理标记。被撤销成员的scope不返回；disabled scope只显示已有成员获准查看的元数据，authorize_memory仍拒绝其正文访问和执行。list_memory_members仅scope owner可用，带精确scope revision和1–64项边界，可查看显式revoked记录，不能凭共享write角色枚举成员。
+
+prepare_user_memory_write和review_user_memory_write接受UserDeclaration，Host绑定真实用户操作的source Run。更新/删除既有条目先用read_memory_verified验证旧版本和完整来源图；预览返回新内容、旧条目首个有界片段与复合approval_digest。预览返回后释放所有来源lease，不在用户思考期间阻碍关闭/撤权。
+
+approve_user_memory_write重新读取草稿和原始来源，核对复合批准摘要，在事实事务提交前再次检查来源权限与版本。仅核心草稿digest不能替代管理批准；来源变更、缺失权限或事务内迟到ACL撤回均拒绝或回滚。显式更新后的来源记为用户声明，模型请求不能调用这一Host接口或提交actor/origin覆盖。
+
+user_memory_write_metadata/by_key用于丢失回复恢复：认证的原草稿actor仅能读取自己非Runtime绑定的UserDeclaration回执，内容仅有ID/摘要/状态/结果版本。撤销数据Grant后仍可查询自己操作是否已提交，不能因此读取正文或自动重放。恢复正文和继续批准仍需新Grant和来源验证。
+
+目前整个scope被禁用后只能管理元数据、成员和启停；禁用scope内正文的专用管理授权尚未提供，不把现有模型Grant扩大到该权限。知识/连接器来源、真实LLM、桌面FRB/UI和完整生产验收仍属于后续工作。
+
+测试使用真实SQLite和临时文件：目录按成员过滤、owner-only成员枚举、禁用scope不授予执行、旧revision拒绝；用户编辑重读文件来源、payload-only批准拒绝、预览不保留lease、提交边界ACL变化回滚、显式删除及无正文丢失回复恢复。

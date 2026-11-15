@@ -8,7 +8,9 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
+mod directory;
 mod drafts;
+pub use directory::{MemoryMemberItem, MemoryMemberPage, MemoryScopeItem, MemoryScopePage};
 #[cfg(test)]
 mod tests;
 pub mod tools;

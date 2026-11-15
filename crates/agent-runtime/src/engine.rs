@@ -4,9 +4,9 @@
 mod contracts;
 mod memory;
 pub use memory::{
-    AgentMemoryApproval, AgentMemoryPreview, ManagedMemoryPage, MemoryManagementAuthority,
-    MemoryProvenance, MemoryReadSelection, MemoryRecovery, MemorySource, VerifiedMemoryPage,
-    VerifiedMemoryRead,
+    AgentMemoryApproval, AgentMemoryPreview, ManagedMemoryPage, ManagedMemoryReview,
+    MemoryManagementAuthority, MemoryProvenance, MemoryReadSelection, MemoryRecovery, MemorySource,
+    VerifiedMemoryPage, VerifiedMemoryRead,
 };
 mod creation;
 mod editing;

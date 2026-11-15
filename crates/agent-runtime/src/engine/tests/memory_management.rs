@@ -226,3 +226,164 @@ async fn sparse_unproven_records_have_bounded_scans_without_ids_in_the_cursor() 
         "opaque cursor cannot cross a Journal session"
     );
 }
+
+#[tokio::test]
+async fn human_edit_rechecks_prior_sources_and_cannot_approve_with_payload_only_hash() {
+    let f = Fixture::new();
+    let mut j = f.open();
+    let grant = setup(&mut j, "alice", "personal");
+    let grants = vec![grant.clone()];
+    let id = super::memory_provenance::learn_file(&mut j, &f.config, &f.grant, &grants).await;
+    j.register_run("alice", "human-edit", "policy-v1")
+        .expect("real human activity");
+    let request = MemoryWriteRequest {
+        entry_id: id.clone(),
+        expected_version: Some("1".into()),
+        source_run: "human-edit".into(),
+        origin: MemoryOrigin::UserDeclaration,
+        mutation: MemoryMutation::Put,
+        payload: Some(MemoryPayload {
+            title: "Corrected by user".into(),
+            content: "Explicit user declaration".into(),
+            enabled: true,
+        }),
+    };
+    let no_sources = MemoryManagementAuthority::new(&grant);
+    assert!(
+        j.prepare_user_memory_write(no_sources, "edit", request.clone())
+            .await
+            .is_err()
+    );
+    let sources = vec![f.grant.clone()];
+    let auth = no_sources.with_source_workspaces(&sources);
+    let preview = j
+        .prepare_user_memory_write(auth, "edit", request)
+        .await
+        .expect("source verified review");
+    assert_eq!(
+        preview.prior.as_ref().expect("prior").content,
+        "allowed data"
+    );
+    assert_ne!(preview.review.digest, preview.approval_digest);
+    tokio::time::timeout(Duration::from_secs(1), grant.wait_drained())
+        .await
+        .expect("no receipt lease retained while human considers preview");
+    assert!(
+        j.approve_user_memory_write(auth, &preview.review.draft_id, &preview.review.digest)
+            .await
+            .is_err()
+    );
+    std::fs::write(f.workspace.path().join("note.txt"), "external replacement")
+        .expect("source changed");
+    assert!(
+        j.approve_user_memory_write(auth, &preview.review.draft_id, &preview.approval_digest)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        j.user_memory_write_by_key("alice", "personal", "edit")
+            .expect("metadata")
+            .expect("draft")
+            .state,
+        "pending"
+    );
+    std::fs::write(f.workspace.path().join("note.txt"), "allowed data")
+        .expect("restore own source");
+    let outcome = j
+        .approve_user_memory_write(auth, &preview.review.draft_id, &preview.approval_digest)
+        .await
+        .expect("exact human approval");
+    assert_eq!(outcome.result_version.as_deref(), Some("2"));
+    assert!(
+        j.approve_user_memory_write(auth, &preview.review.draft_id, &preview.approval_digest)
+            .await
+            .is_err()
+    );
+    grant.request_revoke();
+    let recovered = j
+        .user_memory_write_metadata("alice", "personal", &outcome.draft_id)
+        .expect("metadata without body grant")
+        .expect("committed");
+    assert_eq!(recovered, outcome);
+    assert!(
+        j.user_memory_write_metadata("bob", "personal", &outcome.draft_id)
+            .expect("foreign absent")
+            .is_none()
+    );
+    assert!(
+        j.read_memory_verified(auth, select(&id, false))
+            .await
+            .is_err()
+    );
+}
+#[tokio::test]
+async fn human_edit_late_source_acl_change_rolls_back_fact_and_delete_is_explicit() {
+    let mut f = Fixture::new();
+    let mut j = f.open();
+    let workspace = j
+        .authorize_workspace("alice", "source", f.workspace.path(), "policy-v1")
+        .expect("root");
+    f.grant = j
+        .open_workspace("alice", &workspace.workspace_id)
+        .expect("read");
+    f.config.environment = f.grant.environment().into();
+    let grant = setup(&mut j, "alice", "personal");
+    let grants = vec![grant.clone()];
+    let id = super::memory_provenance::learn_file(&mut j, &f.config, &f.grant, &grants).await;
+    j.register_run("alice", "human-delete", "policy-v1")
+        .expect("human source");
+    let sources = vec![f.grant.clone()];
+    let auth = MemoryManagementAuthority::new(&grant).with_source_workspaces(&sources);
+    let request = MemoryWriteRequest {
+        entry_id: id.clone(),
+        expected_version: Some("1".into()),
+        source_run: "human-delete".into(),
+        origin: MemoryOrigin::UserDeclaration,
+        mutation: MemoryMutation::Delete,
+        payload: None,
+    };
+    let preview = j
+        .prepare_user_memory_write(auth, "delete", request.clone())
+        .await
+        .expect("review");
+    j.connection.execute_batch("CREATE TRIGGER human_source_loss AFTER UPDATE ON memory_entries BEGIN UPDATE local_workspaces SET active=0; END;").expect("explicit commit race fixture");
+    assert!(
+        j.approve_user_memory_write(auth, &preview.review.draft_id, &preview.approval_digest)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        j.read_memory_verified(auth, select(&id, false))
+            .await
+            .expect("original remains")
+            .view(&j)
+            .expect("view")
+            .version,
+        "1"
+    );
+    assert_eq!(
+        j.user_memory_write_by_key("alice", "personal", "delete")
+            .expect("metadata")
+            .expect("draft")
+            .state,
+        "pending"
+    );
+    j.connection
+        .execute_batch("DROP TRIGGER human_source_loss;")
+        .expect("remove race");
+    j.approve_user_memory_write(auth, &preview.review.draft_id, &preview.approval_digest)
+        .await
+        .expect("explicit delete");
+    assert!(
+        j.read_memory_verified(auth, select(&id, false))
+            .await
+            .is_err()
+    );
+    let mut forged = request;
+    forged.origin = MemoryOrigin::ModelInference;
+    assert!(
+        j.prepare_user_memory_write(auth, "forged", forged)
+            .await
+            .is_err()
+    );
+}

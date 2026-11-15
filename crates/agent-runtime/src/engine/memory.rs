@@ -1,9 +1,11 @@
 mod discovery;
 mod management;
+mod management_write;
 pub use management::{
     ManagedMemoryPage, MemoryManagementAuthority, MemoryReadSelection, VerifiedMemoryPage,
     VerifiedMemoryRead,
 };
+pub use management_write::ManagedMemoryReview;
 mod lineage;
 use super::*;
 use crate::memory::{
