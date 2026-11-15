@@ -3,6 +3,8 @@ mod contracts;
 mod editing;
 mod memory;
 mod memory_effects;
+mod memory_history;
+mod memory_management;
 mod memory_provenance;
 use super::*;
 use crate::storage::private_temp;

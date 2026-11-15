@@ -1,3 +1,8 @@
+mod management;
+pub use management::{
+    ManagedMemoryPage, MemoryManagementAuthority, MemoryReadSelection, VerifiedMemoryPage,
+    VerifiedMemoryRead,
+};
 mod lineage;
 use super::*;
 use crate::memory::{
@@ -183,7 +188,7 @@ impl Journal {
         )?;
         let provenance = self.bind_memory_provenance(&stored.config, &op)?;
         let proof = self
-            .verify_memory_provenance(&stored.config, authority, provenance.sources.clone(), None)
+            .verify_operation_memory_sources(&stored.config, authority, provenance.sources.clone())
             .await?;
         let prepared = self
             .prepare_memory_write_for_agent(
@@ -262,7 +267,7 @@ impl Journal {
         ) {
             let graph = self.memory_provenance(&stored.config, &op)?;
             Some(
-                self.verify_memory_provenance(&stored.config, authority, graph.sources, None)
+                self.verify_operation_memory_sources(&stored.config, authority, graph.sources)
                     .await?,
             )
         } else {
@@ -352,7 +357,7 @@ impl Journal {
                 return Err(EngineError::ApprovalRequired);
             }
             provenance_proof = self
-                .verify_memory_provenance(c, authority, graph.sources, None)
+                .verify_operation_memory_sources(c, authority, graph.sources)
                 .await?;
             Some(value)
         } else {
@@ -549,6 +554,70 @@ impl Journal {
             .transpose()
             .map(Option::flatten)
     }
+    pub(super) fn memory_history_version(
+        &self,
+        c: &RunConfig,
+        scope: &str,
+        entry: &str,
+        observed: i64,
+    ) -> Result<i64, EngineError> {
+        let current:Option<i64>=self.connection.query_row("SELECT version FROM memory_entries WHERE scope_id=? AND entry_id=? AND state='active'",params![scope,entry],|r|r.get(0)).optional()?;
+        let current = current.ok_or(EngineError::RecoveryRequired)?;
+        if current == observed {
+            return Ok(current);
+        }
+        if current < observed || current - observed > 100 {
+            return Err(EngineError::RecoveryRequired);
+        }
+        let rows = {
+            let mut q=self.connection.prepare("SELECT d.result_version,m.operation_id,d.draft_id,m.approval_digest FROM memory_drafts d JOIN runtime_memory_operations m USING(draft_id) JOIN operations o USING(operation_id) WHERE d.scope_id=? AND d.entry_id=? AND d.result_version>? AND d.result_version<=? AND d.state='approved' AND o.owner=? AND o.run_id=? AND o.state IN('succeeded','dispatching','unknown') ORDER BY d.result_version")?;
+            q.query_map(
+                params![scope, entry, observed, current, c.owner, c.run_id],
+                |r| {
+                    Ok((
+                        r.get::<_, i64>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, Option<String>>(3)?,
+                    ))
+                },
+            )?
+            .collect::<Result<Vec<_>, _>>()?
+        };
+        if rows.len() as i64 != current - observed {
+            return Err(EngineError::RecoveryRequired);
+        }
+        for (offset, (version, id, draft, approved)) in rows.into_iter().enumerate() {
+            if version != observed + offset as i64 + 1 {
+                return Err(EngineError::RecoveryRequired);
+            }
+            let op = self.operation_record(c, &id)?;
+            self.intent_contract(c, &op)?;
+            let AgentRequest::Memory(MemoryRequest::MemoryWrite(args)) = &op.request else {
+                return Err(EngineError::RecoveryRequired);
+            };
+            if args.scope_id != scope
+                || args.entry_id.as_deref() != Some(entry)
+                || args.expected_version.as_deref() != Some((version - 1).to_string().as_str())
+                || args.mutation != crate::memory::MemoryMutation::Put
+                || !args.payload.as_ref().is_some_and(|v| v.enabled)
+            {
+                return Err(EngineError::RecoveryRequired);
+            }
+            let result = self
+                .owned_memory_draft_metadata(&c.owner, scope, &draft)
+                .map_err(error)?
+                .ok_or(EngineError::RecoveryRequired)?;
+            if result.state != "approved"
+                || result.result_version.as_deref() != Some(version.to_string().as_str())
+                || approved.as_deref() != Some(&result.digest)
+            {
+                return Err(EngineError::RecoveryRequired);
+            }
+            self.memory_provenance(c, &op)?;
+        }
+        Ok(current)
+    }
     pub(super) fn revalidate_memory_sources(
         &self,
         c: &RunConfig,
@@ -577,6 +646,21 @@ impl Journal {
                 .ok_or(EngineError::Forbidden)?;
             match &op.request {
                 AgentRequest::Memory(MemoryRequest::MemoryRead(args)) => {
+                    let current = self.memory_history_version(c, &scope, &entry, version)?;
+                    if current != version {
+                        self.read_memory_for_agent(
+                            grant,
+                            &entry,
+                            Some(&current.to_string()),
+                            0,
+                            4096,
+                            false,
+                        )
+                        .map_err(error)?
+                        .view(self)
+                        .map_err(error)?;
+                        continue;
+                    }
                     let receipt = self
                         .read_memory_for_agent(
                             grant,
@@ -594,10 +678,11 @@ impl Journal {
                     }
                 }
                 AgentRequest::Memory(MemoryRequest::MemoryWrite(_)) => {
+                    let current = self.memory_history_version(c, &scope, &entry, version)?;
                     self.read_memory_for_agent(
                         grant,
                         &entry,
-                        Some(&version.to_string()),
+                        Some(&current.to_string()),
                         0,
                         4096,
                         false,

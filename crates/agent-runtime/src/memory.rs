@@ -197,6 +197,12 @@ impl MemoryGrant {
             tokio::select! {_=local.changed()=>{},_=scope.changed()=>{}}
         }
     }
+    pub(crate) fn actor(&self) -> &str {
+        &self.actor
+    }
+    pub(crate) fn policy(&self) -> &str {
+        &self.policy
+    }
     pub fn scope_id(&self) -> &str {
         &self.scope
     }
@@ -417,7 +423,32 @@ pub struct MemoryReadReceipt {
     include_disabled: bool,
     _lease: MemoryLease,
 }
+pub(crate) struct MemorySourceLease {
+    receipt: MemoryReadReceipt,
+}
+impl MemorySourceLease {
+    pub(crate) fn check_connection(
+        &self,
+        db: &Connection,
+        session: &str,
+        changed: Option<(&str, &str, i64)>,
+    ) -> Result<(), MemoryError> {
+        self.receipt.check_connection(db, session, changed)
+    }
+    pub(crate) fn is_authorized(&self) -> bool {
+        self.receipt.is_authorized()
+    }
+    pub(crate) fn grant(&self) -> MemoryGrant {
+        self.receipt.grant()
+    }
+}
 impl MemoryReadReceipt {
+    pub(crate) fn into_source_lease(mut self) -> MemorySourceLease {
+        self.value.title = String::new();
+        self.value.content = String::new();
+        MemorySourceLease { receipt: self }
+    }
+
     pub(crate) fn grant(&self) -> MemoryGrant {
         self.grant.clone()
     }
@@ -847,4 +878,14 @@ impl Journal {
         }
         Ok(MemoryScopeRevoker { signals })
     }
+}
+
+#[derive(Clone)]
+pub(crate) struct ManagementCursor {
+    pub actor: String,
+    pub scope: String,
+    pub environment: String,
+    pub after: String,
+    pub include_disabled: bool,
+    pub expires: std::time::Instant,
 }

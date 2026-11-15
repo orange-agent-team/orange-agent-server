@@ -247,15 +247,26 @@ pub struct PreparedTool {
     slot: OwnedSemaphorePermit,
     request: WorkspaceRequest,
 }
-impl ToolReceipt {
+pub(crate) struct ReadAuthorityLease {
+    permit: Permit,
+}
+impl ReadAuthorityLease {
+    pub(crate) fn is_authorized(&self) -> bool {
+        !self.permit.inner.is_revoked()
+    }
     pub(crate) fn revocation_grant(&self) -> WorkspaceGrant {
         WorkspaceGrant {
-            inner: self._permit.inner.clone(),
+            inner: self.permit.inner.clone(),
         }
     }
-    pub(crate) fn is_authorized(&self) -> bool {
-        !self._permit.inner.is_revoked()
+}
+impl ToolReceipt {
+    pub(crate) fn into_authority_lease(self) -> ReadAuthorityLease {
+        ReadAuthorityLease {
+            permit: self._permit,
+        }
     }
+
     pub fn result(&self) -> &WorkspaceResult {
         &self.result
     }

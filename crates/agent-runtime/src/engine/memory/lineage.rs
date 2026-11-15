@@ -1,6 +1,6 @@
 //! Content-free causal references captured from the immutable model input.
 use super::*;
-use crate::memory::MemoryReadReceipt;
+use crate::memory::MemorySourceLease;
 use std::collections::{BTreeSet, VecDeque};
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -32,8 +32,8 @@ impl MemoryProvenance {
 }
 #[derive(Default)]
 pub(in crate::engine) struct SourceProof {
-    pub(in crate::engine) files: Vec<workspace::ToolReceipt>,
-    memories: Vec<MemoryReadReceipt>,
+    pub(in crate::engine) files: Vec<workspace::ReadAuthorityLease>,
+    memories: Vec<MemorySourceLease>,
     roots: Vec<(String, WorkspaceGrant)>,
     signals: Vec<crate::workspaces::WorkspaceSourceLease>,
     leases: Vec<crate::memory::MemoryLease>,
@@ -57,11 +57,13 @@ impl SourceProof {
         Ok(())
     }
     pub(in crate::engine) fn is_live(&self) -> bool {
-        self.files.iter().all(workspace::ToolReceipt::is_authorized)
+        self.files
+            .iter()
+            .all(workspace::ReadAuthorityLease::is_authorized)
             && self
                 .memories
                 .iter()
-                .all(crate::memory::MemoryReadReceipt::is_authorized)
+                .all(crate::memory::MemorySourceLease::is_authorized)
             && self.roots.iter().all(|(_, v)| !v.is_revoked())
             && self.signals.iter().all(|s| s.is_live())
             && self.leases.iter().all(crate::memory::MemoryLease::is_live)
@@ -70,13 +72,13 @@ impl SourceProof {
         let files = self
             .files
             .iter()
-            .map(workspace::ToolReceipt::revocation_grant)
+            .map(workspace::ReadAuthorityLease::revocation_grant)
             .chain(self.roots.iter().map(|(_, g)| g.clone()))
             .collect::<Vec<_>>();
         let memories = self
             .memories
             .iter()
-            .map(crate::memory::MemoryReadReceipt::grant)
+            .map(crate::memory::MemorySourceLease::grant)
             .chain(self.leases.iter().map(crate::memory::MemoryLease::grant))
             .collect::<Vec<_>>();
         let signals = self
@@ -137,6 +139,14 @@ impl SourceProof {
     }
 }
 type Key = (String, String, String);
+pub(super) struct SourceAccess<'a> {
+    pub actor: &'a str,
+    pub policy: &'a str,
+    pub workspaces: Vec<&'a WorkspaceGrant>,
+    pub memories: Vec<&'a MemoryGrant>,
+    pub disabled_root: bool,
+}
+
 impl Journal {
     fn capture_memory_provenance(
         &self,
@@ -364,6 +374,34 @@ impl Journal {
         if authority.source_workspaces.len() > 16 || authority.source_memories.len() > 16 {
             return Err(EngineError::Invalid);
         }
+        self.verify_memory_provenance_scoped(
+            SourceAccess {
+                actor: &c.owner,
+                policy: &c.policy,
+                workspaces: std::iter::once(authority.read)
+                    .chain(authority.source_workspaces.iter())
+                    .collect(),
+                memories: authority
+                    .memories
+                    .iter()
+                    .chain(authority.source_memories.iter())
+                    .collect(),
+                disabled_root: false,
+            },
+            sources,
+            root,
+        )
+        .await
+    }
+    pub(super) async fn verify_memory_provenance_scoped(
+        &self,
+        access: SourceAccess<'_>,
+        sources: Vec<MemorySource>,
+        root: Option<Key>,
+    ) -> Result<SourceProof, EngineError> {
+        if access.workspaces.len() > 17 || access.memories.len() > 24 {
+            return Err(EngineError::Invalid);
+        }
         let mut proof = SourceProof::default();
         let mut queue = VecDeque::new();
         for value in sources {
@@ -384,11 +422,13 @@ impl Journal {
                     resource,
                     result_digest,
                 } => {
-                    let grant = std::iter::once(authority.read)
-                        .chain(authority.source_workspaces.iter())
+                    let grant = access
+                        .workspaces
+                        .iter()
+                        .copied()
                         .find(|g| {
-                            g.owner() == c.owner
-                                && g.policy() == c.policy
+                            g.owner() == access.actor
+                                && g.policy() == access.policy
                                 && g.resource_identity() == resource
                                 && !g.is_revoked()
                         })
@@ -432,7 +472,7 @@ impl Journal {
                                 end_line: None,
                             });
                         let receipt = grant
-                            .execute(&c.owner, grant.environment(), &c.policy, read)
+                            .execute(access.actor, grant.environment(), access.policy, read)
                             .await?;
                         if !matches!(receipt.result(),workspace::WorkspaceResult::ReadFile(value) if value.sha256==sha&&value.total_bytes==bytes)
                         {
@@ -441,14 +481,14 @@ impl Journal {
                         receipt
                     } else {
                         let receipt = grant
-                            .execute(&c.owner, grant.environment(), &c.policy, request)
+                            .execute(access.actor, grant.environment(), access.policy, request)
                             .await?;
                         if digest("tool-result-v1", receipt.result())? != result_digest {
                             return Err(EngineError::RecoveryRequired);
                         }
                         receipt
                     };
-                    proof.files.push(receipt);
+                    proof.files.push(receipt.into_authority_lease());
                     let original:Option<(String,String)>=self.connection.query_row("SELECT owner,workspace_id FROM runtime_workspace_roots WHERE run_id=? AND workspace_id IS NOT NULL",[&run],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
                     if let Some((owner, id)) = original {
                         proof.signals.push(
@@ -470,13 +510,13 @@ impl Journal {
                     if !visited.insert(key.clone()) {
                         continue;
                     }
-                    let grant = authority
+                    let grant = access
                         .memories
                         .iter()
-                        .chain(authority.source_memories.iter())
+                        .copied()
                         .find(|g| g.scope_id() == scope && !g.is_revoked())
                         .ok_or(EngineError::Forbidden)?;
-                    self.memory_capability(grant, &c.owner, &c.policy)
+                    self.memory_capability(grant, access.actor, access.policy)
                         .map_err(error)?;
                     let historical = root.as_ref().is_some_and(|(s, e, v)| {
                         s == &scope
@@ -495,9 +535,10 @@ impl Journal {
                                 Some(&version),
                                 0,
                                 4096,
-                                false,
+                                access.disabled_root && root.as_ref() == Some(&key),
                             )
-                            .map_err(error)?,
+                            .map_err(error)?
+                            .into_source_lease(),
                         );
                     }
                     let graph = self.fact_provenance(&scope, &entry, &version)?;
@@ -506,6 +547,49 @@ impl Journal {
                     for child in graph.sources {
                         queue.push_back((child, depth + 1, path.clone()));
                     }
+                }
+            }
+        }
+        proof.check(self)?;
+        Ok(proof)
+    }
+    /// Keep the immutable source graph, while allowing only a witnessed chain of
+    /// this Run's approved replacements to supply the current entry lease.
+    pub(super) async fn verify_operation_memory_sources(
+        &self,
+        c: &RunConfig,
+        authority: AgentAuthority<'_>,
+        sources: Vec<MemorySource>,
+    ) -> Result<SourceProof, EngineError> {
+        let mut proof = SourceProof::default();
+        for source in sources {
+            match &source {
+                MemorySource::Memory {
+                    scope,
+                    entry,
+                    version,
+                } => {
+                    let observed = version.parse::<i64>().map_err(|_| EngineError::Invalid)?;
+                    let current = self.memory_history_version(c, scope, entry, observed)?;
+                    let root = (scope.clone(), entry.clone(), current.to_string());
+                    proof.append(
+                        self.verify_memory_fact(c, authority, scope, entry, &root.2)
+                            .await?,
+                    );
+                    if current != observed {
+                        // Validate the old graph too. Do not infer that a later
+                        // write erased its input dependencies.
+                        proof.append(
+                            self.verify_memory_provenance(c, authority, vec![source], Some(root))
+                                .await?,
+                        );
+                    }
+                }
+                MemorySource::Workspace { .. } => {
+                    proof.append(
+                        self.verify_memory_provenance(c, authority, vec![source], None)
+                            .await?,
+                    );
                 }
             }
         }
@@ -550,7 +634,12 @@ impl Journal {
             .collect::<Result<Vec<_>, _>>()?
         };
         let mut proof = SourceProof::default();
+        let mut visited = BTreeSet::new();
         for (scope, entry, version) in rows {
+            let version = self.memory_history_version(c, &scope, &entry, version)?;
+            if !visited.insert((scope.clone(), entry.clone(), version)) {
+                continue;
+            }
             proof.append(
                 self.verify_memory_fact(c, authority, &scope, &entry, &version.to_string())
                     .await?,

@@ -42,6 +42,7 @@ pub enum JournalError {
 pub struct Journal {
     connection: Connection,
     memory_session: String,
+    memory_cursors: std::cell::RefCell<std::collections::HashMap<String, memory::ManagementCursor>>,
     _host_lock: storage::HostLock,
     private_root: std::path::PathBuf,
     extra_private_roots: Vec<std::path::PathBuf>,
@@ -270,6 +271,7 @@ impl Journal {
         Ok(Self {
             connection,
             memory_session: uuid::Uuid::new_v4().to_string(),
+            memory_cursors: std::cell::RefCell::new(std::collections::HashMap::new()),
             _host_lock: lock,
             private_root: normalized.parent().ok_or(JournalError::Invalid)?.to_owned(),
             workspace_signals: std::cell::RefCell::new(std::collections::HashMap::new()),

@@ -4,7 +4,9 @@
 mod contracts;
 mod memory;
 pub use memory::{
-    AgentMemoryApproval, AgentMemoryPreview, MemoryProvenance, MemoryRecovery, MemorySource,
+    AgentMemoryApproval, AgentMemoryPreview, ManagedMemoryPage, MemoryManagementAuthority,
+    MemoryProvenance, MemoryReadSelection, MemoryRecovery, MemorySource, VerifiedMemoryPage,
+    VerifiedMemoryRead,
 };
 mod creation;
 mod editing;
@@ -1307,7 +1309,11 @@ impl Journal {
             }
             leases.push(receipt);
         }
-        proof.files.extend(leases);
+        proof.files.extend(
+            leases
+                .into_iter()
+                .map(workspace::ToolReceipt::into_authority_lease),
+        );
         proof.check(self)?;
         Ok(proof)
     }
