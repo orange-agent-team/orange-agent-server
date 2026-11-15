@@ -177,6 +177,23 @@ impl Journal {
         read: &WorkspaceGrant,
         create: &CreateFileGrant,
     ) -> Result<(), EngineError> {
+        self.approve_agent_creation_authorized(
+            owner,
+            run,
+            approval,
+            AgentAuthority::read(read).with_creation(create),
+        )
+        .await
+    }
+    pub async fn approve_agent_creation_authorized(
+        &self,
+        owner: &str,
+        run: &str,
+        approval: CreationApproval<'_>,
+        authority: AgentAuthority<'_>,
+    ) -> Result<(), EngineError> {
+        let read = authority.read;
+        let create = authority.create.ok_or(EngineError::Forbidden)?;
         let stored = self.stored_run(owner, run)?;
         check_grant(&stored.config, read)?;
         self.check_creation_binding(&stored, read, Some(create))?;
@@ -198,7 +215,9 @@ impl Journal {
         {
             return Err(EngineError::ApprovalRequired);
         }
-        let _leases = self.revalidate_sources(&stored.config, read).await?;
+        let _leases = self
+            .revalidate_sources_authority(&stored.config, authority)
+            .await?;
         check_grant(&stored.config, read)?;
         let (_, pin) = self.intent_contract(&stored.config, &op)?;
         let tx =
@@ -227,13 +246,17 @@ impl Journal {
         let c = &stored.config;
         let _sources = tokio::select! {
             _=cancel.changed()=>{create.request_revoke();self.cancel_agent(&c.owner,&c.run_id,authority.read)?;return Ok(());}
-            result=self.revalidate_sources(c,authority.read)=>result?,
+            result=self.revalidate_sources_authority(c,authority)=>result?,
         };
         self.check_creation_binding(stored, authority.read, Some(create))?;
         let operation = op.operation(c);
+        _sources.check(self)?;
+        let source_guard = _sources.into_effect_guard();
+        let source_observer = source_guard.observer();
         let result = tokio::select! {
             _=cancel.changed()=>{create.request_revoke();self.cancel_agent(&c.owner,&c.run_id,authority.read)?;return Ok(());}
-            result=self.create_file_for_agent(create,&operation,args,authority.read)=>result,
+            _=source_observer.revoked()=>{create.request_revoke();self.stop_agent(&c.run_id,"recovery_required","source_revoked_during_create")?;return Ok(());}
+            result=self.create_file_for_agent_with_sources(create,&operation,args,authority.read,Some(source_guard))=>result,
         };
         if *cancel.borrow() || authority.read.is_revoked() {
             create.request_revoke();

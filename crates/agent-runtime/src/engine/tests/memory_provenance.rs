@@ -13,7 +13,7 @@ fn write(content: &str) -> ResponseCandidate {
         json!({"scope_id":"personal","mutation":"put","payload":{"title":"Learned note","content":content,"enabled":true}}),
     )])
 }
-async fn learn_file(
+pub(super) async fn learn_file(
     j: &mut Journal,
     config: &RunConfig,
     read: &WorkspaceGrant,

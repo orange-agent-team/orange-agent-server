@@ -1,6 +1,7 @@
 //! Durable local operation boundary and controlled, local-only model/tool host.
 pub mod agent_request;
 pub mod catalog;
+mod effect_guard;
 pub mod engine;
 pub mod memory;
 mod storage;
@@ -44,8 +45,15 @@ pub struct Journal {
     _host_lock: storage::HostLock,
     private_root: std::path::PathBuf,
     extra_private_roots: Vec<std::path::PathBuf>,
-    workspace_signals:
+    workspace_signals: std::cell::RefCell<
         std::collections::HashMap<String, std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    >,
+    workspace_gates: std::cell::RefCell<
+        std::collections::HashMap<String, std::sync::Weak<tokio::sync::RwLock<()>>>,
+    >,
+    memory_signals: std::cell::RefCell<
+        std::collections::HashMap<(String, i64), std::sync::Weak<memory::ScopeSignal>>,
+    >,
 }
 pub struct ResponseAuthority {
     pub current: ExecutionIdentity,
@@ -73,8 +81,18 @@ impl Journal {
             rusqlite::OpenFlags::default() | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
         )?;
         let version: i64 = connection.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if !(0..=24).contains(&version) {
+        if !(0..=25).contains(&version) {
             return Err(JournalError::UnsupportedVersion);
+        }
+        if version == 25 {
+            let policy = connection.query_row(
+                "SELECT policy FROM runtime_effect_policy WHERE singleton=1",
+                [],
+                |r| r.get::<_, String>(0),
+            );
+            if !matches!(policy,Ok(ref value) if value=="source-lifetime.v1") {
+                return Err(JournalError::UnsupportedVersion);
+            }
         }
         if version == 0 {
             let existing:i64=connection.query_row("SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",[],|r|r.get(0))?;
@@ -230,6 +248,12 @@ impl Journal {
             tx.execute_batch(include_str!("schema_v24.sql"))?;
             tx.commit()?;
         }
+        if version < 25 {
+            let tx =
+                connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            tx.execute_batch(include_str!("schema_v25.sql"))?;
+            tx.commit()?;
+        }
         connection.execute_batch("BEGIN IMMEDIATE;
             UPDATE export_restorations SET state='unknown' WHERE state='dispatching';
             UPDATE export_retirements SET state='unknown' WHERE state='dispatching';
@@ -248,7 +272,9 @@ impl Journal {
             memory_session: uuid::Uuid::new_v4().to_string(),
             _host_lock: lock,
             private_root: normalized.parent().ok_or(JournalError::Invalid)?.to_owned(),
-            workspace_signals: std::collections::HashMap::new(),
+            workspace_signals: std::cell::RefCell::new(std::collections::HashMap::new()),
+            memory_signals: std::cell::RefCell::new(std::collections::HashMap::new()),
+            workspace_gates: std::cell::RefCell::new(std::collections::HashMap::new()),
             extra_private_roots: Vec::new(),
         })
     }

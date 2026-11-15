@@ -5,17 +5,26 @@ use std::{
     path::{Path, PathBuf},
 };
 
-/// The lock belongs to the Journal, never to accidentally inherited/duplicated
-/// descriptors. Journal declares this field after its Connection so graceful
-/// destruction closes SQLite before explicitly releasing the owned lock.
+/// One owned open-file description, retained only by explicit effect lifetimes.
+/// No duplicated descriptor can release the lock while an authorized worker lives.
 pub(crate) struct HostLock {
+    inner: std::sync::Arc<OwnedHostLock>,
+}
+struct OwnedHostLock {
     file: File,
 }
-impl Drop for HostLock {
+pub(crate) struct HostEffectLease {
+    _inner: std::sync::Arc<OwnedHostLock>,
+}
+impl HostLock {
+    pub(crate) fn effect_lease(&self) -> HostEffectLease {
+        HostEffectLease {
+            _inner: self.inner.clone(),
+        }
+    }
+}
+impl Drop for OwnedHostLock {
     fn drop(&mut self) {
-        // Unlock only this owned open-file description. A failure is still
-        // fail-closed: the descriptor closes next and a new owner must acquire
-        // its own lock normally. No forced unlock of another process/path.
         let _ = self.file.unlock();
     }
 }
@@ -41,7 +50,9 @@ pub(crate) fn open_private(path: &Path) -> Result<(PathBuf, HostLock), JournalEr
         std::fs::TryLockError::WouldBlock => JournalError::Busy,
         std::fs::TryLockError::Error(error) => JournalError::Io(error),
     })?;
-    let lock = HostLock { file: lock };
+    let lock = HostLock {
+        inner: std::sync::Arc::new(OwnedHostLock { file: lock }),
+    };
     // Sidecars must also be regular private files, never links into another location.
     for suffix in ["-wal", "-shm", "-journal"] {
         let sidecar = PathBuf::from(format!("{}{suffix}", normalized.to_string_lossy()));
@@ -157,6 +168,7 @@ mod tests {
         let first = Journal::open(&path).expect("first host");
         let duplicate = first
             ._host_lock
+            .inner
             .file
             .try_clone()
             .expect("duplicate open-file description fixture");
@@ -196,7 +208,7 @@ mod tests {
             .connection
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .expect("version");
-        assert_eq!(version, 24);
+        assert_eq!(version, 25);
         assert_eq!(
             journal.state("alice", "op").expect("state").as_deref(),
             Some("unknown")
@@ -228,7 +240,7 @@ mod tests {
     }
     #[test]
     fn future_and_unknown_schemas_are_not_rewritten() {
-        for version in [0, 25] {
+        for version in [0, 26] {
             let dir = private_temp();
             let path = dir.path().join("future.sqlite");
             drop(private_file(&path).expect("file"));

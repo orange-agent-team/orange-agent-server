@@ -245,9 +245,21 @@ impl Journal {
         operation: &str,
         authority: EditingAuthority<'_>,
     ) -> Result<workspace::patch::review::PatchReview, EngineError> {
+        self.agent_patch_preview_authorized(owner, run, operation, authority.internal())
+            .await
+    }
+    #[cfg(target_vendor = "apple")]
+    pub async fn agent_patch_preview_authorized(
+        &mut self,
+        owner: &str,
+        run: &str,
+        operation: &str,
+        authority: AgentAuthority<'_>,
+    ) -> Result<workspace::patch::review::PatchReview, EngineError> {
+        let edit = authority.edit.grant.ok_or(EngineError::Forbidden)?;
         let stored = self.stored_run(owner, run)?;
         check_grant(&stored.config, authority.read)?;
-        self.check_edit_binding(&stored, authority.read, authority.internal().edit)?;
+        self.check_edit_binding(&stored, authority.read, authority.edit)?;
         self.check_creation_binding(&stored, authority.read, authority.create)?;
         if stored.phase != "tools_pending" {
             return Err(EngineError::ApprovalRequired);
@@ -262,10 +274,10 @@ impl Journal {
             return Err(EngineError::Forbidden);
         };
         let _sources = self
-            .revalidate_sources(&stored.config, authority.read)
+            .revalidate_sources_authority(&stored.config, authority)
             .await?;
         self.prepare_patch_review(
-            authority.edit,
+            edit,
             authority.read,
             &op.operation(&stored.config),
             args.clone(),
@@ -282,8 +294,20 @@ impl Journal {
         approval: EditingApproval<'_>,
         authority: EditingAuthority<'_>,
     ) -> Result<(), EngineError> {
+        self.approve_agent_editing_authorized(owner, run, approval, authority.internal())
+            .await
+    }
+    #[cfg(target_vendor = "apple")]
+    pub async fn approve_agent_editing_authorized(
+        &mut self,
+        owner: &str,
+        run: &str,
+        approval: EditingApproval<'_>,
+        authority: AgentAuthority<'_>,
+    ) -> Result<(), EngineError> {
+        let edit = authority.edit.grant.ok_or(EngineError::Forbidden)?;
         let preview = self
-            .agent_patch_preview(owner, run, approval.operation_id, authority)
+            .agent_patch_preview_authorized(owner, run, approval.operation_id, authority)
             .await?;
         let stored = self.stored_run(owner, run)?;
         if preview.preview_digest != approval.preview_digest
@@ -297,7 +321,7 @@ impl Journal {
         // Patch approval has its own transaction. Both bindings are mandatory
         // at dispatch, so a failure to save the catalog pin cannot cause effects.
         self.approve_patch_review(
-            authority.edit,
+            edit,
             authority.read,
             &op.operation(&stored.config),
             approval.preview_digest,
@@ -415,13 +439,17 @@ impl Journal {
             let c = &stored.config;
             let _sources = tokio::select! {
                 _=cancel.changed()=>{edit.request_revoke();self.cancel_agent(&c.owner,&c.run_id,authority.read)?;return Ok(());}
-                result=self.revalidate_sources(c,authority.read)=>result?,
+                result=self.revalidate_sources_authority(c,authority)=>result?,
             };
             self.check_edit_binding(stored, authority.read, authority.edit)?;
             let operation = op.operation(c);
+            _sources.check(self)?;
+            let source_guard = _sources.into_effect_guard();
+            let source_observer = source_guard.observer();
             let dispatch = tokio::select! {
                 _=cancel.changed()=>{edit.request_revoke();self.cancel_agent(&c.owner,&c.run_id,authority.read)?;return Ok(());}
-                result=self.begin_patch_publication(edit,authority.read,&operation)=>result.map_err(error)?,
+                _=source_observer.revoked()=>{edit.request_revoke();self.stop_agent(&c.run_id,"recovery_required","source_revoked_during_edit")?;return Ok(());}
+                result=self.begin_patch_publication_with_sources(edit,authority.read,&operation,Some(source_guard))=>result.map_err(error)?,
             };
             struct Watcher(tokio::task::JoinHandle<()>);
             impl Drop for Watcher {
@@ -446,6 +474,7 @@ impl Journal {
                 if !*signal.borrow() {
                     tokio::select! {
                         _=signal.changed()=>{},
+                        _=source_observer.revoked()=>{},
                         _=tokio::time::sleep(timeout)=>{timeout_signal.store(true,std::sync::atomic::Ordering::Release);},
                     }
                 }

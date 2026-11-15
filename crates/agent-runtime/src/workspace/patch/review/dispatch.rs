@@ -42,6 +42,7 @@ pub use super::super::PublishedPatch;
 pub struct PatchDispatch {
     pub(super) approved: ApprovedPatch,
     pub(super) plan: PublicationPlan,
+    pub(crate) sources: Option<crate::effect_guard::EffectGuard>,
 }
 impl PatchDispatch {
     pub fn plan(&self) -> &PublicationPlan {
@@ -49,6 +50,10 @@ impl PatchDispatch {
     }
     pub fn has_live_directory_access(&self) -> bool {
         self.approved.has_live_directory_access()
+            && self
+                .sources
+                .as_ref()
+                .is_none_or(|s| s.check("patch.access"))
     }
 }
 
@@ -62,6 +67,33 @@ impl Journal {
         read: &WorkspaceGrant,
         op: &Operation<'_>,
     ) -> Result<PatchDispatch, PatchError> {
+        self.begin_patch_publication_with_sources(edit, read, op, None)
+            .await
+    }
+    pub(crate) async fn begin_patch_publication_with_sources(
+        &mut self,
+        edit: &EditFileGrant,
+        read: &WorkspaceGrant,
+        op: &Operation<'_>,
+        sources: Option<crate::effect_guard::EffectGuard>,
+    ) -> Result<PatchDispatch, PatchError> {
+        let needs: bool = self
+            .connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM runtime_memory_capabilities WHERE run_id=?)",
+                [op.run],
+                |r| r.get(0),
+            )
+            .map_err(JournalError::from)?;
+        if needs && sources.is_none() {
+            return Err(WorkspaceError::Forbidden.into());
+        }
+        if sources
+            .as_ref()
+            .is_some_and(|s| !s.check("patch.before_dispatch"))
+        {
+            return Err(WorkspaceError::Revoked.into());
+        }
         let approved = self.approved_patch(edit, read, op).await?;
         // Recheck after the filesystem await. The host owns the journal lock;
         // there are no further awaits between these checks and the commit.
@@ -148,11 +180,19 @@ impl Journal {
             params![op.run, op.id],
         )
         .map_err(JournalError::from)?;
-        if !approved.has_live_directory_access() {
+        if !approved.has_live_directory_access()
+            || sources
+                .as_ref()
+                .is_some_and(|s| !s.check("patch.commit_dispatch"))
+        {
             return Err(WorkspaceError::Revoked.into());
         }
         tx.commit().map_err(JournalError::from)?;
-        Ok(PatchDispatch { approved, plan })
+        Ok(PatchDispatch {
+            approved,
+            plan,
+            sources,
+        })
     }
 
     /// Recovery metadata for an authenticated owner, without opening the old

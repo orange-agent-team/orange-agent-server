@@ -181,6 +181,7 @@ impl Journal {
         private.extend(self.extra_private_roots.clone());
         let flag = self
             .workspace_signals
+            .borrow_mut()
             .entry(id.into())
             .or_insert_with(|| Arc::new(AtomicBool::new(false)))
             .clone();
@@ -232,6 +233,7 @@ impl Journal {
         Ok(CreationRevoker {
             flag: self
                 .workspace_signals
+                .borrow_mut()
                 .entry(id.into())
                 .or_insert_with(|| Arc::new(AtomicBool::new(false)))
                 .clone(),
@@ -262,7 +264,7 @@ impl Journal {
         if expected != version {
             return Err(JournalError::Conflict.into());
         }
-        if let Some(flag) = self.workspace_signals.get(id) {
+        if let Some(flag) = self.workspace_signals.borrow().get(id) {
             flag.store(true, Ordering::Release);
         }
         let tx = self

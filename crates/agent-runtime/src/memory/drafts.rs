@@ -288,6 +288,7 @@ impl Journal {
         additional_check: impl Fn(&Connection) -> Result<(), MemoryError>,
     ) -> Result<MemoryDraftOutcome, MemoryError> {
         prepared.view(self)?;
+        let _lease = prepared.grant.lease()?;
         let record = &prepared.record;
         let review = &prepared.review;
         let grant = &prepared.grant;

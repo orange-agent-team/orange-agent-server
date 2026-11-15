@@ -35,8 +35,67 @@ pub(in crate::engine) struct SourceProof {
     pub(in crate::engine) files: Vec<workspace::ToolReceipt>,
     memories: Vec<MemoryReadReceipt>,
     roots: Vec<(String, WorkspaceGrant)>,
+    signals: Vec<crate::workspaces::WorkspaceSourceLease>,
+    leases: Vec<crate::memory::MemoryLease>,
+    host: Option<crate::storage::HostEffectLease>,
 }
 impl SourceProof {
+    pub(in crate::engine) fn retain_host(&mut self, j: &Journal) {
+        self.host = Some(j._host_lock.effect_lease());
+    }
+    pub(in crate::engine) fn cover(
+        &mut self,
+        authority: AgentAuthority<'_>,
+    ) -> Result<(), EngineError> {
+        for grant in authority
+            .memories
+            .iter()
+            .chain(authority.source_memories.iter())
+        {
+            self.leases.push(grant.lease().map_err(error)?);
+        }
+        Ok(())
+    }
+    pub(in crate::engine) fn is_live(&self) -> bool {
+        self.files.iter().all(workspace::ToolReceipt::is_authorized)
+            && self
+                .memories
+                .iter()
+                .all(crate::memory::MemoryReadReceipt::is_authorized)
+            && self.roots.iter().all(|(_, v)| !v.is_revoked())
+            && self.signals.iter().all(|s| s.is_live())
+            && self.leases.iter().all(crate::memory::MemoryLease::is_live)
+    }
+    pub(in crate::engine) fn into_effect_guard(self) -> crate::effect_guard::EffectGuard {
+        let files = self
+            .files
+            .iter()
+            .map(workspace::ToolReceipt::revocation_grant)
+            .chain(self.roots.iter().map(|(_, g)| g.clone()))
+            .collect::<Vec<_>>();
+        let memories = self
+            .memories
+            .iter()
+            .map(crate::memory::MemoryReadReceipt::grant)
+            .chain(self.leases.iter().map(crate::memory::MemoryLease::grant))
+            .collect::<Vec<_>>();
+        let signals = self
+            .signals
+            .iter()
+            .map(crate::workspaces::WorkspaceSourceLease::flag)
+            .collect::<Vec<_>>();
+        crate::effect_guard::EffectGuard::new(
+            move || {
+                files.iter().all(|g| !g.is_revoked())
+                    && memories.iter().all(|g| !g.is_revoked())
+                    && signals
+                        .iter()
+                        .all(|s| !s.load(std::sync::atomic::Ordering::Acquire))
+            },
+            self,
+        )
+    }
+
     pub(in crate::engine) fn check(&self, j: &Journal) -> Result<(), EngineError> {
         self.check_db(&j.connection, &j.memory_session, None)
     }
@@ -53,8 +112,11 @@ impl SourceProof {
         session: &str,
         changed: Option<(&str, &str, i64)>,
     ) -> Result<(), EngineError> {
-        if self.files.iter().any(|v| !v.is_authorized()) {
+        if !self.is_live() {
             return Err(EngineError::Forbidden);
+        }
+        for lease in &self.leases {
+            lease.check_db(db, session).map_err(error)?;
         }
         for receipt in &self.memories {
             receipt
@@ -70,6 +132,8 @@ impl SourceProof {
         self.files.append(&mut other.files);
         self.memories.append(&mut other.memories);
         self.roots.append(&mut other.roots);
+        self.signals.append(&mut other.signals);
+        self.leases.append(&mut other.leases);
     }
 }
 type Key = (String, String, String);
@@ -123,7 +187,9 @@ impl Journal {
                     WorkspaceRequest::ReadFile(_)
                     | WorkspaceRequest::ListDirectory(_)
                     | WorkspaceRequest::SearchFiles(_)
-                    | WorkspaceRequest::SearchText(_),
+                    | WorkspaceRequest::SearchText(_)
+                    | WorkspaceRequest::WriteFile(_)
+                    | WorkspaceRequest::ApplyPatch(_),
                 ) => {
                     let resource:Option<String>=self.connection.query_row("SELECT resource FROM runtime_workspace_roots WHERE run_id=? AND owner=? AND environment=? AND policy=?",params![c.run_id,c.owner,c.environment,c.policy],|r|r.get(0)).optional()?;
                     let result_digest: String = self.connection.query_row(
@@ -155,7 +221,6 @@ impl Journal {
                         return Err(EngineError::RecoveryRequired);
                     }
                 }
-                _ => return Err(EngineError::ExecutionEnvironmentUnavailable),
             }
             if sources.len() > 128 {
                 return Err(EngineError::Invalid);
@@ -332,28 +397,65 @@ impl Journal {
                     let config = self.stored_run(&owner, &run)?.config;
                     let op = self.operation_record(&config, &operation)?;
                     self.intent_contract(&config, &op)?;
-                    self.checked_cached_result(&config, &op)?;
+                    let cached = self.checked_cached_result(&config, &op)?;
                     let expected:String=self.connection.query_row("SELECT result_digest FROM operations WHERE operation_id=? AND state='succeeded'",[&operation],|r|r.get(0))?;
                     if expected != result_digest {
                         return Err(EngineError::RecoveryRequired);
                     }
                     let request = op.request.workspace()?.clone();
-                    if !matches!(
-                        request,
-                        WorkspaceRequest::ReadFile(_)
-                            | WorkspaceRequest::ListDirectory(_)
-                            | WorkspaceRequest::SearchFiles(_)
-                            | WorkspaceRequest::SearchText(_)
-                    ) {
-                        return Err(EngineError::ExecutionEnvironmentUnavailable);
-                    }
-                    let receipt = grant
-                        .execute(&c.owner, grant.environment(), &c.policy, request)
-                        .await?;
-                    if digest("tool-result-v1", receipt.result())? != result_digest {
-                        return Err(EngineError::RecoveryRequired);
-                    }
+                    let published = match &request {
+                        WorkspaceRequest::WriteFile(_) => Some((
+                            cached["data"]["path"].as_str(),
+                            cached["data"]["sha256"].as_str(),
+                            cached["data"]["bytes"].as_str(),
+                        )),
+                        WorkspaceRequest::ApplyPatch(_) => Some((
+                            cached["data"]["path"].as_str(),
+                            cached["data"]["result_sha256"].as_str(),
+                            cached["data"]["bytes"].as_str(),
+                        )),
+                        _ => None,
+                    };
+                    let receipt = if let Some((path, sha, bytes)) = published {
+                        let (path, sha, bytes) = (
+                            path.ok_or(EngineError::Invalid)?,
+                            sha.ok_or(EngineError::Invalid)?,
+                            bytes.ok_or(EngineError::Invalid)?,
+                        );
+                        let read =
+                            WorkspaceRequest::ReadFile(orange_protocol::tools::ReadFileArgs {
+                                path: path.into(),
+                                expected_sha256: Some(sha.into()),
+                                start_byte: None,
+                                max_bytes: None,
+                                start_line: None,
+                                end_line: None,
+                            });
+                        let receipt = grant
+                            .execute(&c.owner, grant.environment(), &c.policy, read)
+                            .await?;
+                        if !matches!(receipt.result(),workspace::WorkspaceResult::ReadFile(value) if value.sha256==sha&&value.total_bytes==bytes)
+                        {
+                            return Err(EngineError::RecoveryRequired);
+                        }
+                        receipt
+                    } else {
+                        let receipt = grant
+                            .execute(&c.owner, grant.environment(), &c.policy, request)
+                            .await?;
+                        if digest("tool-result-v1", receipt.result())? != result_digest {
+                            return Err(EngineError::RecoveryRequired);
+                        }
+                        receipt
+                    };
                     proof.files.push(receipt);
+                    let original:Option<(String,String)>=self.connection.query_row("SELECT owner,workspace_id FROM runtime_workspace_roots WHERE run_id=? AND workspace_id IS NOT NULL",[&run],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
+                    if let Some((owner, id)) = original {
+                        proof.signals.push(
+                            self.source_workspace_lease(&owner, &id)
+                                .map_err(|_| EngineError::Forbidden)?,
+                        );
+                    }
                     proof.roots.push((run, grant.clone()));
                 }
                 MemorySource::Memory {

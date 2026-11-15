@@ -95,6 +95,7 @@ struct Publication {
     result: CreatedFile,
     _permit: Permit,
     _read_permit: Option<Permit>,
+    _sources: Option<crate::effect_guard::EffectGuard>,
 }
 impl Journal {
     /// Complete response -> exact approval -> durable dispatch -> atomic new
@@ -105,14 +106,15 @@ impl Journal {
         op: &Operation<'_>,
         args: CreateFileArgs,
     ) -> Result<CreatedFile, CreateFileError> {
-        self.create_file_guarded(grant, op, args, None).await
+        self.create_file_guarded(grant, op, args, None, None).await
     }
-    pub(crate) async fn create_file_for_agent(
+    pub(crate) async fn create_file_for_agent_with_sources(
         &mut self,
         grant: &CreateFileGrant,
         op: &Operation<'_>,
         args: CreateFileArgs,
         read: &WorkspaceGrant,
+        sources: Option<crate::effect_guard::EffectGuard>,
     ) -> Result<CreatedFile, CreateFileError> {
         if read.resource_identity() != grant.resource_identity() {
             return Err(WorkspaceError::EnvironmentChanged.into());
@@ -120,7 +122,7 @@ impl Journal {
         let read_permit = read
             .permit(op.owner, read.environment(), op.policy_version)
             .await?;
-        self.create_file_guarded(grant, op, args, Some(read_permit))
+        self.create_file_guarded(grant, op, args, Some(read_permit), sources)
             .await
     }
     async fn create_file_guarded(
@@ -129,6 +131,7 @@ impl Journal {
         op: &Operation<'_>,
         args: CreateFileArgs,
         read_permit: Option<Permit>,
+        sources: Option<crate::effect_guard::EffectGuard>,
     ) -> Result<CreatedFile, CreateFileError> {
         validate_binding(grant, op, &args)?;
         self.validate_creation_consent(grant)?;
@@ -192,6 +195,23 @@ impl Journal {
         if runtime && read_permit.is_none() {
             return Err(WorkspaceError::Forbidden.into());
         }
+        let needs_sources: bool = self
+            .connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM runtime_memory_capabilities WHERE run_id=?)",
+                [op.run],
+                |r| r.get(0),
+            )
+            .map_err(JournalError::from)?;
+        if runtime && needs_sources && sources.is_none() {
+            return Err(WorkspaceError::Forbidden.into());
+        }
+        if sources
+            .as_ref()
+            .is_some_and(|s| !s.check("create.before_dispatch"))
+        {
+            return Err(WorkspaceError::Revoked.into());
+        }
         self.claim_with_runtime_step(op, now, true)?;
         let mut cancellation = CancellationGuard {
             inner: permit.inner.clone(),
@@ -199,7 +219,7 @@ impl Journal {
         };
         let work = tokio::task::spawn_blocking(move || {
             let _slot = slot;
-            publish(permit, read_permit, args)
+            publish(permit, read_permit, args, sources)
         });
         let result = tokio::time::timeout(grant.grant.inner.deadline, work).await;
         let result = match result {
@@ -208,7 +228,11 @@ impl Journal {
         };
         match result {
             Ok(receipt) => {
-                if grant.grant.is_revoked()
+                if receipt
+                    ._sources
+                    .as_ref()
+                    .is_some_and(|s| !s.check("create.before_receipt"))
+                    || grant.grant.is_revoked()
                     || receipt
                         ._read_permit
                         .as_ref()
@@ -283,8 +307,14 @@ fn publish(
     permit: Permit,
     read_permit: Option<Permit>,
     args: CreateFileArgs,
+    sources: Option<crate::effect_guard::EffectGuard>,
 ) -> Result<Publication, CreateFileError> {
-    if permit.inner.is_revoked() || read_permit.as_ref().is_some_and(|p| p.inner.is_revoked()) {
+    if sources
+        .as_ref()
+        .is_some_and(|s| !s.check("create.before_staging"))
+        || permit.inner.is_revoked()
+        || read_permit.as_ref().is_some_and(|p| p.inner.is_revoked())
+    {
         return Err(WorkspaceError::Revoked.into());
     }
     let parts = components(&args.path, false)?;
@@ -320,7 +350,12 @@ fn publish(
             return Err(CreateFileError::Unknown);
         }
 
-        if permit.inner.is_revoked() || read_permit.as_ref().is_some_and(|p| p.inner.is_revoked()) {
+        if sources
+            .as_ref()
+            .is_some_and(|s| !s.check("create.before_publish"))
+            || permit.inner.is_revoked()
+            || read_permit.as_ref().is_some_and(|p| p.inner.is_revoked())
+        {
             return Err(WorkspaceError::Revoked.into());
         }
         #[cfg(any(target_vendor = "apple", target_os = "linux", target_os = "android"))]
@@ -357,7 +392,12 @@ fn publish(
             .into_std_file()
             .sync_all()
             .map_err(|_| CreateFileError::Unknown)?;
-        if permit.inner.is_revoked() || read_permit.as_ref().is_some_and(|p| p.inner.is_revoked()) {
+        if sources
+            .as_ref()
+            .is_some_and(|s| !s.check("create.after_publish"))
+            || permit.inner.is_revoked()
+            || read_permit.as_ref().is_some_and(|p| p.inner.is_revoked())
+        {
             return Err(CreateFileError::Unknown);
         }
         Ok(CreatedFile {
@@ -376,6 +416,7 @@ fn publish(
         result,
         _permit: permit,
         _read_permit: read_permit,
+        _sources: sources,
     })
 }
 

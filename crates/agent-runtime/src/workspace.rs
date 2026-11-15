@@ -200,6 +200,7 @@ struct GrantInner {
     resource_identity: String,
     persistent_identity: bool,
     workspace_revocation: Option<Arc<AtomicBool>>,
+    origin_gate: Option<Arc<RwLock<()>>>,
     policy: String,
     revoked: AtomicBool,
     gate: Arc<RwLock<()>>,
@@ -221,6 +222,7 @@ pub struct WorkspaceGrant {
 struct Permit {
     inner: Arc<GrantInner>,
     _gate: OwnedRwLockReadGuard<()>,
+    _origin: Option<OwnedRwLockReadGuard<()>>,
 }
 struct CancellationGuard {
     inner: Arc<GrantInner>,
@@ -246,6 +248,11 @@ pub struct PreparedTool {
     request: WorkspaceRequest,
 }
 impl ToolReceipt {
+    pub(crate) fn revocation_grant(&self) -> WorkspaceGrant {
+        WorkspaceGrant {
+            inner: self._permit.inner.clone(),
+        }
+    }
     pub(crate) fn is_authorized(&self) -> bool {
         !self._permit.inner.is_revoked()
     }
@@ -369,12 +376,22 @@ impl WorkspaceGrant {
                 resource_identity,
                 persistent_identity,
                 workspace_revocation,
+                origin_gate: None,
                 policy: policy.into(),
                 revoked: AtomicBool::new(false),
                 gate: Arc::new(RwLock::new(())),
                 deadline: Duration::from_secs(10),
             }),
         })
+    }
+    pub(crate) fn with_origin_gate(
+        mut self,
+        gate: Arc<RwLock<()>>,
+    ) -> Result<Self, WorkspaceError> {
+        Arc::get_mut(&mut self.inner)
+            .ok_or(WorkspaceError::Invalid)?
+            .origin_gate = Some(gate);
+        Ok(self)
     }
     pub fn environment(&self) -> &str {
         &self.inner.environment
@@ -417,12 +434,18 @@ impl WorkspaceGrant {
             return Err(WorkspaceError::EnvironmentChanged);
         }
         let gate = self.inner.gate.clone().read_owned().await;
+        let origin = if let Some(gate) = &self.inner.origin_gate {
+            Some(gate.clone().read_owned().await)
+        } else {
+            None
+        };
         if self.is_revoked() {
             return Err(WorkspaceError::Revoked);
         }
         Ok(Permit {
             inner: self.inner.clone(),
             _gate: gate,
+            _origin: origin,
         })
     }
     pub async fn prepare(

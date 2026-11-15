@@ -240,11 +240,6 @@ impl Journal {
             None
         };
         let edit_binding = self.edit_start_binding(config, grant, edit)?;
-        // Mixed memory-to-filesystem publication still needs a shared source
-        // lifetime/drain boundary. Keep this unfinished candidate fail-closed.
-        if !memories.is_empty() && (creation_binding.is_some() || edit_binding.is_some()) {
-            return Err(EngineError::ExecutionEnvironmentUnavailable);
-        }
         let config_json = encode(config)?;
         let config_digest = if !memories.is_empty() {
             digest(
@@ -1243,22 +1238,6 @@ impl Journal {
         tx.commit()?;
         Ok(())
     }
-    async fn revalidate_sources(
-        &self,
-        c: &RunConfig,
-        grant: &WorkspaceGrant,
-    ) -> Result<memory::SourceProof, EngineError> {
-        self.revalidate_sources_with_memory(c, grant, &[]).await
-    }
-    async fn revalidate_sources_with_memory(
-        &self,
-        c: &RunConfig,
-        grant: &WorkspaceGrant,
-        memories: &[crate::memory::MemoryGrant],
-    ) -> Result<memory::SourceProof, EngineError> {
-        self.revalidate_sources_authority(c, AgentAuthority::read(grant).with_memory(memories))
-            .await
-    }
     async fn revalidate_sources_authority(
         &self,
         c: &RunConfig,
@@ -1269,6 +1248,8 @@ impl Journal {
         self.check_registered_run_root(c, grant)?;
         self.revalidate_memory_sources(c, memories)?;
         let mut proof = self.verify_run_memory_provenance(c, authority).await?;
+        proof.cover(authority)?;
+        proof.retain_host(self);
         let rows = {
             let mut statement=self.connection.prepare("SELECT request_json,result_digest,result_json,operation_id FROM operations WHERE run_id=? AND state='succeeded' AND request_json IS NOT NULL")?;
             statement

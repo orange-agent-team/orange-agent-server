@@ -50,8 +50,12 @@ pub struct WorkspaceView {
 #[derive(Clone)]
 pub struct WorkspaceRevoker {
     flag: Arc<AtomicBool>,
+    gate: Arc<tokio::sync::RwLock<()>>,
 }
 impl WorkspaceRevoker {
+    pub async fn wait_drained(&self) {
+        drop(self.gate.clone().write_owned().await);
+    }
     pub fn request_revoke(&self) {
         self.flag.store(true, Ordering::Release);
     }
@@ -287,15 +291,19 @@ impl Journal {
         id: &str,
     ) -> Result<WorkspaceRevoker, WorkspaceStoreError> {
         let view = self.workspace(owner, id)?;
-        if !view.active {
-            return Err(WorkspaceStoreError::Revoked);
-        }
         let flag = self
             .workspace_signals
+            .borrow_mut()
             .entry(id.into())
             .or_insert_with(|| Arc::new(AtomicBool::new(false)))
             .clone();
-        Ok(WorkspaceRevoker { flag })
+        if !view.active {
+            flag.store(true, Ordering::Release);
+        }
+        Ok(WorkspaceRevoker {
+            flag,
+            gate: self.workspace_origin_gate(id),
+        })
     }
     pub fn open_workspace(
         &mut self,
@@ -318,7 +326,8 @@ impl Journal {
             Path::new(&view.canonical_path),
             &self.protected_roots(),
             Some(revoker.flag),
-        )?;
+        )?
+        .with_origin_gate(revoker.gate)?;
         // Verify again after opening the capability: a path swap between the two
         // opens must not change which object receives the persisted authority.
         if grant.environment() != view.environment
@@ -442,7 +451,15 @@ pub(crate) fn quarantined(
 
 impl Drop for Journal {
     fn drop(&mut self) {
-        for flag in self.workspace_signals.values() {
+        for signal in self
+            .memory_signals
+            .borrow()
+            .values()
+            .filter_map(std::sync::Weak::upgrade)
+        {
+            signal.revoke();
+        }
+        for flag in self.workspace_signals.borrow().values() {
             flag.store(true, Ordering::Release);
         }
     }
@@ -450,3 +467,68 @@ impl Drop for Journal {
 
 #[cfg(test)]
 mod tests;
+
+impl Journal {
+    pub(crate) fn source_workspace_signal(
+        &self,
+        owner: &str,
+        id: &str,
+    ) -> Result<Arc<AtomicBool>, WorkspaceStoreError> {
+        let view = self.workspace(owner, id)?;
+        if !view.active {
+            return Err(WorkspaceStoreError::Revoked);
+        }
+        Ok(self
+            .workspace_signals
+            .borrow_mut()
+            .entry(id.into())
+            .or_insert_with(|| Arc::new(AtomicBool::new(false)))
+            .clone())
+    }
+}
+
+pub(crate) struct WorkspaceSourceLease {
+    flag: Arc<AtomicBool>,
+    _guard: tokio::sync::OwnedRwLockReadGuard<()>,
+}
+impl WorkspaceSourceLease {
+    pub(crate) fn flag(&self) -> Arc<AtomicBool> {
+        self.flag.clone()
+    }
+    pub(crate) fn is_live(&self) -> bool {
+        !self.flag.load(Ordering::Acquire)
+    }
+}
+impl Journal {
+    fn workspace_origin_gate(&self, id: &str) -> Arc<tokio::sync::RwLock<()>> {
+        let mut gates = self.workspace_gates.borrow_mut();
+        gates.retain(|_, g| g.strong_count() > 0);
+        if let Some(gate) = gates.get(id).and_then(std::sync::Weak::upgrade) {
+            return gate;
+        }
+        let gate = Arc::new(tokio::sync::RwLock::new(()));
+        gates.insert(id.into(), Arc::downgrade(&gate));
+        gate
+    }
+    pub(crate) fn source_workspace_lease(
+        &self,
+        owner: &str,
+        id: &str,
+    ) -> Result<WorkspaceSourceLease, WorkspaceStoreError> {
+        let flag = self.source_workspace_signal(owner, id)?;
+        if flag.load(Ordering::Acquire) {
+            return Err(WorkspaceStoreError::Revoked);
+        }
+        let guard = self
+            .workspace_origin_gate(id)
+            .try_read_owned()
+            .map_err(|_| WorkspaceStoreError::Revoked)?;
+        if flag.load(Ordering::Acquire) {
+            return Err(WorkspaceStoreError::Revoked);
+        }
+        Ok(WorkspaceSourceLease {
+            flag,
+            _guard: guard,
+        })
+    }
+}
