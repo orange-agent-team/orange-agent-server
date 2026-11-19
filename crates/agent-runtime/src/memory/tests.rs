@@ -564,3 +564,59 @@ fn revocation_signal_before_commit_rolls_back_fact_and_receipt_together() {
         .expect("no committed effects");
     assert_eq!(applied, 0);
 }
+
+#[tokio::test]
+async fn delegated_task_access_obeys_parent_mode_cancellation_and_drain() {
+    use tokio::time::{Duration, timeout};
+    let temp = tempfile::tempdir().expect("temp");
+    let mut j = journal(&temp);
+    j.create_memory_scope("alice", "personal", false)
+        .expect("scope");
+    let parent = j
+        .authorize_memory("alice", "personal", "policy", true)
+        .expect("selected");
+    let reader = j.derive_task_memory(&parent, false).expect("reader");
+    let writer = j.derive_task_memory(&parent, true).expect("writer");
+    let readonly_parent = j
+        .authorize_memory("alice", "personal", "policy", false)
+        .expect("independent read");
+    assert!(j.derive_task_memory(&readonly_parent, true).is_err());
+    assert!(
+        j.prepare_memory_write(&reader, "denied", request("alice", "entry", None, "data"))
+            .is_err()
+    );
+    approve(
+        &mut j,
+        &writer,
+        "write",
+        request("alice", "entry", None, "data"),
+    );
+    writer.request_revoke();
+    assert!(!reader.is_revoked() && !parent.is_revoked());
+    let receipt = j
+        .read_memory(&reader, "entry", Some("1"), 0, 4096, false)
+        .expect("held task receipt");
+    let waiting = tokio::spawn({
+        let reader = reader.clone();
+        async move {
+            reader.revoked().await;
+        }
+    });
+    parent.request_revoke();
+    timeout(Duration::from_secs(1), waiting)
+        .await
+        .expect("parent wakes child")
+        .expect("watch");
+    assert!(receipt.view(&j).is_err());
+    assert!(j.derive_task_memory(&parent, false).is_err());
+    assert!(
+        timeout(Duration::from_millis(20), parent.wait_drained())
+            .await
+            .is_err()
+    );
+    drop(receipt);
+    timeout(Duration::from_secs(1), parent.wait_drained())
+        .await
+        .expect("actual drain");
+    assert!(!readonly_parent.is_revoked());
+}

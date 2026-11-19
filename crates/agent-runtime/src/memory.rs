@@ -103,6 +103,20 @@ pub(crate) struct ScopeSignal {
     gate: Arc<tokio::sync::RwLock<()>>,
 }
 impl ScopeSignal {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            closed: AtomicBool::new(false),
+            notice: tokio::sync::watch::channel(false).0,
+            gate: Arc::new(tokio::sync::RwLock::new(())),
+        })
+    }
+    fn acquire(&self) -> Result<tokio::sync::OwnedRwLockReadGuard<()>, MemoryError> {
+        self.gate
+            .clone()
+            .try_read_owned()
+            .map_err(|_| MemoryError::Denied)
+    }
+
     pub(crate) fn revoke(&self) {
         self.closed.store(true, Ordering::Release);
         self.notice.send_replace(true);
@@ -126,6 +140,7 @@ impl MemoryScopeRevoker {
 }
 pub(crate) struct MemoryLease {
     grant: MemoryGrant,
+    _parent: Option<tokio::sync::OwnedRwLockReadGuard<()>>,
     _local: tokio::sync::OwnedRwLockReadGuard<()>,
     _scope: tokio::sync::OwnedRwLockReadGuard<()>,
 }
@@ -149,9 +164,8 @@ pub struct MemoryGrant {
     epoch: i64,
     write: bool,
     policy: String,
-    closed: Arc<AtomicBool>,
-    revoked: tokio::sync::watch::Sender<bool>,
-    gate: Arc<tokio::sync::RwLock<()>>,
+    local: Arc<ScopeSignal>,
+    parent: Option<Arc<ScopeSignal>>,
     scope_signal: Arc<ScopeSignal>,
 }
 impl MemoryGrant {
@@ -159,44 +173,50 @@ impl MemoryGrant {
     /// the serialized Journal mutation before acknowledging closure. Scope-wide
     /// revocation uses MemoryScopeRevoker, not a single session's local signal.
     pub fn request_revoke(&self) {
-        self.closed.store(true, Ordering::Release);
-        self.revoked.send_replace(true);
+        self.local.revoke();
     }
     pub fn is_revoked(&self) -> bool {
-        self.closed.load(Ordering::Acquire) || self.scope_signal.closed.load(Ordering::Acquire)
+        self.local.closed.load(Ordering::Acquire)
+            || self.scope_signal.closed.load(Ordering::Acquire)
+            || self
+                .parent
+                .as_ref()
+                .is_some_and(|p| p.closed.load(Ordering::Acquire))
     }
     pub async fn wait_drained(&self) {
-        drop(self.gate.clone().write_owned().await);
+        drop(self.local.gate.clone().write_owned().await);
     }
     pub(crate) fn lease(&self) -> Result<MemoryLease, MemoryError> {
         if self.is_revoked() {
             return Err(MemoryError::Denied);
         }
-        let local = self
-            .gate
-            .clone()
-            .try_read_owned()
-            .map_err(|_| MemoryError::Denied)?;
-        let scope = self
-            .scope_signal
-            .gate
-            .clone()
-            .try_read_owned()
-            .map_err(|_| MemoryError::Denied)?;
+        let parent = self
+            .parent
+            .as_deref()
+            .map(ScopeSignal::acquire)
+            .transpose()?;
+        let local = self.local.acquire()?;
+        let scope = self.scope_signal.acquire()?;
         if self.is_revoked() {
             return Err(MemoryError::Denied);
         }
         Ok(MemoryLease {
             grant: self.clone(),
             _local: local,
+            _parent: parent,
             _scope: scope,
         })
     }
     pub(crate) async fn revoked(&self) {
-        let mut local = self.revoked.subscribe();
+        let mut local = self.local.notice.subscribe();
+        let mut parent = self.parent.as_ref().map(|p| p.notice.subscribe());
         let mut scope = self.scope_signal.notice.subscribe();
         while !self.is_revoked() {
-            tokio::select! {_=local.changed()=>{},_=scope.changed()=>{}}
+            tokio::select! {
+                _ = local.changed() => {},
+                _ = scope.changed() => {},
+                _ = async { if let Some(rx) = &mut parent { let _ = rx.changed().await; } else { std::future::pending::<()>().await; } } => {}
+            }
         }
     }
     pub(crate) fn actor(&self) -> &str {
@@ -371,6 +391,24 @@ impl Journal {
         self.memory_scope_signal(scope, revision).revoke();
         self.memory_scope(owner, scope)
     }
+    /// Derive a separately cancellable task session from the selected Host grant.
+    /// Every child lease participates in its parent's drain until the work finishes.
+    pub fn derive_task_memory(
+        &self,
+        selected: &MemoryGrant,
+        write: bool,
+    ) -> Result<MemoryGrant, MemoryError> {
+        check(&self.connection, selected, write, &self.memory_session)?;
+        if selected.parent.is_some() {
+            return Err(MemoryError::Denied);
+        }
+        Ok(MemoryGrant {
+            parent: Some(selected.local.clone()),
+            local: ScopeSignal::new(),
+            write,
+            ..selected.clone()
+        })
+    }
     pub fn authorize_memory(
         &self,
         actor: &str,
@@ -394,9 +432,8 @@ impl Journal {
             )?,
             write,
             policy: policy.into(),
-            closed: Arc::new(AtomicBool::new(false)),
-            revoked: tokio::sync::watch::channel(false).0,
-            gate: Arc::new(tokio::sync::RwLock::new(())),
+            local: ScopeSignal::new(),
+            parent: None,
             scope_signal: self.memory_scope_signal(scope, version(&snapshot.revision)?),
         };
         check(&self.connection, &grant, write, &self.memory_session)?;
@@ -854,11 +891,7 @@ impl Journal {
         if let Some(signal) = signals.get(&key).and_then(std::sync::Weak::upgrade) {
             return signal;
         }
-        let signal = Arc::new(ScopeSignal {
-            closed: AtomicBool::new(false),
-            notice: tokio::sync::watch::channel(false).0,
-            gate: Arc::new(tokio::sync::RwLock::new(())),
-        });
+        let signal = ScopeSignal::new();
         signals.insert(key, Arc::downgrade(&signal));
         signal
     }

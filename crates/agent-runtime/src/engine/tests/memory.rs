@@ -365,39 +365,46 @@ async fn memory_revocation_cancels_inflight_model_without_committing_response_or
             })
         }
     }
-    let f = Fixture::new();
-    let mut j = f.open();
-    let grants = vec![scope(&mut j)];
-    let authority = AgentAuthority::read(&f.grant).with_memory(&grants);
-    j.start_agent_authorized(&f.config, prompt(), authority, false)
-        .expect("start");
-    let model = Waiting {
-        entered: tokio::sync::Notify::new(),
-        dropped: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-    };
-    let (_tx, rx) = watch::channel(false);
-    let work = j.advance_agent_authorized("alice", "run-1", authority, &model, rx);
-    let revoke = async {
-        model.entered.notified().await;
-        grants[0].request_revoke();
-    };
-    let (result, _) =
-        tokio::time::timeout(Duration::from_secs(2), async { tokio::join!(work, revoke) })
-            .await
-            .expect("revocation stops await");
-    assert!(result.is_err());
-    assert!(model.dropped.load(Ordering::SeqCst));
-    for table in ["responses", "operations", "memory_drafts"] {
-        let count: i64 = j
-            .connection
-            .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
-            .expect("no commit");
-        assert_eq!(count, 0, "{table}");
+    for delegated in [false, true] {
+        let f = Fixture::new();
+        let mut j = f.open();
+        let parent = scope(&mut j);
+        let grants = if delegated {
+            vec![j.derive_task_memory(&parent, false).expect("task grant")]
+        } else {
+            vec![parent.clone()]
+        };
+        let authority = AgentAuthority::read(&f.grant).with_memory(&grants);
+        j.start_agent_authorized(&f.config, prompt(), authority, false)
+            .expect("start");
+        let model = Waiting {
+            entered: tokio::sync::Notify::new(),
+            dropped: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        };
+        let (_tx, rx) = watch::channel(false);
+        let work = j.advance_agent_authorized("alice", "run-1", authority, &model, rx);
+        let revoke = async {
+            model.entered.notified().await;
+            parent.request_revoke();
+        };
+        let (result, _) =
+            tokio::time::timeout(Duration::from_secs(2), async { tokio::join!(work, revoke) })
+                .await
+                .expect("revocation stops await");
+        assert!(result.is_err());
+        assert!(model.dropped.load(Ordering::SeqCst));
+        for table in ["responses", "operations", "memory_drafts"] {
+            let count: i64 = j
+                .connection
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
+                .expect("no commit");
+            assert_eq!(count, 0, "{table}");
+        }
+        assert_eq!(
+            j.agent_view("alice", "run-1").expect("metadata").phase,
+            Phase::RecoveryRequired
+        );
     }
-    assert_eq!(
-        j.agent_view("alice", "run-1").expect("metadata").phase,
-        Phase::RecoveryRequired
-    );
 }
 #[tokio::test]
 async fn late_approval_loss_rolls_back_memory_fact_and_never_replays_unknown_operation() {
