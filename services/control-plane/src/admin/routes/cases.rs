@@ -146,3 +146,97 @@ pub(super) async fn detail(
     tx.commit().await?;
     audit::response(result, &request)
 }
+
+pub(super) async fn activity(
+    State(identity): State<Arc<AdminIdentity>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    query: Result<Query<ScopedQuery>, QueryRejection>,
+) -> Result<Response, AdminError> {
+    let request = audit::request_id(&headers)?;
+    let query = query.map_err(|_| AdminError::Invalid)?.0;
+    let scope = query.scope()?;
+    let limit = query.limit.unwrap_or(50);
+    if !id_valid(&id)
+        || !(1..=200).contains(&limit)
+        || !matches!(scope.kind.as_str(), "tenant" | "platform")
+    {
+        return Err(AdminError::Invalid);
+    }
+    let mut tx = identity.pool.begin().await?;
+    let session = identity.current_in(&headers, &mut tx).await?;
+    session.authorize("cases.read", &scope)?;
+    let owner = (scope.kind == "tenant").then_some(&scope.scope_id);
+    let row=sqlx::query("SELECT owner_id,version,assigned_to,resolution_ref FROM reconciliation_cases WHERE environment=$1 AND case_id=$2 AND ($3::text IS NULL OR owner_id=$3) FOR SHARE")
+        .bind(&scope.environment).bind(&id).bind(owner).fetch_optional(&mut *tx).await?.ok_or(AdminError::NotFound)?;
+    let session_hash = hash_secret(&cookie(&headers, SESSION_COOKIE)?);
+    let fingerprint = hash_secret(
+        &serde_json::to_string(&(
+            "case-activity.v1",
+            &scope,
+            &id,
+            &session.view.principal_id,
+            &session.view.policy_version,
+            session.grants.get(&scope),
+        ))
+        .map_err(|_| AdminError::Unavailable)?,
+    );
+    let version: i64 = row.try_get("version")?;
+    let (upper, before) = if let Some(token) = query.cursor {
+        if token.is_empty() || token.len() > 2048 {
+            return Err(AdminError::Invalid);
+        }
+        let (upper,last):(i64,i64)=sqlx::query_as("SELECT snapshot_sequence,before_sequence FROM admin_audit_cursors WHERE cursor_hash=$1 AND session_hash=$2 AND authority=$3 AND principal_id=$4 AND expires_at>FLOOR(EXTRACT(EPOCH FROM clock_timestamp()))::bigint").bind(hash_secret(&token)).bind(&session_hash).bind(&fingerprint).bind(&session.view.principal_id).fetch_optional(&mut *tx).await?.ok_or(AdminError::Invalid)?;
+        (upper, Some(last))
+    } else {
+        (version, None)
+    };
+    let rows=sqlx::query("SELECT e.action_id,e.actor_id,e.occurred_at,e.case_version,a.document->'request'->'payload' AS payload FROM reconciliation_case_edits e JOIN admin_action_events a ON a.action_id=e.action_id AND a.kind='action.execute' AND a.principal_id=e.actor_id WHERE case_id=$1 AND case_version<=$2 AND ($3::bigint IS NULL OR case_version<$3) ORDER BY case_version DESC LIMIT $4")
+        .bind(&id).bind(upper).bind(before).bind(i64::from(limit)+1).fetch_all(&mut *tx).await?;
+    let mut data = Vec::new();
+    let mut last = None;
+    for event in rows.iter().take(usize::from(limit)) {
+        let rev = event.try_get::<i64, _>("case_version")?;
+        let payload = event.try_get::<Value, _>("payload")?;
+        if payload["case_id"] != id {
+            return Err(AdminError::Unavailable);
+        }
+        data.push(json!({"action_id":identifier(event.try_get("action_id")?)?,"actor_id":identifier(event.try_get("actor_id")?)?,"occurred_at":timestamp(event.try_get("occurred_at")?)?,"version":rev.to_string(),"payload":payload}));
+        last = Some(rev);
+    }
+    let mut result = json!({"case_id":id,"owner_id":identifier(row.try_get("owner_id")?)?,"version":version.to_string(),"data":data});
+    for field in ["assigned_to", "resolution_ref"] {
+        if let Some(value) = row.try_get::<Option<String>, _>(field)? {
+            result[field] = json!(identifier(value)?);
+        }
+    }
+    if rows.len() > usize::from(limit) {
+        result["next_cursor"] = json!(
+            audit::next_cursor(
+                &mut tx,
+                &session_hash,
+                &session,
+                &fingerprint,
+                upper,
+                last.ok_or(AdminError::Unavailable)?
+            )
+            .await?
+        );
+    }
+    let live = identity.current_in(&headers, &mut tx).await?;
+    live.authorize("cases.read", &scope)?;
+    audit::record_read(
+        &mut tx,
+        &live,
+        &scope,
+        "reconciliation_case.activity",
+        Some(&id),
+        &request,
+    )
+    .await?;
+    tx.commit().await?;
+    audit::response(result, &request)
+}
+fn id_valid(value: &str) -> bool {
+    orange_protocol::valid_id(value) && value.as_bytes()[0].is_ascii_alphanumeric()
+}

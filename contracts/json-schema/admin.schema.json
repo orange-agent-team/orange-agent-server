@@ -1330,6 +1330,46 @@
             "payload"
           ],
           "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "scope": {
+              "$ref": "#/$defs/Scope"
+            },
+            "target_version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "ticket_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 5,
+              "maxLength": 1000
+            },
+            "action_type": {
+              "const": "case.update"
+            },
+            "payload": {
+              "$ref": "#/$defs/ReconciliationCaseEdit"
+            }
+          },
+          "required": [
+            "scope",
+            "target_version",
+            "ticket_id",
+            "reason",
+            "action_type",
+            "payload"
+          ],
+          "additionalProperties": false
         }
       ]
     },
@@ -2795,6 +2835,180 @@
           "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
         }
       }
+    },
+    "ReconciliationCaseEdit": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "change": {
+              "const": "assign"
+            },
+            "case_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "assignee_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            }
+          },
+          "required": [
+            "change",
+            "case_id",
+            "assignee_id"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "change": {
+              "const": "note"
+            },
+            "case_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "note": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1000
+            }
+          },
+          "required": [
+            "change",
+            "case_id",
+            "note"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "change": {
+              "const": "close"
+            },
+            "case_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "resolution_ref": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            }
+          },
+          "required": [
+            "change",
+            "case_id",
+            "resolution_ref"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ReconciliationCaseChange": {
+      "type": "object",
+      "properties": {
+        "action_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "actor_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "occurred_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "payload": {
+          "$ref": "#/$defs/ReconciliationCaseEdit"
+        }
+      },
+      "required": [
+        "action_id",
+        "actor_id",
+        "version",
+        "occurred_at",
+        "payload"
+      ],
+      "additionalProperties": false
+    },
+    "ReconciliationCaseActivity": {
+      "type": "object",
+      "properties": {
+        "case_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "owner_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "assigned_to": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "resolution_ref": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "data": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ReconciliationCaseChange"
+          },
+          "maxItems": 200
+        },
+        "next_cursor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        }
+      },
+      "required": [
+        "case_id",
+        "owner_id",
+        "version",
+        "data"
+      ],
+      "additionalProperties": false
     }
   },
   "$ref": "#/$defs/AdminActionCreate"

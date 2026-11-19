@@ -71,14 +71,21 @@ pub async fn get_node(
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct NodeRequest {
+pub struct ActionRequest {
     pub scope: Scope,
     pub target_version: String,
     pub ticket_id: String,
     pub reason: String,
     pub action_type: String,
-    pub payload: NodePayload,
+    pub payload: ActionPayload,
 }
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum ActionPayload {
+    Node(NodePayload),
+    Case(case_edit::Edit),
+}
+mod case_edit;
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct NodePayload {
@@ -129,9 +136,35 @@ fn id(value: &str) -> bool {
 fn reason(value: &str, min: usize) -> bool {
     (min..=1000).contains(&value.chars().count()) && !value.trim().is_empty()
 }
-impl NodeRequest {
+impl ActionRequest {
+    fn policy(&self) -> &'static str {
+        match self.payload {
+            ActionPayload::Case(_) => "admin-case-policy-v1",
+            ActionPayload::Node(_) => POLICY,
+        }
+    }
+    fn read_permission(&self) -> &'static str {
+        match self.payload {
+            ActionPayload::Case(_) => "cases.read",
+            ActionPayload::Node(_) => "nodes.read",
+        }
+    }
+    fn checker_permission(&self) -> Option<&'static str> {
+        match (&self.action_type[..], &self.payload) {
+            ("node.resume", ActionPayload::Node(_)) => Some("nodes.resume.approve"),
+            ("case.update", ActionPayload::Case(case_edit::Edit::Close { .. })) => {
+                Some("cases.close.approve")
+            }
+            _ => None,
+        }
+    }
+
     fn permission(&self) -> Result<&'static str, AdminError> {
         match self.action_type.as_str() {
+            "case.update" => match &self.payload {
+                ActionPayload::Case(edit) => Ok(edit.permission()),
+                _ => Err(AdminError::Invalid),
+            },
             "node.drain" => Ok("nodes.drain"),
             "node.quarantine" => Ok("nodes.quarantine"),
             "node.resume" => Ok("nodes.resume"),
@@ -147,30 +180,30 @@ impl NodeRequest {
             )
             || !id(&self.scope.scope_id)
             || (self.scope.kind == "platform" && self.scope.scope_id != "platform")
-            || !id(&self.payload.node_id)
             || !id(&self.ticket_id)
             || !reason(&self.reason, 5)
             || !id(&self.target_version)
         {
             return Err(AdminError::Invalid);
         }
-        let valid_payload = match self.action_type.as_str() {
-            "node.drain" => {
-                self.payload.health_report_id.is_none() && self.payload.reason_code.is_none()
+        let node = match &self.payload {
+            ActionPayload::Case(edit) if self.action_type == "case.update" => {
+                return edit.validate(self);
             }
+            ActionPayload::Case(_) => return Err(AdminError::Invalid),
+            ActionPayload::Node(node) if id(&node.node_id) => node,
+            _ => return Err(AdminError::Invalid),
+        };
+        let valid_payload = match self.action_type.as_str() {
+            "node.drain" => node.health_report_id.is_none() && node.reason_code.is_none(),
             "node.quarantine" => {
-                self.payload.health_report_id.is_none()
-                    && self.payload.reason_code.as_ref().is_some_and(|v| {
+                node.health_report_id.is_none()
+                    && node.reason_code.as_ref().is_some_and(|v| {
                         (1..=64).contains(&v.chars().count()) && !v.trim().is_empty()
                     })
             }
             "node.resume" => {
-                self.payload.reason_code.is_none()
-                    && self
-                        .payload
-                        .health_report_id
-                        .as_ref()
-                        .is_some_and(|v| id(v))
+                node.reason_code.is_none() && node.health_report_id.as_ref().is_some_and(|v| id(v))
             }
             _ => false,
         };
@@ -318,7 +351,7 @@ async fn remember(
 }
 struct Managed {
     doc: Value,
-    request: NodeRequest,
+    request: ActionRequest,
     expires: i64,
     revision: i64,
 }
@@ -329,9 +362,9 @@ async fn load(tx: &mut Tx<'_>, action: &str) -> Result<Managed, AdminError> {
     let row = sqlx::query("SELECT a.document,c.expires_at,c.revision FROM admin_actions a JOIN admin_action_control c USING(action_id) WHERE a.action_id=$1 FOR UPDATE OF a,c")
         .bind(action).fetch_optional(&mut **tx).await?.ok_or(AdminError::NotFound)?;
     let doc: Value = row.try_get("document")?;
-    let request: NodeRequest =
+    let request: ActionRequest =
         serde_json::from_value(doc["request"].clone()).map_err(|_| AdminError::Unavailable)?;
-    if text(&doc, "policy_version")? != POLICY
+    if text(&doc, "policy_version")? != request.policy()
         || digest("admin-action-payload-v1", &request)? != text(&doc, "payload_digest")?
     {
         return Err(AdminError::Conflict);
@@ -380,15 +413,19 @@ fn response(doc: Value, status: StatusCode) -> Result<Response, AdminError> {
     response.headers_mut().insert("etag", tag);
     Ok(response)
 }
-async fn target(tx: &mut Tx<'_>, request: &NodeRequest) -> Result<(i64, String), AdminError> {
+async fn target(tx: &mut Tx<'_>, request: &ActionRequest) -> Result<(i64, String), AdminError> {
+    let node = match &request.payload {
+        ActionPayload::Case(edit) => return case_edit::target(tx, request, edit).await,
+        ActionPayload::Node(node) => node,
+    };
     let row = sqlx::query("SELECT owner_id,environment,region_id,version,state FROM nodes WHERE node_id=$1 FOR UPDATE")
-        .bind(&request.payload.node_id).fetch_optional(&mut **tx).await?.ok_or(AdminError::NotFound)?;
+        .bind(&node.node_id).fetch_optional(&mut **tx).await?.ok_or(AdminError::NotFound)?;
     let belongs = row.try_get::<String, _>("environment")? == request.scope.environment
         && match request.scope.kind.as_str() {
             "platform" => request.scope.scope_id == "platform",
             "tenant" => row.try_get::<String, _>("owner_id")? == request.scope.scope_id,
             "region" => row.try_get::<String, _>("region_id")? == request.scope.scope_id,
-            "resource" => request.payload.node_id == request.scope.scope_id,
+            "resource" => node.node_id == request.scope.scope_id,
             _ => false,
         };
     if !belongs {
@@ -403,7 +440,7 @@ async fn target(tx: &mut Tx<'_>, request: &NodeRequest) -> Result<(i64, String),
 pub async fn create(
     State(identity): State<Arc<AdminIdentity>>,
     headers: HeaderMap,
-    body: Result<Json<NodeRequest>, JsonRejection>,
+    body: Result<Json<ActionRequest>, JsonRejection>,
 ) -> Result<Response, AdminError> {
     let request = body.map_err(|_| AdminError::Invalid)?.0;
     request.validate(&identity.config.environment)?;
@@ -425,9 +462,9 @@ pub async fn create(
         target(&mut tx, &request).await?;
         let time = now(&mut tx).await?;
         let action = uuid::Uuid::new_v4().to_string();
-        let dual = request.action_type == "node.resume";
+        let dual = request.checker_permission().is_some();
         let doc = json!({"action_id":action,"requested_by":principal,"request":request,
-            "payload_digest":digest("admin-action-payload-v1",&request)?,"policy_version":POLICY,
+            "payload_digest":digest("admin-action-payload-v1",&request)?,"policy_version":request.policy(),
             "approval_policy":if dual {"maker_checker"} else {"single_operator"},"required_approvals":if dual {1} else {0},
             "approvals":[],"state":if dual {"pending_approval"} else {"ready"},"version":"v1",
             "created_at":timestamp(time)?,"expires_at":timestamp(time+900)?});
@@ -458,7 +495,7 @@ pub async fn get_one(
         &mut tx,
         &session.view.principal_id,
         &m.request.scope,
-        &["actions.read", "nodes.read"],
+        &["actions.read", m.request.read_permission()],
     )
     .await?;
     if now(&mut tx).await? >= deadline {
@@ -505,7 +542,9 @@ async fn mutate(
     let mut m = load(&mut tx, action).await?;
     m.request.validate(&identity.config.environment)?;
     let specific = if matches!(mutation, Mutation::Decide(_)) {
-        "nodes.resume.approve"
+        m.request
+            .checker_permission()
+            .ok_or(AdminError::Forbidden)?
     } else {
         m.request.permission()?
     };
@@ -517,7 +556,7 @@ async fn mutate(
     )
     .await?;
     if matches!(mutation, Mutation::Decide(_))
-        && (m.request.action_type != "node.resume" || text(&m.doc, "requested_by")? == principal)
+        && (m.request.checker_permission().is_none() || text(&m.doc, "requested_by")? == principal)
     {
         return Err(AdminError::Forbidden);
     }
@@ -533,7 +572,9 @@ async fn mutate(
             )
             .await?,
         );
-        if matches!(mutation, Mutation::Execute(_)) && m.request.action_type == "node.resume" {
+        if matches!(mutation, Mutation::Execute(_))
+            && let Some(checker) = m.request.checker_permission()
+        {
             let approvals = m.doc["approvals"]
                 .as_array()
                 .ok_or(AdminError::Unavailable)?;
@@ -551,7 +592,7 @@ async fn mutate(
                     &mut tx,
                     text(&approvals[0], "approver_id")?,
                     &m.request.scope,
-                    &["actions.approve", "nodes.resume.approve"],
+                    &["actions.approve", checker],
                 )
                 .await?,
             );
@@ -604,33 +645,55 @@ async fn mutate(
                     return Err(AdminError::Conflict);
                 }
                 let (version, node_state) = target(&mut tx, &m.request).await?;
-                // A health_report_id string is not verified device recovery evidence.
-                // Resume remains unavailable until the trusted probe consumer exists.
-                if m.request.action_type == "node.resume" {
-                    return Err(AdminError::Unavailable);
-                }
-                if node_state == "revoked"
-                    || (m.request.action_type == "node.drain"
-                        && !matches!(node_state.as_str(), "online" | "offline"))
-                {
-                    return Err(AdminError::Conflict);
-                }
-                let command = uuid::Uuid::new_v4().to_string();
-                let new_state = if m.request.action_type == "node.drain" {
-                    "draining"
-                } else {
-                    "quarantined"
-                };
-                let generation: i64 = sqlx::query_scalar("UPDATE nodes SET state=$2,version=version+1,policy_generation=policy_generation+1 WHERE node_id=$1 RETURNING policy_generation")
-                    .bind(&m.request.payload.node_id)
+                match &m.request.payload {
+                    ActionPayload::Case(edit) => {
+                        deadline = deadline.min(
+                            case_edit::apply(
+                                &mut tx,
+                                edit,
+                                version,
+                                &node_state,
+                                principal,
+                                action,
+                                &m.request.scope,
+                            )
+                            .await?,
+                        );
+                        m.doc["business_ref"] = json!(edit.case_id());
+                        m.doc["state"] = json!("succeeded");
+                        why = "Reconciliation case metadata updated".into();
+                    }
+                    ActionPayload::Node(node) => {
+                        // A health_report_id string is not verified device recovery evidence.
+                        // Resume remains unavailable until the trusted probe consumer exists.
+                        if m.request.action_type == "node.resume" {
+                            return Err(AdminError::Unavailable);
+                        }
+                        if node_state == "revoked"
+                            || (m.request.action_type == "node.drain"
+                                && !matches!(node_state.as_str(), "online" | "offline"))
+                        {
+                            return Err(AdminError::Conflict);
+                        }
+                        let command = uuid::Uuid::new_v4().to_string();
+                        let new_state = if m.request.action_type == "node.drain" {
+                            "draining"
+                        } else {
+                            "quarantined"
+                        };
+                        let generation: i64 = sqlx::query_scalar("UPDATE nodes SET state=$2,version=version+1,policy_generation=policy_generation+1 WHERE node_id=$1 RETURNING policy_generation")
+                    .bind(&node.node_id)
                     .bind(new_state)
                     .fetch_one(&mut *tx)
                     .await?;
-                sqlx::query("INSERT INTO admin_node_commands(command_id,action_id,node_id,command_kind,target_version,state,created_at,policy_generation) VALUES($1,$2,$3,$4,$5,'queued',$6,$7)")
-                    .bind(&command).bind(action).bind(&m.request.payload.node_id).bind(&m.request.action_type).bind(version).bind(now(&mut tx).await?).bind(generation).execute(&mut *tx).await?;
-                m.doc["state"] = json!("executing");
-                m.doc["business_ref"] = json!(command);
-                why = "Durable node command queued; device completion remains unconfirmed".into();
+                        sqlx::query("INSERT INTO admin_node_commands(command_id,action_id,node_id,command_kind,target_version,state,created_at,policy_generation) VALUES($1,$2,$3,$4,$5,'queued',$6,$7)")
+                    .bind(&command).bind(action).bind(&node.node_id).bind(&m.request.action_type).bind(version).bind(now(&mut tx).await?).bind(generation).execute(&mut *tx).await?;
+                        m.doc["state"] = json!("executing");
+                        m.doc["business_ref"] = json!(command);
+                        why = "Durable node command queued; device completion remains unconfirmed"
+                            .into();
+                    }
+                }
             }
         }
         save(&mut tx, &mut m).await?;
@@ -649,7 +712,7 @@ async fn mutate(
     )
 }
 fn check_preview(doc: &Value, hash: &str, policy: &str) -> Result<(), AdminError> {
-    if hash != text(doc, "payload_digest")? || policy != POLICY {
+    if hash != text(doc, "payload_digest")? || policy != text(doc, "policy_version")? {
         return Err(AdminError::Conflict);
     }
     Ok(())

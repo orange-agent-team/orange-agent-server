@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Orange Admin API",
-    "version": "0.1.4",
+    "version": "0.1.5",
     "description": "Candidate contract. Development identity/session and scoped read-only endpoints are implemented; other operations remain design drafts. Separate admin origin, OIDC Authorization Code with PKCE, current permissions, scope, MFA and immutable action policy are required. No generic SQL/exec/set_balance APIs."
   },
   "servers": [
@@ -5863,6 +5863,152 @@
         "x-implementation-status": "planned",
         "description": "Current permissions for one exact scope already granted to this MFA administration session. Legacy session permissions are the intersection of scope grants and do not enumerate every right in the selected scope."
       }
+    },
+    "/admin/v1/reconciliation-cases/{case_id}/activity": {
+      "get": {
+        "operationId": "listReconciliationCaseChanges",
+        "summary": "listReconciliationCaseChanges",
+        "x-permission": "cases.read",
+        "security": [
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RequestId"
+          },
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/Environment"
+          },
+          {
+            "$ref": "#/components/parameters/ScopeKind"
+          },
+          {
+            "$ref": "#/components/parameters/ScopeId"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          },
+          {
+            "$ref": "#/components/parameters/Cursor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "State/projection, not a promise that external effects or resource cleanup have completed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReconciliationCaseActivity"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "x-implementation-status": "development-candidate"
+      }
     }
   },
   "components": {
@@ -7284,6 +7430,46 @@
                   "expires_at"
                 ],
                 "additionalProperties": false
+              }
+            },
+            "required": [
+              "scope",
+              "target_version",
+              "ticket_id",
+              "reason",
+              "action_type",
+              "payload"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "scope": {
+                "$ref": "#/components/schemas/Scope"
+              },
+              "target_version": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+              },
+              "ticket_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 5,
+                "maxLength": 1000
+              },
+              "action_type": {
+                "const": "case.update"
+              },
+              "payload": {
+                "$ref": "#/components/schemas/ReconciliationCaseEdit"
               }
             },
             "required": [
@@ -8760,6 +8946,180 @@
             "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
           }
         }
+      },
+      "ReconciliationCaseEdit": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "change": {
+                "const": "assign"
+              },
+              "case_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+              },
+              "assignee_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+              }
+            },
+            "required": [
+              "change",
+              "case_id",
+              "assignee_id"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "change": {
+                "const": "note"
+              },
+              "case_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+              },
+              "note": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1000
+              }
+            },
+            "required": [
+              "change",
+              "case_id",
+              "note"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "change": {
+                "const": "close"
+              },
+              "case_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+              },
+              "resolution_ref": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+              }
+            },
+            "required": [
+              "change",
+              "case_id",
+              "resolution_ref"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "ReconciliationCaseChange": {
+        "type": "object",
+        "properties": {
+          "action_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+          },
+          "actor_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+          },
+          "version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+          },
+          "occurred_at": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "Z$"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/ReconciliationCaseEdit"
+          }
+        },
+        "required": [
+          "action_id",
+          "actor_id",
+          "version",
+          "occurred_at",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      "ReconciliationCaseActivity": {
+        "type": "object",
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+          },
+          "owner_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+          },
+          "version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+          },
+          "assigned_to": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+          },
+          "resolution_ref": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReconciliationCaseChange"
+            },
+            "maxItems": 200
+          },
+          "next_cursor": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          }
+        },
+        "required": [
+          "case_id",
+          "owner_id",
+          "version",
+          "data"
+        ],
+        "additionalProperties": false
       }
     }
   },
@@ -8838,7 +9198,10 @@
       "actions.approve",
       "payments.refund.approve",
       "ledger.reverse.approve",
-      "pricing.publish.approve"
+      "pricing.publish.approve",
+      "cases.edit",
+      "cases.close",
+      "cases.close.approve"
     ],
     "security_operator": [
       "session.read",

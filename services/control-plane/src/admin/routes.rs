@@ -27,6 +27,10 @@ pub fn router(identity: AdminIdentity) -> Router {
             get(audit::scope_permissions),
         )
         .route("/admin/v1/overview", get(overview))
+        .route(
+            "/admin/v1/reconciliation-cases/{case_id}/activity",
+            get(cases::activity),
+        )
         .route("/admin/v1/reconciliation-cases", get(cases::list))
         .route(
             "/admin/v1/reconciliation-cases/{case_id}",
@@ -196,6 +200,7 @@ impl ScopedQuery {
 fn readable_actions(permissions: &BTreeSet<String>) -> Vec<String> {
     [
         ("run.cancel", "runs.read"),
+        ("case.update", "cases.read"),
         ("node.drain", "nodes.read"),
         ("node.quarantine", "nodes.read"),
         ("node.resume", "nodes.read"),

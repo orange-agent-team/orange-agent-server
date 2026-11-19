@@ -58,7 +58,8 @@ try:
         result['browser_requested']=True
     for command in [
         ['test','-p','orange-control-plane','--features','integration-tests','--test','admin_audit','--locked','--offline'],
-        ['clippy','-p','orange-control-plane','--features','integration-tests','--test','admin_audit','--locked','--offline','--','-D','warnings'],
+        ['test','-p','orange-control-plane','--features','integration-tests','--test','admin_actions','--locked','--offline'],
+        ['clippy','-p','orange-control-plane','--features','integration-tests','--test','admin_audit','--test','admin_actions','--locked','--offline','--','-D','warnings'],
     ]:subprocess.run([str(cargo),*command],cwd=ROOT,env=env,check=True)
     result['passed']=True
 finally:

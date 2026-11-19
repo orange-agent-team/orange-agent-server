@@ -694,3 +694,173 @@ async fn database_protects_request_and_event_evidence() {
     .await;
     assert_eq!(unchanged, doc);
 }
+
+#[tokio::test]
+async fn case_assignment_notes_and_independently_approved_close_are_scoped_and_exactly_once() {
+    let f = fixture().await;
+    let owner: String = sqlx::query_scalar("SELECT owner_id FROM nodes WHERE node_id=$1")
+        .bind(&f.node)
+        .fetch_one(&f.pool)
+        .await
+        .expect("owner");
+    for operator in [&f.maker, &f.checker] {
+        sqlx::query("INSERT INTO admin_grants(principal_id,role,environment,scope_kind,scope_id,expires_at) VALUES($1,'finance_operator','dev','tenant',$2,FLOOR(EXTRACT(EPOCH FROM clock_timestamp()))::bigint+3600)").bind(&operator.id).bind(&owner).execute(&f.pool).await.expect("scoped finance role");
+    }
+    let case = Uuid::new_v4().to_string();
+    sqlx::query("INSERT INTO reconciliation_cases(case_id,owner_id,environment,business_ref,state,next_check_at) VALUES($1,$2,'dev','owned-ref','open',1700000000)").bind(&case).bind(&owner).execute(&f.pool).await.expect("case");
+    let edit = |version: &str, payload: Value| json!({"scope":{"environment":"dev","kind":"tenant","scope_id":owner},"target_version":version,"ticket_id":"ticket","reason":"Review the owned fixture","action_type":"case.update","payload":payload});
+    let create_case = |key: &'static str, body: Value| {
+        http(&f, &f.maker, "POST", "/admin/v1/actions", key, "", body)
+    };
+    let assignment = edit(
+        "1",
+        json!({"change":"assign","case_id":case,"assignee_id":f.checker.id}),
+    );
+    let (code, action, _) = create_case("assign", assignment.clone()).await;
+    assert_eq!(code, StatusCode::CREATED, "{action}");
+    assert_eq!(action["state"], "ready");
+    let run = path(&action, "execute");
+    for _ in 0..2 {
+        let (status, doc, _) = http(
+            &f,
+            &f.maker,
+            "POST",
+            &run,
+            "execute-assign",
+            "\"v1\"",
+            preview(&action),
+        )
+        .await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{doc}");
+        assert_eq!(doc["state"], "succeeded");
+    }
+    assert_eq!(
+        create_case("assign-stale", assignment).await.0,
+        StatusCode::PRECONDITION_FAILED
+    );
+    let note = edit(
+        "2",
+        json!({"change":"note","case_id":case,"note":"Operator verified the external record."}),
+    );
+    let (code, n, _) = create_case("note", note.clone()).await;
+    assert_eq!(code, StatusCode::CREATED, "{n}");
+    let (status, saved, _) = http(
+        &f,
+        &f.maker,
+        "POST",
+        &path(&n, "execute"),
+        "execute-note",
+        "\"v1\"",
+        preview(&n),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{saved}");
+    let close = edit(
+        "3",
+        json!({"change":"close","case_id":case,"resolution_ref":"owned-report"}),
+    );
+    let (status, c, _) = create_case("close", close).await;
+    assert_eq!(status, StatusCode::CREATED, "{c}");
+    assert_eq!(c["approval_policy"], "maker_checker");
+    assert_eq!(
+        http(
+            &f,
+            &f.maker,
+            "POST",
+            &path(&c, "approvals"),
+            "self",
+            "\"v1\"",
+            decision(&c, "approve")
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    let (status, approved, tag) = http(
+        &f,
+        &f.checker,
+        "POST",
+        &path(&c, "approvals"),
+        "approve-close",
+        "\"v1\"",
+        decision(&c, "approve"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{approved}");
+    sqlx::query(
+        "UPDATE admin_grants SET revoked=true WHERE principal_id=$1 AND role='finance_operator'",
+    )
+    .bind(&f.checker.id)
+    .execute(&f.pool)
+    .await
+    .expect("withdraw approval rights");
+    assert_eq!(
+        http(
+            &f,
+            &f.maker,
+            "POST",
+            &path(&c, "execute"),
+            "execute-close",
+            &tag,
+            preview(&c)
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    let current: (String, i64) =
+        sqlx::query_as("SELECT state,version FROM reconciliation_cases WHERE case_id=$1")
+            .bind(&case)
+            .fetch_one(&f.pool)
+            .await
+            .expect("unchanged");
+    assert_eq!(current, ("open".into(), 3));
+    sqlx::query(
+        "UPDATE admin_grants SET revoked=false WHERE principal_id=$1 AND role='finance_operator'",
+    )
+    .bind(&f.checker.id)
+    .execute(&f.pool)
+    .await
+    .expect("restore scoped fixture authority");
+    let (status, done, _) = http(
+        &f,
+        &f.maker,
+        "POST",
+        &path(&c, "execute"),
+        "execute-close",
+        &tag,
+        preview(&c),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{done}");
+    let current:(String,i64,String,String)=sqlx::query_as("SELECT state,version,assigned_to,resolution_ref FROM reconciliation_cases WHERE case_id=$1").bind(&case).fetch_one(&f.pool).await.expect("updated");
+    assert_eq!(
+        current,
+        (
+            "resolved".into(),
+            4,
+            f.checker.id.clone(),
+            "owned-report".into()
+        )
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM reconciliation_case_edits WHERE case_id=$1"
+        )
+        .bind(&case)
+        .fetch_one(&f.pool)
+        .await
+        .expect("exactly once"),
+        3
+    );
+    assert_eq!(
+        create_case("closed-note", edit("4", note["payload"].clone()))
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+    let (status,history,_)=http(&f,&f.maker,"GET",&format!("/admin/v1/reconciliation-cases/{case}/activity?environment=dev&scope_kind=tenant&scope_id={owner}&limit=2"),"","",Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{history}");
+    assert_eq!(history["data"][1]["payload"]["change"], "note");
+    assert!(history["next_cursor"].is_string());
+}
