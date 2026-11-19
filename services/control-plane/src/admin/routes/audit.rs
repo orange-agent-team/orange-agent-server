@@ -2,7 +2,7 @@
 //! of the underlying Job, cleanup, payment or reconciliation.
 use super::*;
 use axum::extract::Path;
-fn request_id(headers: &HeaderMap) -> Result<String, AdminError> {
+pub(super) fn request_id(headers: &HeaderMap) -> Result<String, AdminError> {
     if headers.get_all("x-request-id").iter().count() > 1 {
         return Err(AdminError::Invalid);
     }
@@ -16,7 +16,7 @@ fn request_id(headers: &HeaderMap) -> Result<String, AdminError> {
         None => Ok(uuid::Uuid::new_v4().to_string()),
     }
 }
-fn response(value: Value, request: &str) -> Result<Response, AdminError> {
+pub(super) fn response(value: Value, request: &str) -> Result<Response, AdminError> {
     let mut result = Json(value).into_response();
     result.headers_mut().insert(
         "x-request-id",
@@ -74,7 +74,7 @@ fn project(row: &sqlx::postgres::PgRow) -> Result<Value, AdminError> {
     }
     Ok(value)
 }
-async fn record_read(
+pub(super) async fn record_read(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     current: &CurrentSession,
     scope: &Scope,
@@ -88,7 +88,7 @@ async fn record_read(
         .execute(&mut **tx).await?;
     Ok(())
 }
-async fn next_cursor(
+pub(super) async fn next_cursor(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     session_hash: &str,
     current: &CurrentSession,
@@ -127,10 +127,10 @@ pub(super) async fn list(
     if !(1..=200).contains(&limit) {
         return Err(AdminError::Invalid);
     }
-    let current = identity.current(&headers).await?;
+    let mut tx = identity.pool.begin().await?;
+    let current = identity.current_in(&headers, &mut tx).await?;
     let fingerprint = authority(&current, &scope)?;
     let session_hash = hash_secret(&cookie(&headers, SESSION_COOKIE)?);
-    let mut tx = identity.pool.begin().await?;
     let (snapshot, before) = if let Some(token) = query.cursor {
         if token.is_empty() || token.len() > 2048 {
             return Err(AdminError::Invalid);
@@ -171,7 +171,7 @@ pub(super) async fn list(
             .await?
         );
     }
-    let refreshed = identity.current(&headers).await?;
+    let refreshed = identity.current_in(&headers, &mut tx).await?;
     if authority(&refreshed, &scope)? != fingerprint {
         return Err(AdminError::Forbidden);
     }

@@ -19,6 +19,8 @@ use uuid::Uuid;
 #[cfg(unix)]
 #[path = "admin_audit/browser.rs"]
 mod browser;
+#[path = "admin_audit/cases.rs"]
+mod cases;
 
 async fn session(pool: &PgPool, principal: &str) -> String {
     let token = random_secret();
@@ -148,6 +150,7 @@ async fn migrated_audit_scope_cursor_snapshot_trace_and_revocation() {
     let (principal, token) = actor(&pool, &config.issuer, "tenant", &a).await;
     let (_, foreign) = actor(&pool, &config.issuer, "tenant", &b).await;
     let (_, platform) = actor(&pool, &config.issuer, "platform", "platform").await;
+    let issuer = config.issuer.clone();
     let identity = AdminIdentity::discover(pool.clone(), config)
         .await
         .expect("actual discovery;session issuance is a fixture");
@@ -314,6 +317,7 @@ async fn migrated_audit_scope_cursor_snapshot_trace_and_revocation() {
         get(&app, &token, &list(&b, 2)).await.0,
         StatusCode::FORBIDDEN
     );
+    cases::exercise(&pool, &app, &issuer).await;
     #[cfg(unix)]
     browser::run(&pool, app.clone(), &principal, &token, &a, &b).await;
     // Revocation blocks both saved cursor and direct immutable-event lookup.

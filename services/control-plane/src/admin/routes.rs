@@ -13,6 +13,7 @@ use sqlx::Row;
 use std::sync::Arc;
 
 mod audit;
+mod cases;
 
 pub fn router(identity: AdminIdentity) -> Router {
     Router::new()
@@ -26,6 +27,11 @@ pub fn router(identity: AdminIdentity) -> Router {
             get(audit::scope_permissions),
         )
         .route("/admin/v1/overview", get(overview))
+        .route("/admin/v1/reconciliation-cases", get(cases::list))
+        .route(
+            "/admin/v1/reconciliation-cases/{case_id}",
+            get(cases::detail),
+        )
         .route("/admin/v1/audit-events", get(audit::list))
         .route("/admin/v1/audit-events/{event_id}", get(audit::get_one))
         .route("/admin/v1/nodes/{node_id}", get(super::actions::get_node))

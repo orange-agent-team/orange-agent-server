@@ -21,6 +21,16 @@ pub(super) async fn run(
         sqlx::query("INSERT INTO admin_grants(principal_id,role,environment,scope_kind,scope_id,expires_at) VALUES($1,$2,'dev','tenant',$3,FLOOR(EXTRACT(EPOCH FROM clock_timestamp()))::bigint+3600)").bind(principal).bind(role).bind(scope).execute(pool).await.expect("independent per-scope grants");
     }
 
+    sqlx::query("INSERT INTO owners(owner_id) VALUES($1),($2) ON CONFLICT DO NOTHING")
+        .bind(a)
+        .bind(b)
+        .execute(pool)
+        .await
+        .expect("browser case owners");
+    for n in 0..51 {
+        sqlx::query("INSERT INTO reconciliation_cases(case_id,owner_id,business_ref,environment,state,next_check_at) VALUES($1,$2,$3,'dev','investigating',1700000000)").bind(format!("browser-case-{n:03}")).bind(a).bind(format!("browser-business-{n:03}")).execute(pool).await.expect("browser case");
+    }
+    sqlx::query("INSERT INTO reconciliation_cases(case_id,owner_id,business_ref,environment,state,next_check_at) VALUES('foreign-browser-case',$1,'foreign-hidden','dev','open',1700000000)").bind(b).execute(pool).await.expect("foreign fixture");
     for i in 0..55 {
         seed(pool, &format!("browser-row-{i}"), Some("dev"), Some(a)).await;
     }
