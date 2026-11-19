@@ -82,7 +82,7 @@ impl Journal {
             rusqlite::OpenFlags::default() | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
         )?;
         let version: i64 = connection.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if !(0..=28).contains(&version) {
+        if !(0..=29).contains(&version) {
             return Err(JournalError::UnsupportedVersion);
         }
         if version >= 25 {
@@ -281,6 +281,12 @@ impl Journal {
             let tx =
                 connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
             tx.execute_batch(include_str!("schema_v28.sql"))?;
+            tx.commit()?;
+        }
+        if version < 29 {
+            let tx =
+                connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            tx.execute_batch(include_str!("schema_v29.sql"))?;
             tx.commit()?;
         }
         connection.execute_batch("BEGIN IMMEDIATE;

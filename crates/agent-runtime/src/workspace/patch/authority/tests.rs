@@ -443,7 +443,7 @@ async fn schema_seven_migration_preserves_existing_rights_without_inventing_edit
         .authorize_file_creation("alice", "create", "policy", f.root.path())
         .expect("create consent");
     let create_id = create.consent_id().to_owned();
-    j.connection.execute_batch("DROP TABLE runtime_memory_continuity_policy; DROP INDEX memory_approved_version; DROP TABLE runtime_memory_protocol; DROP TABLE runtime_effect_policy; DROP TABLE runtime_memory_lineage; DROP TABLE runtime_workspace_roots; DROP TABLE runtime_memory_sources; DROP TABLE runtime_memory_operations; DROP TABLE runtime_memory_capabilities; DROP TABLE memory_source_blocks; DROP TABLE memory_audit; DROP TABLE memory_drafts; DROP TABLE memory_entries; DROP TABLE memory_members; DROP TABLE memory_scopes; DROP TABLE export_restorations; DROP TABLE export_retirement_capsules; DROP TABLE export_retirements; DROP TABLE export_writer_bindings; DROP TABLE patch_exports; DROP TABLE patch_capture_receipts; DROP TABLE patch_capture_witnesses; DROP TABLE runtime_edit_capabilities; DROP TABLE patch_version_edges; DROP TABLE patch_retention_archives; DROP TABLE patch_retention_reviews; DROP TABLE patch_recovery_resolutions; DROP TABLE patch_recovery_results; DROP TABLE patch_recovery_approvals; DROP TABLE patch_recoveries; DROP TABLE editing_publication_steps; DROP TABLE editing_publications; DROP TABLE editing_approvals; DROP TABLE editing_previews; DROP TABLE editing_consent_audit; DROP TABLE editing_request_keys; DROP TABLE editing_consents; PRAGMA user_version=7;").expect("actual prior schema fixture");
+    j.connection.execute_batch("DROP TABLE memory_owner_removals; DROP TABLE runtime_memory_continuity_policy; DROP INDEX memory_approved_version; DROP TABLE runtime_memory_protocol; DROP TABLE runtime_effect_policy; DROP TABLE runtime_memory_lineage; DROP TABLE runtime_workspace_roots; DROP TABLE runtime_memory_sources; DROP TABLE runtime_memory_operations; DROP TABLE runtime_memory_capabilities; DROP TABLE memory_source_blocks; DROP TABLE memory_audit; DROP TABLE memory_drafts; DROP TABLE memory_entries; DROP TABLE memory_members; DROP TABLE memory_scopes; DROP TABLE export_restorations; DROP TABLE export_retirement_capsules; DROP TABLE export_retirements; DROP TABLE export_writer_bindings; DROP TABLE patch_exports; DROP TABLE patch_capture_receipts; DROP TABLE patch_capture_witnesses; DROP TABLE runtime_edit_capabilities; DROP TABLE patch_version_edges; DROP TABLE patch_retention_archives; DROP TABLE patch_retention_reviews; DROP TABLE patch_recovery_resolutions; DROP TABLE patch_recovery_results; DROP TABLE patch_recovery_approvals; DROP TABLE patch_recoveries; DROP TABLE editing_publication_steps; DROP TABLE editing_publications; DROP TABLE editing_approvals; DROP TABLE editing_previews; DROP TABLE editing_consent_audit; DROP TABLE editing_request_keys; DROP TABLE editing_consents; PRAGMA user_version=7;").expect("actual prior schema fixture");
     drop(j);
     let j = crate::Journal::open(&path).expect("migrate");
     assert!(j.editing_consents("alice").expect("inventory").is_empty());
@@ -461,7 +461,7 @@ async fn schema_seven_migration_preserves_existing_rights_without_inventing_edit
         .connection
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .expect("version");
-    assert_eq!(version, 28);
+    assert_eq!(version, 29);
     assert!(
         j.preview_file_edit(&f.edit, &f.read, input(b"old\n"))
             .await

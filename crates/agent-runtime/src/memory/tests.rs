@@ -620,3 +620,192 @@ async fn delegated_task_access_obeys_parent_mode_cancellation_and_drain() {
         .expect("actual drain");
     assert!(!readonly_parent.is_revoked());
 }
+
+#[tokio::test]
+async fn scope_owner_can_remove_an_inaccessible_entry_by_exact_metadata_after_restart() {
+    let temp = tempfile::tempdir().expect("temp");
+    let mut j = journal(&temp);
+    j.create_memory_scope("alice", "shared", true)
+        .expect("scope");
+    let shared = j
+        .set_memory_member("alice", "shared", "bob", MemoryAccess::Write, "1")
+        .expect("member");
+    let write = j
+        .authorize_memory("bob", "shared", "policy", true)
+        .expect("grant");
+    approve(
+        &mut j,
+        &write,
+        "seed",
+        request("bob", "private-id", None, "private text"),
+    );
+    let disabled = j
+        .set_memory_scope_enabled("alice", "shared", &shared.revision, false)
+        .expect("disable");
+    assert!(
+        j.authorize_memory("alice", "shared", "policy", false)
+            .is_err()
+    );
+    assert!(
+        j.owner_memory_inventory("bob", "shared", &disabled.revision, None, 10)
+            .is_err()
+    );
+    let row = j
+        .owner_memory_inventory("alice", "shared", &disabled.revision, None, 10)
+        .expect("owner metadata")
+        .remove(0);
+    assert_eq!(row.entry_id, "private-id");
+    assert_eq!(
+        serde_json::to_value(&row)
+            .expect("metadata")
+            .as_object()
+            .expect("object")
+            .len(),
+        3
+    );
+    let target = OwnerRemovalTarget {
+        scope_id: "shared".into(),
+        scope_revision: disabled.revision.clone(),
+        entry_id: row.entry_id,
+        entry_version: row.version,
+    };
+    let review = j
+        .prepare_owner_removal("alice", "request", target.clone())
+        .expect("review");
+    assert_eq!(
+        review,
+        j.prepare_owner_removal("alice", "request", target)
+            .expect("stable review")
+    );
+    assert!(j.inspect_owner_removal("bob", "shared", "request").is_err());
+    assert!(
+        j.approve_owner_removal("alice", "shared", "request", "wrong")
+            .await
+            .is_err()
+    );
+    drop(j);
+    let mut j = journal(&temp);
+    j.connection.execute_batch("CREATE TRIGGER fail_owner_audit BEFORE INSERT ON memory_audit WHEN NEW.action='owner_entry_removed' BEGIN SELECT RAISE(ABORT,'test fault');END;").expect("fault");
+    assert!(
+        j.approve_owner_removal("alice", "shared", "request", &review.approval_digest)
+            .await
+            .is_err()
+    );
+    assert!(
+        !j.inspect_owner_removal("alice", "shared", "request")
+            .expect("receipt")
+            .expect("pending")
+            .applied
+    );
+    assert_eq!(
+        j.owner_memory_inventory("alice", "shared", &disabled.revision, None, 10)
+            .expect("rollback")
+            .len(),
+        1
+    );
+    j.connection
+        .execute_batch("DROP TRIGGER fail_owner_audit")
+        .expect("remove");
+    for _ in 0..2 {
+        assert!(
+            j.approve_owner_removal("alice", "shared", "request", &review.approval_digest)
+                .await
+                .expect("confirm by exact digest")
+                .applied
+        );
+    }
+    let scope = j.memory_scope("alice", "shared").expect("scope");
+    assert!(!scope.enabled);
+    assert!(
+        j.owner_memory_inventory("alice", "shared", &scope.revision, None, 10)
+            .expect("empty")
+            .is_empty()
+    );
+    let (state, body, version): (String, Option<String>, i64) = j
+        .connection
+        .query_row(
+            "SELECT state,payload,version FROM memory_entries WHERE entry_id='private-id'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .expect("tombstone");
+    assert_eq!((state.as_str(), body, version), ("deleted", None, 2));
+    assert_eq!(
+        j.connection
+            .query_row(
+                "SELECT count(*) FROM memory_audit WHERE action='owner_entry_removed'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .expect("audit"),
+        1
+    );
+    assert!(j.connection.query_row("SELECT EXISTS(SELECT 1 FROM memory_source_blocks WHERE scope_id='shared' AND run_id='bob-run')",[],|r|r.get::<_,bool>(0)).expect("old source fenced"));
+}
+#[tokio::test]
+async fn owner_removal_rejects_stale_review_and_ack_waits_for_prior_readers() {
+    use tokio::time::{Duration, timeout};
+    let temp = tempfile::tempdir().expect("temp");
+    let mut j = journal(&temp);
+    j.create_memory_scope("alice", "private", false)
+        .expect("scope");
+    let grant = j
+        .authorize_memory("alice", "private", "policy", true)
+        .expect("access");
+    approve(
+        &mut j,
+        &grant,
+        "seed",
+        request("alice", "first", None, "secret"),
+    );
+    let target = OwnerRemovalTarget {
+        scope_id: "private".into(),
+        scope_revision: "1".into(),
+        entry_id: "first".into(),
+        entry_version: "1".into(),
+    };
+    let stale = j
+        .prepare_owner_removal("alice", "stale", target.clone())
+        .expect("review");
+    approve(
+        &mut j,
+        &grant,
+        "change",
+        request("alice", "first", Some("1"), "new secret"),
+    );
+    assert!(
+        j.approve_owner_removal("alice", "private", "stale", &stale.approval_digest)
+            .await
+            .is_err()
+    );
+    assert!(!grant.is_revoked());
+    let review = j
+        .prepare_owner_removal(
+            "alice",
+            "current",
+            OwnerRemovalTarget {
+                entry_version: "2".into(),
+                ..target
+            },
+        )
+        .expect("fresh");
+    let held = j
+        .read_memory(&grant, "first", None, 0, 4096, false)
+        .expect("held");
+    let approve = j.approve_owner_removal("alice", "private", "current", &review.approval_digest);
+    tokio::pin!(approve);
+    assert!(
+        timeout(Duration::from_millis(30), &mut approve)
+            .await
+            .is_err()
+    );
+    assert!(grant.is_revoked());
+    drop(held);
+    assert!(
+        timeout(Duration::from_secs(1), approve)
+            .await
+            .expect("drain")
+            .expect("receipt")
+            .applied
+    );
+}

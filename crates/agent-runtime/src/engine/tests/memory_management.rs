@@ -677,3 +677,57 @@ async fn pending_user_drafts_are_recoverable_and_discardable_after_restart() {
         next
     );
 }
+
+#[tokio::test]
+async fn owner_removes_file_derived_fact_without_reacquiring_revoked_source() {
+    use crate::memory::OwnerRemovalTarget;
+    let f = Fixture::new();
+    let mut j = f.open();
+    let grant = setup(&mut j, "alice", "personal");
+    let grants = vec![grant.clone()];
+    let id = super::memory_provenance::learn_file(&mut j, &f.config, &f.grant, &grants).await;
+    f.grant.request_revoke();
+    let sources = vec![f.grant.clone()];
+    assert!(
+        j.read_memory_verified(
+            MemoryManagementAuthority::new(&grant).with_source_workspaces(&sources),
+            select(&id, false)
+        )
+        .await
+        .is_err()
+    );
+    let scope = j.memory_scope("alice", "personal").expect("scope");
+    let rows = j
+        .owner_memory_inventory("alice", "personal", &scope.revision, None, 10)
+        .expect("only owner metadata");
+    assert_eq!(rows.len(), 1);
+    let target = OwnerRemovalTarget {
+        scope_id: "personal".into(),
+        scope_revision: scope.revision,
+        entry_id: id.clone(),
+        entry_version: rows[0].version.clone(),
+    };
+    let intent = j
+        .prepare_owner_removal("alice", "remove-derived", target)
+        .expect("metadata preview");
+    let wire = serde_json::to_string(&intent).expect("metadata");
+    assert!(!wire.contains("Learned note") && !wire.contains("allowed data"));
+    j.approve_owner_removal(
+        "alice",
+        "personal",
+        "remove-derived",
+        &intent.approval_digest,
+    )
+    .await
+    .expect("approved");
+    assert!(f.grant.is_revoked());
+    assert!(grant.is_revoked());
+    let fresh = j
+        .authorize_memory("alice", "personal", "policy-v1", true)
+        .expect("active scope");
+    assert!(
+        j.read_memory_verified(MemoryManagementAuthority::new(&fresh), select(&id, true))
+            .await
+            .is_err()
+    );
+}

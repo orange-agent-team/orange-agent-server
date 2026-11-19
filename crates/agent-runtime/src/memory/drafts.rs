@@ -340,11 +340,15 @@ impl Journal {
     else if tx.execute("UPDATE memory_entries SET version=?,state=?,payload=?,payload_digest=?,source_actor=?,source_run=?,origin=? WHERE scope_id=? AND entry_id=? AND version=? AND state!='deleted'",params![next,state,encoded,sha,grant.actor,record.source_run,record.origin.name(),grant.scope,record.entry_id,next-1])?!=1{return Err(MemoryError::Conflict);}
             }
             MemoryMutation::Delete => {
-                // Fence every contributing Run, not only the most recent edit. This also
-                // invalidates pending learning to a different key from those old Runs.
-                tx.execute("INSERT OR IGNORE INTO memory_source_blocks SELECT scope_id,json_extract(body,'$.source_run') FROM memory_drafts WHERE scope_id=? AND entry_id=?",params![grant.scope,record.entry_id])?;
-                tx.execute("INSERT OR IGNORE INTO memory_source_blocks SELECT scope_id,source_run FROM memory_entries WHERE scope_id=? AND entry_id=?",params![grant.scope,record.entry_id])?;
-                if tx.execute("UPDATE memory_entries SET version=?,state='deleted',payload=NULL,payload_digest=?,source_actor=?,source_run=?,origin=? WHERE scope_id=? AND entry_id=? AND version=? AND state!='deleted'",params![next,digest("memory-deletion.v1",&(grant.scope.as_str(),record.entry_id.as_str(),next))?,grant.actor,record.source_run,record.origin.name(),grant.scope,record.entry_id,next-1])?!=1{return Err(MemoryError::Conflict);}
+                super::removal::tombstone(
+                    &tx,
+                    &grant.scope,
+                    &record.entry_id,
+                    next,
+                    &grant.actor,
+                    &record.source_run,
+                    record.origin,
+                )?;
             }
         }
         if tx.execute("UPDATE memory_drafts SET state='approved',payload=NULL,result_version=? WHERE draft_id=? AND state='pending'",params![next,review.draft_id])?!=1{return Err(MemoryError::Conflict);}

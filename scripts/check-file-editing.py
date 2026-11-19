@@ -49,6 +49,7 @@ if args.legacy_runtime:
     release_path = legacy / 'release-manifest.json'
     release = json.loads(release_path.read_text())
     known = {
+        '3ce40db6958ccd0bd499cc78c4882157e5e6aadd': (28, '9c147932f4ff0a34e3571981dda15dfa22994ea1655c0d9638e05ddbc1018e0e'),
         '64748cd25940b9bef28d1efd90488a8e8ab76684': (16, '5f0b1a2c50b0c95ab288a00817926dbc3fa3f928b451547342228a50ccff1266'),
         'a2cdafb95fab90bc1ded82d4a4c061be40463d35': (17, '874a60c4b4364ac54f6accb6a004a9975f7476a78f6c031872ab3d8802af7150'),
         '84d797ca3f2eefdfd675e5d905664add292b713a': (18, '786b0156028da1cccfd1f3f197427b37bfc65a905e6f774e4b2afa074bdb85c6'),
@@ -64,7 +65,7 @@ if args.legacy_runtime:
     }
     pinned = known.get(release.get('origin_commit'))
     if legacy.is_symlink() or pinned is None or hashlib.sha256(release_path.read_bytes()).hexdigest() != pinned[1]:
-        raise SystemExit('Exact supported schema16 through schema27 Runtime source manifest required')
+        raise SystemExit('Exact supported schema16 through schema28 Runtime source manifest required')
     legacy_schema = pinned[0]
     actual = set()
     for directory, folders, names in os.walk(legacy, followlinks=False):
@@ -294,7 +295,7 @@ try:
             assert actual['phase'] == 'ready'
             if legacy_binary and index == 2:
                 with sqlite3.connect(database) as db:
-                    assert db.execute('PRAGMA user_version').fetchone()[0] == 28
+                    assert db.execute('PRAGMA user_version').fetchone()[0] == 29
                     assert db.execute('SELECT * FROM editing_approvals ORDER BY operation_id').fetchall() == saved_approvals
                     assert db.execute('SELECT count(*) FROM patch_capture_witnesses').fetchone()[0] == 0
                     assert db.execute('SELECT count(*) FROM patch_capture_receipts').fetchone()[0] == 1 + len(saved_capture_receipts)
@@ -317,7 +318,7 @@ try:
         assert complete['phase'] == 'completed' and (complete['steps'], complete['invocations']) == (7, 4)
         assert invoke('step') == complete and len(observations['positive']) == 4
         with sqlite3.connect(database) as db:
-            assert db.execute('PRAGMA user_version').fetchone()[0] == 28
+            assert db.execute('PRAGMA user_version').fetchone()[0] == 29
             assert db.execute('SELECT count(*) FROM patch_version_edges').fetchone()[0] == 2
             assert db.execute('SELECT count(*) FROM runtime_tool_approvals').fetchone()[0] == 3
             first = db.execute('SELECT operation_id FROM operations WHERE tool_version=? ORDER BY rowid', ('apply_patch.v1',)).fetchone()[0]
@@ -336,7 +337,7 @@ try:
         assert len(observations['positive']) == 4
         summary.append({'scenario': 'positive', 'model_calls': 4, 'actual_edits': 2, 'reopen_no_replay': True})
         if legacy_binary:
-            summary.append({'scenario': 'schema' + str(legacy_schema) + '-to28', 'actual_old_success_and_approved_edit': True, 'approval_preserved': True, 'no_old_capture_evidence_invented': True, 'historical_source_and_pending_edit_validated': True, 'old_binary_rejected_without_data_mutation': True})
+            summary.append({'scenario': 'schema' + str(legacy_schema) + '-to29', 'actual_old_success_and_approved_edit': True, 'approval_preserved': True, 'no_old_capture_evidence_invented': True, 'historical_source_and_pending_edit_validated': True, 'old_binary_rejected_without_data_mutation': True})
 
         config, save, invoke, workspace, database, _ = fixture('combined')
         create = invoke('authorize-create', 'explicit-create')

@@ -9,6 +9,8 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 mod directory;
+mod removal;
+pub use removal::{OwnerMemoryEntry, OwnerRemovalReview, OwnerRemovalTarget};
 mod drafts;
 pub use directory::{MemoryMemberItem, MemoryMemberPage, MemoryScopeItem, MemoryScopePage};
 #[cfg(test)]

@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Actual fixed memory data -> current schema28, with no HTTP/model inference."""
+"""Actual fixed memory data -> current schema29, with no HTTP/model inference."""
 import argparse, hashlib, json, os, re, shutil, sqlite3, subprocess, tempfile
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 parser=argparse.ArgumentParser();parser.add_argument('--legacy-runtime',required=True,type=Path);parser.add_argument('--continuity',action='store_true');args=parser.parse_args()
 legacy=args.legacy_runtime.resolve();manifest_path=legacy/'release-manifest.json';manifest=json.loads(manifest_path.read_text())
 known={
+ '3ce40db6958ccd0bd499cc78c4882157e5e6aadd':(28,'9c147932f4ff0a34e3571981dda15dfa22994ea1655c0d9638e05ddbc1018e0e'),
  '0de3f2ccc33b70bebfc8858ee7f5ab41ea4b9174':(26,'283ed52467292292e240b7f3220dee0196a7ab262d425ad3508d0ddd1ca175ef'),
  'fb69ea634f67e6ec6d624f9efb566ce89759c39d':(27,'58e9600c22bdd56c50df3c8687437591931790318df80c2c270fb275c3940712')}
 pinned=known.get(manifest.get('origin_commit'))
@@ -57,8 +58,8 @@ with tempfile.TemporaryDirectory(dir=stage,prefix='actual-') as directory:
             return {'schema':db.execute('PRAGMA user_version').fetchone()[0], 'operations':db.execute('SELECT operation_id,request_json,argument_digest,tool_version,result_digest,result_json,model_result,context_applied FROM operations ORDER BY operation_id').fetchall(), 'sources':db.execute('SELECT * FROM runtime_memory_sources ORDER BY operation_id').fetchall(), 'catalogs':db.execute('SELECT invocation,revision,document_digest,document FROM runtime_tool_catalogs ORDER BY invocation').fetchall()}
     before=snapshot();assert before['schema']==legacy_schema and len(before['sources'])==1 and len(before['operations'])==(2 if args.continuity else 1)
     subprocess.run([str(binaries[1]),'resume',str(case)],env=env,check=True,timeout=60)
-    after=snapshot();assert after['schema']==28;assert before['operations']==after['operations'];assert before['sources']==after['sources'];assert all(row in after['catalogs'] for row in before['catalogs'])
+    after=snapshot();assert after['schema']==29;assert before['operations']==after['operations'];assert before['sources']==after['sources'];assert all(row in after['catalogs'] for row in before['catalogs'])
     with sqlite3.connect(dbpath) as db:assert db.execute("SELECT read_version FROM runtime_memory_protocol WHERE run_id='run'").fetchone()==(1,)
     def durable_bytes():return {p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in [dbpath,dbpath.with_name(dbpath.name+'-wal')] if p.exists()}
     digest=durable_bytes();old=subprocess.run([str(binaries[0]),'inspect',str(case)],env=env,capture_output=True,text=True,timeout=30);assert old.returncode!=0,'old reader must refuse';assert 'UnsupportedVersion' in old.stderr or 'unsupported journal' in old.stderr.lower(),old.stderr;assert durable_bytes()==digest,'old reader mutated newer data'
-print(json.dumps({'result':'PASS','scenario':('actual-schema27-human-confirmation-to28' if args.continuity else 'actual-schema'+str(legacy_schema)+'-memory-v1-to28'),'old_binary_seeded_and_approved_read':True,'old_tool_snapshots_and_results_preserved':True,'protocol_retained_v1':True,'read_replays':0,'known_source_required_after_confirmation':args.continuity,'raw_store_bypass_rejected':args.continuity,'withdrawal_after_migration_rejected':args.continuity,'old_binary_rejected_without_mutation':True,'transport':'explicit scripted model; no actual inference'},indent=2))
+print(json.dumps({'result':'PASS','scenario':('actual-schema27-human-confirmation-to29' if args.continuity else 'actual-schema'+str(legacy_schema)+'-memory-v1-to29'),'old_binary_seeded_and_approved_read':True,'old_tool_snapshots_and_results_preserved':True,'protocol_retained_v1':True,'read_replays':0,'known_source_required_after_confirmation':args.continuity,'raw_store_bypass_rejected':args.continuity,'withdrawal_after_migration_rejected':args.continuity,'old_binary_rejected_without_mutation':True,'transport':'explicit scripted model; no actual inference'},indent=2))
