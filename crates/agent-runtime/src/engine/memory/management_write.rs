@@ -49,6 +49,68 @@ impl Journal {
             None => Ok(None),
         }
     }
+    /// Recover pending user requests after Host restart, even when the original
+    /// data grant is gone. Only the author can discover their draft metadata.
+    pub fn pending_user_memory_drafts(
+        &self,
+        actor: &str,
+        scope: &str,
+        after: Option<&str>,
+        limit: u16,
+    ) -> Result<Vec<MemoryDraftOutcome>, EngineError> {
+        if !valid_id(actor)
+            || !valid_id(scope)
+            || after.is_some_and(|id| !valid_id(id))
+            || !(1..=100).contains(&limit)
+        {
+            return Err(EngineError::Invalid);
+        }
+        let mut query=self.connection.prepare(
+            "SELECT d.draft_id FROM memory_drafts d
+             WHERE d.actor=?1 AND d.scope_id=?2 AND d.state='pending'
+               AND (?3 IS NULL OR d.draft_id>?3) AND json_extract(d.body,'$.origin')='user_declaration'
+               AND NOT EXISTS(SELECT 1 FROM runtime_memory_operations m WHERE m.draft_id=d.draft_id)
+             ORDER BY d.draft_id LIMIT ?4")?;
+        let ids = query.query_map(params![actor, scope, after, limit], |row| {
+            row.get::<_, String>(0)
+        })?;
+        ids.map(|id| {
+            self.user_memory_write_metadata(actor, scope, &id?)?
+                .ok_or(EngineError::RecoveryRequired)
+        })
+        .collect()
+    }
+
+    /// Invalidate exactly the author's reviewed draft and erase its pending
+    /// payload in the same transaction as its audit event. Repeated discard
+    /// returns the existing invalidated receipt.
+    pub fn discard_user_memory_draft(
+        &self,
+        actor: &str,
+        scope: &str,
+        draft: &str,
+        expected_digest: &str,
+    ) -> Result<MemoryDraftOutcome, EngineError> {
+        let tx =
+            rusqlite::Transaction::new_unchecked(&self.connection, TransactionBehavior::Immediate)?;
+        let mut outcome = self
+            .user_memory_write_metadata(actor, scope, draft)?
+            .ok_or(EngineError::Forbidden)?;
+        if outcome.digest != expected_digest {
+            return Err(EngineError::ApprovalRequired);
+        }
+        match outcome.state.as_str() {
+            "invalidated" => {}
+            "pending" => {
+                if tx.execute("UPDATE memory_drafts SET state='invalidated',payload=NULL WHERE draft_id=? AND state='pending' AND digest=?",params![draft,expected_digest])?!=1 {return Err(EngineError::RecoveryRequired);}
+                tx.execute("INSERT INTO memory_audit(scope_id,actor,action,entry_id,revision,digest) SELECT scope_id,?,'user_draft_discarded',?,revision,? FROM memory_scopes WHERE scope_id=?",params![actor,outcome.entry_id,expected_digest,scope])?;
+                outcome.state = "invalidated".into();
+            }
+            _ => return Err(EngineError::RecoveryRequired),
+        }
+        tx.commit()?;
+        Ok(outcome)
+    }
     async fn management_prior(
         &self,
         authority: MemoryManagementAuthority<'_>,

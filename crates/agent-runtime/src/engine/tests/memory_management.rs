@@ -572,3 +572,108 @@ fn unknown_human_continuity_policy_refuses_open_without_rewriting() {
     ));
     assert_eq!(before, std::fs::read(path).expect("unchanged bytes"));
 }
+
+#[tokio::test]
+async fn pending_user_drafts_are_recoverable_and_discardable_after_restart() {
+    let f = Fixture::new();
+    let mut j = f.open();
+    let grant = setup(&mut j, "alice", "personal");
+    let auth = MemoryManagementAuthority::new(&grant);
+    let mut ids = vec![];
+    for id in ["one", "two"] {
+        let review = j
+            .prepare_user_memory_write(
+                auth,
+                id,
+                MemoryWriteRequest {
+                    entry_id: id.into(),
+                    expected_version: None,
+                    source_run: "alice-seed".into(),
+                    origin: MemoryOrigin::UserDeclaration,
+                    mutation: MemoryMutation::Put,
+                    payload: Some(MemoryPayload {
+                        title: "Private".into(),
+                        content: "Pending draft body".into(),
+                        enabled: true,
+                    }),
+                },
+            )
+            .await
+            .expect("draft");
+        ids.push(review.review.draft_id);
+    }
+    ids.sort();
+    drop(j);
+    let j = f.open();
+    let first = j
+        .pending_user_memory_drafts("alice", "personal", None, 1)
+        .expect("first owned metadata")
+        .remove(0);
+    assert_eq!(first.draft_id, ids[0]);
+    let next = j
+        .pending_user_memory_drafts("alice", "personal", Some(&first.draft_id), 10)
+        .expect("second page");
+    assert_eq!(next.len(), 1);
+    assert_eq!(next[0].draft_id, ids[1]);
+    assert!(
+        j.pending_user_memory_drafts("bob", "personal", None, 10)
+            .expect("filtered")
+            .is_empty()
+    );
+    assert!(
+        j.discard_user_memory_draft("alice", "personal", &first.draft_id, "incorrect")
+            .is_err()
+    );
+    assert!(
+        j.discard_user_memory_draft("bob", "personal", &first.draft_id, &first.digest)
+            .is_err()
+    );
+    j.connection.execute_batch("CREATE TRIGGER fail_discard BEFORE INSERT ON memory_audit WHEN NEW.action='user_draft_discarded' BEGIN SELECT RAISE(ABORT,'owned fault'); END;").expect("inject");
+    assert!(
+        j.discard_user_memory_draft("alice", "personal", &first.draft_id, &first.digest)
+            .is_err()
+    );
+    assert_eq!(
+        j.user_memory_write_metadata("alice", "personal", &first.draft_id)
+            .expect("metadata")
+            .expect("receipt")
+            .state,
+        "pending"
+    );
+    j.connection
+        .execute_batch("DROP TRIGGER fail_discard")
+        .expect("remove");
+    for _ in 0..2 {
+        assert_eq!(
+            j.discard_user_memory_draft("alice", "personal", &first.draft_id, &first.digest)
+                .expect("exact discard")
+                .state,
+            "invalidated"
+        );
+    }
+    assert_eq!(
+        j.connection
+            .query_row(
+                "SELECT count(*) FROM memory_audit WHERE action='user_draft_discarded'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .expect("one audit"),
+        1
+    );
+    assert!(
+        j.connection
+            .query_row(
+                "SELECT payload FROM memory_drafts WHERE draft_id=?",
+                [first.draft_id],
+                |r| r.get::<_, Option<String>>(0)
+            )
+            .expect("cleared")
+            .is_none()
+    );
+    assert_eq!(
+        j.pending_user_memory_drafts("alice", "personal", None, 10)
+            .expect("remaining"),
+        next
+    );
+}

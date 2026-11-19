@@ -834,6 +834,28 @@ pub enum MemoryRecovery<'a> {
     ConfirmNotAppliedAndContinue(AgentAuthority<'a>),
 }
 impl Journal {
+    /// Content-free recovery discovery. An operation id is needed to inspect
+    /// its durable receipt and make an explicit reconciliation decision.
+    pub fn unresolved_memory_operations(
+        &self,
+        owner: &str,
+        run: &str,
+        after: Option<&str>,
+        limit: u16,
+    ) -> Result<Vec<String>, EngineError> {
+        if !(1..=100).contains(&limit) || after.is_some_and(|id| !valid_id(id)) {
+            return Err(EngineError::Invalid);
+        }
+        self.stored_run(owner, run)?;
+        let mut query=self.connection.prepare(
+            "SELECT o.operation_id FROM operations o JOIN runtime_memory_operations m USING(operation_id)
+             WHERE o.owner=?1 AND o.run_id=?2 AND o.tool_version='memory_write.v1' AND o.state IN('dispatching','unknown')
+               AND (?3 IS NULL OR o.operation_id>?3) ORDER BY o.operation_id LIMIT ?4")?;
+        let ids = query
+            .query_map(params![owner, run, after, limit], |row| row.get(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(ids)
+    }
     pub fn agent_memory_metadata(
         &self,
         owner: &str,

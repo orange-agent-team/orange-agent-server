@@ -689,6 +689,15 @@ async fn ambiguous_memory_effect_is_quarantined_and_requires_exact_explicit_reso
                 .await
                 .is_err()
         );
+        assert_eq!(
+            j.unresolved_memory_operations("alice", "run-1", None, 10)
+                .expect("owned recovery discovery"),
+            vec![op.clone()]
+        );
+        assert!(
+            j.unresolved_memory_operations("bob", "run-1", None, 10)
+                .is_err()
+        );
         let outcome = j
             .agent_memory_metadata("alice", "run-1", &op)
             .expect("owned metadata")
