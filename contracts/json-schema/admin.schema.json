@@ -3595,6 +3595,142 @@
           "pattern": "Z$"
         }
       }
+    },
+    "TranscriptionPriceDraft": {
+      "type": "object",
+      "properties": {
+        "price_version_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "terms": {
+          "$ref": "#/$defs/TranscriptionPriceDraftTerms"
+        },
+        "provider_owner_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "target_version": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "review_report_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "created_by": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "state": {
+          "enum": [
+            "draft",
+            "scheduled",
+            "active",
+            "blocked"
+          ]
+        },
+        "effective_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "publication_action_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "node_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "execution_profile_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        }
+      },
+      "required": [
+        "price_version_id",
+        "terms",
+        "provider_owner_id",
+        "target_version",
+        "review_report_id",
+        "created_by",
+        "created_at",
+        "state",
+        "node_id",
+        "execution_profile_id"
+      ],
+      "additionalProperties": false
+    },
+    "TranscriptionPriceDraftTerms": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "scope": {
+          "$ref": "#/$defs/TextPriceDraftScope"
+        },
+        "observation_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "price_per_minute": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,18}$",
+          "description": "Positive development microcredits per decoded minute. The ten-minute profile limit must fit signed int64."
+        },
+        "fee_bps": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000
+        }
+      },
+      "required": [
+        "scope",
+        "observation_id",
+        "price_per_minute",
+        "fee_bps"
+      ]
+    },
+    "TranscriptionPriceDraftList": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TranscriptionPriceDraft"
+          },
+          "minItems": 0,
+          "maxItems": 200
+        },
+        "next_cursor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "additionalProperties": false
     }
   },
   "$ref": "#/$defs/AdminActionCreate"
