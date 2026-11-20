@@ -8,10 +8,15 @@ publish.workspace = true
 [features]
 integration-tests = []
 cloud-host-tests = ["integration-tests"]
+pg-view-tests = []
 cloud-upgrade-tests = ["integration-tests"]
 real-worker-tests = ["integration-tests", "orange-worker/test-control-gates"]
 web-compute-tests = ["real-worker-tests"]
 queue-expiry-tests = ["integration-tests"]
+
+[[test]]
+name = "pg_views"
+required-features = ["pg-view-tests"]
 
 [[test]]
 name = "postgres"
