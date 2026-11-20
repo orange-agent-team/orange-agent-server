@@ -173,23 +173,14 @@ impl ActionRequest {
     }
 
     fn permission(&self) -> Result<&'static str, AdminError> {
-        match self.action_type.as_str() {
-            "support_access.grant" if matches!(self.payload, ActionPayload::SupportGrant(_)) => {
-                Ok("support.grant")
-            }
-            "support_access.revoke" if matches!(self.payload, ActionPayload::SupportRevoke(_)) => {
-                Ok("support.revoke")
-            }
-            "pricing.publish" if matches!(self.payload, ActionPayload::Price(_)) => {
-                Ok("pricing.publish")
-            }
-            "case.update" => match &self.payload {
-                ActionPayload::Case(edit) => Ok(edit.permission()),
-                _ => Err(AdminError::Invalid),
-            },
-            "node.drain" => Ok("nodes.drain"),
-            "node.quarantine" => Ok("nodes.quarantine"),
-            "node.resume" => Ok("nodes.resume"),
+        match (self.action_type.as_str(), &self.payload) {
+            ("node.drain", ActionPayload::Node(_)) => Ok("nodes.drain"),
+            ("node.quarantine", ActionPayload::Node(_)) => Ok("nodes.quarantine"),
+            ("node.resume", ActionPayload::Node(_)) => Ok("nodes.resume"),
+            ("case.update", ActionPayload::Case(edit)) => Ok(edit.permission()),
+            ("pricing.publish", ActionPayload::Price(_)) => Ok("pricing.publish"),
+            ("support_access.grant", ActionPayload::SupportGrant(_)) => Ok("support.grant"),
+            ("support_access.revoke", ActionPayload::SupportRevoke(_)) => Ok("support.revoke"),
             _ => Err(AdminError::Invalid),
         }
     }
@@ -835,3 +826,7 @@ pub async fn cancel(
     )
     .await
 }
+
+#[cfg(test)]
+#[path = "actions/policy_pairs.rs"]
+mod policy_pairs;
