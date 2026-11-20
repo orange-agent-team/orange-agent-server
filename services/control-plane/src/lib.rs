@@ -6,7 +6,9 @@ mod cloud_model;
 #[cfg(unix)]
 pub mod cloud_node;
 mod cloud_tools;
+pub mod confluence;
 mod connector_file;
+mod document_handles;
 pub mod events;
 mod hosted_connectors;
 pub mod http;
