@@ -24,7 +24,7 @@ if subprocess.run(['git','cat-file','-e',args.commit+':crates/platform-files/Car
     members.append('crates/platform-files')
 roots=['Cargo.toml','Cargo.lock',*members,'contracts/proto','contracts/fixtures/metering-v1.json','contracts/fixtures/builtin-tool-pins.v1.json','contracts/fixtures/editing-tool-pins.v1.json','contracts/fixtures/memory-tool-pins.v1.json','contracts/fixtures/memory-tool-pins.v2.json','config/local-model.lock.json','config/local-tokenizer.lock.json']
 # Optional local embedding host embeds the exact E09 runner and approved profile.
-roots.extend(['config/local-embedding.lock.json','config/local-transcription.lock.json','config/local-image.lock.json','backends/orange_inference_backends/image.py','backends/orange_inference_backends/embedding.py','backends/orange_inference_backends/transcription.py','backends/pyproject.toml','backends/uv.lock'])
+roots.extend(['config/local-embedding.lock.json','config/local-transcription.lock.json','config/local-image.lock.json','backends/orange_inference_backends/image.py','backends/environments/sdxl-macos/pyproject.toml','backends/environments/sdxl-macos/uv.lock','backends/orange_inference_backends/embedding.py','backends/orange_inference_backends/transcription.py','backends/pyproject.toml','backends/uv.lock'])
 entries=git('ls-tree','-r','-z',args.commit,'--',*roots).split(b'\0')
 files={};modes={}
 for entry in filter(None,entries):
