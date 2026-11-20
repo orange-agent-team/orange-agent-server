@@ -8,6 +8,7 @@ pub mod cloud_node;
 mod cloud_tools;
 pub mod confluence;
 mod connector_file;
+mod connector_release;
 mod document_handles;
 pub mod events;
 mod hosted_connectors;

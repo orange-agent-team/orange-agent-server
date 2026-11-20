@@ -156,6 +156,7 @@ pub(super) async fn perform(
     let k = key(&h)?;
     let (mut g, _) = guard(&i, &h, &run, true, true).await?;
     let (s, scope) = live(&i, &mut g, &run, &id).await?;
+    super::connector_access::released_action(&mut g, "notion", &id, &action).await?;
     s.reader.authorize(&scope, &action).map_err(map_source)?;
     let digest = orange_protocol::request_digest("notion.action.v1", &(&run, &id, &action))
         .map_err(|_| AuthError::Invalid)?;

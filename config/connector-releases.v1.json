@@ -1,0 +1,287 @@
+{
+  "manifest_version": 1,
+  "target": "G3",
+  "max_calls_per_run": 100,
+  "max_in_flight_per_run": 4,
+  "max_remote_seconds": 30,
+  "raw_response_bytes": 2097152,
+  "max_file_bytes": 20971520,
+  "adapters": [
+    {
+      "id": "CN-01",
+      "provider": "github",
+      "adapter_version": "1.0.0",
+      "api_revision": "GitHub.com REST 2022-11-28",
+      "scope_rule": "personal Run + explicit repository egress + pinned numeric repository IDs and permitted file directories, issues and pull requests",
+      "source_access": [
+        "metadata:read",
+        "contents:read",
+        "issues:read",
+        "pull_requests:read"
+      ],
+      "provider_effect": "read_only",
+      "response_trust": "external_untrusted_data",
+      "schema_file": "contracts/json-schema/repository-connector.schema.json",
+      "schema_sha256": "120c377f7a63ad682c257569caf86cdd74bf34b9616cce007784038a2e29e7b5",
+      "openapi_file": "contracts/openapi/repository-connector.v1.json",
+      "openapi_sha256": "00d499e378a122bc926a0c995ebacbb276081cd7b69d5ba89bea569957c5fea0",
+      "actions": [
+        {
+          "name": "list_repositories",
+          "output": "Page:Repository",
+          "local_effect": "bounded_read",
+          "execution_digest": "8bc5c6649f3bbeeb766efc9552f09cf6187db3747acb873e10da66e66b2ce25f"
+        },
+        {
+          "name": "read_file",
+          "output": "Artifact",
+          "local_effect": "immutable_source_reference",
+          "execution_digest": "7ed205c083daab6863f1ff793fdb336182c7a9f23b362156eb3e0475b9f1da20"
+        },
+        {
+          "name": "list_issues",
+          "output": "Page:Summary",
+          "local_effect": "bounded_read",
+          "execution_digest": "c37cfb125ca4a984fda6e56900cc9fb2e097c487b9e2be8ea1efdbc2c8133967"
+        },
+        {
+          "name": "read_issue",
+          "output": "Item",
+          "local_effect": "bounded_read",
+          "execution_digest": "2c5921a27688c327a771e3f517bbb961c228017b2e9aa2227b64c73cfc633482"
+        },
+        {
+          "name": "list_pull_requests",
+          "output": "Page:Summary",
+          "local_effect": "bounded_read",
+          "execution_digest": "bf6dbd9979123af72fa486d4c092d811f3693ab90b1fafd66d62f6986b1394d7"
+        },
+        {
+          "name": "read_pull_request",
+          "output": "Item",
+          "local_effect": "bounded_read",
+          "execution_digest": "ad59d134249d3e4a28d7c6f3c2d62dd317641784f9315a028e0c659f5999dd2b"
+        }
+      ]
+    },
+    {
+      "id": "CN-02",
+      "provider": "gitlab",
+      "adapter_version": "1.0.0",
+      "api_revision": "GitLab.com REST v4",
+      "scope_rule": "personal Run + explicit repository egress + pinned numeric project IDs and permitted file directories, issues and merge requests",
+      "source_access": [
+        "read_api",
+        "repository read access"
+      ],
+      "provider_effect": "read_only",
+      "response_trust": "external_untrusted_data",
+      "schema_file": "contracts/json-schema/repository-connector.schema.json",
+      "schema_sha256": "120c377f7a63ad682c257569caf86cdd74bf34b9616cce007784038a2e29e7b5",
+      "openapi_file": "contracts/openapi/repository-connector.v1.json",
+      "openapi_sha256": "00d499e378a122bc926a0c995ebacbb276081cd7b69d5ba89bea569957c5fea0",
+      "actions": [
+        {
+          "name": "list_projects",
+          "output": "Page:Repository",
+          "local_effect": "bounded_read",
+          "execution_digest": "249986e89076f92911c79e54598663127c807b6d66433c5990ec0e077c3ddd4b"
+        },
+        {
+          "name": "read_file",
+          "output": "Artifact",
+          "local_effect": "immutable_source_reference",
+          "execution_digest": "705f06beae9c4cec73d20ff9ffee7be920710490a29b48b6cff5921d8f250860"
+        },
+        {
+          "name": "list_issues",
+          "output": "Page:Summary",
+          "local_effect": "bounded_read",
+          "execution_digest": "ccfbb832c14ab953a6a1d9a781132c0b3df180801d0345a528fdc89f974b47f3"
+        },
+        {
+          "name": "read_issue",
+          "output": "Item",
+          "local_effect": "bounded_read",
+          "execution_digest": "fd2e5da32570ce321b00616169947d70bab0def1fcbceef225cdfdf76cafcf76"
+        },
+        {
+          "name": "list_merge_requests",
+          "output": "Page:Summary",
+          "local_effect": "bounded_read",
+          "execution_digest": "4ae3345e092baea8f2ce5b1fd1c99d5dbefb106cc75686a75af73a104542d702"
+        },
+        {
+          "name": "read_merge_request",
+          "output": "Item",
+          "local_effect": "bounded_read",
+          "execution_digest": "66b695adbe7d92610c8c14ce1b654363a66ca8b64bcd41c422f9ae42a5f6f6e6"
+        }
+      ]
+    },
+    {
+      "id": "CN-03",
+      "provider": "notion",
+      "adapter_version": "1.0.0",
+      "api_revision": "Notion 2026-03-11",
+      "scope_rule": "personal Run + explicit document egress + shared page or database ID and fixed data-source IDs + grant-bound navigation",
+      "source_access": [
+        "read content integration capability"
+      ],
+      "provider_effect": "read_only",
+      "response_trust": "external_untrusted_data",
+      "schema_file": "contracts/json-schema/notion-connector.schema.json",
+      "schema_sha256": "96ee76891e31220de5f53e3b33cacd944468a07f9ef9d70e4a9975d755f4853f",
+      "openapi_file": "contracts/openapi/notion-connector.v1.json",
+      "openapi_sha256": "920115e24da03d000e367f388d26bef0264b0a98bce2cfc967ee308e90ad033e",
+      "actions": [
+        {
+          "name": "search_pages",
+          "output": "SearchResults",
+          "local_effect": "bounded_read",
+          "execution_digest": "0c56a9100cbd9f28b9d12e8c1834fe04fd15e109de3ea3b26b19731763d63148"
+        },
+        {
+          "name": "read_page",
+          "output": "Page",
+          "local_effect": "bounded_read",
+          "execution_digest": "eabb3d8265b59431c85006c1ff396383169f4b360360ef14e202dd01528bb92f"
+        },
+        {
+          "name": "list_blocks",
+          "output": "Blocks",
+          "local_effect": "bounded_read",
+          "execution_digest": "e7ad30626e4a040ac7f67c0302f83d6d5f730dee15d114b55e38c81d75396eb4"
+        },
+        {
+          "name": "query_database",
+          "output": "Rows",
+          "local_effect": "bounded_read",
+          "execution_digest": "f3d375dcb7436b17db3764524a0267b314c07273cd8675468db748427467dc31"
+        }
+      ]
+    },
+    {
+      "id": "CN-04",
+      "provider": "confluence",
+      "adapter_version": "1.0.0",
+      "api_revision": "Confluence Cloud REST v2 pages, spaces, hierarchy and attachments; v1 CQL and attachment download",
+      "scope_rule": "personal Run + explicit document egress + one cloud ID and site + selected numeric space IDs and keys + fixed attachment version",
+      "source_access": [
+        "read:space:confluence",
+        "read:page:confluence",
+        "read:hierarchical-content:confluence",
+        "read:content-details:confluence",
+        "read:attachment:confluence"
+      ],
+      "provider_effect": "read_only",
+      "response_trust": "external_untrusted_data",
+      "schema_file": "contracts/json-schema/confluence-connector.schema.json",
+      "schema_sha256": "df9535a03b9bbc1f9ddfda4c40ac4ad555324df7021202c6b7f5bf5f18135e84",
+      "openapi_file": "contracts/openapi/confluence-connector.v1.json",
+      "openapi_sha256": "287f2918c259488c7ed2714cea6245e53fe1d17146598d95cab7b39f829e6483",
+      "actions": [
+        {
+          "name": "search_pages",
+          "output": "Pages",
+          "local_effect": "bounded_read",
+          "execution_digest": "b0561be5985b67b5d034ad3fea4d2f0508fde9ee619a3d9531ebb534d49f9ed8"
+        },
+        {
+          "name": "read_page",
+          "output": "Content",
+          "local_effect": "bounded_read",
+          "execution_digest": "b5908fcd3683b4e3937a430c5229c39edf2cbec39fb68bbecd32f0f369b84d23"
+        },
+        {
+          "name": "list_children",
+          "output": "Children",
+          "local_effect": "bounded_read",
+          "execution_digest": "95455cb699c83866966591861a4b9b988f395e80aae2d9375a4e9283aa196419"
+        },
+        {
+          "name": "read_attachment",
+          "output": "Quarantine",
+          "local_effect": "quarantined_copy",
+          "execution_digest": "4c7075bbac24993b9f2f470d495c3f5b57036d42e17794eed3bfdc49eadae9d8"
+        }
+      ]
+    },
+    {
+      "id": "CN-05",
+      "provider": "postgres",
+      "adapter_version": "1.0.0",
+      "api_revision": "PostgreSQL wire protocol; PostgreSQL 17 development profile",
+      "scope_rule": "personal Run + dedicated read role and transaction + registered view OID, definition and approved builtin columns",
+      "source_access": [
+        "CONNECT",
+        "USAGE on registered schema",
+        "SELECT on registered views"
+      ],
+      "provider_effect": "read_only",
+      "response_trust": "external_untrusted_data",
+      "schema_file": "contracts/json-schema/pg-connector.schema.json",
+      "schema_sha256": "e8c4246afb3331e928122c88ef6e4c4f6466aa59cbb0ad46a46f3dc8dbb20d93",
+      "openapi_file": "contracts/openapi/pg-connector.v1.json",
+      "openapi_sha256": "50abfd2a30ddd433ebff210eca1422e0f72ab3fa1d9ce77491b1aa7c934b7447",
+      "actions": [
+        {
+          "name": "list_views",
+          "output": "pg.view_ids",
+          "local_effect": "bounded_read",
+          "execution_digest": "aaec83fa25e27f8b8b69080deb5126bc876cbea137ca7becd9ec117e901098b6"
+        },
+        {
+          "name": "describe_view",
+          "output": "pg.paging_key",
+          "local_effect": "bounded_read",
+          "execution_digest": "41f612e20942059e7da0f4a0ff492759c7e51271b1a2247d0838301936acb1e0"
+        },
+        {
+          "name": "query_view",
+          "output": "pg.rows",
+          "local_effect": "bounded_read",
+          "execution_digest": "bdd70a5a998178b361d7f43ddd18b54ccd7aaf15f9fa7b58233c2262d01e84e0"
+        }
+      ]
+    },
+    {
+      "id": "CN-06",
+      "provider": "s3",
+      "adapter_version": "1.0.0",
+      "api_revision": "S3 Signature V4, ListObjectsV2, conditional GET/HEAD",
+      "scope_rule": "personal Run + registered bucket and prefix + required ETag and size + matching version when available",
+      "source_access": [
+        "ListBucket constrained to prefix",
+        "GetObject",
+        "GetObjectVersion for versioned objects"
+      ],
+      "provider_effect": "read_only",
+      "response_trust": "external_untrusted_data",
+      "schema_file": "contracts/json-schema/s3-connector.schema.json",
+      "schema_sha256": "b3cfddaaf5d8500830de768488a35db827bf2b8a093edf17fd87eb7e43977d29",
+      "openapi_file": "contracts/openapi/s3-connector.v1.json",
+      "openapi_sha256": "6b94cf1b6e646d9b762b43e130fe7e14e3fd63b903609e99acf78362308efda6",
+      "actions": [
+        {
+          "name": "list_objects",
+          "output": "List",
+          "local_effect": "bounded_read",
+          "execution_digest": "1671920cab5e5452e30a7314f8dd44f10cecebdb728c5087ae57040b8e767d0a"
+        },
+        {
+          "name": "head_object",
+          "output": "Head",
+          "local_effect": "bounded_read",
+          "execution_digest": "5867eccaa775b19452c65499934b3fc14e4fc513e09c6b259e29394b87139f22"
+        },
+        {
+          "name": "read_object",
+          "output": "Artifact",
+          "local_effect": "immutable_source_reference",
+          "execution_digest": "bb8e41354b3950427329db0e900280e12e8876859ae60fa091b52fefec24a39e"
+        }
+      ]
+    }
+  ]
+}

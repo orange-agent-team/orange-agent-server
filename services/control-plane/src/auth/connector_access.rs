@@ -101,3 +101,40 @@ pub(super) async fn disabled(
     .map_err(db)?;
     Ok(rows.into_iter().collect())
 }
+
+/// The resource grant and the action release are independent prerequisites.
+pub(super) async fn released(
+    g: &mut UserSessionGuard,
+    provider: &str,
+    grant: &str,
+    action: &str,
+) -> Result<(), UserApiError> {
+    let pin = crate::connector_release::pin(provider, action).ok_or_else(denied)?;
+    let ok: bool = sqlx::query_scalar("SELECT connector_grant_allows($1,$2,$3,$4)")
+        .bind(provider)
+        .bind(grant)
+        .bind(action)
+        .bind(pin)
+        .fetch_one(&mut **g.transaction())
+        .await
+        .map_err(db)?;
+    if !ok {
+        return Err(denied());
+    }
+    Ok(())
+}
+pub(super) async fn released_action(
+    g: &mut UserSessionGuard,
+    provider: &str,
+    grant: &str,
+    action: &impl serde::Serialize,
+) -> Result<(), UserApiError> {
+    let body = serde_json::to_value(action).map_err(|_| AuthError::Invalid)?;
+    released(
+        g,
+        provider,
+        grant,
+        body["action"].as_str().ok_or(AuthError::Invalid)?,
+    )
+    .await
+}

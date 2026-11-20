@@ -152,6 +152,7 @@ pub(super) async fn perform_checked(
         p.check(&mut g, &run, &id).await?;
     }
     let (s, views) = authority(&identity, &mut g, &run, &id).await?;
+    super::connector_access::released_action(&mut g, "postgres", &id, &action).await?;
     let protected = permit.map(|p| p.key());
     let request = protected.as_deref().unwrap_or(key(&headers)?);
     capacity(&mut g, &run).await?;

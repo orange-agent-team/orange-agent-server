@@ -450,6 +450,7 @@ pub(super) async fn perform(
         .map_err(|_| AuthError::Invalid)?;
     let (mut g, _) = guard(&i, &h, &run, true, true).await?;
     let (s, allowed) = live(&i, &mut g, &run, f, &id).await?;
+    super::connector_access::released_action(&mut g, f.name(), &id, &a).await?;
     a.authorize(&s, &allowed)?;
     if let Some(old) = reserve(&mut g, &run, f, &id, req, &digest).await? {
         g.finish().await?;
@@ -482,6 +483,7 @@ pub(super) async fn download(
     let req = key(&h)?;
     let (mut g, _) = guard(&i, &h, &run, true, true).await?;
     let (s, allowed) = live(&i, &mut g, &run, f, &id).await?;
+    super::connector_access::released(&mut g, f.name(), &id, "read_file").await?;
     let row=sqlx::query("SELECT repository_id,path,commit_id,blob_id,size_bytes,content_sha256 FROM repository_file_receipts WHERE run_id=$1 AND provider=$2 AND grant_id=$3 AND artifact_id=$4").bind(&run).bind(&name).bind(&id).bind(&artifact).fetch_optional(&mut **g.transaction()).await.map_err(db)?.ok_or_else(missing)?;
     let digest =
         orange_protocol::request_digest("repository.download.v1", &(&run, f, &id, &artifact))

@@ -144,6 +144,7 @@ async fn grant_authority(
             return Err(denied());
         }
     }
+    super::connector_access::released(g, &p.family, grant, &p.name).await?;
     Ok(())
 }
 async fn decision_status(

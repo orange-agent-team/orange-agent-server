@@ -51,7 +51,7 @@ pub struct Registration {
     pub read_role: String,
     pub views: BTreeMap<String, View>,
 }
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Action {
     ListViews {},
@@ -68,7 +68,7 @@ pub enum Action {
         limit: u16,
     },
 }
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Filter {
     column: String,

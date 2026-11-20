@@ -62,6 +62,55 @@ async fn preserved_legacy_grants() {
     db.migrate().await.expect("upgrade live DB");
     db.migrate().await.expect("rerun migrations");
     assert_eq!(snapshot(pool).await, before);
+    let pins=sqlx::query_as::<_,(String,String,String)>("SELECT provider,action_name,execution_digest FROM connector_release_actions ORDER BY provider,action_name").fetch_all(pool).await.expect("release policy records");
+    let manifest: Value = serde_json::from_str(include_str!(
+        "../../../../config/connector-releases.v1.json"
+    ))
+    .expect("release catalog");
+    assert_eq!(pins.len(), 26);
+    for item in manifest["adapters"].as_array().expect("six profiles") {
+        for action in item["actions"].as_array().expect("actions") {
+            assert!(pins.contains(&(
+                item["provider"].as_str().expect("provider").into(),
+                action["name"].as_str().expect("name").into(),
+                action["execution_digest"].as_str().expect("pin").into()
+            )));
+        }
+    }
+    let gh_read = &pins
+        .iter()
+        .find(|(p, a, _)| p == "github" && a == "read_file")
+        .expect("known action")
+        .2;
+    let allowed: bool =
+        sqlx::query_scalar("SELECT connector_grant_allows('github','old-active','read_file',$1)")
+            .bind(gh_read)
+            .fetch_one(pool)
+            .await
+            .expect("backfilled release");
+    assert!(allowed);
+    let write_pin = "0".repeat(64);
+    sqlx::query("INSERT INTO connector_releases(provider,release_id,api_revision,allowed_actions) VALUES('github','fixture-future','fixture',$1)").bind(json!({"read_file":gh_read,"comment":write_pin})).execute(pool).await.expect("separate future release");
+    assert!(
+        !sqlx::query_scalar::<_, bool>(
+            "SELECT connector_grant_allows('github','old-active','comment',$1)"
+        )
+        .bind(&write_pin)
+        .fetch_one(pool)
+        .await
+        .expect("future action denied")
+    );
+    assert!(
+        !sqlx::query_scalar::<_, bool>(
+            "SELECT connector_grant_allows('github','old-active','read_file',$1)"
+        )
+        .bind(&write_pin)
+        .fetch_one(pool)
+        .await
+        .expect("changed action digest denied")
+    );
+    sqlx::query("UPDATE connector_releases SET allowed_actions=allowed_actions||jsonb_build_object('comment',$1::text) WHERE provider='github' AND release_id='1.0.0'").bind(&write_pin).execute(pool).await.expect_err("old action set immutable");
+    sqlx::query("UPDATE connector_grant_release SET release_id='fixture-future' WHERE provider='github' AND grant_id='old-active'").execute(pool).await.expect_err("rebinding prior grant forbidden");
     let optins: i64 = sqlx::query_scalar("SELECT count(*) FROM cloud_document_source_opt_ins")
         .fetch_one(pool)
         .await

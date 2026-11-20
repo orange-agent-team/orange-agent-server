@@ -260,6 +260,7 @@ async fn perform(
     let Json(action) = body.map_err(|_| AuthError::Invalid)?;
     let (mut g, _) = guard(&api.identity, &h, &run, true, true).await?;
     let (s, scope) = live(&api.identity, &mut g, &run, &id).await?;
+    super::connector_access::released_action(&mut g, "confluence", &id, &action).await?;
     s.reader.authorize(&scope, &action).map_err(source_error)?;
     let call = Call {
         i: &api.identity,
@@ -348,6 +349,7 @@ async fn download(
     ))?;
     let (mut g, _) = guard(&api.identity, &h, &run, true, true).await?;
     let (s, scope) = live(&api.identity, &mut g, &run, &id).await?;
+    super::connector_access::released(&mut g, "confluence", &id, "read_attachment").await?;
     let row=sqlx::query("SELECT q.meta,q.space_key FROM confluence_quarantine q JOIN confluence_quarantine_authority a USING(artifact_id) WHERE q.run_id=$1 AND q.grant_id=$2 AND q.artifact_id=$3 AND q.state='available'").bind(&run).bind(&id).bind(&artifact).fetch_optional(&mut **g.transaction()).await.map_err(db)?.ok_or_else(missing)?;
     let meta: Attachment =
         serde_json::from_value(row.get("meta")).map_err(|_| AuthError::Unavailable)?;

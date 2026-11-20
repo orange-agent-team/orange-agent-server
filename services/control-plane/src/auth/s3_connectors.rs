@@ -213,6 +213,7 @@ pub(super) async fn perform_checked(
         p.check(&mut g, &run, &id).await?;
     }
     let source = live(&i, &mut g, &run, &id).await?;
+    super::connector_access::released_action(&mut g, "s3", &id, &action).await?;
     if let Some(prior) = admit(&mut g, &run, &id, req, &digest).await? {
         g.finish().await?;
         return Ok(Json(json!({"kind":"external_untrusted_data","data":prior})));
@@ -271,6 +272,7 @@ pub(super) async fn download(
     let (mut g, _) = guard(&i, &headers, &run, true, true).await?;
 
     let source = live(&i, &mut g, &run, &id).await?;
+    super::connector_access::released(&mut g, "s3", &id, "read_object").await?;
     let saved=sqlx::query("SELECT head,content_sha256 FROM s3_artifact_receipts WHERE artifact_id=$1 AND run_id=$2 AND grant_id=$3").bind(&artifact_id).bind(&run).bind(&id).fetch_optional(&mut **g.transaction()).await.map_err(db)?.ok_or_else(missing)?;
     let head: Head =
         serde_json::from_value(saved.get("head")).map_err(|_| AuthError::Unavailable)?;
