@@ -421,6 +421,9 @@
         "request_projection_digest": {
           "type": "string",
           "pattern": "^[a-f0-9]{64}$"
+        },
+        "tool": {
+          "$ref": "#/$defs/CloudToolChoice"
         }
       },
       "required": [
