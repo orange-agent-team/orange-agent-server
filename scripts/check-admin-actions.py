@@ -15,6 +15,7 @@ env['PATH'] = str(cargo.parent) + os.pathsep + env.get('PATH', '')
 env['ORANGE_TEST_DATABASE_URL'] = (ROOT/'.local/database-url').read_text().strip()
 env['ORANGE_TEST_OIDC_CONFIG_FILE'] = str(ROOT/'.local/identity/admin-config.json')
 for args in [
+    ['test','-p','orange-control-plane','--lib','--locked','--offline','policy_pairs'],
     ['test', '-p', 'orange-control-plane', '--features', 'integration-tests', '--test', 'admin_actions', '--test', 'admin_identity', '--locked'],
     ['clippy', '-p', 'orange-control-plane', '--features', 'integration-tests', '--test', 'admin_actions', '--locked', '--', '-D', 'warnings'],
 ]:
