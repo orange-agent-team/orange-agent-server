@@ -1,6 +1,6 @@
 # Admin API接口索引
 
-契约 0.1.5 定义 43 个路径、45 个 HTTP 操作和 18 种管理动作。下方保留初版索引，并补入对账事项变更。登录、step-up、会话撤销上下文及范围权限查询参见当前契约。[OpenAPI](../contracts/openapi/admin.v1.json) · [JSON Schema](../contracts/json-schema/admin.schema.json)
+契约 0.1.6 定义 43 个路径、45 个 HTTP 操作和 18 种管理动作。下方保留初版索引，并补入对账事项变更。登录、step-up、会话撤销上下文及范围权限查询参见当前契约。[OpenAPI](../contracts/openapi/admin.v1.json) · [JSON Schema](../contracts/json-schema/admin.schema.json)
 
 ## 操作清单
 

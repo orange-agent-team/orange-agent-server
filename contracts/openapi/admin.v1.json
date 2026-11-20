@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Orange Admin API",
-    "version": "0.1.5",
+    "version": "0.1.6",
     "description": "Candidate contract. Development identity/session and scoped read-only endpoints are implemented; other operations remain design drafts. Separate admin origin, OIDC Authorization Code with PKCE, current permissions, scope, MFA and immutable action policy are required. No generic SQL/exec/set_balance APIs."
   },
   "servers": [
@@ -4259,6 +4259,29 @@
             "permission": "support.grant",
             "approval": "maker_checker",
             "approval_permission": "support.grant.approve"
+          },
+          {
+            "action_type": "case.update",
+            "approval": "conditional",
+            "discriminator": "payload.change",
+            "variants": {
+              "assign": {
+                "permission": "cases.edit",
+                "approval": "single_operator",
+                "approval_permission": null
+              },
+              "note": {
+                "permission": "cases.edit",
+                "approval": "single_operator",
+                "approval_permission": null
+              },
+              "close": {
+                "permission": "cases.close",
+                "approval": "maker_checker",
+                "approval_permission": "cases.close.approve"
+              }
+            },
+            "unknown_variant": "reject"
           }
         ],
         "x-implementation-status": "planned"

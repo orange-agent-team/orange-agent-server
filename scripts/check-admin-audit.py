@@ -9,6 +9,19 @@ if source.scheme not in ('postgres','postgresql') or source.hostname not in ('12
 if not args.identity_config.is_file():raise SystemExit('Explicit private development identity configuration required')
 schema=json.loads((ROOT/'contracts/json-schema/admin.schema.json').read_text())
 api=json.loads((ROOT/'contracts/openapi/admin.v1.json').read_text())
+policies=api['paths']['/admin/v1/actions']['post']['x-action-policies']
+declared={item['properties']['action_type']['const'] for item in api['components']['schemas']['AdminActionCreate']['oneOf']}
+if len(policies)!=len(declared) or {rule['action_type'] for rule in policies}!=declared:
+    raise SystemExit('Admin action policy catalog differs from the accepted action types')
+cases=next(rule for rule in policies if rule['action_type']=='case.update')
+expected={
+    'assign':('cases.edit','single_operator',None),
+    'note':('cases.edit','single_operator',None),
+    'close':('cases.close','maker_checker','cases.close.approve'),
+}
+variants={name:(rule['permission'],rule['approval'],rule['approval_permission']) for name,rule in cases['variants'].items()}
+if cases.get('approval')!='conditional' or cases.get('unknown_variant')!='reject' or cases.get('discriminator')!='payload.change' or variants!=expected:
+    raise SystemExit('Case approval policy is inconsistent with the verified operations')
 def normalize(value):
     if isinstance(value,list):return [normalize(v) for v in value]
     if isinstance(value,dict):return {k:(v.replace('#/components/schemas/','#/$defs/',1) if k=='$ref' and isinstance(v,str) and v.startswith('#/components/schemas/') else normalize(v)) for k,v in value.items()}
