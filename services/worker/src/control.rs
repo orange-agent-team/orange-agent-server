@@ -5,6 +5,8 @@ mod inputs;
 mod outputs;
 mod rejections;
 mod renewals;
+#[cfg(unix)]
+mod transcription_observation;
 use crate::broker::{AppliedNodePolicy, Broker, BrokerError};
 use crate::node_journal::{NodeJournal, ReceivedNodeIntent};
 pub use execution::{AuthorizedExecution, ExecutionPoll, StartedExecution};
@@ -22,6 +24,8 @@ use tonic::{
     Streaming,
     transport::{Certificate, Channel, ClientTlsConfig, Endpoint, Identity},
 };
+#[cfg(unix)]
+pub use transcription_observation::ObservationFailure;
 
 pub struct ControlConfig {
     pub endpoint: String,

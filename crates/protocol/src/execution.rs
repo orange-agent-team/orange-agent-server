@@ -54,6 +54,61 @@ pub fn seconds(value: &Option<prost_types::Timestamp>) -> Option<i64> {
         .filter(|v| (1..=253_402_300_799).contains(&v.seconds) && v.nanos == 0)
         .map(|v| v.seconds)
 }
+/// A report describes one approved CPU profile observed in the current session.
+/// It is deliberately in a separate digest namespace from any lease or Job.
+pub fn transcription_observation_digest(r: &worker::TranscriptionObservation) -> Option<String> {
+    if r.profile_descriptor_json.len() > 16384 {
+        return None;
+    }
+    let profile = crate::canonical::parse_tool_arguments(
+        std::str::from_utf8(&r.profile_descriptor_json).ok()?,
+    )
+    .ok()?;
+    if request_digest("worker.transcription-profile.v1", &profile).ok()?
+        != r.execution_profile_digest
+        || profile["device"] != "cpu"
+        || profile["compute_type"] != r.compute_type
+        || profile["model_sha256"] != r.model_sha256
+        || profile["model_version"] != r.model_version
+        || profile["preprocessing"] != "mono-16khz-s16-f32-v1"
+        || profile["cpu_threads"] != 2
+        || profile["workers"] != 1
+        || profile["max_input_bytes"] != 100_000_000
+        || profile["max_duration_ms"] != 600_000
+        || !profile["runner_sha256"].as_str().is_some_and(valid_digest)
+        || !profile["model_profile_sha256"]
+            .as_str()
+            .is_some_and(valid_digest)
+    {
+        return None;
+    }
+    let fixed: serde_json::Value = serde_json::from_slice(include_bytes!(
+        "../../../contracts/fixtures/transcription-observation.v1.json"
+    ))
+    .ok()?;
+    if r.observation_version != 1
+        || ![&r.session_id, &r.request_id, &r.execution_profile_id]
+            .iter()
+            .all(|s| valid_id(s))
+        || !valid_digest(&r.execution_profile_digest)
+        || r.model_version != fixed["model_version"]
+        || r.model_sha256 != fixed["model_sha256"]
+        || r.sample_sha256 != fixed["sample_sha256"]
+        || r.transcript_sha256 != fixed["transcript_sha256"]
+        || Some(r.duration_ms) != fixed["sample_duration_ms"].as_u64()
+        || Some(r.normalized_samples) != fixed["normalized_samples"].as_u64()
+        || !matches!(r.compute_type.as_str(), "int8" | "int8_float32")
+    {
+        return None;
+    }
+    request_digest("worker.transcription-observation.v1",&json!({
+        "session_id":r.session_id,"request_id":r.request_id,"execution_profile_id":r.execution_profile_id,
+        "execution_profile_digest":r.execution_profile_digest,"model_version":r.model_version,"model_sha256":r.model_sha256,
+        "sample_sha256":r.sample_sha256,"duration_ms":r.duration_ms.to_string(),"normalized_samples":r.normalized_samples.to_string(),
+        "transcript_sha256":r.transcript_sha256,"compute_type":r.compute_type
+    })).ok()
+}
+
 pub fn assignment_digest(a: &worker::Assignment) -> Option<String> {
     let l = a.lease.as_ref()?;
     let expires = seconds(&l.expires_at)?;

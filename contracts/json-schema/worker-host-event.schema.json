@@ -19,6 +19,9 @@
     "state": {
       "enum": [
         "ready",
+        "transcription_profile_observed",
+        "transcription_profile_not_admitted",
+        "transcription_probe_failed",
         "policy_applied",
         "execution_stopped",
         "pending_output_commit",

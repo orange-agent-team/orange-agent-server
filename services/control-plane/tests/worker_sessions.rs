@@ -6,6 +6,9 @@ mod input_cases;
 mod policy_cases;
 #[path = "worker_sessions/receiver_cases.rs"]
 mod receiver_cases;
+#[cfg(all(unix, feature = "transcription-observation-tests"))]
+#[path = "worker_sessions/transcription_observation.rs"]
+mod transcription_observation;
 use orange_control_plane::{
     store::Store,
     worker::{

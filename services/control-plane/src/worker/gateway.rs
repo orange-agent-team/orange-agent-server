@@ -171,6 +171,47 @@ fn welcome(s: &DeviceSession) -> worker::ServerFrame {
 #[tonic::async_trait]
 impl WorkerGateway for Gateway {
     type ControlStream = ReceiverStream<Result<worker::ServerFrame, Status>>;
+    async fn report_transcription_observation(
+        &self,
+        request: Request<worker::TranscriptionObservation>,
+    ) -> Result<Response<worker::TranscriptionObservationReceipt>, Status> {
+        use super::transcription_observations::ObservationError;
+        let fingerprint = fingerprint(&request)?;
+        let body = request.into_inner();
+        if orange_protocol::execution::transcription_observation_digest(&body).is_none() {
+            return Err(Status::invalid_argument("invalid profile observation"));
+        }
+        let _permit = self
+            .input_slots
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| Status::resource_exhausted("gateway busy"))?;
+        let session = self
+            .store
+            .current_peer(&fingerprint, &body.session_id)
+            .await
+            .map_err(status)?;
+        let result = self
+            .store
+            .record_transcription_observation(&session, &body)
+            .await
+            .map_err(|e| match e {
+                ObservationError::Invalid => {
+                    Status::invalid_argument("invalid profile observation")
+                }
+                ObservationError::Conflict => {
+                    Status::already_exists("immutable profile observation conflict")
+                }
+                ObservationError::Unreviewed => {
+                    Status::failed_precondition("TRANSCRIPTION_PROFILE_NOT_APPROVED")
+                }
+                ObservationError::Session(e) => status(e),
+                ObservationError::Database(_) => {
+                    Status::unavailable("observation store unavailable")
+                }
+            })?;
+        Ok(Response::new(result))
+    }
     async fn confirm_cpu_cleanup(
         &self,
         request: Request<worker::CpuCleanupRequest>,

@@ -206,6 +206,21 @@ pub async fn run(
     if *stop.borrow() {
         return Ok(());
     }
+    let observation = if let Some(settings) = &config.transcription_observation {
+        let result = probe_transcription(&settings.private_probe_file, stop.clone()).await;
+        if *stop.borrow() {
+            return Ok(());
+        }
+        match result {
+            Ok(fact) => Some((&settings.execution_profile_id, fact)),
+            Err(_) => {
+                emit(&events, event("transcription_probe_failed"));
+                None
+            }
+        }
+    } else {
+        None
+    };
     let connection = if config.confirm_cleanup {
         ControlConnection::connect_managed_cpu(
             config.control(&capabilities)?,
@@ -272,9 +287,28 @@ pub async fn run(
     // output protocol is implemented it cannot start another model or report
     // cloud success. A shutdown explicitly discards this uncommitted value.
     let mut pending_output = None;
+    let mut observed_session = None;
     loop {
         if *stop.borrow() {
             break;
+        }
+        if let Some((profile, fact)) = &observation
+            && observed_session.as_deref()
+                != Some(resources.connection.identity().session_id.as_str())
+        {
+            use crate::control::ObservationFailure;
+            let result = resources
+                .connection
+                .report_transcription_profile(profile, fact)
+                .await;
+            observed_session = Some(resources.connection.identity().session_id.clone());
+            match result {
+                Ok(_) => emit(&events, event("transcription_profile_observed")),
+                Err(ObservationFailure::NotApproved | ObservationFailure::Unsupported) => {
+                    emit(&events, event("transcription_profile_not_admitted"))
+                }
+                Err(ObservationFailure::Control(e)) => return Err(e.into()),
+            }
         }
         let poll = tokio::select! {
             _=stop.changed()=>break,

@@ -8,5 +8,6 @@ pub use sessions::{DeviceSession, SessionError, WorkerSessionStore};
 
 mod rejections;
 mod renewals;
+mod transcription_observations;
 
 pub mod bootstrap;

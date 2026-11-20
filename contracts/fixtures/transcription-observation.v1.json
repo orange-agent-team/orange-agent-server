@@ -1,0 +1,8 @@
+{
+  "sample_sha256": "59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e",
+  "sample_duration_ms": 11000,
+  "normalized_samples": 176000,
+  "transcript_sha256": "e4e644650803b9dca2d1caaf17fbfa3b5cd835a792b8d53d888c6996f7eb1c5d",
+  "model_version": "whisper-small-ct2-int8-cpu-v1",
+  "model_sha256": "3e305921506d8872816023e4c273e75d2419fb89b24da97b4fe7bce14170d671"
+}

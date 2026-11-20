@@ -56,8 +56,12 @@ with tempfile.TemporaryDirectory(prefix='orange-worker-mtls-') as directory:
         metadata=json.loads(subprocess.check_output([str(cargo),'metadata','--no-deps','--format-version','1','--locked'],cwd=ROOT,env=environment,text=True))
         environment['ORANGE_USER_API_BINARY']=str(Path(metadata['target_directory'])/'debug/orange-user-api')
     features='queue-expiry-tests' if environment.get('ORANGE_QUEUE_EXPIRY_TESTS') else ('web-compute-tests' if environment.get('ORANGE_WEB_COMPUTE_TESTS') else ('real-worker-tests' if environment.get('ORANGE_REAL_WORKER_PROFILE') else 'integration-tests'))
+    if environment.get('ORANGE_TRANSCRIPTION_OBSERVATION_TESTS'):
+        features='transcription-observation-tests'
     command=[str(cargo),'test','-p','orange-control-plane','--features',features,'--test','worker_sessions','--locked']
-    if environment.get('ORANGE_REAL_WORKER_PROFILE'):
+    if environment.get('ORANGE_TRANSCRIPTION_OBSERVATION_TESTS'):
+        command+=['transcription_observation::','--','--test-threads=1']
+    elif environment.get('ORANGE_REAL_WORKER_PROFILE'):
         if environment.get('ORANGE_WEB_COMPUTE_TESTS'):command+=['input_cases::cpu_cases::pricing_cases::browser_cases','--','--test-threads=1']
         elif environment.get('ORANGE_CANCEL_REAL_TESTS'):command+=['input_cases::cpu_cases::pricing_cases::cancel_real','--','--test-threads=1']
         elif environment.get('ORANGE_CLEANUP_REAL_TESTS'):command+=['input_cases::cpu_cases::pricing_cases::cleanup_real','--','--test-threads=1']
@@ -80,7 +84,8 @@ with tempfile.TemporaryDirectory(prefix='orange-worker-mtls-') as directory:
     if code:raise SystemExit(code)
     if not passed:raise SystemExit('No actual selected Worker tests passed; refusing an empty-filter success')
     subprocess.run([str(cargo),'build','-p','orange-control-plane','--bin','orange-worker-gateway','--locked'],cwd=ROOT,env=environment,check=True)
-if environment.get('ORANGE_QUEUE_EXPIRY_TESTS'):print('PASS actual PG deadline/queue release and protocol fencing; identity/scheduler/ACK fixtures, no physical cleanup claim')
+if environment.get('ORANGE_TRANSCRIPTION_OBSERVATION_TESTS'):print('PASS real registered CPU ASR observation on the mTLS gateway; independent review fixture, no Job admission or charge')
+elif environment.get('ORANGE_QUEUE_EXPIRY_TESTS'):print('PASS actual PG deadline/queue release and protocol fencing; identity/scheduler/ACK fixtures, no physical cleanup claim')
 elif environment.get('ORANGE_WITHDRAW_TESTS'):print('PASS actual HTTP router/PG withdrawal barriers, old-snapshot races, original-requester authority and existing cancellation with separate declared cleanup; identity/quote/cleanup fixtures, no new physical model certification')
 elif environment.get('ORANGE_JOB_QUERY_TESTS'):print('PASS actual current-user HTTP router/PostgreSQL metadata isolation and pagination; declared identity/quote fixtures, no network mTLS/model or output-content certification')
 elif not environment.get('ORANGE_REAL_WORKER_PROFILE'):print('PASS real mTLS/PostgreSQL control and E08 SQLite/Broker receive/start barriers; explicit CA, profile, OS/device and raw-ACK fixtures, no model engine, physical cleanup or settlement')

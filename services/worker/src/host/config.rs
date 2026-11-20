@@ -19,12 +19,20 @@ pub struct WorkerConfig {
     pub private_key: PathBuf,
     pub node_id: String,
     pub allow_remote_contribution: bool,
+    #[serde(default)]
+    pub transcription_observation: Option<TranscriptionObservationConfig>,
     #[serde(default = "default_output")]
     pub commit_outputs: bool,
     #[serde(default = "default_output")]
     pub confirm_cleanup: bool,
     pub profile_id: String,
     pub profile: ProfileConfig,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TranscriptionObservationConfig {
+    pub execution_profile_id: String,
+    pub private_probe_file: PathBuf,
 }
 fn default_output() -> bool {
     true
@@ -112,6 +120,10 @@ impl WorkerConfig {
             || uri.query().is_some()
             || uri.authority().is_none_or(|v| v.as_str().contains('@'))
             || !orange_protocol::valid_id(&self.node_id)
+            || self.transcription_observation.as_ref().is_some_and(|o| {
+                !orange_protocol::valid_id(&o.execution_profile_id)
+                    || !o.private_probe_file.is_absolute()
+            })
             || !orange_protocol::valid_id(&self.profile_id)
             || !orange_protocol::valid_id(&self.profile.model_version)
             || !orange_protocol::valid_digest(&self.profile.model_sha256)
