@@ -1,0 +1,6 @@
+{
+  "gateway_instance_id": "private-dev-gateway",
+  "server_certificate_file": "/absolute/private/gateway.pem",
+  "server_key_file": "/absolute/private/gateway.key",
+  "client_ca_file": "/absolute/private/worker-ca.pem"
+}

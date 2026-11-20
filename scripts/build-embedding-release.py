@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build the selected CPU release executables from two independent pinned source trees."""
 import argparse
-from local_distribution_profiles import PROFILES
+from local_distribution_profiles import PROFILES, PLATFORM_PROGRAMS
 import hashlib
 import json
 import os
@@ -16,10 +16,16 @@ import tempfile
 root = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser()
 parser.add_argument("--commit", required=True)
-parser.add_argument("--profile", choices=tuple(PROFILES), default="embedding")
+parser.add_argument("--profile", choices=(*PROFILES,"platform"), default="embedding")
 args = parser.parse_args()
-programs = PROFILES[args.profile].programs
-target_args = PROFILES[args.profile].cargo_args
+if args.profile == "platform":
+    programs = PLATFORM_PROGRAMS
+    packages = ["-p","orange-control-plane","-p","orange-worker"]
+    target_args = [part for name in programs for part in ("--bin",name)]
+else:
+    programs = PROFILES[args.profile].programs
+    packages = ["-p","orange-model-runtime"]
+    target_args = PROFILES[args.profile].cargo_args
 if len(args.commit)!=40 or any(c not in "0123456789abcdef" for c in args.commit):
     raise SystemExit("Supply a complete immutable local commit")
 if platform.system()!="Darwin" or platform.machine()!="arm64":
@@ -48,7 +54,7 @@ with tempfile.TemporaryDirectory(prefix="oe-build-") as tmp:
         env=dict(os.environ,PATH=str(cargo.parent)+os.pathsep+os.environ['PATH'],CARGO_INCREMENTAL="0",CARGO_NET_OFFLINE="true",
                  CARGO_TARGET_DIR=str(tree/'target'),CARGO_PROFILE_RELEASE_STRIP="symbols",SOURCE_DATE_EPOCH=epoch,
                  RUSTFLAGS="--remap-path-prefix="+str(tree)+"=/orange-agent",CFLAGS="-ffile-prefix-map="+str(tree)+"=/orange-agent")
-        subprocess.run([cargo,"build","--locked","--offline","--target",target,"--release","-p","orange-model-runtime",
+        subprocess.run([cargo,"build","--locked","--offline","--target",target,"--release",*packages,
                         *target_args],cwd=tree,env=env,check=True)
         files={}
         for name in programs:

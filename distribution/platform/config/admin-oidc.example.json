@@ -1,0 +1,8 @@
+{
+  "issuer": "http://127.0.0.1:44180/realms/orange-dev",
+  "environment": "dev",
+  "client_id": "orange-admin",
+  "client_secret": "REPLACE_WITH_PRIVATE_OIDC_CLIENT_SECRET",
+  "admin_origin": "https://127.0.0.1:43112",
+  "required_acr": "2"
+}

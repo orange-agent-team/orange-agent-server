@@ -19,3 +19,9 @@ PROFILES = {
     "image": Profile(("orange-image",), ("--features","image-host","--bin","orange-image"),
                      ("image.py","__init__.py"), "backends/environments/sdxl-macos/uv.lock"),
 }
+
+# Independently startable processes in the local platform distribution.
+PLATFORM_PROGRAMS = (
+    "orange-user-api", "orange-admin-api", "orange-worker-gateway",
+    "orange-cloud-host-gateway", "orange-cloud-host-node", "orange-worker",
+)
