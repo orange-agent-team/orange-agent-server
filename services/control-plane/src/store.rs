@@ -19,6 +19,7 @@ pub enum StoreError {
     Balance,
     QuoteExpired,
     QuoteMismatch,
+    SpendingPaused,
     InvalidTransition,
     InvocationWithdrawn,
     Database(sqlx::Error),
@@ -38,12 +39,14 @@ impl std::fmt::Display for StoreError {
 impl std::error::Error for StoreError {}
 impl From<sqlx::Error> for StoreError {
     fn from(e: sqlx::Error) -> Self {
-        if e.as_database_error()
-            .is_some_and(|d| d.code().as_deref() == Some("23505"))
+        match e
+            .as_database_error()
+            .and_then(|error| error.code())
+            .as_deref()
         {
-            Self::Conflict
-        } else {
-            Self::Database(e)
+            Some("23505") => Self::Conflict,
+            Some("OA031") => Self::SpendingPaused,
+            _ => Self::Database(e),
         }
     }
 }

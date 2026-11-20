@@ -79,7 +79,7 @@ async fn lot_row(
     owner: &str,
     order: &str,
 ) -> Result<sqlx::postgres::PgRow, Error> {
-    sqlx::query("SELECT l.*,f.amount_minor,f.currency,f.charge_id,COALESCE((SELECT sum(r.amount_minor)::bigint FROM test_refund_orders r WHERE r.order_id=l.order_id AND r.state='succeeded'),0) AS prior_minor,
+    sqlx::query("SELECT l.*,f.amount_minor,f.currency,f.charge_id,EXISTS(SELECT 1 FROM test_dispute_work d WHERE d.order_id=l.order_id AND d.blocks_spend) AS disputed,COALESCE((SELECT sum(r.amount_minor)::bigint FROM test_refund_orders r WHERE r.order_id=l.order_id AND r.state='succeeded'),0) AS prior_minor,
         (SELECT r.refund_id FROM test_refund_orders r WHERE r.order_id=l.order_id AND r.state NOT IN ('succeeded','failed','cancelled')) AS pending
         FROM test_purchase_lots l JOIN test_credit_fulfillments f USING(order_id) JOIN test_checkout_orders o USING(order_id)
         WHERE l.order_id=$1 AND l.owner_id=$2 AND f.owner_id=l.owner_id AND o.owner_id=l.owner_id AND o.merchant_id=$3 AND o.state='credited' FOR UPDATE OF l")
@@ -101,7 +101,7 @@ pub(super) async fn eligibility(
         0,
     )?;
     let v = serde_json::json!({"order_id":order,"owner_id":owner,"currency":r.try_get::<&str,_>("currency")?,
-        "max_refundable_minor":if pending.is_some(){0}else{maximum}.to_string(),"unspent_microcredits":r.try_get::<i64,_>("available")?.to_string(),"pending_refund_id":pending});
+        "max_refundable_minor":if pending.is_some()||r.try_get::<bool,_>("disputed")?{0}else{maximum}.to_string(),"unspent_microcredits":r.try_get::<i64,_>("available")?.to_string(),"pending_refund_id":pending});
     g.finish().await?;
     Ok(private(Json(v).into_response()))
 }
@@ -153,6 +153,15 @@ pub(super) async fn apply(
         || r.try_get::<&str, _>("currency")? != req.currency
     {
         return Err(Error::Conflict);
+    }
+    let disputed: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM test_dispute_work WHERE order_id=$1 AND blocks_spend)",
+    )
+    .bind(&order)
+    .fetch_one(&mut **g.transaction())
+    .await?;
+    if disputed {
+        return Err(Error::SpendingPaused);
     }
     let prior = r.try_get::<i64, _>("prior_minor")?;
     let (_, hold) = limit_and_hold(

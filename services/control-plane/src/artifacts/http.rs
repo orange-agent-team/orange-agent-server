@@ -490,6 +490,9 @@ async fn submit_job(
         .submit_job(&actor, &owner, key, &request)
         .await
         .map_err(|e| match e {
+            crate::store::StoreError::SpendingPaused => {
+                Error(StatusCode::CONFLICT, "SPENDING_PAUSED")
+            }
             crate::store::StoreError::InvocationWithdrawn => {
                 Error(StatusCode::CONFLICT, "INVOCATION_WITHDRAWN")
             }

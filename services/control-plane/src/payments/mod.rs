@@ -1,4 +1,5 @@
 //! Sandbox purchase orders. Only provider-authenticated reconciliation may advance external payment state.
+mod disputes;
 mod refund_work;
 mod refunds;
 mod stripe;
@@ -28,6 +29,8 @@ pub enum Error {
     Forbidden,
     #[error("order or offer unavailable")]
     NotFound,
+    #[error("new spending paused")]
+    SpendingPaused,
     #[error("checkout identity conflict")]
     Conflict,
     #[error("provider evidence mismatch")]
@@ -37,7 +40,16 @@ pub enum Error {
     #[error(transparent)]
     Auth(#[from] auth::AuthError),
     #[error("payment storage unavailable")]
-    Database(#[from] sqlx::Error),
+    Database(sqlx::Error),
+}
+impl From<sqlx::Error> for Error {
+    fn from(error: sqlx::Error) -> Self {
+        match error.as_database_error().and_then(|e| e.code()).as_deref() {
+            Some("OA034") => Self::Conflict,
+            Some("OA032") => Self::Mismatch,
+            _ => Self::Database(error),
+        }
+    }
 }
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
@@ -53,6 +65,7 @@ impl IntoResponse for Error {
                 auth::AuthError::Forbidden | auth::AuthError::Csrf | auth::AuthError::Context,
             ) => (StatusCode::FORBIDDEN, "FORBIDDEN"),
             Self::NotFound => (StatusCode::NOT_FOUND, "NOT_FOUND"),
+            Self::SpendingPaused => (StatusCode::CONFLICT, "SPENDING_PAUSED"),
             Self::Conflict => (StatusCode::CONFLICT, "CHECKOUT_CONFLICT"),
             Self::Mismatch => (StatusCode::CONFLICT, "CHECKOUT_EVIDENCE_MISMATCH"),
             _ => (StatusCode::SERVICE_UNAVAILABLE, "CHECKOUT_UNAVAILABLE"),
@@ -78,6 +91,10 @@ impl Payments {
     }
     pub fn router(&self) -> Router {
         Router::new()
+            .route(
+                "/api/v1/owners/{owner}/spending-status",
+                get(disputes::spending_status),
+            )
             .route("/api/v1/owners/{owner}/credit-offers", get(offers))
             .route(
                 "/api/v1/owners/{owner}/checkout-orders",
@@ -235,7 +252,7 @@ async fn order_row(
     if !valid_order(order) {
         return Err(Error::Invalid);
     }
-    sqlx::query("SELECT o.*,f.currency,f.amount_minor,f.microcredits,f.stripe_price,f.enabled,coalesce(o.dispatched_at<clock_timestamp()-interval '30 seconds',false) AS abandoned
+    sqlx::query("SELECT o.order_id,o.owner_id,o.state,o.session_id,o.checkout_url,o.offer_id,f.currency,f.amount_minor,f.microcredits,f.stripe_price,f.enabled,coalesce(o.dispatched_at<clock_timestamp()-interval '30 seconds',false) AS abandoned
         FROM test_checkout_orders o JOIN test_credit_offers f USING(merchant_id,offer_id) WHERE o.order_id=$1 AND o.owner_id=$2 AND o.requester_id=$3 AND o.merchant_id=$4")
         .bind(order).bind(owner).bind(user).bind(merchant).fetch_optional(&mut **g.transaction()).await?.ok_or(Error::NotFound)
 }
@@ -385,6 +402,19 @@ async fn dispatch(
     let row = order_row(&mut g, &owner, &order, &api.provider.merchant).await?;
     let price: String = row.try_get("stripe_price")?;
     let binding = uuid::Uuid::new_v4().simple().to_string();
+    sqlx::query("SELECT owner_id FROM wallets WHERE owner_id=$1 FOR UPDATE")
+        .bind(&owner)
+        .fetch_one(&mut **g.transaction())
+        .await?;
+    let paused: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM test_dispute_work WHERE owner_id=$1 AND blocks_spend)",
+    )
+    .bind(&owner)
+    .fetch_one(&mut **g.transaction())
+    .await?;
+    if paused {
+        return Err(Error::SpendingPaused);
+    }
     let claimed=sqlx::query("UPDATE test_checkout_orders o SET state='dispatching',dispatched_at=clock_timestamp(),dispatch_binding=$2 WHERE o.order_id=$1 AND o.state='created'
          AND EXISTS(SELECT 1 FROM test_credit_offers f WHERE f.merchant_id=o.merchant_id AND f.offer_id=o.offer_id AND f.enabled FOR SHARE)")
          .bind(&order).bind(&binding).execute(&mut **g.transaction()).await?.rows_affected()==1;
@@ -500,7 +530,10 @@ async fn record(
     {
         return Err(Error::Mismatch);
     }
-    if matches!(old, "created" | "dispatching" | "unknown" | "open") || old == new {
+    if matches!(old, "created" | "dispatching" | "unknown" | "open")
+        || old == new
+        || old == "review_required" && new == "paid_review"
+    {
         sqlx::query("UPDATE test_checkout_orders SET state=$2,session_id=$3,checkout_url=$4 WHERE order_id=$1")
             .bind(order).bind(new).bind(&s.id).bind(url).execute(&mut *tx).await?;
     }

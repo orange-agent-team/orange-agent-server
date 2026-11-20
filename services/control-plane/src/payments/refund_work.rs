@@ -60,6 +60,14 @@ impl Payments {
                     return Err(e);
                 }
                 let mut tx = pool.begin().await?;
+                sqlx::query("SELECT owner_id FROM wallets WHERE owner_id=$1 FOR UPDATE")
+                    .bind(&owner)
+                    .fetch_one(&mut *tx)
+                    .await?;
+                let blocked:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM test_dispute_work WHERE order_id=$1 AND blocks_spend)").bind(&t.order).fetch_one(&mut *tx).await?;
+                if blocked {
+                    return Ok(true);
+                }
                 let state: String = sqlx::query_scalar(
                     "SELECT state FROM test_refund_orders WHERE refund_id=$1 FOR UPDATE",
                 )

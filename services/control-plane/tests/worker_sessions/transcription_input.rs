@@ -1,4 +1,6 @@
 use super::*;
+#[path = "../support/test_dispute.rs"]
+mod dispute_proof;
 #[path = "../support/purchase_lot.rs"]
 mod purchase_lot;
 use axum::{
@@ -313,7 +315,7 @@ async fn run_case(mode: Scenario) {
         .expect("actual OIDC discovery");
     let users = orange_control_plane::auth::routes::router(identity.clone());
     let app = http::build_router(
-        identity,
+        identity.clone(),
         store.clone(),
         Some(AudioMeter::from_file(&config).expect("meter")),
     )
@@ -851,7 +853,11 @@ async fn run_case(mode: Scenario) {
         let lot: (i64, i64, i64) = sqlx::query_as(
             "SELECT available,job_held,spent FROM test_purchase_lots WHERE order_id=$1",
         )
-        .bind(purchased_order.expect("original purchase fixture"))
+        .bind(
+            purchased_order
+                .as_deref()
+                .expect("original purchase fixture"),
+        )
         .fetch_one(db.pool())
         .await
         .expect("actual purchased bucket attribution");
@@ -863,6 +869,16 @@ async fn run_case(mode: Scenario) {
                 (10000, 0, 0)
             }
         );
+        if mode == Scenario::Resident {
+            dispute_proof::after_actual_spend(
+                db,
+                &identity,
+                &buyer.owner,
+                purchased_order.as_deref().expect("purchase"),
+                &job,
+            )
+            .await;
+        }
         process.stop().await;
         drop(conn);
         drop(raw);

@@ -40,6 +40,7 @@ fn config() -> SandboxConfig {
 }
 struct Provider {
     refunds: refunds::RefundMerchant,
+    disputed_order: Mutex<Option<String>>,
     orders: Mutex<HashMap<String, (String, String)>>,
     posts: AtomicUsize,
     mode: AtomicUsize,
@@ -131,6 +132,23 @@ struct Buyer {
     owner: String,
     token: String,
     csrf: String,
+}
+async fn dispute(
+    State(p): State<Arc<Provider>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    assert!(headers_ok(&headers));
+    let order = p
+        .disputed_order
+        .lock()
+        .expect("fixture dispute")
+        .clone()
+        .expect("registered charge");
+    let suffix = order.replace('-', "");
+    Json(
+        json!({"id":id,"object":"dispute","livemode":false,"charge":format!("ch_{suffix}"),"payment_intent":format!("pi_{suffix}"),"amount":500,"currency":"usd","status":"won"}),
+    )
 }
 async fn buyer(db: &Store) -> Buyer {
     let b = Buyer {
@@ -233,6 +251,7 @@ async fn checkout_unknown_concurrency_raw_signatures_and_authoritative_test_cred
     let other = buyer(&db).await;
     let p = Arc::new(Provider {
         refunds: Default::default(),
+        disputed_order: Mutex::new(None),
         orders: Mutex::new(HashMap::new()),
         posts: AtomicUsize::new(0),
         mode: AtomicUsize::new(0),
@@ -241,6 +260,7 @@ async fn checkout_unknown_concurrency_raw_signatures_and_authoritative_test_cred
         .route("/v1/account", get(account))
         .route("/v1/checkout/sessions", post(create_session))
         .route("/v1/checkout/sessions/{id}", get(retrieve))
+        .route("/v1/disputes/{id}", get(dispute))
         .route("/v1/charges/{id}", get(refunds::charge))
         .route("/v1/refunds", get(refunds::list).post(refunds::create))
         .route("/v1/refunds/{id}", get(refunds::retrieve))
@@ -460,6 +480,72 @@ async fn checkout_unknown_concurrency_raw_signatures_and_authoritative_test_cred
         assert!(api.process_one().await.expect("late event recovery"));
         assert_eq!(wallet(&db, &b.owner).await, before);
     }
+    p.mode.store(0, Ordering::SeqCst);
+    let early = Uuid::new_v4().to_string();
+    let suffix = early.replace('-', "");
+    let path = format!("{orders}/{early}");
+    user(
+        (&app, &origin),
+        &b,
+        "POST",
+        &orders,
+        &early,
+        json!({"order_id":early,"offer_id":"dev-pack"}),
+        201,
+    )
+    .await;
+    user(
+        (&app, &origin),
+        &b,
+        "POST",
+        &format!("{path}/session"),
+        &early,
+        json!({}),
+        200,
+    )
+    .await;
+    *p.disputed_order.lock().expect("fixture original dispute") = Some(early.clone());
+    let ts = time::OffsetDateTime::now_utc().unix_timestamp();
+    let before = wallet(&db, &b.owner).await;
+    let disputed = json!({"id":"evt_before_credit","object":"event","livemode":false,"type":"charge.dispute.created","data":{"object":{"object":"dispute","id":"dp_before_credit","charge":format!("ch_{suffix}")}}});
+    assert_eq!(webhook(&app, &disputed, SIGNING, ts, false).await, 204);
+    let completion = json!({"id":"evt_complete_after_dispute","object":"event","livemode":false,"type":"checkout.session.completed","data":{"object":{"id":format!("cs_test_{suffix}"),"object":"checkout.session","metadata":{"orange_order_id":early}}}});
+    let mut reused = completion.clone();
+    reused["id"] = json!("evt_before_credit");
+    assert_eq!(
+        webhook(&app, &reused, SIGNING, ts, false).await,
+        409,
+        "one event identity cannot be reused across different handlers"
+    );
+    assert_eq!(webhook(&app, &completion, SIGNING, ts, false).await, 204);
+    api.process_one()
+        .await
+        .expect("source-matched payment cannot mint before dispute check");
+    assert_eq!(
+        user((&app, &origin), &b, "GET", &path, "", Value::Null, 200).await["state"],
+        "review_required"
+    );
+    assert_eq!(wallet(&db, &b.owner).await, before);
+    api.process_dispute()
+        .await
+        .expect("actual provider says won");
+    assert_eq!(
+        user(
+            (&app, &origin),
+            &b,
+            "POST",
+            &format!("{path}/reconcile"),
+            &early,
+            json!({}),
+            200
+        )
+        .await["state"],
+        "credited"
+    );
+    assert_eq!(
+        wallet(&db, &b.owner).await,
+        (before.0, before.1, before.2 + 9000)
+    );
     let organization = Uuid::new_v4().to_string();
     sqlx::query("INSERT INTO owners(owner_id) VALUES($1)")
         .bind(&organization)
@@ -531,9 +617,88 @@ async fn checkout_unknown_concurrency_raw_signatures_and_authoritative_test_cred
         &b,
         &origin,
         &p,
-        &first_paid.expect("first paid purchase"),
+        first_paid.as_deref().expect("first paid purchase"),
     )
     .await;
+    let original = first_paid.as_deref().expect("first paid purchase");
+    let charge = format!("ch_{}", original.replace('-', ""));
+    *p.disputed_order.lock().expect("merchant dispute state") = Some(original.into());
+    let event = json!({"id":"evt_web_spend_pause","object":"event","livemode":false,"type":"charge.dispute.created","data":{"object":{"id":"dp_web_pause","object":"dispute","charge":charge}}});
+    let ts = time::OffsetDateTime::now_utc().unix_timestamp();
+    assert_eq!(webhook(&app, &event, SIGNING, ts, false).await, 204);
+    let status_path = format!("{base}/spending-status");
+    assert_eq!(
+        user(
+            (&app, &origin),
+            &b,
+            "GET",
+            &status_path,
+            "",
+            Value::Null,
+            200
+        )
+        .await["positive_spending"],
+        "paused"
+    );
+    user(
+        (&app, &origin),
+        &other,
+        "GET",
+        &status_path,
+        "",
+        Value::Null,
+        403,
+    )
+    .await;
+    let blocked = Uuid::new_v4().to_string();
+    user(
+        (&app, &origin),
+        &b,
+        "POST",
+        &orders,
+        &blocked,
+        json!({"order_id":blocked,"offer_id":"dev-pack"}),
+        201,
+    )
+    .await;
+    let charged_before = p.posts.load(Ordering::SeqCst);
+    let denied = user(
+        (&app, &origin),
+        &b,
+        "POST",
+        &format!("{orders}/{blocked}/session"),
+        &blocked,
+        json!({}),
+        409,
+    )
+    .await;
+    assert_eq!(denied["code"], "SPENDING_PAUSED");
+    assert_eq!(p.posts.load(Ordering::SeqCst), charged_before);
+    if let Ok(driver) = std::env::var("ORANGE_CHECKOUT_BROWSER") {
+        let screenshot = std::path::PathBuf::from(
+            std::env::var("ORANGE_CHECKOUT_SCREENSHOT").expect("evidence"),
+        )
+        .with_file_name("spending-pause.png");
+        browser_flow(app.clone(),&driver,json!({"origin":origin,"token":b.token,"owner":b.owner,"order":original,"spending_paused":true,"screenshot":screenshot})).await;
+    }
+    assert!(
+        api.process_dispute()
+            .await
+            .expect("resume using original merchant state")
+    );
+    assert_eq!(
+        user(
+            (&app, &origin),
+            &b,
+            "GET",
+            &status_path,
+            "",
+            Value::Null,
+            200
+        )
+        .await["positive_spending"],
+        "available"
+    );
     stop.send(()).expect("signal shutdown");
     server.await.expect("join fixture");
 }

@@ -259,6 +259,8 @@ async fn serve(
             loop{tokio::select!{_=shutdown.changed()=>break,_=tick.tick()=>{
                 for _ in 0..8{if *shutdown.borrow(){return;}match p.process_one().await{Ok(true)=>{},Ok(false)=>break,Err(_)=>{eprintln!("Sandbox payment work remains pending reconciliation");break;}}}
                 if !*shutdown.borrow() && p.process_refund().await.is_err(){eprintln!("Sandbox refund remains pending reconciliation");}
+                if !*shutdown.borrow() && p.process_dispute().await.is_err(){eprintln!("Sandbox dispute remains pending reconciliation");}
+
 
             }}}
         })

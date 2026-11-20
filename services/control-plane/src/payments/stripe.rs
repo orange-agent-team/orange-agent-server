@@ -497,3 +497,43 @@ impl Sandbox {
         Ok((found, next))
     }
 }
+
+#[derive(Deserialize)]
+pub(super) struct Dispute {
+    pub id: String,
+    object: String,
+    livemode: bool,
+    pub charge: String,
+    pub payment_intent: String,
+    pub amount: i64,
+    pub currency: String,
+    pub status: String,
+}
+impl Sandbox {
+    pub(super) async fn dispute(&self, id: &str) -> Result<Dispute, Error> {
+        if !identifier(id, "dp_") {
+            return Err(Error::Invalid);
+        }
+        self.account().await?;
+        let d: Dispute = receive(
+            self.request(reqwest::Method::GET, &format!("disputes/{id}"))?
+                .send()
+                .await
+                .map_err(|_| Error::Unavailable)?,
+        )
+        .await?;
+        if d.id != id
+            || d.object != "dispute"
+            || d.livemode
+            || !identifier(&d.charge, "ch_")
+            || !identifier(&d.payment_intent, "pi_")
+            || d.amount <= 0
+            || d.currency.len() != 3
+            || !d.currency.bytes().all(|c| c.is_ascii_lowercase())
+            || d.status.len() > 64
+        {
+            return Err(Error::Mismatch);
+        }
+        Ok(d)
+    }
+}

@@ -270,6 +270,11 @@ impl HttpError {
                 "IDEMPOTENCY_CONFLICT",
                 "query_original",
             ),
+            StoreError::SpendingPaused => (
+                StatusCode::CONFLICT,
+                "SPENDING_PAUSED",
+                "after_reconciliation",
+            ),
             StoreError::InvocationWithdrawn => {
                 (StatusCode::CONFLICT, "INVOCATION_WITHDRAWN", "never")
             }

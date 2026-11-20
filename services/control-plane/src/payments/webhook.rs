@@ -66,6 +66,7 @@ struct Data {
 }
 #[derive(Deserialize)]
 struct Object {
+    charge: Option<String>,
     metadata: Option<std::collections::BTreeMap<String, String>>,
     id: String,
     object: String,
@@ -98,6 +99,32 @@ pub(super) async fn receive(
             .is_some_and(|a| a != &api.provider.merchant)
     {
         return Err(Error::Forbidden);
+    }
+    if matches!(
+        v.kind.as_str(),
+        "charge.dispute.created"
+            | "charge.dispute.updated"
+            | "charge.dispute.closed"
+            | "charge.dispute.funds_withdrawn"
+            | "charge.dispute.funds_reinstated"
+    ) {
+        let charge = v.data.object.charge.as_deref().ok_or(Error::Invalid)?;
+        if v.data.object.object != "dispute"
+            || !stripe::identifier(&v.data.object.id, "dp_")
+            || !stripe::identifier(charge, "ch_")
+        {
+            return Err(Error::Invalid);
+        }
+        super::disputes::notify(
+            &api,
+            &v.id,
+            &v.kind,
+            &v.data.object.id,
+            charge,
+            &hex::encode(Sha256::digest(&body)),
+        )
+        .await?;
+        return Ok(StatusCode::NO_CONTENT.into_response());
     }
     if matches!(
         v.kind.as_str(),
@@ -279,6 +306,15 @@ pub(super) async fn fulfill(
         return Ok(());
     }
     if row.try_get::<&str, _>("state")? != "paid_review" {
+        return Err(Error::Mismatch);
+    }
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,61))")
+        .bind(format!("{merchant}:{ch}"))
+        .execute(&mut *tx)
+        .await?;
+    let disputed:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM test_dispute_work WHERE merchant_id=$1 AND charge_id=$2 AND state NOT IN('won','warning_closed','prevented'))")
+        .bind(merchant).bind(ch).fetch_one(&mut *tx).await?;
+    if disputed {
         return Err(Error::Mismatch);
     }
     let owner: &str = row.try_get("owner_id")?;
