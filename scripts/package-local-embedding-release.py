@@ -69,13 +69,29 @@ lock=tomllib.loads(files[lock_name].decode())
 wheel_index={unquote(urlsplit(w['url']).path.rsplit('/',1)[-1]):(pkg,w)
              for pkg in lock['package'] for w in pkg.get('wheels',[])}
 requirements={}
+versions={}
 for path in sorted(args.wheelhouse.glob('*.whl')):
     pkg,w=wheel_index[path.name]
     data=path.read_bytes()
     if len(data)!=w['size'] or 'sha256:'+sha(data)!=w['hash'] or pkg['name'] in requirements:
         raise ValueError('Unexpected or duplicate locked wheel: '+path.name)
+    versions[pkg['name']]=pkg['version']
     requirements[pkg['name']]=pkg['name']+'=='+pkg['version']+' --hash='+w['hash']
     files['wheels/'+path.name]=data
+supplemental=[]
+for row in json.loads(tracked(packaging,'distribution/notices/sources.json')):
+    if versions.get(row['package']) != row['version']:
+        continue
+    name=row['file']
+    if Path(name).parts != (row['package']+'-'+row['version'], 'LICENSE'):
+        raise ValueError('Unexpected archived third-party notice name')
+    data=tracked(packaging,'distribution/notices/'+name)
+    blob=hashlib.sha1(f'blob {len(data)}\0'.encode()+data).hexdigest()
+    if sha(data)!=row['sha256'] or len(data)!=row['bytes'] or blob!=row['git_blob']:
+        raise ValueError('Supplemental license differs from its registered upstream bytes')
+    files['notices/'+name]=data
+    supplemental.append(row)
+files['notices/sources.json']=(json.dumps(supplemental,indent=2)+'\n').encode()
 project=tomllib.loads(files['backends/pyproject.toml'].decode())['project']
 wheel=args.backend_wheel
 if wheel.name!=f"orange_inference_backends-{project['version']}-py3-none-any.whl":

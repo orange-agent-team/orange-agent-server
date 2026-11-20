@@ -1,0 +1,42 @@
+[
+  {
+    "package": "ctranslate2",
+    "version": "4.9.0",
+    "file": "ctranslate2-4.9.0/LICENSE",
+    "bytes": 1115,
+    "sha256": "54aa79d9fe3c09e67a16dcd95b9e88676405a6ec174efda31036983cf7672ecb",
+    "upstream_commit": "a22ba1c63ee35d1a0d25db149aa2a66d36a6a732",
+    "git_blob": "aaa6a320e1facba1a794fdfe084ded21ee350c9b",
+    "url": "https://github.com/OpenNMT/CTranslate2/blob/a22ba1c63ee35d1a0d25db149aa2a66d36a6a732/LICENSE"
+  },
+  {
+    "package": "flatbuffers",
+    "version": "25.12.19",
+    "file": "flatbuffers-25.12.19/LICENSE",
+    "bytes": 11358,
+    "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+    "upstream_commit": "7e163021e59cca4f8e1e35a7c828b5c6b7915953",
+    "git_blob": "d645695673349e3947e8e5ae42332d0ac3164cd7",
+    "url": "https://github.com/google/flatbuffers/blob/7e163021e59cca4f8e1e35a7c828b5c6b7915953/LICENSE"
+  },
+  {
+    "package": "tokenizers",
+    "version": "0.22.1",
+    "file": "tokenizers-0.22.1/LICENSE",
+    "bytes": 11357,
+    "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+    "upstream_commit": "afaae088837b277c19f90604a1111a272838857b",
+    "git_blob": "261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64",
+    "url": "https://github.com/huggingface/tokenizers/blob/afaae088837b277c19f90604a1111a272838857b/LICENSE"
+  },
+  {
+    "package": "tokenizers",
+    "version": "0.23.3",
+    "file": "tokenizers-0.23.3/LICENSE",
+    "bytes": 11357,
+    "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+    "upstream_commit": "301277072263fb3830eb66eec7e47adadf76f1dc",
+    "git_blob": "261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64",
+    "url": "https://github.com/huggingface/tokenizers/blob/301277072263fb3830eb66eec7e47adadf76f1dc/LICENSE"
+  }
+]
