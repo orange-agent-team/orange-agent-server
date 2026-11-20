@@ -3731,6 +3731,67 @@
         "data"
       ],
       "additionalProperties": false
+    },
+    "TestRefundReview": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "refund_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "payment_order_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        },
+        "owner_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "reconciliation_case_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "amount": {
+          "$ref": "#/$defs/Money"
+        },
+        "held_microcredits": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18})$"
+        },
+        "target_version": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "state": {
+          "enum": [
+            "held",
+            "authorized",
+            "approval_lost",
+            "dispatching",
+            "unknown",
+            "pending",
+            "succeeded",
+            "failed",
+            "cancelled",
+            "review_required"
+          ]
+        }
+      },
+      "required": [
+        "refund_id",
+        "payment_order_id",
+        "owner_id",
+        "reconciliation_case_id",
+        "amount",
+        "held_microcredits",
+        "target_version",
+        "state"
+      ]
     }
   },
   "$ref": "#/$defs/AdminActionCreate"

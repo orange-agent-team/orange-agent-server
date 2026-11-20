@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Orange Admin API",
-    "version": "0.1.12",
+    "version": "0.1.13",
     "description": "Candidate contract for the independent Admin origin. Development implementation includes OIDC sessions, scoped reads, selected node and reconciliation case actions, and development text and transcription price governance. Availability of each other action depends on its backend implementation."
   },
   "servers": [
@@ -7414,6 +7414,161 @@
         },
         "x-implementation-status": "development-candidate"
       }
+    },
+    "/admin/v1/test-refunds/{case_id}": {
+      "get": {
+        "operationId": "reviewOriginalSandboxRefund",
+        "summary": "Read reviewed terms and publication status",
+        "x-permission": "refunds.read",
+        "security": [
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RequestId"
+          },
+          {
+            "name": "environment",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "const": "dev"
+            }
+          },
+          {
+            "name": "scope_kind",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "platform",
+                "tenant"
+              ]
+            }
+          },
+          {
+            "$ref": "#/components/parameters/ScopeId"
+          },
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "State/projection, not a promise that external effects or resource cleanup have completed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestRefundReview"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "x-implementation-status": "development-candidate",
+        "description": "Review the original purchase, cash amount and held credits before independent authorization."
+      }
     }
   },
   "components": {
@@ -11247,6 +11402,67 @@
           "data"
         ],
         "additionalProperties": false
+      },
+      "TestRefundReview": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "refund_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "payment_order_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "owner_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+          },
+          "reconciliation_case_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+          },
+          "amount": {
+            "$ref": "#/components/schemas/Money"
+          },
+          "held_microcredits": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]{0,18})$"
+          },
+          "target_version": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "state": {
+            "enum": [
+              "held",
+              "authorized",
+              "approval_lost",
+              "dispatching",
+              "unknown",
+              "pending",
+              "succeeded",
+              "failed",
+              "cancelled",
+              "review_required"
+            ]
+          }
+        },
+        "required": [
+          "refund_id",
+          "payment_order_id",
+          "owner_id",
+          "reconciliation_case_id",
+          "amount",
+          "held_microcredits",
+          "target_version",
+          "state"
+        ]
       }
     }
   },
