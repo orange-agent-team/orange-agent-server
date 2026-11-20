@@ -70,3 +70,33 @@ impl Seals {
         Ok(value)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn prior_notion_cursor_wire_format_is_stable() {
+        let signer = Seals::new(
+            b"orange.notion.navigation.v1\0",
+            "fixture-secret-123456",
+            &serde_json::json!({"roots":{}}),
+        )
+        .ok()
+        .expect("key");
+        let old = "WyJjdXJzb3IiLCJncmFudC1vbmUiLCJ0eXBlZC1hY3Rpb24iLCJjdXJzb3JfMSJd.merhbf-vH1pfQ285vO4BMLSqenudoOD8AF7svZqVv5w";
+        assert_eq!(
+            signer
+                .open::<String>("grant-one", "cursor", "typed-action", old)
+                .ok()
+                .as_deref(),
+            Some("cursor_1")
+        );
+        assert_eq!(
+            signer
+                .seal("grant-one", "cursor", "typed-action", "cursor_1")
+                .ok()
+                .as_deref(),
+            Some(old)
+        );
+    }
+}

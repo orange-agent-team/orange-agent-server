@@ -11,3 +11,5 @@ search_pages 使用固定空间条件构造 CQL，按标题匹配。read_page �
 ```sh
 python3 scripts/check-confluence.py --database-url-file .local/database-url --identity-config .local/identity/user-config.json
 ```
+
+加上 `--web-repo ../orange-agent-web` 会通过 Chrome 校验下载文件名、实际字节与 SHA-256，随后撤权并刷新。发布故障用例在文件写入并校验后暂停数据库状态转换；普通读取被拒绝，此时仍可撤权。释放测试屏障后正文不对用户开放，维护任务删除文件，重复回收不会再次扣减已用容量。

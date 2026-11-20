@@ -22,6 +22,8 @@ def run(provider):
     env=dict(os.environ,PATH=str(cargo.parent)+os.pathsep+os.environ["PATH"])
     cmd=[cargo,"test","--locked","--offline","-p","orange-control-plane","--features",provider+"-fixture-tests"]
     subprocess.run(cmd+["--lib",provider+"::tests"],cwd=root,env=env,check=True)
+    if provider=="confluence":
+        subprocess.run(cmd+["--lib","document_handles::tests"],cwd=root,env=env,check=True)
     with database(args.database_url_file,"orange_"+provider+"_") as (_,url):
         subprocess.run(cmd+["--test","user_identity",provider+"_consent::"],cwd=root,
             env=dict(env,**browser,ORANGE_TEST_DATABASE_URL=url,ORANGE_TEST_USER_CONFIG_FILE=str(args.identity_config.resolve())),check=True)
