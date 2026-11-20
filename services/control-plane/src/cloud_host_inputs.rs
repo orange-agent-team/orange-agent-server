@@ -14,6 +14,7 @@ struct Binding {
     size: u64,
     sha: String,
     attestation: String,
+    model: Option<crate::cloud_model::Selection>,
 }
 async fn binding(
     tx: &mut Tx<'_>,
@@ -56,7 +57,11 @@ async fn binding(
           AND a.artifact_id=$5 AND a.version_id=$6 AND t.artifact_id=a.artifact_id AND t.state='attached' AND NOT t.published_deleted
         FOR SHARE OF a,t,h").bind(&lease.allocation_id).bind(&lease.workspace_id).bind(&lease.host_instance_id).bind(i64::try_from(lease.epoch).map_err(|_|changed())?)
         .bind(&artifact).bind(&version).fetch_optional(&mut **tx).await.map_err(db_error)?.ok_or_else(changed)?;
+    let plan = crate::cloud_model::selection(tx, &lease.run_id)
+        .await
+        .map_err(db_error)?;
     Ok(Binding {
+        model: plan,
         artifact,
         version,
         root: source.try_get("root_id").map_err(db_error)?,
@@ -85,13 +90,19 @@ pub(super) async fn fetch(
             | crate::artifacts::ArtifactError::Integrity => changed(),
             _ => Status::unavailable("workspace input unavailable"),
         })?;
+    let projection = source
+        .model
+        .as_ref()
+        .map(|model| model.projection(&bytes))
+        .transpose()
+        .map_err(|_| changed())?;
     let mut tx = db.begin().await.map_err(db_error)?;
     if source != binding(&mut tx, cert, &lease).await? {
         return Err(changed());
     }
-    sqlx::query("INSERT INTO cloud_workspace_input_reads(allocation_id,receipt_id,artifact_id,version_id,sha256)
-        VALUES($1,$2,$3,$4,$5) ON CONFLICT(allocation_id) DO NOTHING").bind(&lease.allocation_id).bind(uuid::Uuid::new_v4().to_string())
-        .bind(&source.artifact).bind(&source.version).bind(&source.sha).execute(&mut *tx).await.map_err(db_error)?;
+    sqlx::query("INSERT INTO cloud_workspace_input_reads(allocation_id,receipt_id,artifact_id,version_id,sha256,model_projection_digest)
+        VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(allocation_id) DO NOTHING").bind(&lease.allocation_id).bind(uuid::Uuid::new_v4().to_string())
+        .bind(&source.artifact).bind(&source.version).bind(&source.sha).bind(&projection).execute(&mut *tx).await.map_err(db_error)?;
     let receipt_id=sqlx::query_scalar::<_,String>("SELECT receipt_id FROM cloud_workspace_input_reads WHERE allocation_id=$1 AND artifact_id=$2 AND version_id=$3 AND sha256=$4")
         .bind(&lease.allocation_id).bind(&source.artifact).bind(&source.version).bind(&source.sha)
         .fetch_optional(&mut *tx).await.map_err(db_error)?.ok_or_else(changed)?;
@@ -154,6 +165,13 @@ pub(super) async fn ready(
         let changed_rows=sqlx::query("UPDATE cloud_workspaces SET status='ready',version=version+1 WHERE workspace_id=$1 AND status='preparing'")
             .bind(&lease.workspace_id).execute(&mut *tx).await.map_err(db_error)?.rows_affected();
         if changed_rows!=1{return Err(changed());}
+        if source.model.is_some(){
+            let marked=sqlx::query("INSERT INTO cloud_model_proposals(run_id,allocation_id,input_receipt_id,request_projection_digest)
+                SELECT $1,allocation_id,receipt_id,model_projection_digest FROM cloud_workspace_input_reads
+                WHERE allocation_id=$2 AND model_projection_digest IS NOT NULL")
+                .bind(&lease.run_id).bind(&lease.allocation_id).execute(&mut *tx).await.map_err(db_error)?;
+            if marked.rows_affected()!=1{return Err(changed());}
+        }
         leases::event(&mut tx,&lease.run_id,"workspace_materialized").await?;id
     };
     leases::confirm_live(&mut tx, &lease.workspace_id).await?;

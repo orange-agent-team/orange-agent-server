@@ -48,6 +48,9 @@ pub(super) async fn resource(
     if row.try_get::<String, _>("owner_id")? != owner {
         return Err(ArtifactError::NotFound);
     }
+    if !deleted_metadata && !write {
+        crate::cloud_model::output_access(tx, row.try_get("artifact_id")?).await?;
+    }
     let role = scope(tx, actor, owner, write).await?;
     let resource: Option<String> = row.try_get("resource_id")?;
     match (role, resource) {

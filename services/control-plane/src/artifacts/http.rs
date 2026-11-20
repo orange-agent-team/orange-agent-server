@@ -19,6 +19,16 @@ struct Api {
 }
 pub fn router(identity: UserIdentity, store: ArtifactStore) -> Router {
     Router::new()
+        .route("/api/v1/agent/runs/{run}/model", get(cloud_status))
+        .route(
+            "/api/v1/agent/runs/{run}/model/quotes",
+            axum::routing::post(cloud_quote),
+        )
+        .route(
+            "/api/v1/agent/runs/{run}/model/submit",
+            axum::routing::post(cloud_submit),
+        )
+        .route("/api/v1/agent/runs/{run}/model/result", get(cloud_result))
         .route("/api/v1/text-prices", get(prices))
         .route(
             "/api/v1/owners/{owner}/text-quotes",
@@ -477,4 +487,68 @@ async fn withdraw_invocation(
             _ => Error(StatusCode::CONFLICT, "WITHDRAWAL_REJECTED"),
         })?;
     Ok(private(Json(receipt).into_response()))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EmptyCloudRequest {}
+fn cloud_key(h: &HeaderMap) -> Result<&str, Error> {
+    h.get("idempotency-key")
+        .and_then(|v| v.to_str().ok())
+        .filter(|v| valid_id(v))
+        .ok_or_else(|| ArtifactError::Invalid.into())
+}
+async fn cloud_status(
+    State(api): State<Api>,
+    headers: HeaderMap,
+    Path(run): Path<String>,
+) -> Result<Response, Error> {
+    let actor = api.identity.artifact_actor(&headers, false).await?;
+    Ok(private(
+        Json(api.store.cloud_status(&actor, &run).await?).into_response(),
+    ))
+}
+async fn cloud_quote(
+    State(api): State<Api>,
+    headers: HeaderMap,
+    Path(run): Path<String>,
+    body: Result<Json<EmptyCloudRequest>, axum::extract::rejection::JsonRejection>,
+) -> Result<Response, Error> {
+    let _ = body.map_err(|_| ArtifactError::Invalid)?;
+    let actor = api.identity.artifact_actor(&headers, true).await?;
+    Ok(private(
+        Json(
+            api.store
+                .cloud_quote(&actor, &run, cloud_key(&headers)?)
+                .await?,
+        )
+        .into_response(),
+    ))
+}
+async fn cloud_submit(
+    State(api): State<Api>,
+    headers: HeaderMap,
+    Path(run): Path<String>,
+    body: Result<Json<cloud_turn::Confirmation>, axum::extract::rejection::JsonRejection>,
+) -> Result<Response, Error> {
+    let actor = api.identity.artifact_actor(&headers, true).await?;
+    let Json(order) = body.map_err(|_| ArtifactError::Invalid)?;
+    Ok(private(
+        Json(
+            api.store
+                .confirm_cloud_model(&actor, &run, cloud_key(&headers)?, order)
+                .await?,
+        )
+        .into_response(),
+    ))
+}
+async fn cloud_result(
+    State(api): State<Api>,
+    headers: HeaderMap,
+    Path(run): Path<String>,
+) -> Result<Response, Error> {
+    let actor = api.identity.artifact_actor(&headers, false).await?;
+    Ok(private(
+        Json(api.store.cloud_result(&actor, &run).await?).into_response(),
+    ))
 }

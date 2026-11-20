@@ -24,7 +24,7 @@ pub(super) async fn allocation(
     workspace: &str,
     run: &str,
 ) -> Result<PgRow, Status> {
-    sqlx::query("SELECT w.version,w.status,w.epoch,r.status AS run_state,
+    sqlx::query("SELECT r.run_id,w.version,w.status,w.epoch,r.status AS run_state,
         FLOOR(EXTRACT(EPOCH FROM w.lease_until))::bigint AS until,w.previous_lease_until AS previous,
         FLOOR(EXTRACT(EPOCH FROM LEAST(w.expires_at,h.credential_expires_at,h.live_until,clock_timestamp()+interval '30 seconds')))::bigint AS ceiling,
         FLOOR(EXTRACT(EPOCH FROM clock_timestamp()))::bigint AS now,r.user_id,r.owner_id,r.root_budget_id,r.input_artifact_id,r.input_version_id
@@ -36,11 +36,12 @@ pub(super) async fn input_live(tx: &mut Tx<'_>, row: &PgRow) -> Result<(), Statu
     let ok=sqlx::query("SELECT a.artifact_id FROM artifacts a JOIN users u ON u.user_id=a.creator_id AND u.personal_owner_id=a.owner_id
         JOIN owners o ON o.owner_id=a.owner_id JOIN budget_roots b ON b.owner_id=a.owner_id
         WHERE a.artifact_id=$1 AND a.version_id=$2 AND a.owner_id=$3 AND a.creator_id=$4 AND b.root_budget_id=$5
-          AND a.resource_id IS NULL AND a.state='available' AND a.media_type='text/plain' AND u.active AND o.state='active' AND b.state='active'
+          AND a.resource_id IS NULL AND a.state='available' AND (a.media_type='text/plain' OR
+            (a.media_type='application/json' AND EXISTS(SELECT 1 FROM cloud_model_plans p WHERE p.run_id=$6 AND p.input_version_id=a.version_id AND p.owner_id=a.owner_id))) AND u.active AND o.state='active' AND b.state='active'
         FOR SHARE OF a,u,o,b").bind(row.try_get::<String,_>("input_artifact_id").map_err(db_error)?)
         .bind(row.try_get::<String,_>("input_version_id").map_err(db_error)?).bind(row.try_get::<String,_>("owner_id").map_err(db_error)?)
         .bind(row.try_get::<String,_>("user_id").map_err(db_error)?).bind(row.try_get::<String,_>("root_budget_id").map_err(db_error)?)
-        .fetch_optional(&mut **tx).await.map_err(db_error)?;
+        .bind(row.try_get::<String,_>("run_id").map_err(db_error)?).fetch_optional(&mut **tx).await.map_err(db_error)?;
     if ok.is_none() {
         return Err(conflict());
     }
@@ -317,6 +318,9 @@ pub(super) async fn stop(
         }
         sqlx::query("UPDATE cloud_workspaces SET status='draining',version=version+1,epoch=epoch+1,lease_until=NULL WHERE workspace_id=$1")
             .bind(&s.workspace_id).execute(&mut *tx).await.map_err(db_error)?;
+        crate::store::stop_cloud_job(&mut tx, &s.run_id)
+            .await
+            .map_err(|_| Status::unavailable("cloud job stop unresolved"))?;
         let version:i64=sqlx::query_scalar("UPDATE cloud_runs SET status='recovery_required',version=version+1 WHERE run_id=$1 RETURNING version")
             .bind(&s.run_id).fetch_one(&mut *tx).await.map_err(db_error)?;
         sqlx::query("INSERT INTO cloud_run_events(run_id,run_version,kind) VALUES($1,$2,$3)")

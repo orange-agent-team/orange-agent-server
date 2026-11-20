@@ -206,15 +206,27 @@ impl ArtifactStore {
             return Err(ArtifactError::Conflict);
         }
         sqlx::query("INSERT INTO job_inputs(job_id,artifact_id,version_id,owner_id,authorizing_user_id,artifact_sha256,size_bytes,projection_digest,organization_policy,acl_version) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)").bind(job).bind(&metadata.artifact_id).bind(&metadata.version_id).bind(owner).bind(&actor.user).bind(&metadata.sha256).bind(size as i64).bind(&projection).bind(stamp.organization).bind(stamp.acl).execute(&mut *tx).await?;
-        sqlx::query("INSERT INTO artifact_pins(artifact_id,reference_id) VALUES($1,$2)")
-            .bind(&metadata.artifact_id)
-            .bind(format!("job-input:{job}"))
-            .execute(&mut *tx)
-            .await?;
-        crate::events::append(&mut tx, owner, job, "job.input_bound", &projection).await?;
+        record_input_bound(&mut tx, owner, job, &metadata.artifact_id, &projection).await?;
         authority::finish(tx, actor).await?;
         Ok(result)
     }
+}
+/// Both interactive and cloud-funded submissions must protect the source
+/// before a Worker can consume the binding, and publish the same event.
+pub(crate) async fn record_input_bound(
+    tx: &mut Tx<'_>,
+    owner: &str,
+    job: &str,
+    artifact: &str,
+    projection: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("INSERT INTO artifact_pins(artifact_id,reference_id) VALUES($1,$2)")
+        .bind(artifact)
+        .bind(format!("job-input:{job}"))
+        .execute(&mut **tx)
+        .await?;
+    crate::events::append(tx, owner, job, "job.input_bound", projection).await?;
+    Ok(())
 }
 /// Original user's current authority is checked for every dispatch/read. A
 /// bounded Job grant survives browser logout, but not account/role/ACL changes.

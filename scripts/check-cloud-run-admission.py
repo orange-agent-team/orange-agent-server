@@ -12,6 +12,7 @@ import subprocess
 import tempfile
 from urllib.parse import urlsplit
 from owned_postgres import database
+from platform_test_pki import prepare
 
 root=Path(__file__).resolve().parents[1]
 parser=argparse.ArgumentParser()
@@ -29,25 +30,9 @@ if config.get('environment')!='dev' or urlsplit(config['issuer']).hostname not i
     raise SystemExit('Loopback development identity is required')
 rustup=shutil.which('rustup') or '/opt/homebrew/opt/rustup/bin/rustup'
 cargo=Path(subprocess.check_output([rustup,'which','--toolchain','stable','cargo'],text=True).strip())
-openssl=Path('/opt/homebrew/opt/openssl@3/bin/openssl')
-if not openssl.is_file():openssl=shutil.which('openssl')
-if not openssl or not subprocess.check_output([openssl,'version'],text=True).startswith('OpenSSL 3.'):
-    raise SystemExit('OpenSSL 3 is required for the private test PKI')
 with database(args.database_url_file,'orange_cloud_run_') as (database_name,url), tempfile.TemporaryDirectory() as directory:
     tls=Path(directory);os.umask(0o077)
-    def issue(command):
-        subprocess.run([openssl,*command],cwd=tls,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,check=True)
-    for ca in ['host-ca','external-ca']:
-        issue(['req','-x509','-newkey','ec','-pkeyopt','ec_paramgen_curve:P-256','-noenc','-subj','/CN='+ca,
-               '-days','1','-addext','basicConstraints=critical,CA:TRUE','-addext','keyUsage=critical,keyCertSign,cRLSign',
-               '-keyout',ca+'.key','-out',ca+'.pem'])
-    for name,ca,usage in [('gateway','host-ca','serverAuth'),('host','host-ca','clientAuth'),('unadmitted','host-ca','clientAuth'),('worker','external-ca','clientAuth')]:
-        issue(['req','-new','-newkey','ec','-pkeyopt','ec_paramgen_curve:P-256','-noenc','-subj','/CN='+name,'-keyout',name+'.key','-out',name+'.csr'])
-        ext='basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage='+usage+'\n'
-        if name=='gateway':ext+='subjectAltName=DNS:localhost,IP:127.0.0.1\n'
-        (tls/'extensions').write_text(ext)
-        issue(['x509','-req','-in',name+'.csr','-CA',ca+'.pem','-CAkey',ca+'.key','-CAcreateserial','-days','1','-extfile','extensions','-out',name+'.pem'])
-        issue(['x509','-in',name+'.pem','-outform','DER','-out',name+'.der'])
+    prepare(tls)
     env=dict(os.environ,PATH=str(cargo.parent)+os.pathsep+os.environ['PATH'],CARGO_NET_OFFLINE='true',
              ORANGE_TEST_DATABASE_URL=url,ORANGE_TEST_USER_CONFIG_FILE=str(args.identity_config.resolve()),ORANGE_TEST_HOST_TLS=str(tls))
     env.pop('ORANGE_CLOUD_QUALIFIED_DATABASE_FILE',None)

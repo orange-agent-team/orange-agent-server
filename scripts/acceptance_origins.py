@@ -16,7 +16,7 @@ def reserve_origins(*ports):
     deadline=time.monotonic()+180
     try:
         for port in sorted(set(ports)):
-            if port not in (43112,43122):
+            if port not in (43112,43122,43127):
                 raise ValueError('Unknown development HTTPS origin')
             name=Path(tempfile.gettempdir())/f'orange-origin-{os.getuid()}-{port}.lock'
             fd=os.open(name,os.O_RDWR|os.O_CREAT|os.O_NOFOLLOW,0o600)

@@ -146,7 +146,7 @@ impl Store {
         key: &str,
         req: &SubmitJob,
     ) -> Result<JobView, StoreError> {
-        self.submit_as(None, owner, key, req).await
+        self.submit_as(None, owner, key, req, None).await
     }
     pub async fn submit_for_user(
         &self,
@@ -165,10 +165,21 @@ impl Store {
         ) {
             return Err(StoreError::Invalid);
         }
-        self.submit_as(Some(actor), owner, key, req).await
+        self.submit_as(Some(actor), owner, key, req, None).await
     }
     pub fn from_pool(pool: PgPool) -> Self {
         Self { pool }
+    }
+    pub(crate) async fn submit_cloud(
+        &self,
+        actor: &crate::artifacts::ArtifactActor,
+        owner: &str,
+        key: &str,
+        req: &SubmitJob,
+        run: &str,
+    ) -> Result<JobView, StoreError> {
+        self.submit_as(Some(actor), owner, key, req, Some(run))
+            .await
     }
     async fn submit_as(
         &self,
@@ -176,6 +187,7 @@ impl Store {
         owner: &str,
         key: &str,
         req: &SubmitJob,
+        origin: Option<&str>,
     ) -> Result<JobView, StoreError> {
         if ![
             owner,
@@ -191,7 +203,7 @@ impl Store {
             return Err(StoreError::Invalid);
         }
         for attempt in 0..3 {
-            match self.submit_once(owner, key, req, actor).await {
+            match self.submit_once(owner, key, req, actor, origin).await {
                 Err(e) if e.retryable() && attempt < 2 => retry_backoff(attempt).await,
                 result => return result,
             }
@@ -204,6 +216,7 @@ impl Store {
         key: &str,
         req: &SubmitJob,
         actor: Option<&crate::artifacts::ArtifactActor>,
+        origin: Option<&str>,
     ) -> Result<JobView, StoreError> {
         let digest = request_digest("submit_job", req).map_err(|_| StoreError::Invalid)?;
         let mut tx = self.begin().await?;
@@ -214,6 +227,14 @@ impl Store {
         }
         authorize(&mut tx, owner).await?;
         withdrawal::submission_lock(&mut tx, owner, &req.invocation_id).await?;
+        crate::cloud_model::authorize_submit(
+            &mut tx,
+            owner,
+            actor.map(|a| a.user.as_str()),
+            req,
+            origin,
+        )
+        .await?;
         // Lock root before wallet on every path. PostgreSQL, not client memory, arbitrates.
         let root = sqlx::query(
             "SELECT * FROM budget_roots WHERE root_budget_id=$1 AND owner_id=$2 FOR UPDATE",
@@ -309,6 +330,27 @@ impl Store {
         ledger(&mut tx, owner, &format!("reserve:{job}"), entries).await?;
         record_key(&mut tx, owner, "submit_job", key, &digest, &job).await?;
         emit(&mut tx, owner, &job, "job.queued", &digest).await?;
+        if let Some(run) = origin {
+            crate::cloud_model::bind_submitted_input(&mut tx, run, &job).await?;
+            sqlx::query("INSERT INTO cloud_model_jobs(job_id,run_id,quote_id) VALUES($1,$2,$3)")
+                .bind(&job)
+                .bind(run)
+                .bind(&req.quote_id)
+                .execute(&mut *tx)
+                .await?;
+            let version:i64=sqlx::query_scalar("UPDATE cloud_runs SET status='running',version=version+1 WHERE run_id=$1 AND status='queued' RETURNING version")
+                .bind(run).fetch_optional(&mut *tx).await?.ok_or(StoreError::Conflict)?;
+            sqlx::query("INSERT INTO cloud_run_events(run_id,run_version,kind) VALUES($1,$2,'model_job_submitted')").bind(run).bind(version).execute(&mut *tx).await?;
+            crate::cloud_model::live(
+                &mut tx,
+                run,
+                owner,
+                actor.ok_or(StoreError::Forbidden)?.user.as_str(),
+            )
+            .await
+            .map_err(artifact_error)?;
+        }
+
         let view = job_view(&row)?;
         finish_submit(tx, actor).await?;
         Ok(view)
@@ -629,7 +671,7 @@ pub(crate) async fn ledger(
     Ok(())
 }
 
-fn artifact_error(e: crate::artifacts::ArtifactError) -> StoreError {
+pub(crate) fn artifact_error(e: crate::artifacts::ArtifactError) -> StoreError {
     match e {
         crate::artifacts::ArtifactError::Database(e) => StoreError::Database(e),
         _ => StoreError::Forbidden,
@@ -682,6 +724,69 @@ pub(crate) async fn check_budget_actor(
     let granted:Option<bool>=sqlx::query_scalar("SELECT can_submit FROM budget_user_grants WHERE root_budget_id=$1 AND user_id=$2 FOR SHARE").bind(root).bind(user).fetch_optional(&mut **tx).await?;
     if granted != Some(true) {
         return Err(StoreError::Forbidden);
+    }
+    Ok(())
+}
+
+pub(crate) async fn lock_model_invocation(
+    tx: &mut Transaction<'_, Postgres>,
+    owner: &str,
+    invocation: &str,
+) -> Result<(), StoreError> {
+    withdrawal::submission_lock(tx, owner, invocation).await
+}
+
+/// Called with the parent Run locked. It may stop only the exact Job that
+/// was linked to the Run inside the original wallet reservation transaction.
+pub(crate) async fn stop_cloud_job(
+    tx: &mut Transaction<'_, Postgres>,
+    run: &str,
+) -> Result<(), StoreError> {
+    let link=sqlx::query("SELECT j.job_id,j.root_budget_id,j.owner_id FROM cloud_model_jobs m JOIN jobs j USING(job_id)
+        JOIN cloud_runs r ON r.run_id=m.run_id AND r.root_budget_id=j.root_budget_id AND r.owner_id=j.owner_id
+        WHERE m.run_id=$1").bind(run).fetch_optional(&mut **tx).await?;
+    let Some(link) = link else {
+        return Ok(());
+    };
+    let owner: String = link.try_get("owner_id")?;
+    let job: String = link.try_get("job_id")?;
+    let root = sqlx::query(
+        "SELECT * FROM budget_roots WHERE root_budget_id=$1 AND owner_id=$2 FOR UPDATE",
+    )
+    .bind(link.try_get::<String, _>("root_budget_id")?)
+    .bind(&owner)
+    .fetch_one(&mut **tx)
+    .await?;
+    sqlx::query("SELECT owner_id FROM wallets WHERE owner_id=$1 FOR UPDATE")
+        .bind(&owner)
+        .fetch_one(&mut **tx)
+        .await?;
+    let row = sqlx::query("SELECT * FROM jobs WHERE job_id=$1 AND owner_id=$2 FOR UPDATE")
+        .bind(&job)
+        .bind(&owner)
+        .fetch_one(&mut **tx)
+        .await?;
+    let state: String = row.try_get("execution_state")?;
+    match state.as_str() {
+        "queued" => {
+            queue_expiry::release_queue(tx, &root, &row, queue_expiry::QueueEnd::Cancelled).await?;
+        }
+        "running" => {
+            if row.try_get::<String, _>("settlement_state")? != "pending" {
+                return Err(StoreError::InvalidTransition);
+            }
+            let digest = request_digest("cloud.run.stop-model.v1", &(run, &job))
+                .map_err(|_| StoreError::Invalid)?;
+            let changed=sqlx::query("UPDATE jobs SET execution_state='cancelling' WHERE job_id=$1 AND execution_state='running' AND settlement_state='pending'")
+                .bind(&job).execute(&mut **tx).await?;
+            if changed.rows_affected() != 1 {
+                return Err(StoreError::Conflict);
+            }
+            emit(tx, &owner, &job, "job.cancel_requested", &digest).await?;
+        }
+        // Existing terminal, cancelling or uncertain facts retain their original
+        // accounting, retention and device-cleanup responsibilities.
+        _ => {}
     }
     Ok(())
 }

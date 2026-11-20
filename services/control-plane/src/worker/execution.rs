@@ -62,6 +62,16 @@ pub(crate) fn decode(row: &sqlx::postgres::PgRow) -> Result<worker::Assignment, 
 }
 /// Root-before-Job agrees with reservation/cancellation; never takes wallet locks.
 pub(crate) async fn job_authority(tx: &mut Tx<'_>, job: &str) -> Result<String, SessionError> {
+    let cloud:Option<(String,String,String)>=sqlx::query_as("SELECT r.run_id,r.owner_id,r.user_id FROM cloud_model_jobs m JOIN cloud_runs r USING(run_id) WHERE m.job_id=$1")
+        .bind(job).fetch_optional(&mut **tx).await?;
+    if let Some((run, owner, user)) = cloud {
+        crate::cloud_model::live(tx, &run, &owner, &user)
+            .await
+            .map_err(|e| match e {
+                crate::artifacts::ArtifactError::Database(e) => SessionError::Database(e),
+                _ => SessionError::Stale,
+            })?;
+    }
     job_authority_mode(tx, job, false).await
 }
 pub(crate) async fn output_job_authority(

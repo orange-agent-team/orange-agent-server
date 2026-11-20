@@ -1,6 +1,8 @@
 //! Actual browser plus owned API/Worker/Counter. Session, price and enrollment
 //! remain explicit development fixtures; no production identity/payment claim.
 use super::*;
+#[path = "cloud_model_browser.rs"]
+mod hosted;
 #[tokio::test]
 async fn actual_browser_quote_model_settlement_cleanup_and_deleted_content() {
     use super::super::host_cases as host;
@@ -260,6 +262,26 @@ async fn actual_browser_quote_model_settlement_cleanup_and_deleted_content() {
     assert_eq!(count, 1);
     let balance:i64=sqlx::query_scalar("SELECT sum(e.amount)::bigint FROM ledger_entries e JOIN job_settlements s USING(transaction_id) WHERE s.job_id=$1").bind(job).fetch_one(c.f.d.store.pool()).await.expect("balanced ledger");
     assert_eq!(balance, 0);
+    if let Ok(driver) = std::env::var("ORANGE_CLOUD_MODEL_BROWSER") {
+        let ctx = hosted::Setup {
+            pool: c.f.d.store.pool(),
+            object_root: &c.f.root,
+            api: http,
+            user: &c.f.user,
+            owner: &c.f.owner,
+            budget: &c.budget,
+            price: &c.price,
+            cookie: c
+                .f
+                .headers
+                .get("cookie")
+                .expect("private test session")
+                .to_str()
+                .expect("fixture cookie"),
+        };
+        hosted::exercise(ctx, &driver).await;
+        host::event(&mut events, "cloud_cleanup_confirmed").await;
+    }
     host::terminate(&mut worker).await;
     host::stopped(worker_root.path());
     assert!(api.try_wait().expect("owned API").is_none());

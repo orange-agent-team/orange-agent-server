@@ -8,9 +8,10 @@ import subprocess
 import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 lock=json.loads((ROOT/'config/local-model.lock.json').read_text())
-build=json.loads((ROOT/'.local/model-runtime/build.json').read_text())
-backend=ROOT/'.local/model-runtime/build/bin/llama-server'
-model=ROOT/'.local/model-runtime'/ (lock['model']['sha256']+'.gguf')
+runtime=Path(os.environ.get('ORANGE_TEST_MODEL_RUNTIME_ROOT',ROOT/'.local/model-runtime')).resolve()
+build=json.loads((runtime/'build.json').read_text())
+backend=runtime/'build/bin/llama-server'
+model=runtime/ (lock['model']['sha256']+'.gguf')
 def digest(path):
     h=hashlib.sha256()
     with path.open('rb') as f:

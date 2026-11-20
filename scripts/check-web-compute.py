@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Actual model/browser path using an explicitly selected, independently built Web checkout."""
+from acceptance_origins import reserve_origins
 import argparse
 import os
 from pathlib import Path
@@ -13,6 +14,7 @@ parser=argparse.ArgumentParser()
 parser.add_argument('--web-repo',required=True,type=Path)
 parser.add_argument('--node',default=shutil.which('node'))
 args=parser.parse_args()
+reserve_origins(43127)
 web=args.web_repo.resolve()
 driver=web/'apps/web/scripts/real-compute-driver.mjs'
 if not driver.is_file() or not (web/'apps/web/dist/index.html').is_file():raise SystemExit('Explicit built Web compute checkout required')

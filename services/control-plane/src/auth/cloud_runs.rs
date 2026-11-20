@@ -15,6 +15,17 @@ pub(super) struct Create {
     input_version_id: String,
     resource_profile_id: String,
     workspace_ttl_seconds: u32,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "model_choice"
+    )]
+    model: Option<crate::cloud_model::Selection>,
+}
+fn model_choice<'de, D: serde::Deserializer<'de>>(
+    input: D,
+) -> Result<Option<crate::cloud_model::Selection>, D::Error> {
+    crate::cloud_model::Selection::deserialize(input).map(Some)
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -32,7 +43,8 @@ fn busy() -> UserApiError {
     UserApiError(StatusCode::SERVICE_UNAVAILABLE, "HOST_POOL_UNAVAILABLE")
 }
 fn input_valid(c: &Create) -> bool {
-    valid_id(&c.root_budget_id)
+    c.model.as_ref().is_none_or(|m| m.valid())
+        && valid_id(&c.root_budget_id)
         && valid_id(&c.input_artifact_id)
         && valid_id(&c.input_version_id)
         && c.resource_profile_id == PROFILE
@@ -199,11 +211,14 @@ pub(super) async fn create(
         }
         id
     } else {
+        if let Some(m) = &c.model {
+            crate::store::lock_model_invocation(tx, &owner, &m.invocation_id).await?;
+        }
         let budget=sqlx::query("SELECT root_budget_id FROM budget_roots WHERE root_budget_id=$1 AND owner_id=$2 AND state='active' FOR SHARE")
             .bind(&c.root_budget_id).bind(&owner).fetch_optional(&mut **tx).await.map_err(db)?;
         let file=sqlx::query("SELECT artifact_id FROM artifacts WHERE artifact_id=$1 AND version_id=$2 AND owner_id=$3 AND creator_id=$4
-            AND resource_id IS NULL AND state='available' AND media_type='text/plain' AND size_bytes BETWEEN 1 AND 262144 FOR SHARE")
-            .bind(&c.input_artifact_id).bind(&c.input_version_id).bind(&owner).bind(&user).fetch_optional(&mut **tx).await.map_err(db)?;
+            AND resource_id IS NULL AND state='available' AND media_type=$5 AND size_bytes BETWEEN 1 AND 262144 FOR SHARE")
+            .bind(&c.input_artifact_id).bind(&c.input_version_id).bind(&owner).bind(&user).bind(if c.model.is_some(){"application/json"}else{"text/plain"}).fetch_optional(&mut **tx).await.map_err(db)?;
         if budget.is_none() || file.is_none() {
             return Err(missing());
         }
@@ -235,12 +250,15 @@ pub(super) async fn create(
         }
         let id = uuid::Uuid::new_v4().to_string();
         sqlx::query("INSERT INTO cloud_runs(run_id,owner_id,user_id,request_key,request_digest,root_budget_id,input_artifact_id,input_version_id,status)
-            VALUES($1,$2,$3,$4,$5,$6,$7,$8,'queued')").bind(&id).bind(&owner).bind(&user).bind(key).bind(digest).bind(c.root_budget_id)
-            .bind(c.input_artifact_id).bind(c.input_version_id).execute(&mut **tx).await.map_err(db)?;
+            VALUES($1,$2,$3,$4,$5,$6,$7,$8,'queued')").bind(&id).bind(&owner).bind(&user).bind(key).bind(digest).bind(&c.root_budget_id)
+            .bind(&c.input_artifact_id).bind(&c.input_version_id).execute(&mut **tx).await.map_err(db)?;
         sqlx::query("INSERT INTO cloud_workspaces(workspace_id,run_id,owner_id,host_instance_id,profile_id,status,expires_at)
             VALUES($1,$2,$3,$4,$5,'requested',clock_timestamp()+make_interval(secs=>$6))")
-            .bind(uuid::Uuid::new_v4().to_string()).bind(&id).bind(owner).bind(host).bind(PROFILE).bind(f64::from(c.workspace_ttl_seconds))
+            .bind(uuid::Uuid::new_v4().to_string()).bind(&id).bind(&owner).bind(host).bind(PROFILE).bind(f64::from(c.workspace_ttl_seconds))
             .execute(&mut **tx).await.map_err(db)?;
+        if let Some(model) = &c.model {
+            crate::cloud_model::register(tx, &id, &owner, &c.input_version_id, model).await?;
+        }
         let still_live:bool=sqlx::query_scalar("SELECT enabled AND input_protocol_version=1 AND accepting AND live_until>clock_timestamp() AND credential_expires_at>clock_timestamp()
             FROM cloud_pool_hosts h JOIN cloud_workspaces w USING(host_instance_id) WHERE w.run_id=$1")
             .bind(&id).fetch_one(&mut **tx).await.map_err(db)?;
@@ -286,6 +304,7 @@ async fn cancel_locked(g: &mut UserSessionGuard, id: &str) -> Result<(), UserApi
         }
         let state: String = row.try_get("workspace_state").map_err(db)?;
         let unclaimed = state == "requested" && row.try_get::<i64, _>("epoch").map_err(db)? == 0;
+        crate::store::stop_cloud_job(tx, id).await?;
         let next:i64=sqlx::query_scalar("UPDATE cloud_runs SET status='cancelled',version=version+1 WHERE run_id=$1 RETURNING version")
             .bind(id).fetch_one(&mut **tx).await.map_err(db)?;
         let kind = match state.as_str() {
@@ -317,6 +336,9 @@ pub(crate) async fn expire_one(pool: &PgPool) -> Result<bool, sqlx::Error> {
     let run: String = row.try_get("run_id")?;
     let unclaimed =
         row.try_get::<i64, _>("epoch")? == 0 && row.try_get::<String, _>("status")? == "requested";
+    crate::store::stop_cloud_job(&mut tx, &run)
+        .await
+        .map_err(|_| sqlx::Error::Protocol("linked cloud job stop unresolved".into()))?;
     let v: i64 = sqlx::query_scalar(
         "UPDATE cloud_runs SET status=$2,version=version+1 WHERE run_id=$1 RETURNING version",
     )

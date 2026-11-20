@@ -1,6 +1,7 @@
 //! Input object storage. Only available immutable versions can be read; Worker
 //! delivery and output publication require separate Job/lease authorization.
 pub(crate) mod authority;
+mod cloud_turn;
 mod delivery;
 pub mod http;
 pub(crate) mod inputs;

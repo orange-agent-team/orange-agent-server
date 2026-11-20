@@ -126,6 +126,35 @@ impl ArtifactStore {
         owner: &str,
         r: &CreateTextQuote,
     ) -> Result<TextQuoteView, ArtifactError> {
+        self.quote_with_origin(actor, owner, r, None).await
+    }
+    pub(crate) async fn cloud_quote(
+        &self,
+        actor: &ArtifactActor,
+        run: &str,
+        key: &str,
+    ) -> Result<TextQuoteView, ArtifactError> {
+        let mut tx = self.inner.pool.begin().await?;
+        let owner: String =
+            sqlx::query_scalar("SELECT personal_owner_id FROM users WHERE user_id=$1 AND active")
+                .bind(&actor.user)
+                .fetch_optional(&mut *tx)
+                .await?
+                .ok_or(ArtifactError::Forbidden)?;
+        authority::scope(&mut tx, actor, &owner, true).await?;
+        let request =
+            crate::cloud_model::quote_request(&mut tx, run, &owner, &actor.user, key).await?;
+        authority::finish(tx, actor).await?;
+        self.quote_with_origin(actor, &owner, &request, Some(run))
+            .await
+    }
+    async fn quote_with_origin(
+        &self,
+        actor: &ArtifactActor,
+        owner: &str,
+        r: &CreateTextQuote,
+        origin: Option<&str>,
+    ) -> Result<TextQuoteView, ArtifactError> {
         if !r.valid() {
             return Err(ArtifactError::Invalid);
         }
@@ -137,6 +166,7 @@ impl ArtifactStore {
         let digest = request_digest("text.quote.v1", r).map_err(|_| ArtifactError::Invalid)?;
         let mut tx = self.inner.pool.begin().await?;
         authority::scope(&mut tx, actor, owner, true).await?;
+        crate::cloud_model::quote_authority(&mut tx, owner, &actor.user, r, origin).await?;
         crate::store::check_budget_actor(&mut tx, &actor.user, owner, &r.root_budget_id)
             .await
             .map_err(|_| ArtifactError::Forbidden)?;
@@ -148,6 +178,7 @@ impl ArtifactStore {
                 return Err(ArtifactError::Conflict);
             }
             let view = quote_view(&prior)?;
+            crate::cloud_model::check_quote_origin(&mut tx, &view.quote_id, origin).await?;
             authority::finish(tx, actor).await?;
             return Ok(view);
         }
@@ -173,6 +204,19 @@ impl ArtifactStore {
         let measured = meter.input(request.clone()).await.map_err(meter_error)?;
         let mut tx = self.inner.pool.begin().await?;
         authority::scope(&mut tx, actor, owner, true).await?;
+        crate::store::lock_model_invocation(&mut tx, owner, &request.invocation_id)
+            .await
+            .map_err(|_| ArtifactError::Busy)?;
+        let source =
+            crate::cloud_model::quote_authority(&mut tx, owner, &actor.user, r, origin).await?;
+        if let Some(row) = &source
+            && (row.try_get::<String, _>("invocation_id")? != request.invocation_id
+                || row.try_get::<String, _>("request_projection_digest")?
+                    != measured.request_digest())
+        {
+            return Err(ArtifactError::Conflict);
+        }
+
         crate::store::check_budget_actor(&mut tx, &actor.user, owner, &r.root_budget_id)
             .await
             .map_err(|_| ArtifactError::Forbidden)?;
@@ -195,6 +239,8 @@ impl ArtifactStore {
                 return Err(ArtifactError::Conflict);
             }
             let v = quote_view(&prior)?;
+            crate::cloud_model::check_quote_origin(&mut tx, prior.try_get("quote_id")?, origin)
+                .await?;
             authority::finish(tx, actor).await?;
             return Ok(v);
         }
@@ -227,6 +273,18 @@ impl ArtifactStore {
         let expires:i64=sqlx::query_scalar("INSERT INTO quotes(quote_id,owner_id,root_budget_id,invocation_id,projection_digest,price_version,max_amount,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,clock_timestamp()+interval '60 seconds') RETURNING floor(extract(epoch FROM expires_at))::bigint").bind(&quote).bind(owner).bind(&r.root_budget_id).bind(&request.invocation_id).bind(measured.request_digest()).bind(&r.price_version).bind(maximum.units()).fetch_one(&mut *tx).await?;
         sqlx::query("INSERT INTO quote_execution_plans(quote_id,target_node_id,execution_profile_id,request_projection_digest,job_deadline) VALUES($1,$2,$3,$4,date_trunc('second',clock_timestamp()+interval '5 minutes'))").bind(&quote).bind(price.try_get::<String,_>("node_id")?).bind(price.try_get::<String,_>("execution_profile_id")?).bind(measured.request_digest()).execute(&mut *tx).await?;
         sqlx::query("INSERT INTO quote_metering(quote_id,request_id,owner_id,requester_id,request_digest,input_artifact_id,input_version_id,input_units,output_limit,price_version,meter_profile_digest,provider_owner_id,input_price,output_price,fee_bps) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)").bind(&quote).bind(&r.request_id).bind(owner).bind(&actor.user).bind(&digest).bind(&input.artifact_id).bind(&input.version_id).bind(measured.units() as i64).bind(i64::from(r.output_limit)).bind(&r.price_version).bind(measured.profile_digest()).bind(price.try_get::<String,_>("provider_owner_id")?).bind(pricing.input_price.units()).bind(pricing.output_price.units()).bind(price.try_get::<i32,_>("fee_bps")?).execute(&mut *tx).await?;
+        if let Some(row) = source {
+            let run: String = row.try_get("run_id")?;
+            sqlx::query(
+                "INSERT INTO cloud_model_quotes(quote_id,run_id,allocation_id) VALUES($1,$2,$3)",
+            )
+            .bind(&quote)
+            .bind(&run)
+            .bind(row.try_get::<String, _>("allocation_id")?)
+            .execute(&mut *tx)
+            .await?;
+            crate::cloud_model::live(&mut tx, &run, owner, &actor.user).await?;
+        }
         crate::events::append(&mut tx, owner, &quote, "quote.created", &digest).await?;
         authority::finish(tx, actor).await?;
         Ok(TextQuoteView {

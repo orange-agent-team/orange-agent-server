@@ -112,6 +112,18 @@ async fn serve(
     } else {
         None
     };
+    let mut model_stop = stop.subscribe();
+    let model_store = store.clone();
+    let cloud_results = tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(2));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {_=model_stop.changed()=>break,_=tick.tick()=>{
+                let result=tokio::select!{_=model_stop.changed()=>break,result=routes::reconcile_cloud_models(model_store.pool())=>result};
+                if result.is_err(){eprintln!("Cloud model reconciliation deferred");}
+            }}
+        }
+    });
     let mut expiry_stopped = stop.subscribe();
     let expiry_store = store.clone();
     let queue_expiry = tokio::spawn(async move {
@@ -171,6 +183,7 @@ async fn serve(
         None
     };
     queue_expiry.await?;
+    cloud_results.await?;
     if let Some(task) = maintenance {
         task.await?;
     }

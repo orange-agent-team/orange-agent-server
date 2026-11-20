@@ -2,6 +2,13 @@
 mod accounts;
 #[path = "cloud_runs.rs"]
 mod cloud_runs;
+pub async fn reconcile_cloud_models(pool: &sqlx::PgPool) -> Result<usize, sqlx::Error> {
+    let mut count = 0;
+    while count < 32 && crate::cloud_model::reconcile_one(pool).await? {
+        count += 1;
+    }
+    Ok(count)
+}
 pub async fn expire_cloud_workspaces(pool: &sqlx::PgPool) -> Result<usize, sqlx::Error> {
     let mut count = 0;
     while count < 100 && cloud_runs::expire_one(pool).await? {
