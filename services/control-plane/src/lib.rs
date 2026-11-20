@@ -15,6 +15,7 @@ mod hosted_connectors;
 pub mod http;
 pub mod meter_bootstrap;
 pub mod notion;
+pub mod payments;
 pub mod pg_view_sources;
 pub mod pg_views;
 pub mod queue;

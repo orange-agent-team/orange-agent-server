@@ -118,6 +118,16 @@ async fn serve(
     } else {
         None
     };
+    #[cfg(unix)]
+    let payments = env::var_os("ORANGE_STRIPE_TEST_CONFIG")
+        .map(|path| {
+            orange_control_plane::payments::Sandbox::load(std::path::Path::new(&path)).map(
+                |provider| {
+                    orange_control_plane::payments::Payments::new(identity.clone(), provider)
+                },
+            )
+        })
+        .transpose()?;
     let mut app = routes::router(identity.clone()).merge(routes::confluence_router(
         identity.clone(),
         artifacts.clone(),
@@ -134,6 +144,10 @@ async fn serve(
     #[cfg(not(unix))]
     if env::var_os("ORANGE_AUDIO_METER_CONFIG").is_some() {
         return Err("No qualified audio decoder for this target".into());
+    }
+    #[cfg(unix)]
+    if let Some(p) = &payments {
+        app = app.merge(p.router());
     }
     if let Some(objects) = &artifacts {
         app = app.merge(orange_control_plane::artifacts::http::build_router(
@@ -238,6 +252,15 @@ async fn serve(
         api_listener.local_addr()?
     );
     let signal_stop = stop.clone();
+    #[cfg(unix)]
+    let payment_work=payments.map(|p|{
+        let mut shutdown=stop.subscribe();
+        tokio::spawn(async move{let mut tick=tokio::time::interval(std::time::Duration::from_secs(3));tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop{tokio::select!{_=shutdown.changed()=>break,_=tick.tick()=>{
+                for _ in 0..8{if *shutdown.borrow(){return;}match p.process_one().await{Ok(true)=>{},Ok(false)=>break,Err(_)=>{eprintln!("Sandbox payment work remains pending reconciliation");break;}}}
+            }}}
+        })
+    });
     let signal = tokio::spawn(async move {
         let _ = tokio::signal::ctrl_c().await;
         let _ = signal_stop.send(true);
@@ -255,6 +278,10 @@ async fn serve(
     };
     queue_expiry.await?;
     cloud_results.await?;
+    #[cfg(unix)]
+    if let Some(task) = payment_work {
+        task.await?;
+    }
     if let Some(task) = maintenance {
         task.await?;
     }

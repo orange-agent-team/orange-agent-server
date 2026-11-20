@@ -22,6 +22,10 @@ web-compute-tests = ["real-worker-tests"]
 queue-expiry-tests = ["integration-tests"]
 
 [[test]]
+name = "test_checkout"
+required-features = ["integration-tests"]
+
+[[test]]
 name = "s3_source"
 required-features = ["s3-source-tests"]
 
