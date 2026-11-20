@@ -17,7 +17,7 @@ PIN = json.loads((ROOT/"config/local-image.lock.json").read_text())
 parser = argparse.ArgumentParser()
 parser.add_argument("--model-cache",type=Path,default=ROOT/".local/image-model")
 parser.add_argument("--python",type=Path,default=ROOT/".local/image-venv/bin/python")
-parser.add_argument("--only",choices=("negative","generate","cancel","all"),default="all")
+parser.add_argument("--only",choices=("negative","generate","cancel","orphan","all"),default="all")
 args=parser.parse_args()
 os.umask(0o077)
 if not __debug__:
@@ -67,11 +67,11 @@ with tempfile.TemporaryDirectory(prefix="orange-image-qa-") as temp:
         assert target.read_bytes()==b"existing destination"
         available()
         print("PASS fixed request, excess CLIP tokens, model mutation, exclusive device slot and existing output protection",flush=True)
-    def run_one(name,stop):
+    def run_one(name,stop,host_loss=False):
         output=temp/(name+".png")
         start=time.monotonic()
         progress=temp/(name+".log")
-        with progress.open("wb") as err, subprocess.Popen(cmd(output),stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=err) as proc:
+        with progress.open("wb") as err, subprocess.Popen(cmd(output),stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=err,start_new_session=True) as proc:
             try:
                 proc.stdin.write(json.dumps(case).encode());proc.stdin.close()
                 cancelled=False
@@ -80,7 +80,33 @@ with tempfile.TemporaryDirectory(prefix="orange-image-qa-") as temp:
                     if time.monotonic()>end:raise TimeoutError("Owned image operation took too long")
                     if stop and not cancelled and b'"completed_steps":1,' in progress.read_bytes():
                         reject(case,temp/"busy.png","slot busy")
-                        proc.send_signal(signal.SIGINT);cancelled=True
+                        if host_loss:
+                            # Only the new session created for our test process is frozen.
+                            try:
+                                os.killpg(proc.pid, signal.SIGSTOP)
+                                proc.kill();proc.wait(timeout=8)
+                                with (slot/"sdxl.lock").open("a") as probe:
+                                    try:
+                                        fcntl.flock(probe,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                                    except BlockingIOError:
+                                        pass
+                                    else:
+                                        raise AssertionError("Orphaned model lost its device lock")
+                                assert not output.exists()
+                            finally:
+                                try:os.killpg(proc.pid,signal.SIGCONT)
+                                except ProcessLookupError:pass
+                            cutoff=time.monotonic()+120
+                            while True:
+                                with (slot/"sdxl.lock").open("a") as probe:
+                                    try:fcntl.flock(probe,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                                    except BlockingIOError:pass
+                                    else:break
+                                if time.monotonic()>cutoff:raise TimeoutError("Orphan device release deadline")
+                                time.sleep(.1)
+                        else:
+                            proc.send_signal(signal.SIGINT)
+                        cancelled=True
                     time.sleep(.1)
                 payload=proc.stdout.read()
             finally:
@@ -92,7 +118,7 @@ with tempfile.TemporaryDirectory(prefix="orange-image-qa-") as temp:
         available()
         if stop:
             assert cancelled and proc.returncode!=0 and not payload and not output.exists(),progress.read_text()[-800:]
-            return {"cancelled_after_actual_step":True,"slot_reacquired":True,"final_png":False}
+            return {"interrupted_after_actual_step":True,"launching_host_lost":host_loss,"slot_reacquired":True,"final_png":False}
         if proc.returncode:raise RuntimeError(progress.read_text()[-1500:])
         receipt=json.loads(payload);data=output.read_bytes()
         assert len(data)==receipt["bytes"] and hashlib.sha256(data).hexdigest()==receipt["sha256"]
@@ -109,5 +135,7 @@ with tempfile.TemporaryDirectory(prefix="orange-image-qa-") as temp:
         results.update(images=images,identical_rgb=images[0]["rgb_sha256"]==images[1]["rgb_sha256"])
     if args.only in ("all","cancel"):
         results["cancellation"]=run_one("cancel",True)
+    if args.only in ("all","orphan"):
+        results["parent_loss"]=run_one("orphan",True,host_loss=True)
     (dest/(args.only+".json")).write_text(json.dumps(results,indent=2)+"\n")
     print(json.dumps(results),flush=True)

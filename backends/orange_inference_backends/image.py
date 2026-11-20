@@ -213,9 +213,9 @@ def main():
         fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
         emit(run(frame,json.loads(raw),cache,attempt_dir))
     finally:
-        os.close(lock)
-        # After host loss, the next write to its progress pipe fails. Only reclaim
-        # the nonce-specific attempt we observed, after dropping the device lock.
+        # Keep the raw fd until kernel process exit. Framework teardown can
+        # still own MPS allocations after the application-level result exists.
+        # After host loss, reclaim only this nonce-specific private attempt.
         if os.getppid() != parent and attempt_dir.exists():
             current = attempt_dir.lstat()
             if stat.S_ISDIR(current.st_mode) and (current.st_dev,current.st_ino) == (identity.st_dev,identity.st_ino):
