@@ -121,6 +121,20 @@ fn now() -> u64 {
         .as_secs()
 }
 impl Registration {
+    #[cfg(feature = "notion-fixture-tests")]
+    pub fn open_loopback_fixture(
+        &self,
+        address: std::net::SocketAddr,
+        token: &str,
+    ) -> Result<Source, Error> {
+        if !address.ip().is_loopback() {
+            return Err(Error::Denied);
+        }
+        self.build(
+            token,
+            Url::parse(&format!("http://{address}/v1")).map_err(|_| Error::Invalid)?,
+        )
+    }
     pub fn open(&self, token: &str) -> Result<Source, Error> {
         self.build(
             token,
@@ -198,12 +212,176 @@ impl Source {
         }
         self.registration.roots.get(key).ok_or(Error::Denied)
     }
+    fn row_parent(&self, row: &Value, root: &Root, ds: &str) -> Result<(), Error> {
+        projection::parent(row, "data_source_id", ds)?;
+        let Root::Database { database_id, .. } = root else {
+            return Err(Error::Denied);
+        };
+        if let Some(value) = row["parent"].get("database_id")
+            && value.as_str().and_then(|v| id(v).ok()).as_ref() != Some(database_id)
+        {
+            return Err(Error::Changed);
+        }
+        Ok(())
+    }
+    fn location(&self, scope: &Scope, key: &str, handle: Option<&str>) -> Result<Location, Error> {
+        let root = self.root(scope, key)?;
+        if let Some(handle) = handle {
+            return self.seals.location(scope, key, handle);
+        }
+        match root {
+            Root::Page { page_id } => Ok(Location {
+                page: page_id.clone(),
+                data_source: None,
+                blocks: vec![],
+            }),
+            _ => Err(Error::Denied),
+        }
+    }
+    pub fn authorize(&self, scope: &Scope, a: &Action) -> Result<(), Error> {
+        if !orange_protocol::valid_id(&scope.grant)
+            || scope.allowed.is_empty()
+            || scope
+                .allowed
+                .iter()
+                .any(|k| !self.registration.roots.contains_key(k))
+        {
+            return Err(Error::Denied);
+        }
+        let check_limit = |n: u8| {
+            if (1..=100).contains(&n) {
+                Ok(())
+            } else {
+                Err(Error::Invalid)
+            }
+        };
+        match a {
+            Action::SearchPages {
+                query,
+                limit,
+                cursor,
+            } => {
+                check_limit(*limit)?;
+                if query.len() > 1024 {
+                    return Err(Error::Invalid);
+                }
+                let binding = stamp(
+                    "notion.search.v1",
+                    &(&scope.allowed, query.to_lowercase(), limit),
+                )?;
+                self.seals.cursor(scope, &binding, cursor.as_deref())?;
+            }
+            Action::ReadPage { root, page } => {
+                if !self
+                    .location(scope, root, page.as_deref())?
+                    .blocks
+                    .is_empty()
+                {
+                    return Err(Error::Denied);
+                }
+            }
+            Action::ListBlocks {
+                root,
+                target,
+                limit,
+                cursor,
+            } => {
+                check_limit(*limit)?;
+                let loc = self.location(scope, root, target.as_deref())?;
+                if loc.blocks.len() >= 16 {
+                    return Err(Error::Limit);
+                }
+                let binding = stamp("notion.blocks.v1", &(root, loc, limit))?;
+                self.seals.cursor(scope, &binding, cursor.as_deref())?;
+            }
+            Action::QueryDatabase {
+                root,
+                data_source,
+                limit,
+                cursor,
+                filter,
+                sort,
+            } => {
+                check_limit(*limit)?;
+                let source = id(data_source)?;
+                let Root::Database { data_sources, .. } = self.root(scope, root)? else {
+                    return Err(Error::Denied);
+                };
+                if !data_sources.contains(&source) {
+                    return Err(Error::Denied);
+                }
+                if let Some(f) = filter {
+                    projection::filter(f)?;
+                }
+                if let Some(s) = sort
+                    && (!matches!(s.timestamp.as_str(), "created_time" | "last_edited_time")
+                        || !matches!(s.direction.as_str(), "ascending" | "descending"))
+                {
+                    return Err(Error::Invalid);
+                }
+                let binding = stamp("notion.query.v1", &(root, source, filter, sort, limit))?;
+                self.seals.cursor(scope, &binding, cursor.as_deref())?;
+            }
+        }
+        Ok(())
+    }
+    pub async fn execute(&self, scope: &Scope, a: Action) -> Result<Value, Error> {
+        self.execute_guarded(scope, a, || async { Ok(()) }).await
+    }
+    pub(crate) async fn execute_guarded<F, Fut>(
+        &self,
+        scope: &Scope,
+        a: Action,
+        check: F,
+    ) -> Result<Value, Error>
+    where
+        F: Fn() -> Fut + Send + Sync,
+        Fut: std::future::Future<Output = Result<(), Error>> + Send,
+    {
+        self.authorize(scope, &a)?;
+        let out = tokio::time::timeout(
+            Duration::from_secs(30),
+            Reader {
+                source: self,
+                check,
+            }
+            .execute_inner(scope, a),
+        )
+        .await
+        .map_err(|_| Error::Unavailable)??;
+        let envelope = json!({"kind":"external_untrusted_data","data":out});
+        if serde_json::to_vec(&envelope)
+            .map_err(|_| Error::Protocol)?
+            .len()
+            > MAX_BYTES
+        {
+            return Err(Error::Limit);
+        }
+        Ok(envelope)
+    }
+}
+struct Reader<'a, F> {
+    source: &'a Source,
+    check: F,
+}
+impl<F> std::ops::Deref for Reader<'_, F> {
+    type Target = Source;
+    fn deref(&self) -> &Source {
+        self.source
+    }
+}
+impl<F, Fut> Reader<'_, F>
+where
+    F: Fn() -> Fut + Send + Sync,
+    Fut: std::future::Future<Output = Result<(), Error>> + Send,
+{
     async fn request(
         &self,
         segments: &[&str],
         params: &[(&str, String)],
         body: Option<Value>,
     ) -> Result<Value, Error> {
+        (self.check)().await?;
         if self.authorization_refused() {
             return Err(Error::Credentials);
         }
@@ -300,18 +478,6 @@ impl Source {
         }
         Ok(())
     }
-    fn row_parent(&self, row: &Value, root: &Root, ds: &str) -> Result<(), Error> {
-        projection::parent(row, "data_source_id", ds)?;
-        let Root::Database { database_id, .. } = root else {
-            return Err(Error::Denied);
-        };
-        if let Some(value) = row["parent"].get("database_id")
-            && value.as_str().and_then(|v| id(v).ok()).as_ref() != Some(database_id)
-        {
-            return Err(Error::Changed);
-        }
-        Ok(())
-    }
     async fn page_at(&self, scope: &Scope, key: &str, loc: &Location) -> Result<Value, Error> {
         let root = self.root(scope, key)?;
         match (root, &loc.data_source) {
@@ -324,20 +490,6 @@ impl Source {
             self.row_parent(&v, root, ds)?;
         }
         Ok(v)
-    }
-    fn location(&self, scope: &Scope, key: &str, handle: Option<&str>) -> Result<Location, Error> {
-        let root = self.root(scope, key)?;
-        if let Some(handle) = handle {
-            return self.seals.location(scope, key, handle);
-        }
-        match root {
-            Root::Page { page_id } => Ok(Location {
-                page: page_id.clone(),
-                data_source: None,
-                blocks: vec![],
-            }),
-            _ => Err(Error::Denied),
-        }
     }
     async fn verify_path(&self, scope: &Scope, key: &str, loc: &Location) -> Result<String, Error> {
         self.page_at(scope, key, loc).await?;
@@ -357,108 +509,6 @@ impl Source {
         Ok(prev.clone())
     }
     /// Validate the user-selected roots and the exact navigation/query shape before charging a Run slot.
-    pub fn authorize(&self, scope: &Scope, a: &Action) -> Result<(), Error> {
-        if !orange_protocol::valid_id(&scope.grant)
-            || scope.allowed.is_empty()
-            || scope
-                .allowed
-                .iter()
-                .any(|k| !self.registration.roots.contains_key(k))
-        {
-            return Err(Error::Denied);
-        }
-        let check_limit = |n: u8| {
-            if (1..=100).contains(&n) {
-                Ok(())
-            } else {
-                Err(Error::Invalid)
-            }
-        };
-        match a {
-            Action::SearchPages {
-                query,
-                limit,
-                cursor,
-            } => {
-                check_limit(*limit)?;
-                if query.len() > 1024 {
-                    return Err(Error::Invalid);
-                }
-                let binding = stamp(
-                    "notion.search.v1",
-                    &(&scope.allowed, query.to_lowercase(), limit),
-                )?;
-                self.seals.cursor(scope, &binding, cursor.as_deref())?;
-            }
-            Action::ReadPage { root, page } => {
-                if !self
-                    .location(scope, root, page.as_deref())?
-                    .blocks
-                    .is_empty()
-                {
-                    return Err(Error::Denied);
-                }
-            }
-            Action::ListBlocks {
-                root,
-                target,
-                limit,
-                cursor,
-            } => {
-                check_limit(*limit)?;
-                let loc = self.location(scope, root, target.as_deref())?;
-                if loc.blocks.len() >= 16 {
-                    return Err(Error::Limit);
-                }
-                let binding = stamp("notion.blocks.v1", &(root, loc, limit))?;
-                self.seals.cursor(scope, &binding, cursor.as_deref())?;
-            }
-            Action::QueryDatabase {
-                root,
-                data_source,
-                limit,
-                cursor,
-                filter,
-                sort,
-            } => {
-                check_limit(*limit)?;
-                let source = id(data_source)?;
-                let Root::Database { data_sources, .. } = self.root(scope, root)? else {
-                    return Err(Error::Denied);
-                };
-                if !data_sources.contains(&source) {
-                    return Err(Error::Denied);
-                }
-                if let Some(f) = filter {
-                    projection::filter(f)?;
-                }
-                if let Some(s) = sort
-                    && (!matches!(s.timestamp.as_str(), "created_time" | "last_edited_time")
-                        || !matches!(s.direction.as_str(), "ascending" | "descending"))
-                {
-                    return Err(Error::Invalid);
-                }
-                let binding = stamp("notion.query.v1", &(root, source, filter, sort, limit))?;
-                self.seals.cursor(scope, &binding, cursor.as_deref())?;
-            }
-        }
-        Ok(())
-    }
-    pub async fn execute(&self, scope: &Scope, a: Action) -> Result<Value, Error> {
-        self.authorize(scope, &a)?;
-        let out = tokio::time::timeout(Duration::from_secs(30), self.execute_inner(scope, a))
-            .await
-            .map_err(|_| Error::Unavailable)??;
-        let envelope = json!({"kind":"external_untrusted_data","data":out});
-        if serde_json::to_vec(&envelope)
-            .map_err(|_| Error::Protocol)?
-            .len()
-            > MAX_BYTES
-        {
-            return Err(Error::Limit);
-        }
-        Ok(envelope)
-    }
     async fn execute_inner(&self, scope: &Scope, a: Action) -> Result<Value, Error> {
         match a {
             Action::SearchPages {

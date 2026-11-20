@@ -25,11 +25,15 @@ use uuid::Uuid;
     any(
         feature = "pg-view-tests",
         feature = "s3-source-tests",
-        feature = "repository-fixture-tests"
+        feature = "repository-fixture-tests",
+        feature = "notion-fixture-tests"
     )
 ))]
 #[path = "user_identity/connector_run.rs"]
 mod connector_run;
+#[cfg(all(unix, feature = "notion-fixture-tests"))]
+#[path = "user_identity/notion_consent.rs"]
+mod notion_consent;
 #[cfg(all(unix, feature = "pg-view-tests"))]
 #[path = "user_identity/pg_view_consent.rs"]
 mod pg_consent;

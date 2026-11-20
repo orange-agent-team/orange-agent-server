@@ -98,3 +98,52 @@ pub(super) async fn browser(f: &Fixture, run: &str, driver: String) -> Value {
     std::fs::write(dir.join("browser.json"), out.stdout).expect("save browser receipt");
     receipt
 }
+
+#[cfg(any(feature = "repository-fixture-tests", feature = "notion-fixture-tests"))]
+pub(super) async fn opted_in(f: &Fixture, legacy: &str, flag: &str) -> String {
+    use sqlx::Row;
+    // Admission uses the real create handler. Only the platform Host's readiness is a fixture here.
+    let input = sqlx::query(
+        "SELECT root_budget_id,input_artifact_id,input_version_id FROM cloud_runs WHERE run_id=$1",
+    )
+    .bind(legacy)
+    .fetch_one(&f.pool)
+    .await
+    .expect("sealed input");
+    sqlx::query("INSERT INTO cloud_pool_hosts(host_instance_id,certificate_sha256,profile_id,attestation_digest,region_id,max_workspaces,enabled,credential_expires_at,accepting,live_until,input_protocol_version) VALUES($1,$2,'dev-gvisor-linux-arm64-v1',$3,'dev',8,true,clock_timestamp()+interval '10 minutes',true,clock_timestamp()+interval '10 minutes',1)").bind(Uuid::new_v4().to_string()).bind(hex::encode(Sha256::digest(format!("{legacy}/{flag}").as_bytes()))).bind("1".repeat(64)).execute(&f.pool).await.expect("registered host fixture");
+    let mut create = json!({"root_budget_id":input.get::<String,_>("root_budget_id"),"input_artifact_id":input.get::<String,_>("input_artifact_id"),"input_version_id":input.get::<String,_>("input_version_id"),"resource_profile_id":"dev-gvisor-linux-arm64-v1","workspace_ttl_seconds":300});
+    create[flag] = json!(true);
+    let (code, result) = request(
+        f,
+        "POST",
+        "/api/v1/agent/runs",
+        Some(create.clone()),
+        keyed(f, flag),
+    )
+    .await;
+    assert!(
+        matches!(code, StatusCode::OK | StatusCode::CREATED),
+        "{result}"
+    );
+    let run = result["run_id"].as_str().expect("created run");
+    create[flag] = json!(false);
+    assert_eq!(
+        request(
+            f,
+            "POST",
+            "/api/v1/agent/runs",
+            Some(create),
+            keyed(f, flag)
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    sqlx::query("UPDATE cloud_runs SET status='running',version=version+1 WHERE run_id=$1")
+        .bind(run)
+        .execute(&f.pool)
+        .await
+        .expect("ready Run fixture");
+
+    run.to_owned()
+}

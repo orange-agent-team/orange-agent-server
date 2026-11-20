@@ -172,7 +172,15 @@ pub(super) async fn perform(
     capacity(&mut g, &run).await?;
     sqlx::query("INSERT INTO repository_source_calls(run_id,provider,grant_id,request_key,request_digest,until_at) VALUES($1,'notion',$2,$3,$4,clock_timestamp()+interval '35 seconds')").bind(&run).bind(&id).bind(k).bind(digest).execute(&mut **g.transaction()).await.map_err(db)?;
     g.finish().await?;
-    let result = s.reader.execute(&scope, action).await;
+    let result=s.reader.execute_guarded(&scope,action,||async{
+        let (mut guard,_)=guard(&i,&h,&run,true,true).await.map_err(|_|Error::Denied)?;
+        live(&i,&mut guard,&run,&id).await.map_err(|_|Error::Denied)?;
+        let active:bool=sqlx::query_scalar("SELECT EXISTS(SELECT FROM repository_source_calls WHERE run_id=$1 AND provider='notion' AND grant_id=$2 AND request_key=$3 AND until_at>clock_timestamp() AND finished_at IS NULL)")
+            .bind(&run).bind(&id).bind(k).fetch_one(&mut **guard.transaction()).await.map_err(|_|Error::Unavailable)?;
+        if !active{return Err(Error::Denied);}
+        guard.finish().await.map_err(|_|Error::Denied)?;
+        Ok(())
+    }).await;
     if s.reader.authorization_refused() {
         disable_source(&i, &s.owner, "notion", &s.digest).await?;
     }
