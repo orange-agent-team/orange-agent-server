@@ -1,6 +1,9 @@
 //! Actual DB/session/organization boundary with explicit session fixtures. Real login is a separate browser test.
 #[path = "user_identity/accounts.rs"]
 mod account_cases;
+#[cfg(feature = "cloud-host-tests")]
+#[path = "user_identity/cloud_runs.rs"]
+mod cloud_host_tests;
 use axum::{
     Router,
     body::{Body, to_bytes},

@@ -122,6 +122,11 @@ async fn serve(
             tokio::select! {
                 _=expiry_stopped.changed()=>break,
                 _=tick.tick()=>{
+                    let cloud=tokio::select!{
+                        _=expiry_stopped.changed()=>break,
+                        result=routes::expire_cloud_workspaces(expiry_store.pool())=>result,
+                    };
+                    if cloud.is_err(){eprintln!("Cloud workspace expiry deferred");}
                     let activation = tokio::select! {
                         _ = expiry_stopped.changed() => break,
                         result = orange_control_plane::admin::activate_due_text_prices(expiry_store.pool()) => result,

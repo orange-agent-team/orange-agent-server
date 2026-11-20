@@ -1,5 +1,14 @@
 #[path = "accounts.rs"]
 mod accounts;
+#[path = "cloud_runs.rs"]
+mod cloud_runs;
+pub async fn expire_cloud_workspaces(pool: &sqlx::PgPool) -> Result<usize, sqlx::Error> {
+    let mut count = 0;
+    while count < 100 && cloud_runs::expire_one(pool).await? {
+        count += 1;
+    }
+    Ok(count)
+}
 #[path = "support.rs"]
 mod support;
 use super::{
@@ -28,6 +37,22 @@ use serde::Deserialize;
 use std::sync::Arc;
 pub fn router(identity: UserIdentity) -> Router {
     Router::new()
+        .route(
+            "/api/v1/agent/workspace-capacity",
+            get(cloud_runs::capacity),
+        )
+        .route(
+            "/api/v1/agent/invocations/{id}",
+            get(cloud_runs::lookup).delete(cloud_runs::withdraw),
+        )
+        .route(
+            "/api/v1/agent/runs",
+            get(cloud_runs::list).post(cloud_runs::create),
+        )
+        .route(
+            "/api/v1/agent/runs/{id}",
+            get(cloud_runs::get_one).delete(cloud_runs::cancel),
+        )
         .route("/api/v1/auth/start", get(start))
         .route("/api/v1/auth/callback", get(callback))
         .route("/api/v1/session", get(session).delete(logout))

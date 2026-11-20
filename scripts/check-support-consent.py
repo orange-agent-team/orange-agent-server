@@ -8,8 +8,8 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
-from urllib.parse import unquote, urlsplit, urlunsplit
-import uuid
+from urllib.parse import urlsplit
+from owned_postgres import database
 
 root = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser()
@@ -20,23 +20,12 @@ parser.add_argument('--admin-repo',type=Path)
 parser.add_argument('--web-repo',type=Path)
 parser.add_argument('--node',type=Path,default=shutil.which('node'))
 args = parser.parse_args()
-base = urlsplit(args.database_url_file.read_text().strip())
-if base.scheme not in ('postgres', 'postgresql') or base.hostname not in ('localhost', '127.0.0.1', '::1'):
-    raise SystemExit('An explicit local PostgreSQL database is required')
 config = json.loads(args.identity_config.read_text())
 if config.get('environment') != 'dev' or urlsplit(config['issuer']).hostname not in ('127.0.0.1', 'localhost', '::1'):
     raise SystemExit('Development identity on loopback is required')
 
-name = 'orange_consent_' + uuid.uuid4().hex
-pg = dict(os.environ, PGHOST=base.hostname, PGPORT=str(base.port or 5432), PGUSER=unquote(base.username or ''),
-          PGPASSWORD=unquote(base.password or ''), PGDATABASE=unquote(base.path[1:]), PGCONNECT_TIMEOUT='5')
-psql = shutil.which('psql') or '/opt/homebrew/opt/postgresql@17/bin/psql'
-def query(statement):
-    return subprocess.check_output([psql, '-X', '-w', '-At', '-v', 'ON_ERROR_STOP=1', '-c', statement], env=pg, text=True).strip()
-
-query(f'CREATE DATABASE "{name}"')
-try:
-    env = dict(os.environ, ORANGE_TEST_DATABASE_URL=urlunsplit(base._replace(path='/'+name)),
+with database(args.database_url_file,'orange_consent_') as (name,url):
+    env = dict(os.environ, ORANGE_TEST_DATABASE_URL=url,
                ORANGE_TEST_USER_CONFIG_FILE=str(args.identity_config.resolve()), CARGO_NET_OFFLINE='true')
     for key in ['ORANGE_SUPPORT_BROWSER_DRIVER','ORANGE_SUPPORT_BROWSER_NODE','ORANGE_SUPPORT_EVIDENCE']:
         env.pop(key,None)
@@ -79,9 +68,3 @@ try:
             receipt=json.loads((Path(env[variable])/'browser-result.json').read_text())
             if receipt['mutations'] != (6 if variable=='ORANGE_SUPPORT_ADMIN_EVIDENCE' else 2):
                 raise SystemExit('Browser receipt does not attest the requested workflow')
-finally:
-    if query("SELECT count(*) FROM pg_stat_activity WHERE datname='"+name+"'") == '0':
-        query(f'DROP DATABASE "{name}"')
-        print('Removed owned test database '+name, flush=True)
-    else:
-        raise SystemExit('Test database retained with open connections: '+name)
