@@ -67,8 +67,12 @@ pub(super) async fn run(
         sqlx::query("INSERT INTO admin_grants(principal_id,role,environment,scope_kind,scope_id,expires_at) VALUES($1,'finance_operator','dev','tenant',$2,FLOOR(EXTRACT(EPOCH FROM clock_timestamp()))::bigint+3600)").bind(&who).bind(a).execute(pool).await.expect("finance fixture grant");
         finance.push(serde_json::json!({"id":who,"cookie":format!("{SESSION_COOKIE}={}",session(pool,&who).await)}));
     }
+    let node = Uuid::new_v4().to_string();
+    sqlx::query("INSERT INTO nodes(node_id,owner_id,environment,region_id,state) VALUES($1,$2,'dev','browser-region','online')")
+        .bind(&node).bind(a).execute(pool).await.expect("browser price node");
+    let terms = crate::price_fixture::seed(pool, a, &node).await;
     let fixture = evidence.join("browser-private.json");
-    let bytes=serde_json::to_vec(&serde_json::json!({"api":format!("http://{address}/"),"origin":"https://127.0.0.1:43112","cookie":format!("{SESSION_COOKIE}={token}"),"principal":principal,"scope_a":a,"scope_b":b,"scope_c":third,"finance":finance})).expect("fixture JSON");
+    let bytes=serde_json::to_vec(&serde_json::json!({"api":format!("http://{address}/"),"origin":"https://127.0.0.1:43112","cookie":format!("{SESSION_COOKIE}={token}"),"principal":principal,"scope_a":a,"scope_b":b,"scope_c":third,"finance":finance,"price_terms":terms})).expect("fixture JSON");
     let mut options = std::fs::OpenOptions::new();
     use std::os::unix::fs::OpenOptionsExt;
     options.write(true).create_new(true).mode(0o600);
@@ -166,6 +170,23 @@ pub(super) async fn run(
     assert_eq!(report["case_write_ui"], true);
     assert_eq!(report["audit_ui_mutations"], 0);
     assert_eq!(report["case_edits"]["action_posts"], 7);
+    assert_eq!(report["pricing"]["post_count"], 4);
+    let version = report["pricing"]["price_version_id"]
+        .as_str()
+        .expect("browser price version");
+    let verified:(String,i64,i64,i32,String,String)=sqlx::query_as("SELECT p.state,t.input_price,t.output_price,t.fee_bps,d.created_by,p.checker_id FROM admin_text_price_publications p JOIN admin_text_price_drafts d USING(price_version) JOIN text_prices t USING(price_version) WHERE p.price_version=$1 AND t.node_id=$2")
+        .bind(version).bind(node).fetch_one(pool).await.expect("independent live price confirmation");
+    assert_eq!(
+        verified,
+        (
+            "active".into(),
+            2000,
+            6000,
+            120,
+            finance[0]["id"].as_str().expect("maker").into(),
+            finance[1]["id"].as_str().expect("checker").into()
+        )
+    );
     let closed:(String,i64,String,String)=sqlx::query_as("SELECT state,version,assigned_to,resolution_ref FROM reconciliation_cases WHERE case_id='browser-case-050'").fetch_one(pool).await.expect("independent DB confirmation");
     assert_eq!(
         closed,

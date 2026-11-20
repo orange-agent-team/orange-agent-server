@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use sqlx::Row;
 use std::sync::Arc;
 
-mod audit;
+pub(super) mod audit;
 mod cases;
 
 pub fn router(identity: AdminIdentity) -> Router {
@@ -27,6 +27,14 @@ pub fn router(identity: AdminIdentity) -> Router {
             get(audit::scope_permissions),
         )
         .route("/admin/v1/overview", get(overview))
+        .route(
+            "/admin/v1/price-drafts",
+            get(super::actions::prices::list).post(super::actions::prices::create),
+        )
+        .route(
+            "/admin/v1/price-drafts/{price_id}",
+            get(super::actions::prices::get_one),
+        )
         .route(
             "/admin/v1/reconciliation-cases/{case_id}/activity",
             get(cases::activity),
@@ -177,7 +185,7 @@ pub struct ScopedQuery {
     cursor: Option<String>,
 }
 impl ScopedQuery {
-    fn scope(&self) -> Result<Scope, AdminError> {
+    pub(super) fn scope(&self) -> Result<Scope, AdminError> {
         if !matches!(self.environment.as_str(), "dev" | "staging" | "production")
             || !matches!(
                 self.scope_kind.as_str(),
@@ -210,7 +218,7 @@ fn readable_actions(permissions: &BTreeSet<String>) -> Vec<String> {
         ("credential.revoke", "risk.read"),
         ("payment.refund", "payments.read"),
         ("ledger.reverse", "ledger.read"),
-        ("pricing.publish", "models.read"),
+        ("pricing.publish", "pricing.read"),
         ("release.rollout", "releases.read"),
         ("release.revoke", "releases.read"),
         ("feature.disable", "features.read"),

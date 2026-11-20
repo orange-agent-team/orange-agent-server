@@ -1,4 +1,6 @@
 //! Real PostgreSQL and HTTP handlers; explicit sessions are fixtures, not issued MFA.
+#[path = "support/admin_price.rs"]
+mod price_fixture;
 use axum::{
     Router,
     body::{Body, to_bytes},
@@ -893,3 +895,6 @@ async fn case_assignment_notes_and_independently_approved_close_are_scoped_and_e
         0
     );
 }
+
+#[path = "admin_actions/prices.rs"]
+mod price_drafts;

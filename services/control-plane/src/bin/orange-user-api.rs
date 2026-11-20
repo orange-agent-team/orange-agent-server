@@ -122,6 +122,11 @@ async fn serve(
             tokio::select! {
                 _=expiry_stopped.changed()=>break,
                 _=tick.tick()=>{
+                    let activation = tokio::select! {
+                        _ = expiry_stopped.changed() => break,
+                        result = orange_control_plane::admin::activate_due_text_prices(expiry_store.pool()) => result,
+                    };
+                    if activation.is_err() { eprintln!("Scheduled development price activation deferred"); }
                     let result=tokio::select!{_=expiry_stopped.changed()=>break,result=expiry_store.expire_queued_ready(&mut cursor,100)=>result};
                     if !matches!(result,Ok((_,0))){eprintln!("Queue expiration remains unresolved; no execution cleanup is inferred");}
                 }

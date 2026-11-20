@@ -88,7 +88,7 @@ pub(super) async fn record_read(
         .execute(&mut **tx).await?;
     Ok(())
 }
-pub(super) async fn next_cursor(
+pub(in crate::admin) async fn next_cursor(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     session_hash: &str,
     current: &CurrentSession,

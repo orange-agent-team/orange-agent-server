@@ -84,8 +84,10 @@ pub struct ActionRequest {
 pub enum ActionPayload {
     Node(NodePayload),
     Case(case_edit::Edit),
+    Price(prices::Publish),
 }
 mod case_edit;
+pub(super) mod prices;
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct NodePayload {
@@ -140,17 +142,20 @@ impl ActionRequest {
     fn policy(&self) -> &'static str {
         match self.payload {
             ActionPayload::Case(_) => "admin-case-policy-v1",
+            ActionPayload::Price(_) => "admin-text-price-v1",
             ActionPayload::Node(_) => POLICY,
         }
     }
     fn read_permission(&self) -> &'static str {
         match self.payload {
             ActionPayload::Case(_) => "cases.read",
+            ActionPayload::Price(_) => "pricing.read",
             ActionPayload::Node(_) => "nodes.read",
         }
     }
     fn checker_permission(&self) -> Option<&'static str> {
         match (&self.action_type[..], &self.payload) {
+            ("pricing.publish", ActionPayload::Price(_)) => Some("pricing.publish.approve"),
             ("node.resume", ActionPayload::Node(_)) => Some("nodes.resume.approve"),
             ("case.update", ActionPayload::Case(case_edit::Edit::Close { .. })) => {
                 Some("cases.close.approve")
@@ -161,6 +166,9 @@ impl ActionRequest {
 
     fn permission(&self) -> Result<&'static str, AdminError> {
         match self.action_type.as_str() {
+            "pricing.publish" if matches!(self.payload, ActionPayload::Price(_)) => {
+                Ok("pricing.publish")
+            }
             "case.update" => match &self.payload {
                 ActionPayload::Case(edit) => Ok(edit.permission()),
                 _ => Err(AdminError::Invalid),
@@ -190,7 +198,10 @@ impl ActionRequest {
             ActionPayload::Case(edit) if self.action_type == "case.update" => {
                 return edit.validate(self);
             }
-            ActionPayload::Case(_) => return Err(AdminError::Invalid),
+            ActionPayload::Price(p) if self.action_type == "pricing.publish" => {
+                return p.validate(self);
+            }
+            ActionPayload::Case(_) | ActionPayload::Price(_) => return Err(AdminError::Invalid),
             ActionPayload::Node(node) if id(&node.node_id) => node,
             _ => return Err(AdminError::Invalid),
         };
@@ -415,6 +426,7 @@ fn response(doc: Value, status: StatusCode) -> Result<Response, AdminError> {
 }
 async fn target(tx: &mut Tx<'_>, request: &ActionRequest) -> Result<(i64, String), AdminError> {
     let node = match &request.payload {
+        ActionPayload::Price(p) => return prices::target(tx, request, p).await,
         ActionPayload::Case(edit) => return case_edit::target(tx, request, edit).await,
         ActionPayload::Node(node) => node,
     };
@@ -460,6 +472,9 @@ pub async fn create(
         load(&mut tx, &action).await?.doc
     } else {
         target(&mut tx, &request).await?;
+        if let ActionPayload::Price(p) = &request.payload {
+            prices::require_creator(&mut tx, p, principal).await?;
+        }
         if let ActionPayload::Case(edit) = &request.payload {
             deadline =
                 deadline.min(case_edit::assignee_deadline(&mut tx, edit, &request.scope).await?);
@@ -650,6 +665,13 @@ async fn mutate(
                 }
                 let (version, node_state) = target(&mut tx, &m.request).await?;
                 match &m.request.payload {
+                    ActionPayload::Price(p) => {
+                        let checker = text(&m.doc["approvals"][0], "approver_id")?;
+                        prices::publish(&mut tx, p, action, checker, principal).await?;
+                        m.doc["business_ref"] = json!(p.price_version_id);
+                        m.doc["state"] = json!("succeeded");
+                        why = "Approved development price publication recorded".into();
+                    }
                     ActionPayload::Case(edit) => {
                         deadline = deadline.min(
                             case_edit::apply(

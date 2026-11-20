@@ -1,4 +1,5 @@
 pub mod actions;
+pub use actions::prices::activate_due as activate_due_text_prices;
 pub mod identity;
 pub mod routes;
 

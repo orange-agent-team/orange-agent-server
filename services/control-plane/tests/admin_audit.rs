@@ -1,4 +1,7 @@
 //! Real PG migrations and HTTP authorization; sessions are explicit fixtures.
+#[cfg(unix)]
+#[path = "support/admin_price.rs"]
+mod price_fixture;
 use axum::{
     Router,
     body::{Body, to_bytes},
