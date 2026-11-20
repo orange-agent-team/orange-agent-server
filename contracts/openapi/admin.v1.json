@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Orange Admin API",
-    "version": "0.1.7",
+    "version": "0.1.8",
     "description": "Candidate contract for the independent Admin origin. Development implementation includes OIDC sessions, scoped reads, selected node and reconciliation case actions, and development text price governance. Availability of each other action depends on its backend implementation."
   },
   "servers": [
@@ -9667,12 +9667,12 @@
           "input_price": {
             "type": "string",
             "pattern": "^(0|[1-9][0-9]{0,18})$",
-            "description": "Nonnegative development credits in integer units representable as signed int64. The maximum quote must also fit int64."
+            "description": "Integer microcredits per 1,000 metered units. 1 credit = 1,000,000 microcredits. Input and output charges round up separately. Both rate and maximum quote must fit signed int64."
           },
           "output_price": {
             "type": "string",
             "pattern": "^(0|[1-9][0-9]{0,18})$",
-            "description": "Nonnegative development credits in integer units representable as signed int64. The maximum quote must also fit int64."
+            "description": "Integer microcredits per 1,000 metered units. 1 credit = 1,000,000 microcredits. Input and output charges round up separately. Both rate and maximum quote must fit signed int64."
           },
           "output_limit": {
             "type": "integer",
