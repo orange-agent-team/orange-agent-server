@@ -114,6 +114,27 @@ async fn approved_source_view_uses_actual_read_role_and_bounded_queries() {
             .await,
         Err(Error::Invalid)
     ));
+    sqlx::query("INSERT INTO source.orders(seq,name) VALUES(9007199254740993,'big'),(9007199254740994,'next')").execute(&admin).await.expect("exact integer fixture");
+    let first = registry
+        .execute(&reader, &grant, page(json!(["seq"]), Some(20)))
+        .await
+        .expect("large page");
+    assert_eq!(
+        first["data"],
+        json!({"rows":[{"seq":"9007199254740993"}],"next_after":"9007199254740993"})
+    );
+    let next = registry
+        .execute(
+            &reader,
+            &grant,
+            page(json!(["seq"]), Some(9007199254740993)),
+        )
+        .await
+        .expect("large cursor");
+    assert_eq!(
+        next["data"],
+        json!({"rows":[{"seq":"9007199254740994"}],"next_after":null})
+    );
     sqlx::query("UPDATE source.orders SET name=repeat('x',1048576) WHERE seq=10")
         .execute(&admin)
         .await

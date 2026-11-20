@@ -234,5 +234,25 @@ async fn scoped_source_reads_require_live_run_and_grant_at_delivery() {
             .0,
         StatusCode::TOO_MANY_REQUESTS
     );
+    sqlx::query("UPDATE cloud_runs SET status='cancelled',version=version+1 WHERE run_id=$1")
+        .bind(&run)
+        .execute(&f.pool)
+        .await
+        .expect("terminal Run fixture");
+    let (code, inventory) = request(&f, "GET", &base, None, headers(&f)).await;
+    assert_eq!(code, StatusCode::OK);
+    assert_eq!(inventory["run_readable"], false);
+    assert_eq!(
+        request(
+            &f,
+            "POST",
+            &current,
+            Some(json!({"action":"list_views"})),
+            keyed(&f, "terminal")
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
     source.close().await;
 }
