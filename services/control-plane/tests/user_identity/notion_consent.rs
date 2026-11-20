@@ -19,8 +19,60 @@ const EDIT: &str = "2026-11-01T00:00:00.000Z";
 fn notion_page(id: &str, title: &str, parent: Value) -> Value {
     json!({"object":"page","id":id,"in_trash":false,"last_edited_time":EDIT,"parent":parent,"properties":{"Name":{"type":"title","title":[{"type":"text","plain_text":title}]},"Status":{"type":"select","select":{"name":"Open"}}}})
 }
+async fn preserved_legacy_grants() {
+    let db =
+        Store::connect(&std::env::var("ORANGE_TEST_DATABASE_URL").expect("disposable database"))
+            .await
+            .expect("owned source");
+    let pool = db.pool();
+    let name: String = sqlx::query_scalar("SELECT current_database()")
+        .fetch_one(pool)
+        .await
+        .expect("database identity");
+    assert!(
+        name.strip_prefix("orange_notion_").is_some_and(
+            |suffix| suffix.len() == 32 && suffix.bytes().all(|b| b.is_ascii_hexdigit())
+        )
+    );
+    sqlx::migrate!()
+        .run_to(47, pool)
+        .await
+        .expect("install schema 47");
+    let version: i64 = sqlx::query_scalar("SELECT max(version) FROM _sqlx_migrations")
+        .fetch_one(pool)
+        .await
+        .expect("actual v47");
+    assert_eq!(version, 47);
+    let f = fixture_from_store(&db).await;
+    let (legacy, _root) = active_run(&f).await;
+    let existing = opted_in(&f, &legacy, "allow_external_connectors").await;
+    for grant in ["old-active", "old-revoked"] {
+        sqlx::query("INSERT INTO repository_source_grants(grant_id,run_id,provider,source_id,source_digest,repository_ids,request_key,request_digest,expires_at) VALUES($1,$2,'github','stored',repeat('a',64),ARRAY['17'],$1,repeat('b',64),clock_timestamp()+interval '1 hour')").bind(grant).bind(&existing).execute(pool).await.expect("prior row");
+    }
+    sqlx::query("INSERT INTO repository_source_revocations(grant_id) VALUES('old-revoked')")
+        .execute(pool)
+        .await
+        .expect("prior revoke");
+    sqlx::query("INSERT INTO repository_source_calls(run_id,provider,grant_id,request_key,request_digest,until_at,finished_at) VALUES($1,'github','old-active','file-request',repeat('c',64),clock_timestamp(),clock_timestamp())").bind(&existing).execute(pool).await.expect("prior call");
+    sqlx::query("INSERT INTO repository_file_receipts(artifact_id,run_id,provider,grant_id,request_key,repository_id,path,commit_id,blob_id,size_bytes,content_sha256) VALUES('old-artifact',$1,'github','old-active','file-request','17','doc.txt',repeat('1',40),repeat('2',40),10,repeat('d',64))").bind(&existing).execute(pool).await.expect("prior file reference");
+    async fn snapshot(p: &PgPool) -> Value {
+        sqlx::query_scalar("SELECT jsonb_build_array((SELECT jsonb_agg(to_jsonb(g) ORDER BY grant_id) FROM repository_source_grants g),(SELECT jsonb_agg(to_jsonb(r) ORDER BY grant_id) FROM repository_source_revocations r),(SELECT jsonb_agg(to_jsonb(c) ORDER BY request_key) FROM repository_source_calls c),(SELECT jsonb_agg(to_jsonb(a) ORDER BY artifact_id) FROM repository_file_receipts a))").fetch_one(p).await.expect("historical rows")
+    }
+    let before = snapshot(pool).await;
+    db.migrate().await.expect("upgrade live DB");
+    db.migrate().await.expect("rerun migrations");
+    assert_eq!(snapshot(pool).await, before);
+    let optins: i64 = sqlx::query_scalar("SELECT count(*) FROM cloud_document_source_opt_ins")
+        .fetch_one(pool)
+        .await
+        .expect("no legacy opt-ins");
+    assert_eq!(optins, 0);
+    let blocked=sqlx::query("INSERT INTO external_source_grants(grant_id,run_id,provider,source_id,source_digest,root_keys,request_key,request_digest,expires_at) VALUES('new',$1,'notion','notion',repeat('a',64),ARRAY['notes'],'k',repeat('a',64),clock_timestamp()+interval '1 hour')").bind(&existing).execute(pool).await.expect_err("old repository consent cannot admit a document grant");
+    assert!(blocked.as_database_error().is_some_and(|e|e.message()=="run missing provider-specific external access consent"));
+}
 #[tokio::test]
 async fn notion_egress_grants_and_revoke_during_source_io() {
+    preserved_legacy_grants().await;
     let mut f = fixture().await;
     let other = fixture().await;
     let (legacy, _root) = active_run(&f).await;
@@ -193,5 +245,12 @@ async fn notion_egress_grants_and_revoke_during_source_io() {
         StatusCode::FORBIDDEN
     );
     assert_eq!(count.load(Ordering::SeqCst), before + 1);
+    if let Ok(driver) = std::env::var("ORANGE_NOTION_BROWSER") {
+        let result = super::connector_run::browser(&f, &run, driver).await;
+        assert_eq!(
+            result,
+            json!({"searched":true,"page":true,"blocks":true,"database":true,"read_scoped_row":true,"revoked_after_reload":true})
+        );
+    }
     server.abort();
 }

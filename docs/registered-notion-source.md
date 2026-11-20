@@ -11,3 +11,5 @@ search_pages 在已授权页面根中按标题查找，按登记页分页，页�
 ```sh
 python3 scripts/check-notion.py --database-url-file .local/database-url --identity-config .local/identity/user-config.json
 ```
+
+加入 `--web-repo ../orange-agent-web` 可通过真实 Chrome 访问四个动作、读取查询结果中的授权行，并在撤权后刷新核对。验收首先在一次性 PostgreSQL 中重建 47 版的仓库授权、调用和文件回执，然后升级并重复迁移，逐项核对原数据与文档外发选择。源端没有真实工作区令牌时，这些测试使用固定版本的本机协议夹具。

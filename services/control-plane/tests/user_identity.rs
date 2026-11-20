@@ -58,6 +58,9 @@ async fn fixture() -> Fixture {
     .await
     .expect("connect");
     store.migrate().await.expect("migrate");
+    fixture_from_store(&store).await
+}
+async fn fixture_from_store(store: &Store) -> Fixture {
     let config: UserOidcConfig = serde_json::from_slice(
         &std::fs::read(
             std::env::var("ORANGE_TEST_USER_CONFIG_FILE").expect("real provider config required"),

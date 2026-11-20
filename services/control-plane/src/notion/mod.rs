@@ -608,8 +608,12 @@ where
                     .await?;
                 let (blocks, next) = projection::list(&result, limit)?;
                 let mut data = Vec::new();
+                let mut seen = BTreeSet::new();
                 for v in blocks {
                     let block = projection::identifier(v)?;
+                    if !seen.insert(block.clone()) {
+                        return Err(Error::Protocol);
+                    }
                     projection::object(v, "block", &block)?;
                     projection::parent(
                         v,
@@ -672,8 +676,12 @@ where
                     .await?;
                 let (rows, next) = projection::list(&result, limit)?;
                 let mut data = Vec::new();
+                let mut seen = BTreeSet::new();
                 for row in rows {
                     let page = projection::identifier(row)?;
+                    if !seen.insert(page.clone()) {
+                        return Err(Error::Protocol);
+                    }
                     projection::object(row, "page", &page)?;
                     self.row_parent(row, resource, &ds)?;
                     let loc = Location {
