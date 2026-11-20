@@ -85,12 +85,14 @@ pub enum ActionPayload {
     Node(NodePayload),
     Case(case_edit::Edit),
     Price(prices::Publish),
+    Refund(refunds::Refund),
     Role(roles::Binding),
     SupportGrant(support::Issue),
     SupportRevoke(support::Revoke),
 }
 mod case_edit;
 pub(super) mod prices;
+pub(crate) mod refunds;
 pub(super) mod roles;
 pub(super) mod support;
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -149,6 +151,7 @@ impl ActionRequest {
             ActionPayload::Role(_) => "admin-role-governance-v1",
             ActionPayload::Case(_) => "admin-case-policy-v1",
             ActionPayload::Price(_) => "admin-text-price-v1",
+            ActionPayload::Refund(_) => "admin-test-refund-v1",
             ActionPayload::SupportGrant(_) | ActionPayload::SupportRevoke(_) => "admin-support-v1",
             ActionPayload::Node(_) => POLICY,
         }
@@ -158,6 +161,7 @@ impl ActionRequest {
             ActionPayload::Role(_) => "admins.roles.read",
             ActionPayload::Case(_) => "cases.read",
             ActionPayload::Price(_) => "pricing.read",
+            ActionPayload::Refund(_) => "refunds.read",
             ActionPayload::SupportGrant(_) | ActionPayload::SupportRevoke(_) => "support.read",
             ActionPayload::Node(_) => "nodes.read",
         }
@@ -169,6 +173,7 @@ impl ActionRequest {
             ("support_access.grant", ActionPayload::SupportGrant(_)) => {
                 Some("support.grant.approve")
             }
+            ("payment.refund", ActionPayload::Refund(_)) => Some("payments.refund.approve"),
             ("pricing.publish", ActionPayload::Price(_)) => Some("pricing.publish.approve"),
             ("node.resume", ActionPayload::Node(_)) => Some("nodes.resume.approve"),
             ("case.update", ActionPayload::Case(case_edit::Edit::Close { .. })) => {
@@ -186,6 +191,7 @@ impl ActionRequest {
             ("node.quarantine", ActionPayload::Node(_)) => Ok("nodes.quarantine"),
             ("node.resume", ActionPayload::Node(_)) => Ok("nodes.resume"),
             ("case.update", ActionPayload::Case(edit)) => Ok(edit.permission()),
+            ("payment.refund", ActionPayload::Refund(_)) => Ok("payments.refund"),
             ("pricing.publish", ActionPayload::Price(_)) => Ok("pricing.publish"),
             ("support_access.grant", ActionPayload::SupportGrant(_)) => Ok("support.grant"),
             ("support_access.revoke", ActionPayload::SupportRevoke(_)) => Ok("support.revoke"),
@@ -214,6 +220,7 @@ impl ActionRequest {
             ActionPayload::Price(p) if self.action_type == "pricing.publish" => {
                 return p.validate(self);
             }
+            ActionPayload::Refund(p) => return p.validate(self),
             ActionPayload::Role(p) => return p.validate(self),
             ActionPayload::SupportGrant(p) => return p.validate(self),
             ActionPayload::SupportRevoke(p) => return p.validate(self),
@@ -454,6 +461,7 @@ async fn target(tx: &mut Tx<'_>, request: &ActionRequest) -> Result<(i64, String
             roles::target(tx, request, p).await?;
             return Ok((1, "reviewed".into()));
         }
+        ActionPayload::Refund(p) => return refunds::target(tx, request, p).await,
         ActionPayload::Price(p) => return prices::target(tx, request, p).await,
         ActionPayload::Case(edit) => return case_edit::target(tx, request, edit).await,
         ActionPayload::Node(node) => node,
@@ -757,6 +765,17 @@ async fn mutate(
                         m.doc["business_ref"] = json!(p.grant_id);
                         m.doc["state"] = json!("succeeded");
                         why = "Scoped support grant revoked".into();
+                    }
+                    ActionPayload::Refund(p) => {
+                        let checker = text(&m.doc["approvals"][0], "approver_id")?;
+                        let maker = text(&m.doc, "requested_by")?;
+                        let refund = refunds::authorize(
+                            &mut tx, &m.request, p, action, maker, checker, principal,
+                        )
+                        .await?;
+                        m.doc["business_ref"] = json!(refund);
+                        m.doc["state"] = json!("succeeded");
+                        why="Independent refund authorization recorded; merchant confirmation pending".into();
                     }
                     ActionPayload::Price(p) => {
                         let checker = text(&m.doc["approvals"][0], "approver_id")?;

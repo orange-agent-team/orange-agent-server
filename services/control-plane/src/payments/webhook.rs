@@ -99,6 +99,40 @@ pub(super) async fn receive(
     {
         return Err(Error::Forbidden);
     }
+    if matches!(
+        v.kind.as_str(),
+        "refund.created" | "refund.updated" | "refund.failed"
+    ) {
+        if v.data.object.object != "refund" || !stripe::identifier(&v.data.object.id, "re_") {
+            return Err(Error::Invalid);
+        }
+        let Some(m) = v.data.object.metadata.as_ref() else {
+            return Ok(StatusCode::NO_CONTENT.into_response());
+        };
+        let (Some(refund), Some(order), Some(binding)) = (
+            m.get("orange_refund_id"),
+            m.get("orange_order_id"),
+            m.get("orange_binding"),
+        ) else {
+            return Ok(StatusCode::NO_CONTENT.into_response());
+        };
+        let mut tx = api.identity.pool.begin().await?;
+        let ours=sqlx::query("SELECT r.refund_id FROM test_refund_orders r JOIN test_checkout_orders o USING(order_id) WHERE r.refund_id=$1 AND r.order_id=$2 AND o.merchant_id=$3 AND r.dispatch_binding=$4 FOR UPDATE OF r")
+            .bind(refund).bind(order).bind(&api.provider.merchant).bind(binding).fetch_optional(&mut *tx).await?;
+        if ours.is_some() {
+            let inserted=sqlx::query("INSERT INTO test_stripe_refund_events(merchant_id,event_id,kind,refund_id,provider_refund_id,raw_sha256) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING")
+                .bind(&api.provider.merchant).bind(&v.id).bind(&v.kind).bind(refund).bind(&v.data.object.id).bind(hex::encode(Sha256::digest(&body))).execute(&mut *tx).await?.rows_affected();
+            let prior:(String,String,String)=sqlx::query_as("SELECT kind,refund_id,provider_refund_id FROM test_stripe_refund_events WHERE merchant_id=$1 AND event_id=$2").bind(&api.provider.merchant).bind(&v.id).fetch_one(&mut *tx).await?;
+            if prior != (v.kind, refund.clone(), v.data.object.id) {
+                return Err(Error::Conflict);
+            }
+            if inserted == 1 {
+                sqlx::query("UPDATE test_refund_orders SET next_check=clock_timestamp() WHERE refund_id=$1 AND state IN('dispatching','pending','unknown')").bind(refund).execute(&mut *tx).await?;
+            }
+        }
+        tx.commit().await?;
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    }
     if !matches!(
         v.kind.as_str(),
         "checkout.session.completed"

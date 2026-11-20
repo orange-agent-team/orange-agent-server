@@ -46,6 +46,10 @@ pub fn router(identity: AdminIdentity) -> Router {
             "/admin/v1/session/permissions",
             get(audit::scope_permissions),
         )
+        .route(
+            "/admin/v1/test-refunds/{case_id}",
+            get(super::actions::refunds::review),
+        )
         .route("/admin/v1/overview", get(overview))
         .route(
             "/admin/v1/price-drafts",

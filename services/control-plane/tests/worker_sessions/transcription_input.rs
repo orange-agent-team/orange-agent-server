@@ -1,4 +1,6 @@
 use super::*;
+#[path = "../support/purchase_lot.rs"]
+mod purchase_lot;
 use axum::{
     Router,
     body::{Body, to_bytes},
@@ -21,7 +23,7 @@ struct Buyer {
     origin: String,
 }
 impl Buyer {
-    async fn create(db: &Store, origin: &str) -> Self {
+    async fn create(db: &Store, origin: &str, gift: i64) -> Self {
         let owner = Uuid::new_v4().to_string();
         let user = Uuid::new_v4().to_string();
         let token = Uuid::new_v4().simple().to_string();
@@ -31,8 +33,9 @@ impl Buyer {
             .execute(db.pool())
             .await
             .expect("buyer");
-        sqlx::query("INSERT INTO wallets(owner_id,gift) VALUES($1,10000)")
+        sqlx::query("INSERT INTO wallets(owner_id,gift) VALUES($1,$2)")
             .bind(&owner)
+            .bind(gift)
             .execute(db.pool())
             .await
             .expect("fixture wallet");
@@ -250,11 +253,13 @@ async fn start_resident(
     resident
 }
 async fn balances(db: &Store, owner: &str) -> (i64, i64) {
-    sqlx::query_as("SELECT gift,reserved_gift FROM wallets WHERE owner_id=$1")
-        .bind(owner)
-        .fetch_one(db.pool())
-        .await
-        .expect("actual wallet")
+    sqlx::query_as(
+        "SELECT gift+purchased,reserved_gift+reserved_purchased FROM wallets WHERE owner_id=$1",
+    )
+    .bind(owner)
+    .fetch_one(db.pool())
+    .await
+    .expect("actual wallet")
 }
 async fn run_case(mode: Scenario) {
     let config = PathBuf::from(std::env::var("ORANGE_ASR_PROBE_FILE").expect("probe config"));
@@ -284,8 +289,25 @@ async fn run_case(mode: Scenario) {
             .expect("OIDC"),
     )
     .expect("config");
-    let buyer = Buyer::create(db, &cfg.user_origin).await;
-    let stranger = Buyer::create(db, &cfg.user_origin).await;
+    let resident_funds = matches!(mode, Scenario::Resident | Scenario::ResidentRevoked);
+    let buyer = Buyer::create(db, &cfg.user_origin, if resident_funds { 0 } else { 10000 }).await;
+    let purchased_order = if resident_funds {
+        Some(
+            purchase_lot::credited(
+                db.pool(),
+                &buyer.owner,
+                &buyer.user,
+                "acct_asr_fixture",
+                &Uuid::new_v4().to_string(),
+                10000,
+            )
+            .await,
+        )
+    } else {
+        None
+    };
+
+    let stranger = Buyer::create(db, &cfg.user_origin, 10000).await;
     let identity = UserIdentity::discover(db.pool().clone(), cfg)
         .await
         .expect("actual OIDC discovery");
@@ -826,6 +848,21 @@ async fn run_case(mode: Scenario) {
         .await
         .expect("post-receipt pin release");
         assert_eq!(pins, 0);
+        let lot: (i64, i64, i64) = sqlx::query_as(
+            "SELECT available,job_held,spent FROM test_purchase_lots WHERE order_id=$1",
+        )
+        .bind(purchased_order.expect("original purchase fixture"))
+        .fetch_one(db.pool())
+        .await
+        .expect("actual purchased bucket attribution");
+        assert_eq!(
+            lot,
+            if mode == Scenario::Resident {
+                (7800, 0, 2200)
+            } else {
+                (10000, 0, 0)
+            }
+        );
         process.stop().await;
         drop(conn);
         drop(raw);

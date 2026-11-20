@@ -1,4 +1,8 @@
 //! Actual PostgreSQL, current user HTTP and Stripe wire adapter against an isolated loopback merchant double.
+#[path = "support/purchase_lot.rs"]
+mod purchase_lot;
+#[path = "test_checkout/refunds.rs"]
+mod refunds;
 use axum::{
     Json, Router,
     body::{Body, to_bytes},
@@ -35,6 +39,7 @@ fn config() -> SandboxConfig {
     }
 }
 struct Provider {
+    refunds: refunds::RefundMerchant,
     orders: Mutex<HashMap<String, (String, String)>>,
     posts: AtomicUsize,
     mode: AtomicUsize,
@@ -227,6 +232,7 @@ async fn checkout_unknown_concurrency_raw_signatures_and_authoritative_test_cred
     let b = buyer(&db).await;
     let other = buyer(&db).await;
     let p = Arc::new(Provider {
+        refunds: Default::default(),
         orders: Mutex::new(HashMap::new()),
         posts: AtomicUsize::new(0),
         mode: AtomicUsize::new(0),
@@ -235,6 +241,9 @@ async fn checkout_unknown_concurrency_raw_signatures_and_authoritative_test_cred
         .route("/v1/account", get(account))
         .route("/v1/checkout/sessions", post(create_session))
         .route("/v1/checkout/sessions/{id}", get(retrieve))
+        .route("/v1/charges/{id}", get(refunds::charge))
+        .route("/v1/refunds", get(refunds::list).post(refunds::create))
+        .route("/v1/refunds/{id}", get(refunds::retrieve))
         .with_state(p.clone());
     let socket = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -345,6 +354,7 @@ async fn checkout_unknown_concurrency_raw_signatures_and_authoritative_test_cred
         "cancelled"
     );
     assert_eq!(p.posts.load(Ordering::SeqCst), 0);
+    let mut first_paid = None;
     for (mode, expected) in [
         (0, "open"),
         (1, "unknown"),
@@ -356,6 +366,9 @@ async fn checkout_unknown_concurrency_raw_signatures_and_authoritative_test_cred
     ] {
         p.mode.store(mode, Ordering::SeqCst);
         let id = Uuid::new_v4().to_string();
+        if mode == 0 {
+            first_paid = Some(id.clone());
+        }
         let path = format!("{orders}/{id}");
         let body = json!({"order_id":id,"offer_id":"dev-pack"});
         let mut bad = body.clone();
@@ -504,13 +517,23 @@ async fn checkout_unknown_concurrency_raw_signatures_and_authoritative_test_cred
         p.mode.store(0, Ordering::SeqCst);
         let before = wallet(&db, &b.owner).await;
         let requests = p.posts.load(Ordering::SeqCst);
-        browser_flow(app.clone(),&driver,json!({"origin":origin,"token":b.token,"owner":b.owner,"screenshot":std::env::var("ORANGE_CHECKOUT_SCREENSHOT").expect("screenshot")})).await;
+        browser_flow(app.clone(),&driver,json!({"origin":origin,"token":b.token,"owner":b.owner,"refunds":true,"screenshot":std::env::var("ORANGE_CHECKOUT_SCREENSHOT").expect("screenshot")})).await;
         assert_eq!(p.posts.load(Ordering::SeqCst), requests + 1);
         assert_eq!(
             wallet(&db, &b.owner).await,
             (before.0, before.1, before.2 + 9000)
         );
     }
+    refunds::exercise(
+        &db,
+        &api,
+        &app,
+        &b,
+        &origin,
+        &p,
+        &first_paid.expect("first paid purchase"),
+    )
+    .await;
     stop.send(()).expect("signal shutdown");
     server.await.expect("join fixture");
 }
@@ -533,13 +556,19 @@ async fn browser_flow(app: Router, driver: &str, mut fixture: Value) {
             .await
             .expect("user API")
     });
-    let mut child =
-        tokio::process::Command::new(std::env::var("ORANGE_CHECKOUT_NODE").expect("pinned Node"))
-            .arg(driver)
-            .stdin(std::process::Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .expect("browser driver");
+    let mut child = tokio::process::Command::new(
+        std::env::var(if fixture.get("maker").is_some() {
+            "ORANGE_REFUND_ADMIN_NODE"
+        } else {
+            "ORANGE_CHECKOUT_NODE"
+        })
+        .expect("pinned Node"),
+    )
+    .arg(driver)
+    .stdin(std::process::Stdio::piped())
+    .kill_on_drop(true)
+    .spawn()
+    .expect("browser driver");
     let mut input = child.stdin.take().expect("fixture pipe");
     input
         .write_all(&serde_json::to_vec(&fixture).expect("fixture"))
@@ -553,4 +582,96 @@ async fn browser_flow(app: Router, driver: &str, mut fixture: Value) {
     let _ = stop.send(());
     service.await.expect("local server stopped");
     assert!(status.success(), "real checkout UI");
+}
+
+async fn job_from_wallet(db: &Store, owner: &str, root: &str, held: i64) -> String {
+    use orange_protocol::{InvocationPurpose, SubmitJob};
+    let quote = Uuid::new_v4().to_string();
+    let invocation = Uuid::new_v4().to_string();
+    let projection = "c".repeat(64);
+    sqlx::query("INSERT INTO quotes(quote_id,owner_id,root_budget_id,invocation_id,projection_digest,price_version,max_amount,expires_at) VALUES($1,$2,$3,$4,$5,'lot-reservation-fixture',$6,clock_timestamp()+interval '5 minutes')")
+        .bind(&quote).bind(owner).bind(root).bind(&invocation).bind(&projection).bind(held).execute(db.pool()).await.expect("approved queue fixture");
+    db.submit(
+        owner,
+        &Uuid::new_v4().to_string(),
+        &SubmitJob {
+            quote_id: quote,
+            root_budget_id: root.into(),
+            purpose: InvocationPurpose::Primary,
+            invocation_id: invocation,
+            request_projection_digest: projection,
+        },
+    )
+    .await
+    .expect("normal job reservation")
+    .job_id
+}
+async fn lot(db: &Store, order: &str) -> (i64, i64, i64) {
+    sqlx::query_as("SELECT available,job_held,spent FROM test_purchase_lots WHERE order_id=$1")
+        .bind(order)
+        .fetch_one(db.pool())
+        .await
+        .expect("purchase lot")
+}
+
+#[tokio::test]
+async fn schema_58_purchase_and_job_history_survives_lot_upgrade_and_exact_queue_release() {
+    let url = std::env::var("ORANGE_CHECKOUT_OLD_DATABASE").expect("disposable historic database");
+    assert!(
+        url.rsplit('/')
+            .next()
+            .is_some_and(|v| v.starts_with("orange_checkout_old_"))
+    );
+    let db = Store::connect(&url).await.expect("database");
+    sqlx::migrate::Migrator::with_migrations(
+        sqlx::migrate!()
+            .iter()
+            .filter(|m| m.version <= 58)
+            .cloned()
+            .collect(),
+    )
+    .run(db.pool())
+    .await
+    .expect("schema 58");
+    let b = buyer(&db).await;
+    sqlx::query("UPDATE wallets SET purchased=100 WHERE owner_id=$1")
+        .bind(&b.owner)
+        .execute(db.pool())
+        .await
+        .expect("pre-existing unattributed balance");
+    let a = purchase_lot::credited(db.pool(), &b.owner, &b.user, MERCHANT, "first", 1000).await;
+    let c = purchase_lot::credited(db.pool(), &b.owner, &b.user, MERCHANT, "second", 2000).await;
+    let root = db
+        .create_budget(
+            &b.owner,
+            "lot-root",
+            &orange_protocol::CreateBudget {
+                scope_id: "lots".into(),
+                limit: "10000".to_owned().try_into().expect("limit"),
+            },
+        )
+        .await
+        .expect("budget")
+        .root_budget_id;
+    let historic = job_from_wallet(&db, &b.owner, &root, 1600).await;
+    db.migrate().await.expect("actual migration");
+    db.migrate().await.expect("repeat migrations");
+    assert_eq!(lot(&db, &a).await, (0, 1000, 0));
+    assert_eq!(lot(&db, &c).await, (1500, 500, 0));
+    for _ in 0..2 {
+        db.cancel_queued(&b.owner, &historic, "cancel-old")
+            .await
+            .expect("cancel original job");
+    }
+    assert_eq!(lot(&db, &a).await, (1000, 0, 0));
+    assert_eq!(lot(&db, &c).await, (2000, 0, 0));
+    let later = job_from_wallet(&db, &b.owner, &root, 1300).await;
+    assert_eq!(lot(&db, &a).await, (0, 1000, 0));
+    assert_eq!(lot(&db, &c).await, (1800, 200, 0));
+    db.cancel_queued(&b.owner, &later, "cancel-later")
+        .await
+        .expect("return original lots");
+    assert_eq!(wallet(&db, &b.owner).await, (0, 0, 3100));
+    let total:(i64,i64)=sqlx::query_as("SELECT sum(a.held)::bigint,sum(a.charged)::bigint FROM test_job_lot_allocations a WHERE job_id IN ($1,$2)").bind(historic).bind(later).fetch_one(db.pool()).await.expect("immutable allocations");
+    assert_eq!(total, (2700, 0));
 }

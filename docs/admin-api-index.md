@@ -92,3 +92,5 @@ OIDC登录/回调的完整协议、用户API和云Host等另按整体接口计�
 `GET /admin/v1/transcription-price-drafts` 列出当前管理范围中的转写草稿。`POST` 在同一路径创建草稿，所需权限为 `pricing.draft`。请求包括管理范围、已审核观测编号、每分钟微积分费率和平台费率基点。源音频时长以毫秒计量，整单向上取整。`GET /admin/v1/transcription-price-drafts/{price_id}` 返回节点、提供方、执行配置、不可变条款及审核摘要，读取需要 `pricing.read`。
 
 草稿作者通过既有的 `pricing.publish` 动作提交审核。审批和执行均重读范围权限，只有原审核记录仍然匹配时才发布。指定未来时间的版本在到期时重新核对审批人的权限。已有启用价格时，新草稿不会暗中覆盖旧价格。所有金额均为本地开发积分。实际可报价还要求有效的用户输入授权、预算及当前 Worker 会话能力。[Admin 契约](../contracts/openapi/admin.v1.json)
+
+`GET /admin/v1/test-refunds/{case_id}` 在当前 dev 平台或租户范围内按 `refunds.read` 返回原单、所持微积分、原币最小单位和条款摘要。既有 `payment.refund` 支持开发测试订单的独立财务审批。执行的业务引用是本地退款编号；商户实际结果由退款状态查询返回。[开发退款规则](test-checkout.md)

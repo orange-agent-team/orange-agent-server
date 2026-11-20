@@ -14,6 +14,10 @@ fn accepted_actions_require_their_own_payload_family() {
             json!({"change":"note","case_id":"case","note":"test note"}),
         ),
         (
+            &["payment.refund"],
+            json!({"payment_order_id":"order","amount":{"currency":"USD","minor_units":"100"},"reconciliation_case_id":"case"}),
+        ),
+        (
             &["pricing.publish"],
             json!({"price_version_id":"price","review_report_id":"report","effective_at":"2030-01-01T00:00:00Z"}),
         ),

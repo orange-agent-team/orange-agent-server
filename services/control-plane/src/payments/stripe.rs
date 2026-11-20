@@ -342,3 +342,158 @@ impl Session {
         Ok((&intent.id, &ch.id))
     }
 }
+
+#[derive(Deserialize)]
+pub(super) struct RefundObject {
+    pub id: String,
+    object: String,
+    charge: String,
+    payment_intent: String,
+    amount: i64,
+    currency: String,
+    status: Option<String>,
+    livemode: Option<bool>,
+    metadata: std::collections::BTreeMap<String, String>,
+}
+pub(super) struct RefundTerms {
+    pub refund: String,
+    pub order: String,
+    pub currency: String,
+    pub amount: i64,
+    pub original_amount: i64,
+    pub prior: i64,
+    pub charge: String,
+    pub intent: String,
+    pub binding: String,
+}
+impl RefundObject {
+    pub(super) fn matches(&self, t: &RefundTerms) -> bool {
+        self.object == "refund"
+            && identifier(&self.id, "re_")
+            && self.livemode != Some(true)
+            && self.charge == t.charge
+            && self.payment_intent == t.intent
+            && self.amount == t.amount
+            && self.currency == t.currency
+            && self.metadata.get("orange_refund_id") == Some(&t.refund)
+            && self.metadata.get("orange_order_id") == Some(&t.order)
+            && self.metadata.get("orange_binding") == Some(&t.binding)
+    }
+    pub(super) fn state(&self) -> &str {
+        self.status.as_deref().unwrap_or("unknown")
+    }
+}
+impl Sandbox {
+    pub(super) async fn check_refundable_charge(&self, t: &RefundTerms) -> Result<(), Error> {
+        self.account().await?;
+        if !identifier(&t.charge, "ch_") {
+            return Err(Error::Mismatch);
+        }
+        let v: Charge = receive(
+            self.request(reqwest::Method::GET, &format!("charges/{}", t.charge))?
+                .send()
+                .await
+                .map_err(|_| Error::Unavailable)?,
+        )
+        .await?;
+        if v.object != "charge"
+            || v.id != t.charge
+            || v.payment_intent != t.intent
+            || v.livemode
+            || !v.paid
+            || !v.captured
+            || v.refunded
+            || v.disputed
+            || v.amount != t.original_amount
+            || v.amount_captured != t.original_amount
+            || v.amount_refunded != t.prior
+            || v.currency != t.currency
+        {
+            return Err(Error::Mismatch);
+        }
+        Ok(())
+    }
+    pub(super) async fn create_refund(&self, t: &RefundTerms) -> Result<RefundObject, Error> {
+        let amount = t.amount.to_string();
+        let fields = [
+            ("charge", t.charge.as_str()),
+            ("amount", amount.as_str()),
+            ("metadata[orange_refund_id]", &t.refund),
+            ("metadata[orange_order_id]", &t.order),
+            ("metadata[orange_binding]", &t.binding),
+        ];
+        receive(
+            self.request(reqwest::Method::POST, "refunds")?
+                .header("Idempotency-Key", format!("orange-refund-{}", t.refund))
+                .form(&fields)
+                .send()
+                .await
+                .map_err(|_| Error::Unavailable)?,
+        )
+        .await
+    }
+    pub(super) async fn refund(&self, id: &str) -> Result<RefundObject, Error> {
+        if !identifier(id, "re_") {
+            return Err(Error::Mismatch);
+        }
+        self.account().await?;
+        let v: RefundObject = receive(
+            self.request(reqwest::Method::GET, &format!("refunds/{id}"))?
+                .send()
+                .await
+                .map_err(|_| Error::Unavailable)?,
+        )
+        .await?;
+        if v.id != id {
+            return Err(Error::Mismatch);
+        }
+        Ok(v)
+    }
+    pub(super) async fn find_refund(
+        &self,
+        t: &RefundTerms,
+        after: Option<&str>,
+    ) -> Result<(Option<RefundObject>, Option<String>), Error> {
+        #[derive(Deserialize)]
+        struct Page {
+            object: String,
+            data: Vec<RefundObject>,
+            has_more: bool,
+        }
+        self.account().await?;
+        let mut query = self
+            .request(reqwest::Method::GET, "refunds")?
+            .query(&[("charge", t.charge.as_str()), ("limit", "100")]);
+        if let Some(id) = after {
+            if !identifier(id, "re_") {
+                return Err(Error::Invalid);
+            }
+            query = query.query(&[("starting_after", id)]);
+        }
+        let page: Page = receive(query.send().await.map_err(|_| Error::Unavailable)?).await?;
+        if page.object != "list" || page.data.len() > 100 {
+            return Err(Error::Mismatch);
+        }
+        let next = if page.has_more {
+            Some(
+                page.data
+                    .last()
+                    .filter(|v| identifier(&v.id, "re_") && Some(v.id.as_str()) != after)
+                    .ok_or(Error::Mismatch)?
+                    .id
+                    .clone(),
+            )
+        } else {
+            None
+        };
+        let mut candidates = page
+            .data
+            .into_iter()
+            .filter(|r| r.metadata.get("orange_refund_id") == Some(&t.refund));
+        let found = candidates.next();
+        if candidates.next().is_some() {
+            return Err(Error::Mismatch);
+        }
+        Ok((found, next))
+    }
+}

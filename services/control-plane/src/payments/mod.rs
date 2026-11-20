@@ -1,4 +1,6 @@
 //! Sandbox purchase orders. Only provider-authenticated reconciliation may advance external payment state.
+mod refund_work;
+mod refunds;
 mod stripe;
 mod webhook;
 use crate::auth::{
@@ -77,7 +79,10 @@ impl Payments {
     pub fn router(&self) -> Router {
         Router::new()
             .route("/api/v1/owners/{owner}/credit-offers", get(offers))
-            .route("/api/v1/owners/{owner}/checkout-orders", post(create))
+            .route(
+                "/api/v1/owners/{owner}/checkout-orders",
+                get(history).post(create),
+            )
             .route(
                 "/api/v1/owners/{owner}/checkout-orders/{order}",
                 get(get_order),
@@ -93,6 +98,22 @@ impl Payments {
             .route(
                 "/api/v1/owners/{owner}/checkout-orders/{order}/reconcile",
                 post(reconcile),
+            )
+            .route(
+                "/api/v1/owners/{owner}/checkout-orders/{order}/refundable",
+                get(refunds::eligibility),
+            )
+            .route(
+                "/api/v1/owners/{owner}/checkout-orders/{order}/refunds",
+                post(refunds::apply),
+            )
+            .route(
+                "/api/v1/owners/{owner}/refunds/{refund}",
+                get(refunds::get_refund),
+            )
+            .route(
+                "/api/v1/owners/{owner}/refunds/{refund}/cancel",
+                post(refunds::cancel_refund),
             )
             .route("/api/v1/payment-events/stripe-test", post(webhook::receive))
             .layer(DefaultBodyLimit::max(256 * 1024))
@@ -278,6 +299,57 @@ async fn create(
     }
     g.finish().await?;
     Ok(private((StatusCode::CREATED, Json(result)).into_response()))
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HistoryQuery {
+    after: Option<String>,
+    limit: Option<i64>,
+}
+async fn history(
+    State(api): State<Arc<Payments>>,
+    Path(owner): Path<String>,
+    h: HeaderMap,
+    q: Result<axum::extract::Query<HistoryQuery>, axum::extract::rejection::QueryRejection>,
+) -> Result<Response, Error> {
+    let mut g = api.guard(&h, &owner, false).await?;
+    let axum::extract::Query(q) = q.map_err(|_| Error::Invalid)?;
+    let limit = q.limit.unwrap_or(20);
+    if !(1..=50).contains(&limit) {
+        return Err(Error::Invalid);
+    }
+    let user = g.view().user_id.clone();
+    let merchant = &api.provider.merchant;
+    let after: Option<i64> = if let Some(id) = q.after {
+        if !valid_order(&id) {
+            return Err(Error::Invalid);
+        }
+        Some(sqlx::query_scalar("SELECT order_sequence FROM test_checkout_orders WHERE order_id=$1 AND owner_id=$2 AND requester_id=$3 AND merchant_id=$4").bind(id).bind(&owner).bind(&user).bind(merchant).fetch_optional(&mut **g.transaction()).await?.ok_or(Error::NotFound)?)
+    } else {
+        None
+    };
+    let rows=sqlx::query("SELECT o.order_id,o.state,f.offer_id,f.currency,f.amount_minor,f.microcredits,coalesce(o.dispatched_at<clock_timestamp()-interval '30 seconds',false) AS abandoned
+        FROM test_checkout_orders o JOIN test_credit_offers f USING(merchant_id,offer_id) WHERE o.owner_id=$1 AND o.requester_id=$2 AND o.merchant_id=$3 AND ($4::bigint IS NULL OR o.order_sequence<$4) ORDER BY o.order_sequence DESC LIMIT $5")
+       .bind(&owner).bind(&user).bind(merchant).bind(after).bind(limit+1).fetch_all(&mut **g.transaction()).await?;
+    let visible = &rows[..rows.len().min(limit as usize)];
+    let mut data = Vec::new();
+    for r in visible {
+        let state: &str = r.try_get("state")?;
+        data.push(serde_json::json!({"order_id":r.try_get::<&str,_>("order_id")?,"offer":offer(r)?,"state":if state=="dispatching"&&r.try_get::<bool,_>("abandoned")?{"unknown"}else{state}}));
+    }
+    let cursor = if rows.len() > visible.len() {
+        visible
+            .last()
+            .map(|r| r.try_get::<&str, _>("order_id"))
+            .transpose()?
+    } else {
+        None
+    };
+    g.finish().await?;
+    Ok(private(
+        Json(serde_json::json!({"owner_id":owner,"data":data,"next_cursor":cursor}))
+            .into_response(),
+    ))
 }
 async fn get_order(
     State(api): State<Arc<Payments>>,
