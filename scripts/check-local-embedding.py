@@ -28,7 +28,7 @@ ENV = dict(os.environ, PATH=str(CARGO.parent) + os.pathsep + os.environ["PATH"])
 PROFILE = PIN["model_version"]
 
 
-def request(session, data, token=None):
+def request(session, data, token=None, path="/v1/embeddings"):
     conn = http.client.HTTPConnection("localhost", timeout=100)
     conn.sock = socket.socket(socket.AF_UNIX)
     conn.sock.settimeout(100)
@@ -36,7 +36,7 @@ def request(session, data, token=None):
     try:
         conn.request(
             "POST",
-            "/v1/embeddings",
+            path,
             json.dumps(data),
             {
                 "Authorization": "Bearer "
@@ -87,7 +87,7 @@ def check(session):
         code, body = request(session, data, token)
         assert code == status and "data" not in body and "error" in body, (code, status)
     # This fixed tokenizer maps each standalone 'cat' to one token, plus two boundary tokens.
-    edge_text = " ".join(["cat"] * 510)
+    edge_text = " ".join(["cat"] * 507)
     code, edge = request(session, dict(payload, input=edge_text))
     assert code == 200 and edge["usage"]["prompt_tokens"] == 512
     code, overflow = request(session, dict(payload, input=[texts[0], edge_text + " "]))
@@ -99,6 +99,26 @@ def check(session):
         len(chinese["data"]) == 2
         and chinese["data"][0]["embedding"] != chinese["data"][1]["embedding"]
     )
+
+    def count(values):
+        code, receipt = request(
+            session, dict(payload, input=values), path="/v1/embeddings/input_tokens"
+        )
+        assert (
+            code == 200
+            and "data" not in receipt
+            and len(receipt["projection_digest"]) == 64
+        )
+        assert receipt["input_tokens"] == sum(receipt["item_tokens"])
+        return receipt
+
+    projected = count(["hello", "passage: 东京"])
+    assert projected == count(["query: hello", "passage: 东京"])
+    assert (
+        projected["projection_digest"]
+        != count(["passage: hello", "passage: 东京"])["projection_digest"]
+    )
+    assert count([edge_text])["item_tokens"] == [512]
     first = client(session, texts)
     rows = [r["embedding"] for r in first["data"]]
     assert len(rows) == 3 and all(len(v) == 384 for v in rows)
@@ -119,6 +139,8 @@ def check(session):
     )
     single = [request(session, dict(payload, input=text))[1] for text in texts]
     counts = [r["usage"]["prompt_tokens"] for r in single]
+    trusted_count = count(batch)
+    assert trusted_count["item_tokens"] == [counts[i % 3] for i in range(32)]
     assert complete["usage"] == {
         "prompt_tokens": sum(counts[i % 3] for i in range(32)),
         "total_tokens": sum(counts[i % 3] for i in range(32)),
@@ -127,6 +149,8 @@ def check(session):
         "dimensions": 384,
         "max_batch": 32,
         "single_counts": counts,
+        "preflight_tokens": trusted_count["input_tokens"],
+        "projection_digest": trusted_count["projection_digest"],
         "batch_usage": complete["usage"],
         "cosine_related": similarity(rows[0], rows[1]),
         "cosine_unrelated": similarity(rows[0], rows[2]),

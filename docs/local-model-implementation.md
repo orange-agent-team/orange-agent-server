@@ -44,7 +44,7 @@ python3 scripts/check-real-agent.py --model-protocol responses
 
 ## MP-03 本地向量接口
 
-固定的 `multilingual-e5-small-onnx-cpu-v1` 配置通过私有 Unix socket 提供 `POST /v1/embeddings`，Rust 客户端入口为 `LlamaClient::embed`。请求可传单个文本或 1 至 32 个文本，编码为 float，输出维度 384。每段上限 512 个 token，包含模型特殊 token。检索调用方应给查询和候选段落分别使用发布者规定的 query 与 passage 前缀。[发布者模型说明](https://huggingface.co/intfloat/multilingual-e5-small)
+固定的 `multilingual-e5-small-onnx-cpu-v1` 配置通过私有 Unix socket 提供 `POST /v1/embeddings`，Rust 客户端入口为 `LlamaClient::embed`。请求可传单个文本或 1 至 32 个文本，编码为 float，输出维度 384。每段上限 512 个 token，包含模型特殊 token。显式的 query 与 passage 前缀按原文保留，普通文本默认补上 query 前缀。私有计量扩展 `POST /v1/embeddings/input_tokens` 返回规范输入摘要、逐项和整批计数。计量包含前缀和边界 token，排除批内补齐。计数本身不执行向量计算。[发布者模型说明](https://huggingface.co/intfloat/multilingual-e5-small)
 
 E04 在本地私有目录创建套接字，将临时凭据经启动者的专用管道交付。每次请求调用一个固定 E09 CPU 子进程，核对 ONNX 与 tokenizer 的完整 SHA-256，再对整批执行平均池化和 L2 归一化。Rust 核对索引、行数、固定维度、有限数值、单位范数和用量。单槽被占用时返回 429。输入含过长段落时返回 422 并拒绝整批。实际分词数汇总为 usage，开发配置未接入资金账本。
 

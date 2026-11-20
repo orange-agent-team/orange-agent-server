@@ -35,7 +35,21 @@ impl EmbeddingRequest {
             TextInput::Batch(b) => b,
         };
         validate_texts(&texts)?;
-        Ok(texts)
+        let mut projected = Vec::with_capacity(texts.len());
+        for text in texts {
+            if let Some(content) = text
+                .strip_prefix("query: ")
+                .or_else(|| text.strip_prefix("passage: "))
+            {
+                if content.trim().is_empty() {
+                    return Err(ModelError::Invalid);
+                }
+                projected.push(text);
+            } else {
+                projected.push(format!("query: {text}"));
+            }
+        }
+        Ok(projected)
     }
 }
 pub fn validate_texts(texts: &[String]) -> Result<(), ModelError> {

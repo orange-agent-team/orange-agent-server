@@ -24,9 +24,7 @@ def verified_bytes(root, name, spec):
     return data
 
 
-def infer(root, profile, texts):
-    import numpy as np
-    import onnxruntime as ort
+def infer(root, profile, texts, count_only):
     from tokenizers import Tokenizer
 
     files = profile["files"]
@@ -39,6 +37,12 @@ def infer(root, profile, texts):
     lengths = [len(item.ids) for item in encodings]
     if max(lengths) > profile["max_tokens_per_text"]:
         raise OversizedText
+    if count_only:
+        return {"lengths": lengths}
+
+    import numpy as np
+    import onnxruntime as ort
+
     width = max(lengths)
     pad = tokenizer.token_to_id("<pad>")
     if pad is None:
@@ -91,7 +95,7 @@ def main():
         or not all(isinstance(t, str) and t.strip() for t in texts)
     ):
         raise ValueError("input")
-    return infer(Path(sys.argv[1]), profile, texts)
+    return infer(Path(sys.argv[1]), profile, texts, request["count_only"])
 
 
 if __name__ == "__main__":

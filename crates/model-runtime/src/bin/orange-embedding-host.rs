@@ -3,7 +3,7 @@
 mod local {
     use axum::{
         Json, Router,
-        extract::{DefaultBodyLimit, Request, State, rejection::JsonRejection},
+        extract::{DefaultBodyLimit, MatchedPath, Request, State, rejection::JsonRejection},
         http::{StatusCode, header},
         middleware::{self, Next},
         response::{IntoResponse, Response},
@@ -13,7 +13,7 @@ mod local {
         ModelError,
         embeddings::{BatchResult, EmbeddingRequest, PROFILE},
     };
-    use serde::Deserialize;
+    use serde::{Deserialize, Serialize};
     use serde_json::{Value, json};
     use sha2::{Digest, Sha256};
     use std::{
@@ -72,6 +72,18 @@ mod local {
         next.run(req).await
     }
 
+    const COUNT_ROUTE: &str = "/v1/embeddings/input_tokens";
+    #[derive(Serialize)]
+    #[serde(untagged)]
+    enum Output {
+        Batch(BatchResult),
+        Counts {
+            model: &'static str,
+            projection_digest: String,
+            item_tokens: Vec<u64>,
+            input_tokens: u64,
+        },
+    }
     #[derive(Deserialize)]
     #[serde(untagged, deny_unknown_fields)]
     enum RunnerResult {
@@ -79,15 +91,22 @@ mod local {
             lengths: Vec<u64>,
             vectors: Vec<Vec<f32>>,
         },
+        Counts {
+            lengths: Vec<u64>,
+        },
         Error {
             error: String,
         },
     }
 
-    async fn run(host: Host, texts: Vec<String>) -> Result<BatchResult, Failure> {
+    async fn run(host: Host, texts: Vec<String>, count_only: bool) -> Result<Output, Failure> {
         let count = texts.len();
-        let frame = serde_json::to_vec(&json!({"profile":host.pin,"texts":texts}))
-            .map_err(|_| unavailable())?;
+        let projection_digest =
+            orange_protocol::request_digest("embedding.input.v1", &(&host.pin, &texts))
+                .map_err(|_| unavailable())?;
+        let frame =
+            serde_json::to_vec(&json!({"profile":host.pin,"texts":texts,"count_only":count_only}))
+                .map_err(|_| unavailable())?;
         if frame.len() > 262144 {
             return Err(Failure(StatusCode::PAYLOAD_TOO_LARGE, "batch_too_large"));
         }
@@ -123,13 +142,27 @@ mod local {
                 return Err(unavailable());
             }
             match serde_json::from_slice(&data).map_err(|_| unavailable())? {
-                RunnerResult::Complete { lengths, vectors } => {
-                    BatchResult::from_runner(vectors, &lengths, count).map_err(|_| unavailable())
+                RunnerResult::Complete { lengths, vectors } if !count_only => {
+                    BatchResult::from_runner(vectors, &lengths, count)
+                        .map(Output::Batch)
+                        .map_err(|_| unavailable())
+                }
+                RunnerResult::Counts { lengths }
+                    if count_only
+                        && lengths.len() == count
+                        && lengths.iter().all(|n| (1..=512).contains(n)) =>
+                {
+                    Ok(Output::Counts {
+                        model: PROFILE,
+                        input_tokens: lengths.iter().sum(),
+                        item_tokens: lengths,
+                        projection_digest,
+                    })
                 }
                 RunnerResult::Error { error } if error == "text_too_long" => {
                     Err(Failure(StatusCode::UNPROCESSABLE_ENTITY, "text_too_long"))
                 }
-                RunnerResult::Error { .. } => Err(unavailable()),
+                _ => Err(unavailable()),
             }
         };
         let result = tokio::time::timeout(Duration::from_secs(90), work)
@@ -143,8 +176,9 @@ mod local {
 
     async fn embed(
         State(host): State<Host>,
+        path: MatchedPath,
         body: Result<Json<EmbeddingRequest>, JsonRejection>,
-    ) -> Result<Json<BatchResult>, Failure> {
+    ) -> Result<Json<Output>, Failure> {
         let Json(request) = body.map_err(|e| Failure(e.status(), "invalid_embedding_request"))?;
         let texts = request.into_texts().map_err(|e| match e {
             ModelError::Limit => Failure(StatusCode::PAYLOAD_TOO_LARGE, "batch_too_large"),
@@ -158,7 +192,7 @@ mod local {
         // A disconnected HTTP client cannot return a still-running slot to the host.
         tokio::spawn(async move {
             let _permit = permit;
-            run(host, texts).await
+            run(host, texts, path.as_str() == COUNT_ROUTE).await
         })
         .await
         .map_err(|_| unavailable())?
@@ -192,6 +226,7 @@ mod local {
         };
         let app = Router::new()
             .route("/v1/embeddings", post(embed))
+            .route(COUNT_ROUTE, post(embed))
             .layer(DefaultBodyLimit::max(256 * 1024))
             .layer(middleware::from_fn_with_state(host.clone(), authorize))
             .with_state(host.clone());
