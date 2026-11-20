@@ -128,6 +128,66 @@
             }
           }
         }
+      },
+      "get": {
+        "operationId": "listOriginalTestOrders",
+        "security": [
+          {
+            "UserSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "owner",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized test-merchant state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestOrderPage"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request rejected or evidence unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/owners/{owner}/checkout-orders/{order}": {
@@ -1037,6 +1097,72 @@
           "max_refundable_minor",
           "unspent_microcredits",
           "pending_refund_id"
+        ]
+      },
+      "TestOrderSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "order_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "state": {
+            "enum": [
+              "created",
+              "cancelled",
+              "dispatching",
+              "unknown",
+              "open",
+              "expired",
+              "paid_review",
+              "credited",
+              "review_required"
+            ]
+          },
+          "offer": {
+            "$ref": "#/components/schemas/TestCreditOffer"
+          }
+        },
+        "required": [
+          "order_id",
+          "state",
+          "offer"
+        ]
+      },
+      "TestOrderPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "owner_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+          },
+          "data": {
+            "type": "array",
+            "maxItems": 50,
+            "items": {
+              "$ref": "#/components/schemas/TestOrderSummary"
+            }
+          },
+          "next_cursor": {
+            "oneOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "owner_id",
+          "data",
+          "next_cursor"
         ]
       }
     }
