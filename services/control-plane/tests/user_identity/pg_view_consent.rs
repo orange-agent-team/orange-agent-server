@@ -80,6 +80,54 @@ async fn scoped_source_reads_require_live_run_and_grant_at_delivery() {
     assert_eq!(code, StatusCode::OK);
     let run = Uuid::new_v4().to_string();
     sqlx::query("INSERT INTO cloud_runs(run_id,owner_id,user_id,request_key,request_digest,root_budget_id,input_artifact_id,input_version_id,status) VALUES($1,$2,$2,'test',$3,$4,$5,$6,'running')").bind(&run).bind(&f.user).bind("a".repeat(64)).bind(budget["root_budget_id"].as_str().expect("budget")).bind(input.artifact_id).bind(input.version_id).execute(&f.pool).await.expect("fixture running Run");
+    if let Ok(driver) = std::env::var("ORANGE_CN05_BROWSER") {
+        use tokio::io::AsyncWriteExt;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test listener");
+        let addr = listener.local_addr().expect("address");
+        let app = f.router.clone();
+        let serving =
+            tokio::spawn(async move { axum::serve(listener, app).await.expect("serve test API") });
+        let dir =
+            std::path::PathBuf::from(std::env::var("ORANGE_CN05_EVIDENCE").expect("evidence"));
+        let mut child =
+            tokio::process::Command::new(std::env::var("ORANGE_CN05_NODE").expect("node"))
+                .arg(driver)
+                .env_clear()
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .kill_on_drop(true)
+                .spawn()
+                .expect("Chrome driver");
+        let packet = json!({"api":format!("http://{addr}"),"origin":f.identity.config.user_origin,"token":f.token,"run":run,"screenshot":dir.join("rows.png")});
+        let mut input = child.stdin.take().expect("private pipe");
+        input
+            .write_all(&serde_json::to_vec(&packet).expect("JSON"))
+            .await
+            .expect("send private fixture");
+        drop(input);
+        let out = tokio::time::timeout(
+            std::time::Duration::from_secs(120),
+            child.wait_with_output(),
+        )
+        .await
+        .expect("driver deadline")
+        .expect("browser");
+        serving.abort();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let receipt: Value = serde_json::from_slice(&out.stdout).expect("browser receipt");
+        assert_eq!(
+            receipt,
+            json!({"approved":true,"listed":true,"described":true,"queried":true,"revoked_after_reload":true})
+        );
+        std::fs::write(dir.join("browser.json"), out.stdout).expect("save receipt");
+    }
     let base = format!("/api/v1/agent/runs/{run}/connectors/postgres");
     assert_eq!(
         request(&other, "GET", &base, None, headers(&other)).await.0,
