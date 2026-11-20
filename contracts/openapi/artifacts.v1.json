@@ -1003,7 +1003,14 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/SubmitTextJob"
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/SubmitTextJob"
+                  },
+                  {
+                    "$ref": "#/components/schemas/SubmitTranscriptionJob"
+                  }
+                ]
               }
             }
           }
