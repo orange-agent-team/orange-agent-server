@@ -61,7 +61,13 @@ async fn migrate_populated_single_turn_database_without_replaying_effects() {
            OR t.invocation_id<>j.invocation_id OR j.quote_id<>jt.quote_id OR q.input_version_id<>t.version_id OR i.artifact_id<>t.artifact_id OR i.projection_digest<>t.projection_digest")
         .fetch_one(pool).await.expect("exact existing inputs and costs");
     assert_eq!(mismatches, 0);
-    let report = json!({"old_version":40,"new_version":41,"first_turns":proposals,"quotes":quotes,"jobs":jobs,"finals":finals,"tool_requests":tools,
+    let actual_version: i64 =
+        sqlx::query_scalar("SELECT max(version) FROM _sqlx_migrations WHERE success")
+            .fetch_one(pool)
+            .await
+            .expect("installed schema version");
+    assert!(actual_version >= 41);
+    let report = json!({"old_version":40,"turn_migration":41,"new_version":actual_version,"first_turns":proposals,"quotes":quotes,"jobs":jobs,"finals":finals,"tool_requests":tools,
         "original_unknown":uncertain,"implicit_continuations":0,"mapping_mismatches":mismatches,"repeat_migration":true});
     let output = PathBuf::from(std::env::var("ORANGE_CLOUD_UPGRADE_REPORT").expect("owned report"));
     std::fs::write(output, serde_json::to_vec_pretty(&report).expect("report"))

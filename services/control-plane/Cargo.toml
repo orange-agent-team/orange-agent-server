@@ -78,6 +78,9 @@ prost.workspace = true
 opendal.workspace = true
 libc.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+rustix.workspace = true
+
 [dev-dependencies]
 orange-model-runtime.workspace = true
 reqwest.workspace = true

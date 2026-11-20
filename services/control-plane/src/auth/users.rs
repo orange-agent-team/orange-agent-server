@@ -24,6 +24,7 @@ pub struct UserIdentity {
     pub pool: PgPool,
     pub config: Arc<UserOidcConfig>,
     provider: OidcProvider,
+    pub pg_sources: crate::pg_view_sources::Sources,
 }
 pub struct UserLoginStart {
     pub authorization_url: String,
@@ -87,6 +88,7 @@ impl UserIdentity {
         Ok(Self {
             pool,
             config: Arc::new(config),
+            pg_sources: Default::default(),
             provider,
         })
     }

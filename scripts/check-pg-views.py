@@ -2,6 +2,7 @@
 """Exercise CN-05 against a disposable source and a dedicated PostgreSQL login."""
 import argparse
 import os
+import json
 from pathlib import Path
 import secrets
 import shutil
@@ -13,6 +14,7 @@ from owned_postgres import database
 root = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser()
 parser.add_argument("--database-url-file", type=Path, required=True)
+parser.add_argument("--identity-config", required=True, type=Path)
 args = parser.parse_args()
 role = "cn05_" + uuid.uuid4().hex
 password = secrets.token_hex(32)
@@ -46,5 +48,13 @@ try:
         subprocess.run([cargo,"test","--locked","--offline","-p","orange-control-plane","--features","pg-view-tests","--test","pg_views"],
                        cwd=root,env=dict(os.environ, PATH=str(cargo.parent)+os.pathsep+os.environ["PATH"],
                                          ORANGE_VIEW_FIXTURE_ADMIN=url, ORANGE_VIEW_FIXTURE_READER=reader),check=True)
+        sql(name, f"GRANT SELECT ON source.sales TO {role}")
+        registration = {"database": name, "read_role": role, "views": {"sales": {"schema": "source", "relation": "sales", "columns": {"name": "text", "seq":"int8"}, "paging_key":"seq"}}}
+        source = {"source_id": "sales-db", "address":"127.0.0.1", "port":base.port or 5432, "registration": registration, "password":password}
+        with database(args.database_url_file, "orange_view_app_") as (_, platform):
+            subprocess.run([cargo,"test","--locked","--offline","-p","orange-control-plane","--features","pg-view-tests,integration-tests","--test","user_identity","pg_consent::scoped_source_reads"],
+                cwd=root,env=dict(os.environ, PATH=str(cargo.parent)+os.pathsep+os.environ["PATH"], ORANGE_TEST_DATABASE_URL=platform,
+                ORANGE_TEST_USER_CONFIG_FILE=str(args.identity_config.resolve()), ORANGE_VIEW_FIXTURE_ADMIN=url,ORANGE_VIEW_FIXTURE_CONFIG=json.dumps(source)),check=True)
+
 finally:
     sql(base.path[1:], f"DROP ROLE {role}")

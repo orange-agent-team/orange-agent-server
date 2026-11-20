@@ -9,6 +9,7 @@ mod cloud_tools;
 pub mod events;
 pub mod http;
 pub mod meter_bootstrap;
+pub mod pg_view_sources;
 pub mod pg_views;
 pub mod queue;
 pub mod store;

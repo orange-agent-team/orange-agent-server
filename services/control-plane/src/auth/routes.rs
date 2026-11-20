@@ -18,6 +18,8 @@ pub async fn expire_cloud_workspaces(pool: &sqlx::PgPool) -> Result<usize, sqlx:
     }
     Ok(count)
 }
+#[path = "pg_connectors.rs"]
+mod pg_connectors;
 #[path = "support.rs"]
 mod support;
 use super::{
@@ -46,6 +48,18 @@ use serde::Deserialize;
 use std::sync::Arc;
 pub fn router(identity: UserIdentity) -> Router {
     Router::new()
+        .route(
+            "/api/v1/agent/runs/{run}/connectors/postgres",
+            get(pg_connectors::list).post(pg_connectors::grant),
+        )
+        .route(
+            "/api/v1/agent/runs/{run}/connectors/postgres/{grant}",
+            axum::routing::delete(pg_connectors::revoke),
+        )
+        .route(
+            "/api/v1/agent/runs/{run}/connectors/postgres/{grant}/actions",
+            axum::routing::post(pg_connectors::perform),
+        )
         .route(
             "/api/v1/agent/workspace-capacity",
             get(cloud_runs::capacity),

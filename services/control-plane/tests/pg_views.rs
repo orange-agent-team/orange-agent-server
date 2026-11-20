@@ -9,7 +9,7 @@ fn action(value: Value) -> Action {
 }
 fn page(columns: Value, after: Option<i64>) -> Action {
     action(
-        json!({"action":"query_view","view_id":"sales","columns":columns,"after":after,"limit":1}),
+        json!({"action":"query_view","view_id":"sales","columns":columns,"after":after.map(|n|n.to_string()),"limit":1}),
     )
 }
 
@@ -33,6 +33,12 @@ async fn approved_source_view_uses_actual_read_role_and_bounded_queries() {
     let view = View {
         schema: "source".into(),
         relation: "sales".into(),
+        relation_oid: sqlx::query_scalar::<_, i64>("SELECT 'source.sales'::regclass::oid::bigint")
+            .fetch_one(&admin)
+            .await
+            .expect("relation")
+            .try_into()
+            .expect("oid"),
         definition_sha256: hex::encode(Sha256::digest(def.as_bytes())),
         columns: BTreeMap::from([
             ("seq".into(), "int8".into()),
@@ -47,7 +53,7 @@ async fn approved_source_view_uses_actual_read_role_and_bounded_queries() {
     };
     let grant = BTreeSet::from(["sales".into()]);
     let listed = registry
-        .execute(&reader, &grant, Action::ListViews)
+        .execute(&reader, &grant, Action::ListViews {})
         .await
         .expect("authorized list");
     assert_eq!(listed["data"]["view_ids"], json!(["sales"]));
@@ -71,7 +77,7 @@ async fn approved_source_view_uses_actual_read_role_and_bounded_queries() {
         .expect("first page");
     assert_eq!(
         batch,
-        json!({"kind":"external_untrusted_data","data":{"rows":[{"name":"橙子"}],"next_after":10}})
+        json!({"kind":"external_untrusted_data","data":{"rows":[{"name":"橙子"}],"next_after":"10"}})
     );
     let batch = registry
         .execute(&reader, &grant, page(json!(["name"]), Some(10)))
@@ -89,7 +95,7 @@ async fn approved_source_view_uses_actual_read_role_and_bounded_queries() {
             .execute(&reader, &grant, filtered)
             .await
             .expect("bound equality")["data"]["rows"],
-        json!([{"seq":10}])
+        json!([{"seq":"10"}])
     );
     assert!(serde_json::from_value::<Action>(json!({"action":"query_view","view_id":"sales","sql":"select 1","columns":["name"],"limit":1})).is_err());
     assert!(matches!(
@@ -99,7 +105,7 @@ async fn approved_source_view_uses_actual_read_role_and_bounded_queries() {
         Err(Error::Denied)
     ));
     assert!(matches!(
-        registry.execute(&admin, &grant, Action::ListViews).await,
+        registry.execute(&admin, &grant, Action::ListViews {}).await,
         Err(Error::Denied)
     ));
     assert!(matches!(
@@ -128,7 +134,7 @@ async fn approved_source_view_uses_actual_read_role_and_bounded_queries() {
     let (registry_copy, pool, scope) = (registry.clone(), reader.clone(), grant.clone());
     let pending = tokio::spawn(async move {
         registry_copy
-            .execute(&pool, &scope, Action::ListViews)
+            .execute(&pool, &scope, Action::ListViews {})
             .await
     });
     tokio::time::timeout(std::time::Duration::from_secs(3),async{
@@ -144,7 +150,9 @@ async fn approved_source_view_uses_actual_read_role_and_bounded_queries() {
         Err(Error::Changed)
     ));
     assert!(matches!(
-        registry.execute(&reader, &grant, Action::ListViews).await,
+        registry
+            .execute(&reader, &grant, Action::ListViews {})
+            .await,
         Err(Error::Changed)
     ));
     sqlx::query("CREATE OR REPLACE VIEW source.sales AS SELECT seq,name FROM source.orders")
@@ -152,7 +160,7 @@ async fn approved_source_view_uses_actual_read_role_and_bounded_queries() {
         .await
         .expect("restore approved definition");
     registry
-        .execute(&reader, &grant, Action::ListViews)
+        .execute(&reader, &grant, Action::ListViews {})
         .await
         .expect("restored view is readable");
     let role = &registry.read_role;
@@ -173,6 +181,26 @@ async fn approved_source_view_uses_actual_read_role_and_bounded_queries() {
             .await
             .is_err()
     );
+    sqlx::query("DROP VIEW source.sales")
+        .execute(&admin)
+        .await
+        .expect("remove fixture view");
+    sqlx::query("CREATE VIEW source.sales AS SELECT seq,name FROM source.orders")
+        .execute(&admin)
+        .await
+        .expect("recreate same definition");
+    sqlx::QueryBuilder::new("GRANT SELECT ON source.sales TO ")
+        .push(role)
+        .build()
+        .execute(&admin)
+        .await
+        .expect("allow source role");
+    assert!(matches!(
+        registry
+            .execute(&reader, &grant, Action::ListViews {})
+            .await,
+        Err(Error::Changed)
+    ));
     reader.close().await;
     admin.close().await;
 }

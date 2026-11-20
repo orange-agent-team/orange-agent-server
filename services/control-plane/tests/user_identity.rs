@@ -20,6 +20,9 @@ use serde_json::{Value, json};
 use sqlx::PgPool;
 use tower::ServiceExt;
 use uuid::Uuid;
+#[cfg(all(unix, feature = "pg-view-tests"))]
+#[path = "user_identity/pg_view_consent.rs"]
+mod pg_consent;
 struct Fixture {
     identity: UserIdentity,
     router: Router,

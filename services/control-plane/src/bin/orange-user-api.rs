@@ -45,6 +45,17 @@ async fn serve(
     let store = Store::connect(&env::var("DATABASE_URL")?).await?;
     store.migrate().await?;
     let identity = UserIdentity::discover(store.pool().clone(), config).await?;
+    #[cfg(unix)]
+    let identity = if let Some(path) = env::var_os("ORANGE_PG_VIEW_SOURCES") {
+        let mut identity = identity;
+        identity.pg_sources =
+            orange_control_plane::pg_view_sources::Sources::load_development_file(
+                std::path::Path::new(&path),
+            )?;
+        identity
+    } else {
+        identity
+    };
     let artifacts = if let Some(root) = env::var_os("ORANGE_ARTIFACT_ROOT") {
         let bytes = env::var("ORANGE_ARTIFACT_BYTE_LIMIT")
             .unwrap_or_else(|_| "1073741824".into())

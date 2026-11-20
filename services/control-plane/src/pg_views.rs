@@ -30,6 +30,7 @@ impl From<sqlx::Error> for Error {
 pub struct View {
     pub schema: String,
     pub relation: String,
+    pub relation_oid: u32,
     pub definition_sha256: String,
     pub columns: BTreeMap<String, String>,
     pub paging_key: String,
@@ -44,7 +45,7 @@ pub struct Registration {
 #[derive(Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Action {
-    ListViews,
+    ListViews {},
     DescribeView {
         view_id: String,
     },
@@ -52,7 +53,7 @@ pub enum Action {
         view_id: String,
         columns: Vec<String>,
         equals: Option<Filter>,
-        after: Option<i64>,
+        after: Option<String>,
         #[serde(default)]
         descending: bool,
         limit: u16,
@@ -84,6 +85,7 @@ impl Registration {
                 || !identifier(&v.schema)
                 || v.schema.starts_with("pg_")
                 || v.schema == "information_schema"
+                || v.relation_oid == 0
                 || !identifier(&v.relation)
                 || !orange_protocol::valid_digest(&v.definition_sha256)
                 || !(1..=32).contains(&v.columns.len())
@@ -136,7 +138,7 @@ impl Registration {
             return Err(Error::Denied);
         }
         let result = match action {
-            Action::ListViews => {
+            Action::ListViews {} => {
                 let mut ids = Vec::new();
                 for id in allowed {
                     let view = self.views.get(id).ok_or(Error::Denied)?;
@@ -185,11 +187,12 @@ impl View {
             .execute(&mut **tx)
             .await
             .map_err(|_| Error::Changed)?;
-        let row=sqlx::query("SELECT pg_get_viewdef(c.oid,false) AS definition, jsonb_object_agg(a.attname,t.typname) AS columns FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace JOIN pg_attribute a ON a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped JOIN pg_type t ON t.oid=a.atttypid AND t.typnamespace='pg_catalog'::regnamespace WHERE n.nspname=$1 AND c.relname=$2 AND c.relkind='v' AND c.relowner<>(SELECT oid FROM pg_roles WHERE rolname=current_user) AND has_table_privilege(c.oid,'SELECT') AND NOT has_table_privilege(c.oid,'INSERT,UPDATE,DELETE,TRUNCATE,TRIGGER') GROUP BY c.oid")
+        let row=sqlx::query("SELECT c.oid::bigint AS oid, pg_get_viewdef(c.oid,false) AS definition, jsonb_object_agg(a.attname,t.typname) AS columns FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace JOIN pg_attribute a ON a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped JOIN pg_type t ON t.oid=a.atttypid AND t.typnamespace='pg_catalog'::regnamespace WHERE n.nspname=$1 AND c.relname=$2 AND c.relkind='v' AND c.relowner<>(SELECT oid FROM pg_roles WHERE rolname=current_user) AND has_table_privilege(c.oid,'SELECT') AND NOT has_table_privilege(c.oid,'INSERT,UPDATE,DELETE,TRUNCATE,TRIGGER') GROUP BY c.oid")
             .bind(&self.schema).bind(&self.relation).fetch_optional(&mut **tx).await?.ok_or(Error::Changed)?;
         let definition: String = row.try_get("definition")?;
         let columns: Value = row.try_get("columns")?;
-        if hex::encode(Sha256::digest(definition.as_bytes())) != self.definition_sha256
+        if row.try_get::<i64, _>("oid")? != i64::from(self.relation_oid)
+            || hex::encode(Sha256::digest(definition.as_bytes())) != self.definition_sha256
             || self
                 .columns
                 .iter()
@@ -204,7 +207,7 @@ impl View {
         tx: &mut Transaction<'_, Postgres>,
         columns: &[String],
         equals: Option<Filter>,
-        after: Option<i64>,
+        after: Option<String>,
         descending: bool,
         limit: u16,
     ) -> Result<Value, Error> {
@@ -216,6 +219,15 @@ impl View {
         {
             return Err(Error::Invalid);
         }
+        let after = after
+            .map(|raw| {
+                let n = raw.parse::<i64>().map_err(|_| Error::Invalid)?;
+                if raw != n.to_string() {
+                    return Err(Error::Invalid);
+                }
+                Ok(n)
+            })
+            .transpose()?;
         let key = format!("v.\"{}\"", self.paging_key);
         let mut q = QueryBuilder::new(
             "SELECT page.k, CASE WHEN octet_length(page.data::text)<=1048576 THEN page.data END AS data FROM (SELECT ",
@@ -228,6 +240,9 @@ impl View {
             q.push_bind(col)
                 .push("::text,")
                 .push(format!("v.\"{col}\""));
+            if self.columns[col] == "int8" {
+                q.push("::text");
+            }
         }
         q.push(") AS data FROM ")
             .push(self.relation_sql())
@@ -268,7 +283,7 @@ impl View {
                 return Err(Error::Changed);
             }
             if rows.len() == usize::from(limit) {
-                next = previous;
+                next = previous.map(|key: i64| key.to_string());
                 break;
             }
             let data = row
