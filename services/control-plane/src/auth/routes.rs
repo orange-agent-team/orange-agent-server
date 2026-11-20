@@ -1,5 +1,7 @@
 #[path = "accounts.rs"]
 mod accounts;
+#[path = "support.rs"]
+mod support;
 use super::{
     users::{USER_COOKIE, USER_FLOW_COOKIE, UserIdentity},
     *,
@@ -30,6 +32,15 @@ pub fn router(identity: UserIdentity) -> Router {
         .route("/api/v1/auth/callback", get(callback))
         .route("/api/v1/session", get(session).delete(logout))
         .route("/api/v1/session/revocation", get(revocation_context))
+        .route("/api/v1/account/support-resources", get(support::resources))
+        .route(
+            "/api/v1/account/support-authorizations",
+            get(support::list).post(support::create),
+        )
+        .route(
+            "/api/v1/account/support-authorizations/{id}",
+            get(support::get_one).delete(support::revoke),
+        )
         .route("/api/v1/account/wallet", get(accounts::wallet))
         .route(
             "/api/v1/account/budgets",

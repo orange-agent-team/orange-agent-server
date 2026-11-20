@@ -226,3 +226,6 @@ async fn budget_creation_rolls_back_if_session_expires_before_commit() {
     let counts:(i64,i64)=sqlx::query_as("SELECT (SELECT count(*) FROM budget_roots WHERE owner_id=$1),(SELECT count(*) FROM idempotency WHERE owner_id=$1 AND operation='user_create_budget.v1')").bind(&f.user).fetch_one(&f.pool).await.expect("rollback");
     assert_eq!(counts, (0, 0));
 }
+
+#[path = "support_consent.rs"]
+mod support_consent;
