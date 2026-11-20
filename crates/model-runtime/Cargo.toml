@@ -8,6 +8,11 @@ publish.workspace = true
 [features]
 process-test-fixture = []
 embedding-host = ["dep:axum", "dep:tempfile"]
+image-host = ["dep:png", "dep:tempfile"]
+
+[[bin]]
+name = "orange-image"
+required-features = ["image-host"]
 
 [[bin]]
 name = "orange-embedding-host"
@@ -22,6 +27,7 @@ name = "supervisor"
 required-features = ["process-test-fixture"]
 
 [dependencies]
+png = { version = "=0.18.1", optional = true }
 axum = { workspace = true, optional = true }
 jsonschema.workspace = true
 orange-domain.workspace = true
