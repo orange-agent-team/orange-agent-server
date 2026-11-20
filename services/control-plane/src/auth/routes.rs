@@ -30,6 +30,8 @@ pub(crate) fn hosted_connector_router(
 ) -> Router {
     model_connectors::router(i, s)
 }
+#[path = "repository_connectors.rs"]
+mod repository_connectors;
 #[path = "s3_connectors.rs"]
 mod s3_connectors;
 #[path = "support.rs"]
@@ -60,6 +62,22 @@ use serde::Deserialize;
 use std::sync::Arc;
 pub fn router(identity: UserIdentity) -> Router {
     Router::new()
+        .route(
+            "/api/v1/agent/runs/{run}/connectors/{provider}",
+            get(repository_connectors::list).post(repository_connectors::grant),
+        )
+        .route(
+            "/api/v1/agent/runs/{run}/connectors/{provider}/{grant}",
+            axum::routing::delete(repository_connectors::revoke),
+        )
+        .route(
+            "/api/v1/agent/runs/{run}/connectors/{provider}/{grant}/actions",
+            axum::routing::post(repository_connectors::perform),
+        )
+        .route(
+            "/api/v1/agent/runs/{run}/connectors/{provider}/{grant}/artifacts/{artifact}/content",
+            axum::routing::post(repository_connectors::download),
+        )
         .route(
             "/api/v1/agent/connector-tools",
             get(model_connectors::catalog),

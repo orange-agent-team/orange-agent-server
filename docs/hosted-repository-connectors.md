@@ -12,3 +12,15 @@ cargo test --offline --locked -p orange-control-plane --features repository-live
 ```
 
 [GitHub Git Blob 接口](https://docs.github.com/en/rest/git/blobs) · [GitLab 仓库文件接口](https://docs.gitlab.com/api/repository_files/)
+
+## Run 授权
+
+开发 User API 从 `ORANGE_REPOSITORY_SOURCES` 指向的所有者私有文件加载配置。每条登记包含 source_id、owner_id 和 registration。带 token 的条目还要求显式 credential_revision。仓库凭证不会交给模型或客户端。GitHub 与 GitLab 的 provider、资源 ID、命名空间及可读范围均参与来源摘要。
+
+只有创建时显式设置 `allow_external_connectors: true` 的托管 Run 才能授权第三方仓库读取。省略该选项时，服务端在授予连接器权限和源端请求之前拒绝。更改已有创建请求的该字段会触发幂等冲突。用户随后应选择本次运行允许的数值仓库 ID 和有效期；数据源地址仅由宿主管理。未授权路径与对象在预留配额前拒绝。CN-01、CN-02、CN-05、CN-06 共享每 Run 的调用数和并发限制。
+
+read_file 完成后生成与同一 Run 和源授权绑定的文件回执。下载过程重新读取固定提交中的对象、校验 Git blob 与内容 SHA-256，并在交付前再次检查会话、Run 和源授权。公开 API 与本机授权验收可分别运行。
+
+```sh
+python3 scripts/check-repository-grants.py --database-url-file .local/database-url --identity-config .local/identity/user-config.json
+```

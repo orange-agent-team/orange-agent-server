@@ -15,12 +15,17 @@ pub(super) struct Create {
     input_version_id: String,
     resource_profile_id: String,
     workspace_ttl_seconds: u32,
+    #[serde(default, skip_serializing_if = "is_disabled")]
+    allow_external_connectors: bool,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         deserialize_with = "model_choice"
     )]
     model: Option<crate::cloud_model::Selection>,
+}
+fn is_disabled(value: &bool) -> bool {
+    !*value
 }
 fn model_choice<'de, D: serde::Deserializer<'de>>(
     input: D,
@@ -263,6 +268,13 @@ pub(super) async fn create(
         sqlx::query("INSERT INTO cloud_runs(run_id,owner_id,user_id,request_key,request_digest,root_budget_id,input_artifact_id,input_version_id,status)
             VALUES($1,$2,$3,$4,$5,$6,$7,$8,'queued')").bind(&id).bind(&owner).bind(&user).bind(key).bind(digest).bind(&c.root_budget_id)
             .bind(&c.input_artifact_id).bind(&c.input_version_id).execute(&mut **tx).await.map_err(db)?;
+        if c.allow_external_connectors {
+            sqlx::query("INSERT INTO cloud_external_source_opt_ins(run_id) VALUES($1)")
+                .bind(&id)
+                .execute(&mut **tx)
+                .await
+                .map_err(db)?;
+        }
         sqlx::query("INSERT INTO cloud_workspaces(workspace_id,run_id,owner_id,host_instance_id,profile_id,status,expires_at)
             VALUES($1,$2,$3,$4,$5,'requested',clock_timestamp()+make_interval(secs=>$6))")
             .bind(uuid::Uuid::new_v4().to_string()).bind(&id).bind(&owner).bind(host).bind(PROFILE).bind(f64::from(c.workspace_ttl_seconds))

@@ -24,6 +24,7 @@ pub struct UserIdentity {
     pub pool: PgPool,
     pub config: Arc<UserOidcConfig>,
     provider: OidcProvider,
+    pub repository_sources: crate::repo_connector::registry::Sources,
     pub s3_sources: crate::s3_sources::Sources,
     pub pg_sources: crate::pg_view_sources::Sources,
 }
@@ -91,6 +92,7 @@ impl UserIdentity {
             config: Arc::new(config),
             pg_sources: Default::default(),
             s3_sources: Default::default(),
+            repository_sources: Default::default(),
             provider,
         })
     }

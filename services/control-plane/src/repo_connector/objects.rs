@@ -7,6 +7,14 @@ pub enum Kind {
     Change,
 }
 impl Source {
+    pub(crate) fn item_scope(
+        &self,
+        allowed: &BTreeSet<u64>,
+        id: u64,
+        kind: Kind,
+    ) -> Result<(), Error> {
+        self.collection(self.repo(allowed, id)?, kind).map(|_| ())
+    }
     fn collection(&self, r: &Repository, kind: Kind) -> Result<&'static str, Error> {
         match (kind, self.provider) {
             (Kind::Issue, _) if r.issues => Ok("issues"),

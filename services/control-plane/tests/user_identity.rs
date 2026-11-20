@@ -20,12 +20,22 @@ use serde_json::{Value, json};
 use sqlx::PgPool;
 use tower::ServiceExt;
 use uuid::Uuid;
-#[cfg(all(unix, any(feature = "pg-view-tests", feature = "s3-source-tests")))]
+#[cfg(all(
+    unix,
+    any(
+        feature = "pg-view-tests",
+        feature = "s3-source-tests",
+        feature = "repository-fixture-tests"
+    )
+))]
 #[path = "user_identity/connector_run.rs"]
 mod connector_run;
 #[cfg(all(unix, feature = "pg-view-tests"))]
 #[path = "user_identity/pg_view_consent.rs"]
 mod pg_consent;
+#[cfg(all(unix, feature = "repository-fixture-tests"))]
+#[path = "user_identity/repository_consent.rs"]
+mod repository_consent;
 #[cfg(all(unix, feature = "s3-source-tests"))]
 #[path = "user_identity/s3_consent.rs"]
 mod s3_consent;

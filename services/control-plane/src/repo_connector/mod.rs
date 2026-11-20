@@ -1,6 +1,7 @@
 //! Read-only repository connector sources. Destinations are selected by the operator, never by a tool.
 mod files;
 mod objects;
+pub mod registry;
 pub use objects::Kind;
 use reqwest::{
     Client, StatusCode, Url,
@@ -127,13 +128,31 @@ fn commit_id(s: &str) -> bool {
         && s.bytes()
             .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
 }
-fn check_page(page: u32, limit: usize) -> Result<(), Error> {
+pub(crate) fn check_page(page: u32, limit: usize) -> Result<(), Error> {
     if page == 0 || page > 10000 || !(1..=100).contains(&limit) {
         return Err(Error::Invalid);
     }
     Ok(())
 }
 impl Registration {
+    #[cfg(feature = "repository-fixture-tests")]
+    pub fn open_loopback_fixture(
+        &self,
+        addr: std::net::SocketAddr,
+        token: &str,
+    ) -> Result<Source, Error> {
+        if !addr.ip().is_loopback() {
+            return Err(Error::Denied);
+        }
+        let base = match self.provider {
+            Provider::Github => "",
+            Provider::Gitlab => "/api/v4",
+        };
+        self.create(
+            Url::parse(&format!("http://{addr}{base}")).map_err(|_| Error::Invalid)?,
+            Some(token),
+        )
+    }
     /// A token, if supplied, must originate in the host's credential store.
     pub fn open(&self, token: Option<&str>) -> Result<Source, Error> {
         let origin = match self.provider {

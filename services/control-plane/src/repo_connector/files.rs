@@ -174,13 +174,13 @@ impl Source {
         }
         Ok(result)
     }
-    pub async fn read_file(
+    pub(crate) fn file_scope(
         &self,
         allowed: &BTreeSet<u64>,
         id: u64,
         revision: &str,
         path: &str,
-    ) -> Result<Blob, Error> {
+    ) -> Result<&Repository, Error> {
         let repo = self.repo(allowed, id)?;
         if !clean_path(path)
             || path.split('/').count() > 32
@@ -197,6 +197,16 @@ impl Source {
         }) {
             return Err(Error::Denied);
         }
+        Ok(repo)
+    }
+    pub async fn read_file(
+        &self,
+        allowed: &BTreeSet<u64>,
+        id: u64,
+        revision: &str,
+        path: &str,
+    ) -> Result<Blob, Error> {
+        let repo = self.file_scope(allowed, id, revision, path)?;
         tokio::time::timeout(Duration::from_secs(30), async {
             self.identity(repo).await?;
             let result = match self.provider {
