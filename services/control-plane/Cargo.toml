@@ -9,10 +9,15 @@ publish.workspace = true
 integration-tests = []
 cloud-host-tests = ["integration-tests"]
 pg-view-tests = []
+s3-source-tests = []
 cloud-upgrade-tests = ["integration-tests"]
 real-worker-tests = ["integration-tests", "orange-worker/test-control-gates"]
 web-compute-tests = ["real-worker-tests"]
 queue-expiry-tests = ["integration-tests"]
+
+[[test]]
+name = "s3_source"
+required-features = ["s3-source-tests"]
 
 [[test]]
 name = "pg_views"
@@ -75,7 +80,9 @@ tonic.workspace = true
 tokio-stream.workspace = true
 prost-types.workspace = true
 prost.workspace = true
-opendal.workspace = true
+percent-encoding = "=2.3.2"
+reqwest.workspace = true
+opendal = { workspace = true, features = ["services-s3"] }
 libc.workspace = true
 
 [target.'cfg(unix)'.dependencies]
@@ -83,7 +90,6 @@ rustix.workspace = true
 
 [dev-dependencies]
 orange-model-runtime.workspace = true
-reqwest.workspace = true
 tempfile.workspace = true
 rusqlite.workspace = true
 tower.workspace = true
