@@ -14,6 +14,7 @@ pub mod meter_bootstrap;
 pub mod pg_view_sources;
 pub mod pg_views;
 pub mod queue;
+pub mod repo_connector;
 pub mod s3_objects;
 pub mod s3_sources;
 pub mod store;
