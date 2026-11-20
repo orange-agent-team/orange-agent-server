@@ -49,11 +49,19 @@ pub fn router(identity: AdminIdentity) -> Router {
         .route("/admin/v1/overview", get(overview))
         .route(
             "/admin/v1/price-drafts",
-            get(super::actions::prices::list).post(super::actions::prices::create),
+            get(super::actions::prices::list::<false>).post(super::actions::prices::create),
         )
         .route(
             "/admin/v1/price-drafts/{price_id}",
-            get(super::actions::prices::get_one),
+            get(super::actions::prices::get_one::<false>),
+        )
+        .route(
+            "/admin/v1/transcription-price-drafts",
+            get(super::actions::prices::list::<true>).post(super::actions::prices::audio::create),
+        )
+        .route(
+            "/admin/v1/transcription-price-drafts/{price_id}",
+            get(super::actions::prices::get_one::<true>),
         )
         .route(
             "/admin/v1/reconciliation-cases/{case_id}/activity",

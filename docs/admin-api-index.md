@@ -86,3 +86,9 @@ OIDC登录/回调的完整协议、用户API和云Host等另按整体接口计�
 支持操作通过 GET /admin/v1/support-authorizations/{id} 核对用户授权。support_access.grant 需要客服申请、安全人员独立批准及执行。support_access.revoke 可由拥有相应租户权限的客服或安全管理员执行。授权记录通过 GET /admin/v1/support-grants 和 GET /admin/v1/support-grants/{id} 查询。正文按次通过 POST /admin/v1/support-content 核对。
 
 平台角色绑定通过 GET /admin/v1/principals/{principal}/role-bindings/{role} 核对。授予与撤销均以目标版本、当前作用域、申请人与独立批准人为依据。目标人员已有管理主体标识，不能充当本次授予或撤销的申请人、独立批准人或执行人。
+
+### 开发转写定价
+
+`GET /admin/v1/transcription-price-drafts` 列出当前管理范围中的转写草稿。`POST` 在同一路径创建草稿，所需权限为 `pricing.draft`。请求包括管理范围、已审核观测编号、每分钟微积分费率和平台费率基点。源音频时长以毫秒计量，整单向上取整。`GET /admin/v1/transcription-price-drafts/{price_id}` 返回节点、提供方、执行配置、不可变条款及审核摘要，读取需要 `pricing.read`。
+
+草稿作者通过既有的 `pricing.publish` 动作提交审核。审批和执行均重读范围权限，只有原审核记录仍然匹配时才发布。指定未来时间的版本在到期时重新核对审批人的权限。已有启用价格时，新草稿不会暗中覆盖旧价格。所有金额均为本地开发积分。实际可报价还要求有效的用户输入授权、预算及当前 Worker 会话能力。[Admin 契约](../contracts/openapi/admin.v1.json)

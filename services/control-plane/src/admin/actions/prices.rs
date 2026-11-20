@@ -1,10 +1,48 @@
 //! Immutable development price terms. Submission, independent approval and
 //! the time at which a version becomes quotable have distinct receipts.
+pub mod audio;
 use super::*;
 use orange_domain::TextQuote;
 use orange_protocol::Money;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
+// These two compiled SQL literals share the statement shape. Caller input is always bound.
+macro_rules! catalog_part {
+    (audio,drafts) => {
+        "admin_transcription_price_drafts"
+    };
+    (text,drafts) => {
+        "admin_text_price_drafts"
+    };
+    (audio,publications) => {
+        "admin_transcription_price_publications"
+    };
+    (text,publications) => {
+        "admin_text_price_publications"
+    };
+    (audio,catalog) => {
+        "transcription_prices"
+    };
+    (text,catalog) => {
+        "text_prices"
+    };
+    ($family:ident,$literal:literal) => {
+        $literal
+    };
+}
+macro_rules! catalog_sql{
+    ($audio:expr; $($part:tt),+) => {if $audio {concat!($(catalog_part!(audio,$part)),+)}else{concat!($(catalog_part!(text,$part)),+)}};
+}
+fn is_audio(price: &str) -> bool {
+    price.starts_with("asr-price-")
+}
+fn scope_of(row: &sqlx::postgres::PgRow) -> Result<Scope, AdminError> {
+    Ok(Scope {
+        environment: "dev".into(),
+        kind: row.try_get("scope_kind")?,
+        scope_id: row.try_get("scope_id")?,
+    })
+}
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Publish {
@@ -99,11 +137,7 @@ fn terms(row: &sqlx::postgres::PgRow) -> Result<Terms, AdminError> {
         ))
     };
     Ok(Terms {
-        scope: Scope {
-            environment: "dev".into(),
-            kind: row.try_get("scope_kind")?,
-            scope_id: row.try_get("scope_id")?,
-        },
+        scope: scope_of(row)?,
         node_id: row.try_get("node_id")?,
         execution_profile_id: row.try_get("execution_profile_id")?,
         meter_profile_digest: row.try_get("meter_profile_digest")?,
@@ -171,7 +205,12 @@ async fn binding(tx: &mut Tx<'_>, t: &Terms) -> Result<(String, Value), AdminErr
     Ok((row.try_get("owner_id")?, descriptor))
 }
 fn project(row: &sqlx::postgres::PgRow) -> Result<Value, AdminError> {
-    let t = terms(row)?;
+    let price = row.try_get::<&str, _>("price_version")?;
+    let t = if is_audio(price) {
+        json!(audio::terms(row)?)
+    } else {
+        json!(terms(row)?)
+    };
     let mut value = json!({
         "price_version_id":row.try_get::<String,_>("price_version")?,
         "terms":t,
@@ -182,6 +221,10 @@ fn project(row: &sqlx::postgres::PgRow) -> Result<Value, AdminError> {
         "created_at":timestamp(row.try_get("created_at")?)?,
         "state":row.try_get::<Option<String>,_>("state")?.unwrap_or_else(||"draft".into())
     });
+    if is_audio(price) {
+        value["node_id"] = json!(row.try_get::<&str, _>("node_id")?);
+        value["execution_profile_id"] = json!(row.try_get::<&str, _>("execution_profile_id")?);
+    }
     if let Some(at) = row.try_get::<Option<i64>, _>("effective_at")? {
         value["effective_at"] = json!(timestamp(at)?);
     }
@@ -195,14 +238,9 @@ async fn one(
     scope: &Scope,
     price: &str,
 ) -> Result<sqlx::postgres::PgRow, AdminError> {
-    sqlx::query(
-        "SELECT d.*,p.state,p.effective_at,p.action_id
-         FROM admin_text_price_drafts d
-         LEFT JOIN admin_text_price_publications p USING(price_version)
-         WHERE d.price_version=$1
-           AND d.scope_kind=$2
-           AND d.scope_id=$3",
-    )
+    let audio = is_audio(price);
+    sqlx::query(catalog_sql!(audio; "SELECT d.*,p.state,p.effective_at,p.action_id FROM ", drafts, " d LEFT JOIN ", publications, " p USING(price_version)
+        WHERE d.price_version=$1 AND d.scope_kind=$2 AND d.scope_id=$3"))
     .bind(price)
     .bind(&scope.kind)
     .bind(&scope.scope_id)
@@ -264,7 +302,7 @@ async fn audit(
          FROM clock_timestamp()))::bigint)").bind(uuid::Uuid::new_v4().to_string()).bind(who).bind(kind).bind(&scope.environment).bind(&scope.kind).bind(&scope.scope_id).bind(entity).execute(&mut **tx).await?;
     Ok(())
 }
-pub async fn get_one(
+pub async fn get_one<const AUDIO: bool>(
     State(identity): State<Arc<AdminIdentity>>,
     headers: HeaderMap,
     Path(price): Path<String>,
@@ -272,7 +310,7 @@ pub async fn get_one(
 ) -> Result<Json<Value>, AdminError> {
     let q = query.map_err(|_| AdminError::Invalid)?.0;
     let scope = q.scope()?;
-    if q.limit.is_some() || q.cursor.is_some() || !id(&price) {
+    if q.limit.is_some() || q.cursor.is_some() || !id(&price) || AUDIO != is_audio(&price) {
         return Err(AdminError::Invalid);
     }
     let mut tx = identity.pool.begin().await?;
@@ -294,7 +332,7 @@ pub async fn get_one(
     tx.commit().await?;
     Ok(Json(value))
 }
-pub async fn list(
+pub async fn list<const AUDIO: bool>(
     State(identity): State<Arc<AdminIdentity>>,
     headers: HeaderMap,
     query: Result<axum::extract::Query<ReadQuery>, axum::extract::rejection::QueryRejection>,
@@ -308,8 +346,13 @@ pub async fn list(
     let mut tx = identity.pool.begin().await?;
     let session = identity.current_in(&headers, &mut tx).await?;
     session.authorize("pricing.read", &scope)?;
+    let audio = AUDIO;
     let fingerprint = digest(
-        "admin-price-pages.v1",
+        if AUDIO {
+            "admin-transcription-price-pages.v1"
+        } else {
+            "admin-price-pages.v1"
+        },
         &(
             &scope,
             &session.view.principal_id,
@@ -341,18 +384,18 @@ pub async fn list(
         .ok_or(AdminError::Invalid)?;
         (u, Some(b))
     } else {
-        (sqlx::query_scalar::<_,i64>("SELECT coalesce(max(draft_sequence),0) FROM admin_text_price_drafts WHERE scope_kind=$1 AND scope_id=$2").bind(&scope.kind).bind(&scope.scope_id).fetch_one(&mut *tx).await?,None)
+        (sqlx::query_scalar::<_,i64>(catalog_sql!(audio; "SELECT coalesce(max(draft_sequence),0) FROM ", drafts, " WHERE scope_kind=$1 AND scope_id=$2")).bind(&scope.kind).bind(&scope.scope_id).fetch_one(&mut *tx).await?,None)
     };
     let rows = sqlx::query(
-        "SELECT d.*,p.state,p.effective_at,p.action_id
-         FROM admin_text_price_drafts d
-         LEFT JOIN admin_text_price_publications p USING(price_version)
+        catalog_sql!(audio; "SELECT d.*,p.state,p.effective_at,p.action_id
+         FROM ", drafts, " d
+         LEFT JOIN ", publications, " p USING(price_version)
          WHERE d.scope_kind=$1
            AND d.scope_id=$2
            AND draft_sequence<=$3
            AND ($4::bigint IS NULL OR draft_sequence<$4)
          ORDER BY draft_sequence DESC
-         LIMIT $5",
+         LIMIT $5"),
     )
     .bind(&scope.kind)
     .bind(&scope.scope_id)
@@ -401,7 +444,7 @@ pub(super) async fn target(
     p: &Publish,
 ) -> Result<(i64, String), AdminError> {
     let row = one(tx, &r.scope, &p.price_version_id).await?;
-    let t = terms(&row)?;
+
     if row.try_get::<String, _>("terms_digest")? != r.target_version
         || row.try_get::<String, _>("review_report_id")? != p.review_report_id
     {
@@ -410,17 +453,25 @@ pub(super) async fn target(
     if row.try_get::<Option<String>, _>("state")?.is_some() {
         return Err(AdminError::Conflict);
     }
-    let occupied: bool =
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM text_prices WHERE price_version=$1)")
-            .bind(&p.price_version_id)
-            .fetch_one(&mut **tx)
-            .await?;
+    let audio = is_audio(&p.price_version_id);
+
+    let occupied: bool = sqlx::query_scalar(
+        catalog_sql!(audio; "SELECT EXISTS(SELECT 1 FROM ", catalog, " WHERE price_version=$1)"),
+    )
+    .bind(&p.price_version_id)
+    .fetch_one(&mut **tx)
+    .await?;
     if occupied {
         return Err(AdminError::Conflict);
     }
     if effective_seconds(&p.effective_at)? < row.try_get::<i64, _>("created_at")? {
         return Err(AdminError::Invalid);
     }
+    if audio {
+        audio::verify(tx, &p.price_version_id, &row).await?;
+        return Ok((1, "draft".into()));
+    }
+    let t = terms(&row)?;
     let (owner, descriptor) = binding(tx, &t).await?;
     if digest("admin-price-terms.v1", &(&p.price_version_id, owner, &t))? != r.target_version
         || digest("admin-price-review.v1", &(&r.target_version, descriptor))? != p.review_report_id
@@ -434,11 +485,10 @@ pub(super) async fn require_creator(
     p: &Publish,
     principal: &str,
 ) -> Result<(), AdminError> {
-    let creator: String =
-        sqlx::query_scalar("SELECT created_by FROM admin_text_price_drafts WHERE price_version=$1")
-            .bind(&p.price_version_id)
-            .fetch_one(&mut **tx)
-            .await?;
+    let creator: String = sqlx::query_scalar(catalog_sql!(is_audio(&p.price_version_id); "SELECT created_by FROM ", drafts, " WHERE price_version=$1"))
+    .bind(&p.price_version_id)
+    .fetch_one(&mut **tx)
+    .await?;
     if creator != principal {
         return Err(AdminError::Forbidden);
     }
@@ -451,10 +501,12 @@ pub(super) async fn publish(
     checker: &str,
     executor: &str,
 ) -> Result<(), AdminError> {
-    sqlx::query("INSERT INTO admin_text_price_publications(price_version,action_id,effective_at,checker_id,executor_id,state) VALUES($1,$2,$3,$4,$5,'scheduled')").bind(&p.price_version_id).bind(action).bind(effective_seconds(&p.effective_at)?).bind(checker).bind(executor).execute(&mut **tx).await?;
-    if activate_one(tx, Some(&p.price_version_id)).await? {
+    let audio = is_audio(&p.price_version_id);
+
+    sqlx::query(catalog_sql!(audio; "INSERT INTO ", publications, "(price_version,action_id,effective_at,checker_id,executor_id,state) VALUES($1,$2,$3,$4,$5,'scheduled')")).bind(&p.price_version_id).bind(action).bind(effective_seconds(&p.effective_at)?).bind(checker).bind(executor).execute(&mut **tx).await?;
+    if activate_one(tx, audio, Some(&p.price_version_id)).await? {
         let state: String = sqlx::query_scalar(
-            "SELECT state FROM admin_text_price_publications WHERE price_version=$1",
+            catalog_sql!(audio; "SELECT state FROM ", publications, " WHERE price_version=$1"),
         )
         .bind(&p.price_version_id)
         .fetch_one(&mut **tx)
@@ -521,20 +573,29 @@ async fn materialize(
     Ok(inserted.rows_affected() == 1)
 }
 
-async fn activate_one(tx: &mut Tx<'_>, only: Option<&str>) -> Result<bool, AdminError> {
+async fn activate_one(
+    tx: &mut Tx<'_>,
+    audio: bool,
+    only: Option<&str>,
+) -> Result<bool, AdminError> {
     let row = sqlx::query(
-        "SELECT d.*,p.checker_id,p.executor_id,p.action_id
-         FROM admin_text_price_publications p JOIN admin_text_price_drafts d USING(price_version)
+        catalog_sql!(audio; "SELECT d.*,p.checker_id,p.executor_id,p.action_id
+         FROM ", publications, " p JOIN ", drafts, " d USING(price_version)
          WHERE p.state='scheduled' AND effective_at<=FLOOR(EXTRACT(EPOCH FROM clock_timestamp()))::bigint
            AND ($1::text IS NULL OR p.price_version=$1)
-         ORDER BY effective_at,price_version LIMIT 1 FOR UPDATE OF p SKIP LOCKED")
+         ORDER BY effective_at,price_version LIMIT 1 FOR UPDATE OF p SKIP LOCKED"))
         .bind(only).fetch_optional(&mut **tx).await?;
     let Some(row) = row else {
         return Ok(false);
     };
     let price: String = row.try_get("price_version")?;
-    let t = terms(&row)?;
-    let (state, event) = match materialize(tx, &row, &price, &t).await {
+    let scope = scope_of(&row)?;
+    let result = if audio {
+        audio::activate(tx, &row, &price, &scope).await
+    } else {
+        materialize(tx, &row, &price, &terms(&row)?).await
+    };
+    let (state, event) = match result {
         Ok(true) => ("active", "pricing.publication_activated"),
         Ok(false) => ("blocked", "pricing.publication_not_inserted"),
         Err(AdminError::Forbidden) => ("blocked", "pricing.publication_authority_lost"),
@@ -544,13 +605,13 @@ async fn activate_one(tx: &mut Tx<'_>, only: Option<&str>) -> Result<bool, Admin
         Err(error) => return Err(error),
     };
     sqlx::query(
-        "UPDATE admin_text_price_publications SET state=$2,completed_at=FLOOR(EXTRACT(EPOCH FROM clock_timestamp()))::bigint
-         WHERE price_version=$1 AND state='scheduled'")
+        catalog_sql!(audio; "UPDATE ", publications, " SET state=$2,completed_at=FLOOR(EXTRACT(EPOCH FROM clock_timestamp()))::bigint
+         WHERE price_version=$1 AND state='scheduled'"))
         .bind(&price).bind(state).execute(&mut **tx).await?;
     audit(
         tx,
         "system.price-scheduler",
-        &t.scope,
+        &scope,
         event,
         Some(row.try_get("action_id")?),
     )
@@ -568,7 +629,10 @@ pub async fn activate_due(pool: &sqlx::PgPool) -> Result<usize, AdminError> {
         sqlx::query("SET LOCAL statement_timeout='5s'")
             .execute(&mut *tx)
             .await?;
-        let handled = activate_one(&mut tx, None).await?;
+        let first = count % 2 == 1;
+        let handled = activate_one(&mut tx, first, None).await?
+            || activate_one(&mut tx, !first, None).await?;
+
         tx.commit().await?;
         if !handled {
             break;

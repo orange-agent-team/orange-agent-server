@@ -82,8 +82,15 @@ pub(super) async fn run(
     sqlx::query("INSERT INTO nodes(node_id,owner_id,environment,region_id,state) VALUES($1,$2,'dev','browser-region','online')")
         .bind(&node).bind(a).execute(pool).await.expect("browser price node");
     let terms = crate::price_fixture::seed(pool, a, &node).await;
+    let audio = crate::price_fixture::seed_audio(pool, a, &node).await;
+    sqlx::query("INSERT INTO transcription_process_identities VALUES($1,$2)")
+        .bind(audio["observation_id"].as_str().expect("observation"))
+        .bind("a".repeat(64))
+        .execute(pool)
+        .await
+        .expect("reviewed ASR process fixture");
     let fixture = evidence.join("browser-private.json");
-    let bytes=serde_json::to_vec(&serde_json::json!({"api":format!("http://{address}/"),"origin":"https://127.0.0.1:43112","cookie":format!("{SESSION_COOKIE}={token}"),"principal":principal,"scope_a":a,"scope_b":b,"scope_c":third,"finance":finance,"governance":governance,"price_terms":terms})).expect("fixture JSON");
+    let bytes=serde_json::to_vec(&serde_json::json!({"api":format!("http://{address}/"),"origin":"https://127.0.0.1:43112","cookie":format!("{SESSION_COOKIE}={token}"),"principal":principal,"scope_a":a,"scope_b":b,"scope_c":third,"finance":finance,"governance":governance,"price_terms":terms,"audio_price_terms":audio})).expect("fixture JSON");
     let mut options = std::fs::OpenOptions::new();
     use std::os::unix::fs::OpenOptionsExt;
     options.write(true).create_new(true).mode(0o600);
@@ -182,6 +189,22 @@ pub(super) async fn run(
     assert_eq!(report["audit_ui_mutations"], 0);
     assert_eq!(report["case_edits"]["action_posts"], 7);
     assert_eq!(report["pricing"]["post_count"], 4);
+    assert_eq!(report["case_edits"]["audio_pricing"]["post_count"], 4);
+    let audio_price = report["case_edits"]["audio_pricing"]["price_version_id"]
+        .as_str()
+        .expect("browser audio version");
+    let billed:(String,i64,i32,String,String)=sqlx::query_as("SELECT p.state,t.price_per_minute,t.fee_bps,d.created_by,p.checker_id FROM admin_transcription_price_publications p JOIN admin_transcription_price_drafts d USING(price_version) JOIN transcription_prices t USING(price_version) WHERE p.price_version=$1 AND t.node_id=$2 AND t.enabled AND t.admission='development_only'")
+        .bind(audio_price).bind(&node).fetch_one(pool).await.expect("independently approved audio rate");
+    assert_eq!(
+        billed,
+        (
+            "active".into(),
+            12000,
+            2000,
+            finance[0]["id"].as_str().expect("maker").into(),
+            finance[1]["id"].as_str().expect("checker").into()
+        )
+    );
     let version = report["pricing"]["price_version_id"]
         .as_str()
         .expect("browser price version");

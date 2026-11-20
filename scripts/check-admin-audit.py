@@ -67,7 +67,7 @@ with os.fdopen(fd,'w') as stream:stream.write(url+'\n')
 result={'database':name,'passed':False,'dropped':False,'scope':'actual PostgreSQL migrations and HTTP scopes/cursors;explicit session fixtures,not MFA issuance or browser certification'}
 try:
     cargo=Path(subprocess.check_output([shutil.which('rustup') or '/opt/homebrew/opt/rustup/bin/rustup','which','--toolchain','stable','cargo'],text=True).strip())
-    env=os.environ.copy();env.update(PATH=str(cargo.parent)+os.pathsep+env.get('PATH',''),ORANGE_TEST_DATABASE_URL=url,ORANGE_AUDIT_TEST_DATABASE=name,ORANGE_TEST_OIDC_CONFIG_FILE=str(args.identity_config.resolve()),CARGO_TARGET_DIR=str(ROOT/'target'),CARGO_BUILD_JOBS='2',CARGO_NET_OFFLINE='true')
+    env=os.environ.copy();env.update(PATH=str(cargo.parent)+os.pathsep+env.get('PATH',''),ORANGE_TEST_DATABASE_URL=url,ORANGE_AUDIT_TEST_DATABASE=name,ORANGE_TEST_OIDC_CONFIG_FILE=str(args.identity_config.resolve()),CARGO_TARGET_DIR=os.environ.get('CARGO_TARGET_DIR') or str(ROOT/'target'),CARGO_BUILD_JOBS='2',CARGO_NET_OFFLINE='true')
     for key in ['ORANGE_AUDIT_BROWSER_DRIVER','ORANGE_AUDIT_BROWSER_NODE','ORANGE_AUDIT_BROWSER_EVIDENCE']:env.pop(key,None)
     if args.admin_repo:
         env.update(ORANGE_AUDIT_BROWSER_DRIVER=str(driver),ORANGE_AUDIT_BROWSER_NODE=str(args.node.resolve()),ORANGE_AUDIT_BROWSER_EVIDENCE=str(folder))

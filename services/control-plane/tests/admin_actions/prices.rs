@@ -320,3 +320,163 @@ async fn scheduled(mode: &str) {
     assert_eq!(final_events, vec![event.to_owned()]);
     recovered.close().await;
 }
+
+#[tokio::test]
+async fn transcription_rates_require_independent_approval_and_match_the_reviewed_observation() {
+    const AUDIO: &str = "/admin/v1/transcription-price-drafts";
+    let f = fixture().await;
+    let text_terms = admit(&f).await;
+    let scope = &text_terms["scope"];
+    let owner = scope["scope_id"].as_str().expect("tenant");
+    let terms = crate::price_fixture::seed_audio(&f.pool, owner, &f.node).await;
+    let observation = terms["observation_id"].as_str().expect("observation");
+    assert_eq!(
+        http(&f, &f.maker, "POST", AUDIO, "draft", "", terms.clone())
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    sqlx::query("INSERT INTO transcription_process_identities VALUES($1,$2)")
+        .bind(observation)
+        .bind("a".repeat(64))
+        .execute(&f.pool)
+        .await
+        .expect("prior reviewed identity fixture");
+    let (status, row, _) = http(&f, &f.maker, "POST", AUDIO, "draft", "", terms.clone()).await;
+    assert_eq!(status, StatusCode::CREATED, "{row}");
+    assert_eq!(row["node_id"], f.node);
+    assert_eq!(row["terms"], terms);
+    assert_eq!(
+        http(&f, &f.maker, "POST", AUDIO, "draft", "", terms.clone())
+            .await
+            .1,
+        row
+    );
+    let list = format!("{AUDIO}?environment=dev&scope_kind=tenant&scope_id={owner}");
+    assert_eq!(
+        http(&f, &f.maker, "GET", &list, "", "", Value::Null)
+            .await
+            .1,
+        json!({"data":[row]})
+    );
+    assert_eq!(
+        http(&f, &f.stranger, "GET", &list, "", "", Value::Null)
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    let detail = format!(
+        "{AUDIO}/{}?environment=dev&scope_kind=tenant&scope_id={owner}",
+        price_id(&row)
+    );
+    assert_eq!(
+        http(&f, &f.maker, "GET", &detail, "", "", Value::Null)
+            .await
+            .1,
+        row
+    );
+    let mut tampered = terms.clone();
+    tampered["price_per_minute"] = json!("0");
+    assert_eq!(
+        http(&f, &f.maker, "POST", AUDIO, "invalid", "", tampered)
+            .await
+            .0,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM transcription_prices WHERE node_id=$1")
+            .bind(&f.node)
+            .fetch_one(&f.pool)
+            .await
+            .expect("not priced yet"),
+        0
+    );
+    release(&f, &row, row["created_at"].as_str().expect("time")).await;
+    let actual:(i64,i32,bool,String)=sqlx::query_as("SELECT price_per_minute,fee_bps,enabled,review_digest FROM transcription_prices WHERE price_version=$1 AND admission='development_only'").bind(price_id(&row)).fetch_one(&f.pool).await.expect("approved price materialized");
+    assert_eq!(
+        actual,
+        (
+            12000,
+            2000,
+            true,
+            row["review_report_id"].as_str().expect("review").into()
+        )
+    );
+    assert_eq!(
+        http(&f, &f.maker, "GET", &detail, "", "", Value::Null)
+            .await
+            .1["state"],
+        "active"
+    );
+}
+
+#[tokio::test]
+async fn transcription_publication_rechecks_checker_at_effective_time_and_never_revives() {
+    let f = fixture().await;
+    let text = admit(&f).await;
+    let owner = text["scope"]["scope_id"].as_str().expect("tenant");
+    let terms = crate::price_fixture::seed_audio(&f.pool, owner, &f.node).await;
+    sqlx::query("INSERT INTO transcription_process_identities VALUES($1,$2)")
+        .bind(terms["observation_id"].as_str().expect("observation"))
+        .bind("e".repeat(64))
+        .execute(&f.pool)
+        .await
+        .expect("reviewed process");
+    let (status, row, _) = http(
+        &f,
+        &f.maker,
+        "POST",
+        "/admin/v1/transcription-price-drafts",
+        "scheduled",
+        "",
+        terms,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{row}");
+    let at: i64 =
+        sqlx::query_scalar("SELECT floor(extract(epoch FROM clock_timestamp()))::bigint+4")
+            .fetch_one(&f.pool)
+            .await
+            .expect("due time");
+    release(
+        &f,
+        &row,
+        &OffsetDateTime::from_unix_timestamp(at)
+            .expect("instant")
+            .format(&Rfc3339)
+            .expect("UTC"),
+    )
+    .await;
+    sqlx::query(
+        "UPDATE admin_grants SET revoked=true WHERE principal_id=$1 AND role='finance_operator'",
+    )
+    .bind(&f.checker.id)
+    .execute(&f.pool)
+    .await
+    .expect("revoke checker before publication");
+    sqlx::query("SELECT pg_sleep(GREATEST(0,$1::bigint-extract(epoch FROM clock_timestamp())))")
+        .bind(at)
+        .execute(&f.pool)
+        .await
+        .expect("advance to scheduled time");
+    let (first, second) = tokio::join!(
+        activate_due_text_prices(&f.pool),
+        activate_due_text_prices(&f.pool)
+    );
+    first.expect("scheduler");
+    second.expect("concurrent scheduler");
+    let missed:(String,i64)=sqlx::query_as("SELECT p.state,(SELECT count(*) FROM transcription_prices WHERE price_version=p.price_version) FROM admin_transcription_price_publications p WHERE price_version=$1")
+       .bind(price_id(&row)).fetch_one(&f.pool).await.expect("blocked record");
+    assert_eq!(missed, ("blocked".into(), 0));
+    sqlx::query(
+        "UPDATE admin_grants SET revoked=false WHERE principal_id=$1 AND role='finance_operator'",
+    )
+    .bind(&f.checker.id)
+    .execute(&f.pool)
+    .await
+    .expect("restore test grant");
+    activate_due_text_prices(&f.pool).await.expect("retry");
+    let events:i64=sqlx::query_scalar("SELECT count(*) FROM admin_audit WHERE event_type='pricing.publication_authority_lost' AND entity_id=(SELECT action_id FROM admin_transcription_price_publications WHERE price_version=$1)")
+       .bind(price_id(&row)).fetch_one(&f.pool).await.expect("single revocation audit");
+    assert_eq!(events, 1);
+}
