@@ -1419,6 +1419,71 @@
             "payload"
           ],
           "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "scope": {
+              "$ref": "#/$defs/Scope"
+            },
+            "target_version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "ticket_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 5,
+              "maxLength": 1000
+            },
+            "action_type": {
+              "const": "admin.role_revoke"
+            },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "principal_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                },
+                "role": {
+                  "type": "string",
+                  "enum": [
+                    "platform_admin",
+                    "support_operator",
+                    "compute_operator",
+                    "finance_operator",
+                    "security_operator",
+                    "release_operator",
+                    "auditor"
+                  ]
+                }
+              },
+              "required": [
+                "principal_id",
+                "role"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "scope",
+            "target_version",
+            "ticket_id",
+            "reason",
+            "action_type",
+            "payload"
+          ],
+          "additionalProperties": false
         }
       ]
     },
@@ -3474,6 +3539,62 @@
         "resources"
       ],
       "additionalProperties": false
+    },
+    "AdminRoleBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "principal_id",
+        "role",
+        "scope",
+        "state",
+        "revision",
+        "target_version"
+      ],
+      "properties": {
+        "principal_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "platform_admin",
+            "support_operator",
+            "compute_operator",
+            "finance_operator",
+            "security_operator",
+            "release_operator",
+            "auditor"
+          ]
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "state": {
+          "enum": [
+            "absent",
+            "active",
+            "revoked",
+            "expired"
+          ]
+        },
+        "revision": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$"
+        },
+        "target_version": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        }
+      }
     }
   },
   "$ref": "#/$defs/AdminActionCreate"

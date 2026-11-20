@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Orange Admin API",
-    "version": "0.1.10",
+    "version": "0.1.11",
     "description": "Candidate contract for the independent Admin origin. Development implementation includes OIDC sessions, scoped reads, selected node and reconciliation case actions, and development text price governance. Availability of each other action depends on its backend implementation."
   },
   "servers": [
@@ -4288,6 +4288,12 @@
             "permission": "support.revoke",
             "approval": "single_operator",
             "approval_permission": null
+          },
+          {
+            "action_type": "admin.role_revoke",
+            "permission": "admins.revoke",
+            "approval": "maker_checker",
+            "approval_permission": "admins.revoke.approve"
           }
         ],
         "x-implementation-status": "partial-development-candidate"
@@ -6793,6 +6799,168 @@
         },
         "x-implementation-status": "development-candidate"
       }
+    },
+    "/admin/v1/principals/{principal}/role-bindings/{role}": {
+      "get": {
+        "operationId": "reviewAdminRoleBinding",
+        "summary": "Review a scoped role for an existing administrator",
+        "x-permission": "admins.roles.read",
+        "security": [
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RequestId"
+          },
+          {
+            "$ref": "#/components/parameters/ScopeKind"
+          },
+          {
+            "$ref": "#/components/parameters/ScopeId"
+          },
+          {
+            "name": "environment",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "const": "dev"
+            }
+          },
+          {
+            "name": "principal",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            }
+          },
+          {
+            "name": "role",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "platform_admin",
+                "support_operator",
+                "compute_operator",
+                "finance_operator",
+                "security_operator",
+                "release_operator",
+                "auditor"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "State/projection, not a promise that external effects or resource cleanup have completed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminRoleBinding"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "x-implementation-status": "development-candidate"
+      }
     }
   },
   "components": {
@@ -8303,6 +8471,71 @@
                 "required": [
                   "grant_id"
                 ]
+              }
+            },
+            "required": [
+              "scope",
+              "target_version",
+              "ticket_id",
+              "reason",
+              "action_type",
+              "payload"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "scope": {
+                "$ref": "#/components/schemas/Scope"
+              },
+              "target_version": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+              },
+              "ticket_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 5,
+                "maxLength": 1000
+              },
+              "action_type": {
+                "const": "admin.role_revoke"
+              },
+              "payload": {
+                "type": "object",
+                "properties": {
+                  "principal_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                  },
+                  "role": {
+                    "type": "string",
+                    "enum": [
+                      "platform_admin",
+                      "support_operator",
+                      "compute_operator",
+                      "finance_operator",
+                      "security_operator",
+                      "release_operator",
+                      "auditor"
+                    ]
+                  }
+                },
+                "required": [
+                  "principal_id",
+                  "role"
+                ],
+                "additionalProperties": false
               }
             },
             "required": [
@@ -10369,6 +10602,62 @@
           "resources"
         ],
         "additionalProperties": false
+      },
+      "AdminRoleBinding": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "principal_id",
+          "role",
+          "scope",
+          "state",
+          "revision",
+          "target_version"
+        ],
+        "properties": {
+          "principal_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "platform_admin",
+              "support_operator",
+              "compute_operator",
+              "finance_operator",
+              "security_operator",
+              "release_operator",
+              "auditor"
+            ]
+          },
+          "scope": {
+            "$ref": "#/components/schemas/Scope"
+          },
+          "state": {
+            "enum": [
+              "absent",
+              "active",
+              "revoked",
+              "expired"
+            ]
+          },
+          "revision": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]*)$"
+          },
+          "target_version": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "Z$"
+          }
+        }
       }
     }
   },
@@ -10387,7 +10676,10 @@
       "actions.cancel",
       "admins.grant",
       "actions.approve",
-      "admins.grant.approve"
+      "admins.grant.approve",
+      "admins.roles.read",
+      "admins.revoke",
+      "admins.revoke.approve"
     ],
     "support_operator": [
       "session.read",
@@ -10473,7 +10765,9 @@
       "actions.approve",
       "support.grant.approve",
       "admins.grant.approve",
-      "support.revoke"
+      "support.revoke",
+      "admins.roles.read",
+      "admins.revoke.approve"
     ],
     "release_operator": [
       "session.read",
