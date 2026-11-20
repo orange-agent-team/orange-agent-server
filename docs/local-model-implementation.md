@@ -29,3 +29,15 @@ python3 scripts/check-local-model.py
 补充：已有源码词表可独立构建`llama-tokenize`，现已用它完成[DR-01候选投影与七组固定计量样例](structured-output-metering.md)。这不依赖权重下载，不改变完整模型推理仍未验证的状态；独立词表和生产模型的匹配尚待核对。
 
 下载路径已更新为[受控Rust缓存管理](model-cache-implementation.md)，增加断点续传、私有路径、配额及取消时文件锁保护。真实网络仍超时，不能把缓存单元测试等同于已取得模型。
+
+## MP-01 本地 Responses 文本协议
+
+本地 Agent CLI 配置可以设置 `"model_protocol": "responses"`。省略时继续使用 `chat_completions`。两个协议共用固定模型和私有本地传输。Responses 模式从完整的用户消息、已提交的助手函数调用与相同 call_id 的工具结果构造无状态请求。输入计量使用同协议的 `/v1/responses/input_tokens`，上下文和最大输出都在派发前检查。
+
+模型返回的文本、函数参数和最终输出须逐项匹配。缺少完成事件、调用编号发生变化、收到未声明的输出类型、模型标识不匹配、使用量矛盾或达到固定后端的输出上限都会中止本轮。该本地配置支持文本与声明的函数工具，结构化最终答复、托管工具与服务商存储均未启用。取消会中止客户端请求，资源回收另由监督进程核对。
+
+以下命令在本机使用固定 CPU 模型和真实 SQLite 会话，验证两轮模型生成、测试所有者批准、文件读取与进程重开后的恢复。
+
+```sh
+python3 scripts/check-real-agent.py --model-protocol responses
+```

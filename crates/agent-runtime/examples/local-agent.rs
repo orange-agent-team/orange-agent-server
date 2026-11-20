@@ -4,7 +4,7 @@ use orange_agent_runtime::{
     engine::{CreationApproval, GatewayFailure, ModelFuture, ModelGateway, RunConfig},
     workspace::WorkspaceGrant,
 };
-use orange_model_runtime::llama::LlamaClient;
+use orange_model_runtime::llama::{LlamaClient, LocalTextProtocol};
 use orange_protocol::model::{GenerateRequest, Message, Role};
 use serde::Deserialize;
 use std::{
@@ -25,6 +25,8 @@ struct Config {
     model_endpoint: Option<String>,
     #[serde(default)]
     model_socket: Option<PathBuf>,
+    #[serde(default)]
+    model_protocol: LocalTextProtocol,
     model_key_file: PathBuf,
     context_tokens: u32,
     prompt: String,
@@ -547,7 +549,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 )?,
                 _ => return Err("Local model transport unavailable on this target".into()),
             };
-            let model = LocalModel(client);
+            let model = LocalModel(client.with_protocol(config.model_protocol));
             let (sender, receiver) = watch::channel(false);
             let signal = tokio::spawn(async move {
                 let _ = tokio::signal::ctrl_c().await;

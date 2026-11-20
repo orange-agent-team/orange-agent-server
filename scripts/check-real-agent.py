@@ -23,7 +23,13 @@ PRIVATE=ROOT/'.local/model-runtime'
 REPORT=ROOT/'.local/real-agent'
 parser=argparse.ArgumentParser()
 parser.add_argument('--required-tool',choices=['read_file','search_files','search_text','ask_user'],default='read_file')
+parser.add_argument('--model-protocol',choices=['chat_completions','responses'],default='chat_completions')
+parser.add_argument('--model-runtime-root',type=Path,default=PRIVATE)
 args=parser.parse_args()
+PRIVATE=args.model_runtime_root.resolve()
+if args.model_protocol!='chat_completions':
+    REPORT=ROOT/'.local'/('real-agent-'+args.model_protocol)
+target=Path(os.environ.get('CARGO_TARGET_DIR',ROOT/'target')).resolve()
 
 def digest(path):
     value=hashlib.sha256()
@@ -52,7 +58,7 @@ def main():
     subprocess.run([str(cargo),'build','-p','orange-model-runtime','--bin','orange-model-host','--locked'],cwd=ROOT,env=env,check=True)
     REPORT.mkdir(parents=True,exist_ok=True,mode=0o700)
     result={'scope':'actual pinned CPU model, isolated local file, explicit test-owner approvals and SQLite recovery; not hosted Agent, public identity, charges or GPU',
-            'model_sha256':lock['model']['sha256'],'backend_commit':lock['backend']['commit'],'phases':[],'approved_operations':0,'passed':False,'test_run_id':test_run_id,'required_tool':args.required_tool,'observed_tools':[]}
+            'model_sha256':lock['model']['sha256'],'backend_commit':lock['backend']['commit'],'phases':[],'approved_operations':0,'passed':False,'test_run_id':test_run_id,'model_protocol':args.model_protocol,'required_tool':args.required_tool,'observed_tools':[]}
     # Short private root avoids Unix socket path limits. Never use user-selected directories.
     with tempfile.TemporaryDirectory(prefix='oa-real-',dir='/private/tmp' if os.uname().sysname=='Darwin' else None) as temporary:
         base=Path(temporary).resolve();runtime=base/('durable-model-state-'*6);ipc=base/'m';state=base/'j';workspace=base/'w'
@@ -68,7 +74,7 @@ def main():
             'model':str(model),'model_sha256':lock['model']['sha256'],'model_bytes':lock['model']['bytes'],'model_version':'qwen-agent-test-v1','context_tokens':4096,
             'startup_timeout_seconds':120,'control_nonce':nonce,'instance_id':instance})
         with (runtime/'host.log').open('w') as log:
-            host=subprocess.Popen([str(ROOT/'target/debug/orange-model-host'),str(runtime/'profile.json')],cwd=ROOT,env={'PATH':'/usr/bin:/bin'},stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=log,text=True)
+            host=subprocess.Popen([str(target/'debug/orange-model-host'),str(runtime/'profile.json')],cwd=ROOT,env={'PATH':'/usr/bin:/bin'},stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=log,text=True)
             try:
                 host.stdin.write('auth '+nonce+'\n');host.stdin.flush()
                 selector=selectors.DefaultSelector();selector.register(host.stdout,selectors.EVENT_READ)
@@ -81,7 +87,7 @@ def main():
                 if ready['record']['phase']!='ready' or ready['record']['instance_id']!=instance:raise RuntimeError('Wrong model instance')
                 config={'run':{'owner':'real-agent-fixture-owner','run_id':uuid.uuid4().hex,'policy':'read-only-fixture-v1','environment':'pending-grant-info','model_version':'qwen-agent-test-v1',
                     'max_steps':12,'max_invocations':6,'max_output_tokens':256,'deadline_unix':int(time.time())+180},'grant_id':'real-agent-fixture-grant','workspace':str(workspace),
-                    'journal':str(state/'journal.sqlite'),'private_roots':[str(runtime),str(ipc),str(state),str(PRIVATE)],'model_socket':str(ipc/'engine.sock'),
+                    'journal':str(state/'journal.sqlite'),'private_roots':[str(runtime),str(ipc),str(state),str(PRIVATE)],'model_socket':str(ipc/'engine.sock'),'model_protocol':args.model_protocol,
                     'model_key_file':str(runtime/'api.key'),'context_tokens':4096,
                     'prompt':'Use read_file to read the existing workspace file proof.txt with the relative path proof.txt. Do not guess its content. After the tool result is returned, answer with the exact file text.'}
                 if args.required_tool=='search_files':
@@ -93,7 +99,7 @@ def main():
                     config['prompt']='First call ask_user with exactly these arguments: {"questions":[{"prompt":"Which file should I read?"}]}. Wait for the user answer. Do not call any filesystem tool before that answer. After receiving the answers array, your next response must call read_file with path equal to the answered filename. Do not produce prose or merely repeat the filename. Only after receiving the read_file result may you return the exact file content. The task is not complete until the file content is returned.'
                 path=state/'agent.json';write(path,config)
                 def invoke(operation,*arguments,expect_error=False,input_json=None):
-                    child=subprocess.Popen([str(ROOT/'target/debug/examples/local-agent'),str(path),operation,*arguments],cwd=ROOT,env={'PATH':'/usr/bin:/bin'},stdin=subprocess.PIPE if input_json is not None else subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+                    child=subprocess.Popen([str(target/'debug/examples/local-agent'),str(path),operation,*arguments],cwd=ROOT,env={'PATH':'/usr/bin:/bin'},stdin=subprocess.PIPE if input_json is not None else subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
                     try:
                         for _ in range(25):
                             try:out,error=child.communicate(input=json.dumps(input_json) if input_json is not None and _==0 else None,timeout=5);break

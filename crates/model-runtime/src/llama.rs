@@ -8,7 +8,23 @@ use serde_json::{Value, json};
 use std::time::Duration;
 use tokio::sync::watch;
 
+#[derive(Clone, Copy, Default, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LocalTextProtocol {
+    #[default]
+    ChatCompletions,
+    Responses,
+}
+impl LocalTextProtocol {
+    fn path(self) -> &'static str {
+        match self {
+            Self::ChatCompletions => "v1/chat/completions",
+            Self::Responses => "v1/responses",
+        }
+    }
+}
 pub struct LlamaClient {
+    protocol: LocalTextProtocol,
     client: Client,
     endpoint: Url,
     key: String,
@@ -16,6 +32,10 @@ pub struct LlamaClient {
     context_tokens: u32,
 }
 impl LlamaClient {
+    pub fn with_protocol(mut self, protocol: LocalTextProtocol) -> Self {
+        self.protocol = protocol;
+        self
+    }
     /// Private filesystem IPC for an owned local backend, without a TCP port race.
     #[cfg(unix)]
     pub fn private_socket(
@@ -53,6 +73,7 @@ impl LlamaClient {
             .build()
             .map_err(|_| ModelError::Unavailable)?;
         Ok(Self {
+            protocol: LocalTextProtocol::default(),
             client,
             endpoint: Url::parse("http://localhost/").map_err(|_| ModelError::Invalid)?,
             key,
@@ -89,6 +110,7 @@ impl LlamaClient {
             .build()
             .map_err(|_| ModelError::Unavailable)?;
         Ok(Self {
+            protocol: LocalTextProtocol::default(),
             client,
             endpoint: url,
             key,
@@ -131,6 +153,9 @@ impl LlamaClient {
         if request.model_version != self.model {
             return Err(ModelError::Invalid);
         }
+        if matches!(self.protocol, LocalTextProtocol::Responses) {
+            return Ok(crate::responses::request_body(request, stream));
+        }
         let messages: Vec<Value> = request.messages.iter().map(|message| {
             let mut value=json!({"role":message.role,"content":message.content});
             if let Some(id)=&message.tool_call_id {value["tool_call_id"]=json!(id);}
@@ -153,7 +178,7 @@ impl LlamaClient {
     pub async fn input_tokens(&self, request: &GenerateRequest) -> Result<u64, ModelError> {
         let value = self
             .json(
-                "v1/chat/completions/input_tokens",
+                &format!("{}/input_tokens", self.protocol.path()),
                 self.request(request, false)?,
             )
             .await?;
@@ -205,7 +230,7 @@ impl LlamaClient {
         self.input_tokens(request).await?;
         let mut response = self
             .client
-            .post(self.url("v1/chat/completions")?)
+            .post(self.url(self.protocol.path())?)
             .bearer_auth(&self.key)
             .json(&self.request(request, true)?)
             .send()
@@ -223,18 +248,27 @@ impl LlamaClient {
             return Err(ModelError::Protocol);
         }
         let mut decoder = SseDecoder::default();
-        let mut assembler = ChatAssembler::default();
+        let mut chat = ChatAssembler::default();
+        let mut responses = crate::responses::ResponsesAssembler::default();
         while let Some(chunk) = response
             .chunk()
             .await
             .map_err(|_| ModelError::Unavailable)?
         {
             for event in decoder.push(&chunk)? {
-                assembler.event(&event)?;
+                match self.protocol {
+                    LocalTextProtocol::ChatCompletions => chat.event(&event)?,
+                    LocalTextProtocol::Responses => responses.event(&event)?,
+                }
             }
         }
         decoder.finish()?;
-        let candidate = assembler.finish()?;
+        let candidate = match self.protocol {
+            LocalTextProtocol::ChatCompletions => chat.finish()?,
+            LocalTextProtocol::Responses => {
+                responses.finish(&self.model, request.max_output_tokens)?
+            }
+        };
         if candidate
             .native_usage
             .as_ref()
