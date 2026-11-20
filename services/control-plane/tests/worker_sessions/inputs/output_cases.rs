@@ -29,6 +29,7 @@ async fn begin(
     let candidate = candidate();
     let bytes = serde_json::to_vec(&candidate).expect("JSON");
     let header = worker::OutputHeader {
+        transcription_output_version: 0,
         session_id: c.identity().session_id.clone(),
         upload_id: Uuid::new_v4().to_string(),
         accepted: Some(worker::Acknowledge {

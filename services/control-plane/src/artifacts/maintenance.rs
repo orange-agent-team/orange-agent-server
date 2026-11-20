@@ -41,7 +41,7 @@ impl ArtifactStore {
             )
             .await?;
         }
-        let derived=sqlx::query("SELECT a.*,i.artifact_id AS source_id FROM worker_output_uploads w JOIN job_inputs i USING(job_id) JOIN artifacts source ON source.artifact_id=i.artifact_id JOIN artifacts a ON a.artifact_id=w.artifact_id WHERE a.root_id=$1 AND a.state!='deleted' AND source.state='deleted' ORDER BY a.created_at LIMIT $2 FOR UPDATE OF a SKIP LOCKED").bind(&self.inner.objects.root_id).bind(i64::from(limit)).fetch_all(&mut *tx).await?;
+        let derived=sqlx::query("SELECT a.*,i.artifact_id AS source_id FROM worker_output_uploads w JOIN result_source_bindings i USING(job_id) JOIN artifacts source ON source.artifact_id=i.artifact_id JOIN artifacts a ON a.artifact_id=w.artifact_id WHERE a.root_id=$1 AND a.state!='deleted' AND source.state='deleted' ORDER BY a.created_at LIMIT $2 FOR UPDATE OF a SKIP LOCKED").bind(&self.inner.objects.root_id).bind(i64::from(limit)).fetch_all(&mut *tx).await?;
         for row in &derived {
             let artifact: String = row.try_get("artifact_id")?;
             sqlx::query("UPDATE artifacts SET state='deleted',deleted_at=clock_timestamp() WHERE artifact_id=$1").bind(&artifact).execute(&mut *tx).await?;

@@ -173,6 +173,7 @@ fn hello(node: &str) -> worker::WorkerFrame {
             output_version: 0,
             cpu_cleanup_version: 0,
             transcription_input_version: 0,
+            transcription_output_version: 0,
         })),
     }
 }

@@ -20,6 +20,7 @@ mod quarantine;
 pub(crate) use quarantine::QuarantineRequest;
 mod settlement;
 mod storage;
+mod transcription_output;
 mod transfer;
 pub use delivery::ArtifactReader;
 use orange_protocol::{
@@ -103,6 +104,13 @@ pub struct ArtifactStore {
     inner: Arc<Inner>,
 }
 struct Inner {
+    #[cfg(feature = "transcription-input-tests")]
+    transcript_publish_gate: Mutex<
+        Option<(
+            tokio::sync::oneshot::Sender<()>,
+            tokio::sync::oneshot::Receiver<()>,
+        )>,
+    >,
     pool: PgPool,
     objects: storage::LocalObjects,
     slots: Arc<Semaphore>,
@@ -169,6 +177,8 @@ impl ArtifactStore {
         }
         Ok(Self {
             inner: Arc::new(Inner {
+                #[cfg(feature = "transcription-input-tests")]
+                transcript_publish_gate: Default::default(),
                 pool,
                 objects,
                 slots: Arc::new(Semaphore::new(4)),

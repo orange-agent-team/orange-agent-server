@@ -321,7 +321,7 @@ pub(crate) async fn source_read_in(
     job: &str,
     user: &str,
 ) -> Result<orange_protocol::grpc::worker::InputArtifact, ArtifactError> {
-    let row=sqlx::query("SELECT a.*,i.owner_id AS bound_owner FROM job_inputs i JOIN artifacts a USING(artifact_id) WHERE i.job_id=$1 AND a.owner_id=i.owner_id AND a.version_id=i.version_id AND a.sha256=i.artifact_sha256 AND a.size_bytes=i.size_bytes AND a.state='available' FOR SHARE OF a").bind(job).fetch_optional(&mut **tx).await?.ok_or(ArtifactError::Forbidden)?;
+    let row=sqlx::query("SELECT a.*,i.owner_id AS bound_owner FROM result_source_bindings i JOIN artifacts a USING(artifact_id) WHERE i.job_id=$1 AND a.owner_id=i.owner_id AND a.version_id=i.version_id AND a.sha256=i.artifact_sha256 AND a.size_bytes=i.size_bytes AND a.state='available' FOR SHARE OF a").bind(job).fetch_optional(&mut **tx).await?.ok_or(ArtifactError::Forbidden)?;
     let owner: String = row.try_get("bound_owner")?;
     let role = authority::user_scope(tx, user, &owner, false).await?;
     match (role, row.try_get::<Option<String>, _>("resource_id")?) {

@@ -68,6 +68,7 @@ struct ControlVersions {
     rejection_receipts_version: u32,
     input_artifacts_version: u32,
     transcription_input_version: u32,
+    transcription_output_version: u32,
     renewal_version: u32,
     output_version: u32,
     cpu_cleanup_version: u32,
@@ -84,6 +85,7 @@ pub struct ControlConnection {
     rejection_receipts_version: u32,
     input_artifacts_version: u32,
     transcription_input_version: u32,
+    transcription_output_version: u32,
     renewal_version: u32,
     output_version: u32,
     cpu_cleanup_version: u32,
@@ -222,6 +224,7 @@ impl ControlConnection {
             rejection_receipts_version,
             input_artifacts_version,
             transcription_input_version,
+            transcription_output_version,
             renewal_version,
             output_version,
             cpu_cleanup_version,
@@ -242,6 +245,7 @@ impl ControlConnection {
                     rejection_receipts_version,
                     input_artifacts_version,
                     transcription_input_version,
+                    transcription_output_version,
                     renewal_version,
                     output_version,
                     cpu_cleanup_version,
@@ -278,6 +282,7 @@ impl ControlConnection {
         if welcome.node_control_version != node_control_version
             || welcome.execution_control_version != execution_control_version
             || welcome.rejection_receipts_version != rejection_receipts_version
+            || welcome.transcription_output_version != transcription_output_version
             || welcome.transcription_input_version != transcription_input_version
             || welcome.input_artifacts_version != input_artifacts_version
             || welcome.renewal_version != renewal_version
@@ -311,6 +316,7 @@ impl ControlConnection {
             rejection_receipts_version,
             input_artifacts_version,
             transcription_input_version,
+            transcription_output_version,
             renewal_version,
             output_version,
             cpu_cleanup_version,

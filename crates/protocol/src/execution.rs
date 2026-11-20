@@ -17,13 +17,20 @@ pub fn output_header_digest(h: &worker::OutputHeader, a: &worker::Assignment) ->
             .is_some_and(u8::is_ascii_alphanumeric)
         || !valid_digest(&h.sha256)
         || !valid_digest(&h.response_digest)
-        || !(1..=1024 * 1024).contains(&h.size_bytes)
+        || (a.transcription_input.is_some() && h.transcription_output_version != 1)
+        || (a.transcription_input.is_none() && h.transcription_output_version != 0)
+        || !(1..=if a.transcription_input.is_some() {
+            crate::transcript::MAX_BYTES
+        } else {
+            1024 * 1024
+        })
+            .contains(&h.size_bytes)
         || ack.result != worker::AckResult::Accepted as i32
     {
         return None;
     }
     let accepted = acknowledge_digest(ack, a)?;
-    request_digest("worker.output.header.v1",&json!({"session_id":h.session_id,"upload_id":h.upload_id,"accepted_digest":accepted,"sha256":h.sha256,"size_bytes":h.size_bytes.to_string(),"response_digest":h.response_digest})).ok()
+    request_digest(if a.transcription_input.is_some(){"worker.transcription.output.header.v1"}else{"worker.output.header.v1"},&json!({"session_id":h.session_id,"upload_id":h.upload_id,"accepted_digest":accepted,"sha256":h.sha256,"size_bytes":h.size_bytes.to_string(),"response_digest":h.response_digest})).ok()
 }
 pub fn renewal_digest(
     r: &worker::ExecutionRenewalRequest,
@@ -417,6 +424,7 @@ mod tests {
     fn output_header_binds_exact_bytes_response_and_original_execution() {
         let a = assignment();
         let mut h = worker::OutputHeader {
+            transcription_output_version: 0,
             session_id: a.session_id.clone(),
             upload_id: "upload".into(),
             accepted: Some(worker::Acknowledge {

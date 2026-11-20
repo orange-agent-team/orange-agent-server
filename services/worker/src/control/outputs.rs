@@ -23,7 +23,12 @@ pub(crate) fn verify_receipt(
         || r.response_digest != h.response_digest
         || artifact.sha256 != h.sha256
         || artifact.size_bytes != h.size_bytes
-        || artifact.media_type != "application/vnd.orange.model-response+json"
+        || artifact.media_type
+            != if h.transcription_output_version == 1 {
+                orange_protocol::transcript::MEDIA
+            } else {
+                "application/vnd.orange.model-response+json"
+            }
     {
         return Err(ControlError::Protocol);
     }
@@ -49,6 +54,27 @@ impl ControlConnection {
         )
         .await
     }
+    pub async fn connect_transcription_outputs(
+        config: ControlConfig,
+        node: &mut NodeJournal,
+        journal: &mut ExecutionJournal,
+    ) -> Result<Self, ControlError> {
+        Self::connect_execution_mode(
+            config,
+            node,
+            journal,
+            ControlVersions {
+                rejection_receipts_version: 1,
+                input_artifacts_version: 1,
+                renewal_version: 1,
+                output_version: 1,
+                transcription_input_version: 1,
+                transcription_output_version: 1,
+                ..ControlVersions::default()
+            },
+        )
+        .await
+    }
     pub fn supports_output(&self) -> bool {
         self.output_version == 1
     }
@@ -60,6 +86,35 @@ impl ControlConnection {
         command: &str,
         candidate: &orange_protocol::model::ResponseCandidate,
     ) -> Result<worker::OutputReceipt, ControlError> {
+        let bytes = serde_json::to_vec(candidate).map_err(|_| ControlError::Invalid)?;
+        let digest = orange_protocol::request_digest("worker.cpu.candidate.v1", candidate)
+            .map_err(|_| ControlError::Invalid)?;
+        self.commit_candidate(journal, command, bytes, digest, 0)
+            .await
+    }
+    pub async fn commit_transcription_output(
+        &mut self,
+        journal: &mut ExecutionJournal,
+        command: &str,
+        candidate: &orange_protocol::transcript::TranscriptionResult,
+    ) -> Result<worker::OutputReceipt, ControlError> {
+        if self.transcription_output_version != 1 {
+            return Err(ControlError::Stale);
+        }
+        let bytes = serde_json::to_vec(candidate).map_err(|_| ControlError::Invalid)?;
+        let digest = orange_protocol::request_digest("worker.transcription.result.v1", candidate)
+            .map_err(|_| ControlError::Invalid)?;
+        self.commit_candidate(journal, command, bytes, digest, 1)
+            .await
+    }
+    async fn commit_candidate(
+        &mut self,
+        journal: &mut ExecutionJournal,
+        command: &str,
+        bytes: Vec<u8>,
+        response_digest: String,
+        version: u32,
+    ) -> Result<worker::OutputReceipt, ControlError> {
         if !self.supports_output() || !self.is_current_locally() {
             return Err(ControlError::Stale);
         }
@@ -67,15 +122,14 @@ impl ControlConnection {
             .record(command)
             .map_err(|_| ControlError::Unavailable)?
             .ok_or(ControlError::Invalid)?;
-        let bytes = serde_json::to_vec(candidate).map_err(|_| ControlError::Invalid)?;
         let h = worker::OutputHeader {
+            transcription_output_version: version,
             session_id: self.identity.session_id.clone(),
             upload_id: uuid::Uuid::new_v4().to_string(),
             accepted: Some(record.ack().map_err(|_| ControlError::Stale)?),
             sha256: hex::encode(Sha256::digest(&bytes)),
             size_bytes: bytes.len() as u64,
-            response_digest: orange_protocol::request_digest("worker.cpu.candidate.v1", candidate)
-                .map_err(|_| ControlError::Invalid)?,
+            response_digest,
         };
         let digest = output_header_digest(&h, &record.assignment).ok_or(ControlError::Invalid)?;
         journal

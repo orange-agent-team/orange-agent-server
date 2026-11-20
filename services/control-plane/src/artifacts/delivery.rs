@@ -38,6 +38,8 @@ impl ArtifactReader {
             audio_pause: Default::default(),
             store: ArtifactStore {
                 inner: Arc::new(Inner {
+                    #[cfg(feature = "transcription-input-tests")]
+                    transcript_publish_gate: Default::default(),
                     pool,
                     objects,
                     slots: Arc::new(Semaphore::new(4)),

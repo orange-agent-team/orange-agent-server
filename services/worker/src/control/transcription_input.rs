@@ -10,10 +10,14 @@ pub struct TranscriptionDownload {
     grant_id: String,
     assignment_digest: String,
     projection: String,
+    profile: String,
     buffer: Vec<u8>,
     first: Option<(AudioMeasurement, Option<String>, usize)>,
 }
 pub struct VerifiedTranscriptionInput {
+    measurement: AudioMeasurement,
+    projection: String,
+    profile: String,
     pub audio: Vec<u8>,
     pub accepted: Candidate,
     pub language: Option<String>,
@@ -43,6 +47,7 @@ impl TranscriptionDownload {
             grant_id: grant_id.into(),
             assignment_digest: assignment.payload_digest.clone(),
             projection: assignment.request_projection_digest.clone(),
+            profile: assignment.execution_profile_digest.clone(),
             buffer: Vec::new(),
             first: None,
         })
@@ -118,6 +123,7 @@ impl TranscriptionDownload {
             }
             Ok(v)
         };
+        let original = m.clone();
         let accepted = Candidate {
             model_version: m.model_version,
             audio_sha256: m.audio_sha256,
@@ -138,10 +144,57 @@ impl TranscriptionDownload {
             .validate()
             .map_err(|_| ControlError::Protocol)?;
         Ok(VerifiedTranscriptionInput {
+            measurement: original,
+            projection: self.projection,
+            profile: self.profile,
             audio: self.buffer,
             accepted,
             language,
         })
+    }
+}
+impl VerifiedTranscriptionInput {
+    pub fn output(
+        &self,
+        candidate: Candidate,
+        expected_compute: &str,
+    ) -> Result<orange_protocol::transcript::TranscriptionResult, ControlError> {
+        if candidate.model_version != self.accepted.model_version
+            || candidate.audio_sha256 != self.accepted.audio_sha256
+            || candidate.measure != self.accepted.measure
+        {
+            return Err(ControlError::Protocol);
+        }
+        let t = candidate.transcript.ok_or(ControlError::Protocol)?;
+        let result = orange_protocol::transcript::TranscriptionResult {
+            version: 1,
+            request_projection_digest: self.projection.clone(),
+            execution_profile_digest: self.profile.clone(),
+            measurement: self.measurement.clone(),
+            compute_type: t.compute_type,
+            language: t.language,
+            language_probability: t.language_probability,
+            text: t.text,
+            segments: t
+                .segments
+                .into_iter()
+                .map(|v| orange_protocol::transcript::TimedText {
+                    start_ms: v.start_ms,
+                    end_ms: v.end_ms,
+                    text: v.text,
+                })
+                .collect(),
+        };
+        if !result.matches(
+            &self.measurement,
+            &self.projection,
+            &self.profile,
+            expected_compute,
+            self.language.as_deref(),
+        ) {
+            return Err(ControlError::Protocol);
+        }
+        Ok(result)
     }
 }
 impl ControlConnection {
@@ -228,6 +281,7 @@ mod tests {
             grant_id: "grant".into(),
             assignment_digest: "a".repeat(64),
             projection: "b".repeat(64),
+            profile: "c".repeat(64),
             buffer: Vec::new(),
             first: None,
         }

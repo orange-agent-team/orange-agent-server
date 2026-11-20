@@ -22,6 +22,7 @@ pub mod grpc {
 pub mod team;
 pub mod tool_spec;
 pub mod tools;
+pub mod transcript;
 pub mod user;
 
 use orange_domain::Credits;

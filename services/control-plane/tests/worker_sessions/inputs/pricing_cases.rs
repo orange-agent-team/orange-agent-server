@@ -213,6 +213,7 @@ async fn execute_header(
     let a = assignment(&c.f).await;
     let bytes = serde_json::to_vec(response).expect("JSON");
     worker::OutputHeader {
+        transcription_output_version: 0,
         session_id: connection.identity().session_id.clone(),
         upload_id: Uuid::new_v4().to_string(),
         accepted: Some(worker::Acknowledge {

@@ -83,14 +83,43 @@ impl Buyer {
     }
 }
 
+#[derive(PartialEq, Eq, Clone, Copy)]
+enum Scenario {
+    Input,
+    Publish,
+    WithdrawOutput,
+    InvalidOutput,
+}
 #[tokio::test]
 async fn consent_and_confirmed_lease_gate_every_real_audio_chunk() {
+    run_case(Scenario::Input).await;
+}
+#[tokio::test]
+async fn same_verified_transcript_publishes_once_and_follows_deleted_source() {
+    run_case(Scenario::Publish).await;
+}
+#[tokio::test]
+async fn verified_output_bytes_remain_private_if_consent_is_revoked_before_publication() {
+    run_case(Scenario::WithdrawOutput).await;
+}
+#[tokio::test]
+async fn inconsistent_duration_cannot_publish_or_create_a_measurement_fact() {
+    run_case(Scenario::InvalidOutput).await;
+}
+
+async fn run_case(mode: Scenario) {
     let config = PathBuf::from(std::env::var("ORANGE_ASR_PROBE_FILE").expect("probe config"));
     let (_send, stop) = tokio::sync::watch::channel(false);
     let fact = orange_worker::host::probe_transcription(&config, stop)
         .await
         .expect("actual approved CPU profile");
-    let d = device("client-s").await;
+    let d = device(match mode {
+        Scenario::Input => "client-s",
+        Scenario::Publish => "client-v",
+        Scenario::WithdrawOutput => "client-w",
+        Scenario::InvalidOutput => "client-x",
+    })
+    .await;
     let db = &d.store;
     let root = tempfile::tempdir().expect("private root");
     std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).expect("private");
@@ -115,7 +144,11 @@ async fn consent_and_confirmed_lease_gate_every_real_audio_chunk() {
     )
     .merge(users);
     let reader = store.reader();
-    let server = Running::start_with_input(db, Some(reader.clone())).await;
+    let server = if mode == Scenario::Input {
+        Running::start_with_input(db, Some(reader.clone())).await
+    } else {
+        Running::start_with_output(db, store.clone()).await
+    };
     let mut raw = server
         .client(Some(&d.certificate))
         .await
@@ -134,13 +167,22 @@ async fn consent_and_confirmed_lease_gate_every_real_audio_chunk() {
     let mut journal =
         ExecutionJournal::open(&private.path().join("execution.sqlite"), d.node.clone())
             .expect("execution journal");
-    let mut conn = ControlConnection::connect_transcription_inputs(
-        worker_config(&server, &d),
-        &mut node,
-        &mut journal,
-    )
-    .await
-    .expect("negotiated lease-bound input");
+    let mut conn = if mode == Scenario::Input {
+        ControlConnection::connect_transcription_inputs(
+            worker_config(&server, &d),
+            &mut node,
+            &mut journal,
+        )
+        .await
+    } else {
+        ControlConnection::connect_transcription_outputs(
+            worker_config(&server, &d),
+            &mut node,
+            &mut journal,
+        )
+        .await
+    }
+    .expect("negotiated transport");
     let w = conn.identity().clone();
     let profile = Uuid::new_v4().to_string();
     sqlx::query("INSERT INTO reviewed_execution_profiles(execution_profile_id,model_version_id,model_sha256,execution_profile_digest) VALUES($1,$2,$3,$4)")
@@ -308,7 +350,9 @@ async fn consent_and_confirmed_lease_gate_every_real_audio_chunk() {
             409,
         )
         .await;
-    if let Ok(driver) = std::env::var("ORANGE_AUDIO_CONSENT_BROWSER") {
+    if mode == Scenario::Input
+        && let Ok(driver) = std::env::var("ORANGE_AUDIO_CONSENT_BROWSER")
+    {
         use tokio::io::AsyncWriteExt;
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("owned API");
         let addr = listener.local_addr().expect("port");
@@ -347,7 +391,8 @@ async fn consent_and_confirmed_lease_gate_every_real_audio_chunk() {
         api.await.expect("API stopped");
         assert!(status.success(), "browser flow");
     }
-    let no_jobs: i64 = sqlx::query_scalar("SELECT count(*) FROM jobs")
+    let no_jobs: i64 = sqlx::query_scalar("SELECT count(*) FROM jobs WHERE owner_id=$1")
+        .bind(&buyer.owner)
         .fetch_one(db.pool())
         .await
         .expect("jobs");
@@ -532,12 +577,177 @@ async fn consent_and_confirmed_lease_gate_every_real_audio_chunk() {
     .expect("within local lease")
     .expect("real provider-side inference");
     assert_eq!(candidate.measure, received.accepted.measure);
-    let transcript = candidate.transcript.expect("complete candidate");
+    let transcript = candidate.transcript.as_ref().expect("complete candidate");
     assert_eq!(transcript.language, "en");
     assert_eq!(
         hex::encode(Sha256::digest(transcript.text.as_bytes())),
         fact.transcript_sha256
     );
+    if mode != Scenario::Input {
+        use sqlx::Row;
+        let mut result = received
+            .output(candidate, &fact.profile.compute_type)
+            .expect("checked transcript");
+        if mode == Scenario::InvalidOutput {
+            result.measurement.duration_ms = "1".into();
+        }
+        let bytes = serde_json::to_vec(&result).expect("result bytes");
+        let recorded=sqlx::query("SELECT execution_journal_id,broker_grant_id,broker_epoch,slot_generation FROM worker_execution_attempts WHERE command_id=$1")
+            .bind(&record.command_id).fetch_one(db.pool()).await.expect("actual accepted ACK identity");
+        let ack = worker::Acknowledge {
+            command_id: record.command_id.clone(),
+            payload_digest: assignment.payload_digest.clone(),
+            lease: assignment.lease.clone(),
+            result: worker::AckResult::Accepted as i32,
+            execution_journal_id: recorded.get("execution_journal_id"),
+            broker_grant_id: recorded.get("broker_grant_id"),
+            broker_epoch: recorded.get::<i64, _>("broker_epoch") as u64,
+            slot_generation: recorded.get::<i64, _>("slot_generation") as u64,
+        };
+        let h = worker::OutputHeader {
+            transcription_output_version: 1,
+            session_id: w.session_id.clone(),
+            upload_id: Uuid::new_v4().to_string(),
+            accepted: Some(ack),
+            size_bytes: bytes.len() as u64,
+            sha256: hex::encode(Sha256::digest(&bytes)),
+            response_digest: orange_protocol::request_digest(
+                "worker.transcription.result.v1",
+                &result,
+            )
+            .expect("digest"),
+        };
+        let frames = || {
+            vec![
+                worker::OutputFrame {
+                    body: Some(worker::output_frame::Body::Header(h.clone())),
+                },
+                worker::OutputFrame {
+                    body: Some(worker::output_frame::Body::Data(worker::OutputData {
+                        offset: 0,
+                        data: bytes.clone(),
+                    })),
+                },
+            ]
+        };
+        let mut wrong = frames();
+        if let Some(worker::output_frame::Body::Header(header)) = &mut wrong[0].body {
+            header.transcription_output_version = 0;
+        }
+        assert!(
+            raw.commit_output(tokio_stream::iter(wrong)).await.is_err(),
+            "text header cannot commit audio"
+        );
+        let job_result = format!("{base}/jobs/{job}/result");
+        if mode == Scenario::Publish {
+            let receipt = raw
+                .commit_output(tokio_stream::iter(frames()))
+                .await
+                .expect("actual transcript published")
+                .into_inner();
+            assert_eq!(
+                receipt.artifact.as_ref().expect("artifact").media_type,
+                orange_protocol::transcript::MEDIA
+            );
+            let query = worker::OutputQuery {
+                session_id: w.session_id.clone(),
+                original: Some(h.clone()),
+            };
+            assert_eq!(
+                raw.query_output(query)
+                    .await
+                    .expect("receipt lookup")
+                    .into_inner(),
+                receipt
+            );
+            assert_eq!(
+                raw.commit_output(tokio_stream::iter(frames()))
+                    .await
+                    .expect("same immutable upload")
+                    .into_inner(),
+                receipt
+            );
+            let v = buyer.call(&app, "GET", &job_result, "", vec![], 200).await;
+            let url = format!(
+                "{base}/uploads/{}/content?version_id={}",
+                h.upload_id,
+                v["version_id"].as_str().expect("version")
+            );
+            let delivered = buyer.call(&app, "GET", &url, "", vec![], 200).await;
+            assert_eq!(
+                delivered,
+                serde_json::to_value(&result).expect("published document")
+            );
+            let fact_row=sqlx::query("SELECT duration_ms,source_sha256,response_digest FROM transcription_response_facts WHERE job_id=$1").bind(&job).fetch_one(db.pool()).await.expect("one immutable fact");
+            assert_eq!(fact_row.get::<i64, _>("duration_ms"), 11000);
+            assert_eq!(
+                fact_row.get::<String, _>("response_digest"),
+                h.response_digest
+            );
+            assert_eq!(
+                fact_row.get::<String, _>("source_sha256"),
+                fact.sample_sha256
+            );
+            buyer
+                .call(&app, "DELETE", &endpoint, upload, vec![], 200)
+                .await;
+            buyer.call(&app, "GET", &job_result, "", vec![], 403).await;
+            store
+                .collect(50)
+                .await
+                .expect("derived artifact collection");
+            let state: String =
+                sqlx::query_scalar("SELECT state FROM artifacts WHERE artifact_id=$1")
+                    .bind(v["artifact_id"].as_str().expect("id"))
+                    .fetch_one(db.pool())
+                    .await
+                    .expect("retired");
+            assert_eq!(state, "deleted");
+        } else {
+            if mode == Scenario::WithdrawOutput {
+                let (arrived, resume) = store.pause_verified_transcript_publication().await;
+                let mut client = raw.clone();
+                let data = frames();
+                let output =
+                    tokio::spawn(
+                        async move { client.commit_output(tokio_stream::iter(data)).await },
+                    );
+                tokio::time::timeout(Duration::from_secs(4), arrived)
+                    .await
+                    .expect("verified output written privately")
+                    .expect("gate");
+                buyer
+                    .call(
+                        &app,
+                        "DELETE",
+                        &format!("{path}/{grant}"),
+                        &grant,
+                        vec![],
+                        200,
+                    )
+                    .await;
+                resume.send(()).expect("resume final publication");
+                assert!(output.await.expect("joined").is_err());
+            } else {
+                assert!(
+                    raw.commit_output(tokio_stream::iter(frames()))
+                        .await
+                        .is_err(),
+                    "invalid decoded usage"
+                );
+            }
+            let facts:i64=sqlx::query_scalar("SELECT (SELECT count(*) FROM job_response_commits WHERE job_id=$1)+(SELECT count(*) FROM transcription_response_facts WHERE job_id=$1)").bind(&job).fetch_one(db.pool()).await.expect("no effects");
+            assert_eq!(facts, 0);
+            buyer.call(&app, "GET", &job_result, "", vec![], 409).await;
+            store.collect(50).await.expect("orphan transfer collected");
+        }
+        drop(conn);
+        drop(raw);
+        drop(foreign);
+        server.stop().await;
+        store.drain().await.expect("writer closed");
+        return;
+    }
     let step = orange_protocol::pricing::AUDIO_INPUT_CHUNK_BYTES;
     let mut next = read.clone();
     next.offset = step as u64;

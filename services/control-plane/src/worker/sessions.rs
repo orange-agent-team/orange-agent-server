@@ -26,6 +26,7 @@ pub struct DeviceSession {
     pub rejection_receipts_version: u32,
     pub input_artifacts_version: u32,
     pub transcription_input_version: u32,
+    pub transcription_output_version: u32,
     pub renewal_version: u32,
     pub output_version: u32,
     pub cpu_cleanup_version: u32,
@@ -56,6 +57,7 @@ impl WorkerSessionStore {
         let rejection_receipts_version = hello.rejection_receipts_version;
         let input_artifacts_version = hello.input_artifacts_version;
         let transcription_input_version = hello.transcription_input_version;
+        let transcription_output_version = hello.transcription_output_version;
         let renewal_version = hello.renewal_version;
         let output_version = hello.output_version;
         let cpu_cleanup_version = hello.cpu_cleanup_version;
@@ -68,6 +70,9 @@ impl WorkerSessionStore {
             || node_control_version > 2
             || execution_control_version > 2
             || rejection_receipts_version > 1
+            || transcription_output_version > 1
+            || (transcription_output_version == 1
+                && (transcription_input_version != 1 || output_version != 1))
             || transcription_input_version > 1
             || (transcription_input_version == 1 && input_artifacts_version != 1)
             || input_artifacts_version > 1
@@ -94,6 +99,11 @@ impl WorkerSessionStore {
             sqlx::query("UPDATE worker_sessions SET transcription_input_version=1 WHERE node_id=$1 AND session_id=$2")
                 .bind(node).bind(&id).execute(&mut *tx).await?;
         }
+        if transcription_output_version == 1 {
+            sqlx::query("UPDATE worker_sessions SET transcription_output_version=1 WHERE node_id=$1 AND session_id=$2")
+                .bind(node).bind(&id).execute(&mut *tx).await?;
+        }
+
         let policy_generation: i64 =
             sqlx::query_scalar("SELECT policy_generation FROM nodes WHERE node_id=$1")
                 .bind(node)
@@ -111,6 +121,7 @@ impl WorkerSessionStore {
             rejection_receipts_version,
             input_artifacts_version,
             transcription_input_version,
+            transcription_output_version,
             renewal_version,
             output_version,
             cpu_cleanup_version,
@@ -212,6 +223,13 @@ async fn current(
     let valid:Option<i64>=sqlx::query_scalar("SELECT connection_epoch FROM worker_sessions WHERE node_id=$1 AND gateway_instance_id=$2 AND connection_epoch=$3 AND session_id=$4 AND certificate_sha256=$5 AND node_control_version=$6 AND execution_control_version=$7 AND rejection_receipts_version=$8 AND input_artifacts_version=$9 AND renewal_version=$10 AND output_version=$11 AND cpu_cleanup_version=$12 AND expires_at>clock_timestamp() FOR UPDATE").bind(&s.node_id).bind(&s.gateway_instance_id).bind(s.connection_epoch).bind(&s.session_id).bind(&s.certificate_sha256).bind(s.node_control_version as i32).bind(s.execution_control_version as i32).bind(s.rejection_receipts_version as i32).bind(s.input_artifacts_version as i32).bind(s.renewal_version as i32).bind(s.output_version as i32).bind(s.cpu_cleanup_version as i32).fetch_optional(&mut **tx).await?;
     if valid.is_some() && s.transcription_input_version == 1 {
         let enabled:bool=sqlx::query_scalar("SELECT transcription_input_version=1 FROM worker_sessions WHERE node_id=$1 AND session_id=$2")
+            .bind(&s.node_id).bind(&s.session_id).fetch_one(&mut **tx).await?;
+        if !enabled {
+            return Err(SessionError::Stale);
+        }
+    }
+    if valid.is_some() && s.transcription_output_version == 1 {
+        let enabled:bool=sqlx::query_scalar("SELECT transcription_output_version=1 FROM worker_sessions WHERE node_id=$1 AND session_id=$2")
             .bind(&s.node_id).bind(&s.session_id).fetch_one(&mut **tx).await?;
         if !enabled {
             return Err(SessionError::Stale);

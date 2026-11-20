@@ -14,6 +14,7 @@ struct OutputScope {
     organization: bool,
     header_digest: String,
     input: worker::InputArtifact,
+    transcription: Option<super::transcription_output::TranscriptSource>,
 }
 impl ArtifactStore {
     async fn output_resource(
@@ -108,16 +109,32 @@ impl ArtifactStore {
         let organization = authority::user_scope(tx, &user, &owner, !historical)
             .await?
             .is_some();
-        let input = if historical {
-            inputs::source_read_in(tx, &lease.job_id, &user).await?
+        let (input, transcription) = if assignment.transcription_input.is_some() {
+            let (input, source) = self
+                .transcript_source(tx, s, &assignment, &owner, &user, historical)
+                .await?;
+            // Financial admission is separate until trusted ASR prices, usage and settlement are installed.
+            let reserved: i64 = sqlx::query_scalar("SELECT reserved FROM jobs WHERE job_id=$1")
+                .bind(&lease.job_id)
+                .fetch_one(&mut **tx)
+                .await?;
+            if reserved != 0 {
+                return Err(ArtifactError::PricingUnavailable);
+            }
+            (input, Some(source))
         } else {
-            inputs::check_input_in(tx, &lease.job_id)
-                .await?
-                .ok_or(ArtifactError::Forbidden)?
+            let input = if historical {
+                inputs::source_read_in(tx, &lease.job_id, &user).await?
+            } else {
+                inputs::check_input_in(tx, &lease.job_id)
+                    .await?
+                    .ok_or(ArtifactError::Forbidden)?
+            };
+            if assignment.input_artifacts != vec![input.clone()] {
+                return Err(ArtifactError::Integrity);
+            }
+            (input, None)
         };
-        if assignment.input_artifacts != vec![input.clone()] {
-            return Err(ArtifactError::Integrity);
-        }
         Ok(OutputScope {
             job: lease.job_id.clone(),
             owner,
@@ -125,6 +142,7 @@ impl ArtifactStore {
             organization,
             header_digest: digest,
             input,
+            transcription,
         })
     }
     async fn finish_output_scope(
@@ -138,6 +156,21 @@ impl ArtifactStore {
             let live:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM worker_execution_attempts WHERE command_id=$1 AND session_id=$2 AND state='started' AND lease_expires_at>clock_timestamp())").bind(&h.accepted.as_ref().ok_or(ArtifactError::Invalid)?.command_id).bind(&s.session_id).fetch_one(&mut *tx).await?;
             if !live {
                 return Err(ArtifactError::Expired);
+            }
+        }
+        if !historical && h.transcription_output_version == 1 {
+            let lease = h
+                .accepted
+                .as_ref()
+                .and_then(|a| a.lease.as_ref())
+                .ok_or(ArtifactError::Invalid)?;
+            let live:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM jobs j JOIN quotes q USING(quote_id) JOIN quote_execution_plans p USING(quote_id)
+                JOIN transcription_input_candidates c ON c.owner_id=j.owner_id AND c.invocation_id=j.invocation_id AND c.author_id=j.submitting_user_id
+                AND c.root_budget_id=j.root_budget_id AND c.projection_digest=q.projection_digest AND c.node_id=p.target_node_id AND c.execution_profile_id=p.execution_profile_id
+                WHERE j.job_id=$1 AND c.session_id=$2 AND c.connection_epoch=$3 AND p.job_deadline>clock_timestamp())")
+                .bind(&lease.job_id).bind(&s.session_id).bind(s.connection_epoch).fetch_one(&mut *tx).await?;
+            if !live {
+                return Err(ArtifactError::Forbidden);
             }
         }
         crate::worker::sessions::finish(tx, s)
@@ -210,7 +243,7 @@ impl ArtifactStore {
                 .execute(&mut *tx)
                 .await?;
             }
-            sqlx::query("INSERT INTO artifacts(artifact_id,version_id,root_id,owner_id,creator_id,resource_id,sha256,size_bytes,media_type) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)").bind(&artifact).bind(&version).bind(&self.inner.objects.root_id).bind(&scope.owner).bind(&scope.user).bind(scope.organization.then_some(&artifact)).bind(&h.sha256).bind(h.size_bytes as i64).bind(MEDIA).execute(&mut *tx).await?;
+            sqlx::query("INSERT INTO artifacts(artifact_id,version_id,root_id,owner_id,creator_id,resource_id,sha256,size_bytes,media_type) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)").bind(&artifact).bind(&version).bind(&self.inner.objects.root_id).bind(&scope.owner).bind(&scope.user).bind(scope.organization.then_some(&artifact)).bind(&h.sha256).bind(h.size_bytes as i64).bind(if scope.transcription.is_some(){orange_protocol::transcript::MEDIA}else{MEDIA}).execute(&mut *tx).await?;
             sqlx::query("INSERT INTO artifact_uploads(owner_id,upload_id,artifact_id,request_digest) VALUES($1,$2,$3,$4)").bind(&scope.owner).bind(&h.upload_id).bind(&artifact).bind(&scope.header_digest).execute(&mut *tx).await?;
             sqlx::query("INSERT INTO worker_output_uploads(job_id,attempt_id,node_id,upload_id,artifact_id,header_digest,response_digest,original_header) VALUES($1,$2,$3,$4,$5,$6,$7,$8)").bind(&scope.job).bind(&h.accepted.as_ref().and_then(|a|a.lease.as_ref()).ok_or(ArtifactError::Invalid)?.attempt_id).bind(&s.node_id).bind(&h.upload_id).bind(&artifact).bind(&scope.header_digest).bind(&h.response_digest).bind(h.encode_to_vec()).execute(&mut *tx).await?;
             sqlx::query("UPDATE artifact_capacity SET records=records+1 WHERE root_id=$1")
@@ -380,6 +413,14 @@ impl ArtifactStore {
             if Instant::now() >= deadline {
                 return Err(ArtifactError::Expired);
             }
+            #[cfg(feature = "transcription-input-tests")]
+            if h.transcription_output_version == 1
+                && let Some((arrived, resume)) =
+                    self.inner.transcript_publish_gate.lock().await.take()
+            {
+                let _ = arrived.send(());
+                resume.await.map_err(|_| ArtifactError::Unavailable)?;
+            }
             self.publish_output(sessions, s, h, &t, deadline, usage.as_ref())
                 .await
         }
@@ -409,6 +450,23 @@ impl ArtifactStore {
         h: &worker::OutputHeader,
         bytes: &[u8],
     ) -> Result<Option<orange_model_runtime::meter_service::MeasuredOutput>, ArtifactError> {
+        let mut tx = self.inner.pool.begin().await?;
+        let scope = self.output_scope(&mut tx, sessions, s, h, false).await?;
+        let key:String=sqlx::query_scalar("SELECT t.published_key FROM artifacts a JOIN artifact_transfers t ON a.published_transfer_id=t.transfer_id WHERE a.artifact_id=$1 AND a.root_id=$2 AND a.state='available' AND t.state='attached' AND NOT t.published_deleted").bind(&scope.input.artifact_id).bind(&self.inner.objects.root_id).fetch_optional(&mut *tx).await?.ok_or(ArtifactError::Integrity)?;
+        self.finish_output_scope(tx, s, h, false).await?;
+        let request = self
+            .inner
+            .objects
+            .read(&key, scope.input.size_bytes)
+            .await?
+            .to_vec();
+        if hex::encode(Sha256::digest(&request)) != scope.input.sha256 {
+            return Err(ArtifactError::Integrity);
+        }
+        if let Some(audio) = scope.transcription {
+            audio.validate(bytes, &h.response_digest)?;
+            return Ok(None);
+        }
         let value = orange_protocol::canonical::parse_tool_arguments(
             std::str::from_utf8(bytes).map_err(|_| ArtifactError::Invalid)?,
         )
@@ -424,19 +482,6 @@ impl ArtifactStore {
         }
         orange_model_runtime::metering::project_candidate(&candidate)
             .map_err(|_| ArtifactError::Invalid)?;
-        let mut tx = self.inner.pool.begin().await?;
-        let scope = self.output_scope(&mut tx, sessions, s, h, false).await?;
-        let key:String=sqlx::query_scalar("SELECT t.published_key FROM artifacts a JOIN artifact_transfers t ON a.published_transfer_id=t.transfer_id WHERE a.artifact_id=$1 AND a.root_id=$2 AND a.state='available' AND t.state='attached' AND NOT t.published_deleted").bind(&scope.input.artifact_id).bind(&self.inner.objects.root_id).fetch_optional(&mut *tx).await?.ok_or(ArtifactError::Integrity)?;
-        self.finish_output_scope(tx, s, h, false).await?;
-        let request = self
-            .inner
-            .objects
-            .read(&key, scope.input.size_bytes)
-            .await?
-            .to_vec();
-        if hex::encode(Sha256::digest(&request)) != scope.input.sha256 {
-            return Err(ArtifactError::Integrity);
-        }
         let request: orange_protocol::model::GenerateRequest =
             serde_json::from_slice(&request).map_err(|_| ArtifactError::Integrity)?;
         request.validate().map_err(|_| ArtifactError::Integrity)?;
@@ -502,12 +547,28 @@ impl ArtifactStore {
                     version_id: t.view.version_id.clone(),
                     sha256: h.sha256.clone(),
                     size_bytes: h.size_bytes,
-                    media_type: MEDIA.into(),
+                    media_type: if scope.transcription.is_some() {
+                        orange_protocol::transcript::MEDIA
+                    } else {
+                        MEDIA
+                    }
+                    .into(),
                 }),
                 response_digest: h.response_digest.clone(),
                 header_digest: scope.header_digest,
             };
             sqlx::query("INSERT INTO job_response_commits(job_id,commit_id,artifact_id,version_id,response_digest,receipt) VALUES($1,$2,$3,$4,$5,$6)").bind(&scope.job).bind(&receipt.commit_id).bind(&t.view.artifact_id).bind(&t.view.version_id).bind(&h.response_digest).bind(receipt.encode_to_vec()).execute(&mut *tx).await?;
+            if let Some(audio) = &scope.transcription {
+                audio
+                    .record(
+                        &mut tx,
+                        &scope.job,
+                        &scope.owner,
+                        &scope.input,
+                        &h.response_digest,
+                    )
+                    .await?;
+            }
             self.record_usage(&mut tx, &scope.job, &h.response_digest, usage)
                 .await?;
             sqlx::query("INSERT INTO artifact_pins(artifact_id,reference_id) VALUES($1,$2)")
