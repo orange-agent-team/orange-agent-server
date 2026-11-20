@@ -22,6 +22,10 @@ if not rustup:
 # Resolve in the repository so rustup reads its checked-in rust-toolchain.toml.
 cargo = Path(subprocess.check_output([rustup,'which','cargo'],cwd=root,text=True).strip())
 
+protoc = os.environ.get('PROTOC') or shutil.which('protoc') or next((str(p) for p in [Path('/opt/homebrew/bin/protoc'),Path('/usr/local/bin/protoc')] if p.is_file()),None)
+if not protoc or subprocess.check_output([protoc,'--version'],text=True).strip() != 'libprotoc 36.2':
+    raise SystemExit('The pinned Protobuf compiler 36.2 is required for the control-plane integration tests')
+
 def exact(env, suite, case):
     command = [str(cargo),'test','--locked','--offline','-p','orange-control-plane','--features','integration-tests','--test',suite,case,'--','--exact']
     result = subprocess.run(command, cwd=root, env=env, check=True, text=True, stdout=subprocess.PIPE)
@@ -31,7 +35,7 @@ def exact(env, suite, case):
 
 with database(args.database_url_file, 'orange_ownership_') as (_, url):
     env = {k:v for k,v in os.environ.items() if not k.startswith('ORANGE_')}
-    env.update(PATH=str(cargo.parent)+os.pathsep+env.get('PATH',''),ORANGE_TEST_DATABASE_URL=url,ORANGE_TEST_USER_CONFIG_FILE=str(args.identity_config.resolve()))
+    env.update(PROTOC=protoc,PATH=str(cargo.parent)+os.pathsep+env.get('PATH',''),ORANGE_TEST_DATABASE_URL=url,ORANGE_TEST_USER_CONFIG_FILE=str(args.identity_config.resolve()))
     if args.check == 'catalogue':
         exact(env,'postgres','resource_catalogue_resolves_each_business_owner_on_the_migrated_database')
     elif args.check == 'permissions':
