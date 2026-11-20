@@ -18,3 +18,16 @@ echo '{"prompt":"A ripe orange on a white ceramic plate.","seed":7341}' |
 每次调用需指定新的目标文件。当前用户独占运行槽。宿主只接受本次 attempt 的校验、加载、25 个连续步进及最终回执，检查编码摘要、严格 PNG 分块、尺寸、色彩格式和独立解码后的完整像素摘要。候选文件通过校验后才在目标目录原子发布。SIGINT 或 SIGTERM 到达宿主后会终止其拥有的子进程并等待回收。公开进度不包含提示词和图像内容。
 
 `python3 scripts/check-local-image.py` 覆盖非法选项、种子、超长输入、哈希错误、槽争用、既有输出保护、两次固定输入的真实生成，以及首次实际扩散步后取消。报告中的内存数据为同步回调处的 MPS 观察值。硬件、系统或框架改变后的像素一致性需分别测量。Windows/NVIDIA、Linux OCI、远端 Worker、付费交付和容量仍需各自的真实证据。
+
+## 离线开发包
+
+准备 macOS 专用依赖目录后运行验证脚本。脚本从当前提交独立构建两次 Rust 程序，重建 E09 wheel，对照专用锁和受审组件清单校验所有依赖，再在新目录完成离线安装和一次真实 MPS 生图。有 GPU 运算在途时应串行使用同一物理设备。
+
+```sh
+mkdir -p .local/image-wheelhouse
+uv export --project backends/environments/sdxl-macos --locked --no-dev --no-emit-project --no-header --format requirements-txt --output-file .local/image-wheelhouse/dependencies.txt
+python3.12 -m pip --isolated download --index-url https://pypi.org/simple --only-binary=:all: --no-deps --require-hashes --dest .local/image-wheelhouse -r .local/image-wheelhouse/dependencies.txt
+python3 scripts/check-embedding-distribution.py --profile image
+```
+
+合格压缩包和构建回执保存在 `.local/image-distributions/`。压缩包使用内容摘要命名，保留锁文件、已验证的第一方组件和离线依赖；模型与测试图像分别管理。

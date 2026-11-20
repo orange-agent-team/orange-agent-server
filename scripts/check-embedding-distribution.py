@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Qualify the current committed macOS local inference distribution with isolated builds and an offline install."""
 import argparse
+from local_distribution_profiles import PROFILES
 from pathlib import Path
 import json
 import subprocess
 import sys
 
 parser=argparse.ArgumentParser()
-parser.add_argument('--profile', choices=('embedding','transcription'), default='embedding')
+parser.add_argument('--profile', choices=tuple(PROFILES), default='embedding')
 profile=parser.parse_args().profile
 root=Path(__file__).resolve().parents[1]
 python=Path.home()/'.local/bin/python3.12'

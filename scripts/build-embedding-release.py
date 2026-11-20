@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Build the selected CPU release executables from two independent pinned source trees."""
 import argparse
+from local_distribution_profiles import PROFILES
 import hashlib
 import json
 import os
@@ -15,10 +16,10 @@ import tempfile
 root = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser()
 parser.add_argument("--commit", required=True)
-parser.add_argument("--profile", choices=("embedding", "transcription"), default="embedding")
+parser.add_argument("--profile", choices=tuple(PROFILES), default="embedding")
 args = parser.parse_args()
-programs = ("orange-embedding-host", "examples/local-embeddings") if args.profile == "embedding" else ("orange-transcribe",)
-target_args = ["--features", "embedding-host", "--bin", programs[0], "--example", "local-embeddings"] if args.profile == "embedding" else ["--bin", programs[0]]
+programs = PROFILES[args.profile].programs
+target_args = PROFILES[args.profile].cargo_args
 if len(args.commit)!=40 or any(c not in "0123456789abcdef" for c in args.commit):
     raise SystemExit("Supply a complete immutable local commit")
 if platform.system()!="Darwin" or platform.machine()!="arm64":

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Assemble a deterministic local runtime archive and verify a fresh offline installation."""
 import argparse
+from local_distribution_profiles import PROFILES
 import gzip
 import hashlib
 import io
@@ -24,7 +25,7 @@ p.add_argument('--backend-wheel',type=Path,required=True)
 p.add_argument('--uv-cache',type=Path,required=True,help='Offline cache containing the pinned Python build backend')
 p.add_argument('--model-cache',type=Path,required=True)
 p.add_argument('--output-dir',type=Path,required=True)
-p.add_argument('--profile', choices=('embedding','transcription'), default='embedding')
+p.add_argument('--profile', choices=tuple(PROFILES), default='embedding')
 args=p.parse_args()
 profile=args.profile
 if sys.version_info[:2]!=(3,12) or platform.machine()!='arm64' or sys.platform!='darwin':
@@ -46,7 +47,7 @@ builds=native['builds']
 if len(builds)!=2 or builds[0]!=builds[1] or not native['reproducible'] or native['target']!='aarch64-apple-darwin':
     raise ValueError('Two identical native builds required')
 files={}
-programs = ['local-embeddings','orange-embedding-host'] if profile=='embedding' else ['orange-transcribe']
+programs = [Path(program).name for program in PROFILES[profile].programs]
 for name in programs:
     data=(args.native/name).read_bytes()
     if sha(data)!=builds[0][name]:
@@ -59,7 +60,12 @@ for name in ['README.md','smoke.py']:
 for name in [f'config/local-{profile}.lock.json','backends/uv.lock','backends/pyproject.toml','Cargo.lock']:
     files[name]=tracked(commit,name)
 
-lock=tomllib.loads(files['backends/uv.lock'].decode())
+lock_name = PROFILES[profile].environment_lock
+if lock_name not in files:
+    files[lock_name] = tracked(commit,lock_name)
+    environment_project = str(Path(lock_name).with_name('pyproject.toml'))
+    files[environment_project] = tracked(commit,environment_project)
+lock=tomllib.loads(files[lock_name].decode())
 wheel_index={unquote(urlsplit(w['url']).path.rsplit('/',1)[-1]):(pkg,w)
              for pkg in lock['package'] for w in pkg.get('wheels',[])}
 requirements={}
@@ -90,12 +96,17 @@ with tempfile.TemporaryDirectory(prefix='oe-backend-') as temp:
     if (out/wheel.name).read_bytes()!=backend:
         raise ValueError('Supplied backend wheel differs from the complete pinned-source build')
 with ZipFile(io.BytesIO(backend)) as z:
-    for file in (('embedding.py','__init__.py') if profile=='embedding' else ('embedding.py','transcription.py','__init__.py')):
+    for file in PROFILES[profile].python_sources:
         name='orange_inference_backends/'+file
         if z.read(name)!=tracked(commit,'backends/'+name):
             raise ValueError('E09 wheel disagrees with pinned source')
+if profile == 'image':
+    approved = json.loads(files['config/local-image.lock.json'])['environment']
+    if sha(files[lock_name]) != approved['lock_sha256'] or set(requirements) != set(approved['packages']):
+        raise ValueError('Image wheelhouse must match the entire approved macOS runtime')
 files['wheels/'+wheel.name]=backend
-requirements['orange-inference-backends']=f"orange-inference-backends[{profile}]=={project['version']} --hash=sha256:"+sha(backend)
+extra = '' if profile=='image' else '['+profile+']'
+requirements['orange-inference-backends']=f"orange-inference-backends{extra}=={project['version']} --hash=sha256:"+sha(backend)
 files['requirements.txt']=('\n'.join(sorted(requirements.values()))+'\n').encode()
 manifest={'runtime_source':commit,'packaging_source':packaging,'target':native['target'],'model_assets':'external verified local cache',
           'sha256':{name:sha(data) for name,data in sorted(files.items())}}
