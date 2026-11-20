@@ -175,7 +175,7 @@ impl WorkerSessionStore {
         Ok(())
     }
 }
-async fn authorize(
+pub(crate) async fn authorize(
     tx: &mut Transaction<'_, Postgres>,
     node: &str,
     fingerprint: &str,

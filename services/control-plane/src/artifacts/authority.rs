@@ -49,6 +49,20 @@ pub(super) async fn resource(
         return Err(ArtifactError::NotFound);
     }
     let role = scope(tx, actor, owner, write).await?;
+    resource_role(tx, &actor.user, owner, row, role, write, deleted_metadata).await
+}
+pub(super) async fn resource_role(
+    tx: &mut Tx<'_>,
+    user: &str,
+    owner: &str,
+    row: &sqlx::postgres::PgRow,
+    role: Option<TeamRole>,
+    write: bool,
+    deleted_metadata: bool,
+) -> Result<(), ArtifactError> {
+    if row.try_get::<String, _>("owner_id")? != owner {
+        return Err(ArtifactError::NotFound);
+    }
     if !deleted_metadata && !write {
         crate::cloud_model::output_access(tx, row.try_get("artifact_id")?).await?;
     }
@@ -62,7 +76,7 @@ pub(super) async fn resource(
             }
             crate::team::resource_permission(
                 tx,
-                &actor.user,
+                user,
                 &id,
                 role,
                 if write {
@@ -83,7 +97,7 @@ pub(super) async fn resource(
                 .fetch_optional(&mut **tx)
                 .await?;
         if let Some(job) = job {
-            super::inputs::source_read_in(tx, &job, &actor.user).await?;
+            super::inputs::source_read_in(tx, &job, user).await?;
         }
     }
     Ok(())

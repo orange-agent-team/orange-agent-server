@@ -53,6 +53,15 @@ pub fn build_router(
             "/api/v1/owners/{owner}/uploads/{upload}/transcription-measurements",
             axum::routing::post(audio_measurement),
         )
+        .route(
+            "/api/v1/owners/{owner}/transcription-input-grants",
+            axum::routing::post(create_audio_grant),
+        )
+        .route(
+            "/api/v1/owners/{owner}/transcription-input-grants/{id}",
+            get(audio_grant_status).delete(revoke_audio_grant),
+        )
+        .route("/api/v1/transcription-targets/{id}", get(audio_target))
         .route("/api/v1/text-prices", get(prices))
         .route(
             "/api/v1/owners/{owner}/text-quotes",
@@ -101,6 +110,67 @@ pub fn build_router(
             audio,
         })
         .merge(connectors)
+}
+async fn audio_target(
+    State(api): State<Api>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Response, Error> {
+    let actor = api.identity.artifact_actor(&headers, false).await?;
+    Ok(private(
+        Json(api.store.audio_target(&actor, &id).await?).into_response(),
+    ))
+}
+async fn create_audio_grant(
+    State(api): State<Api>,
+    Path(owner): Path<String>,
+    headers: HeaderMap,
+    body: Result<
+        Json<orange_protocol::pricing::CreateTranscriptionInputGrant>,
+        axum::extract::rejection::JsonRejection,
+    >,
+) -> Result<Response, Error> {
+    let actor = api.identity.artifact_actor(&headers, true).await?;
+    let Json(r) = body.map_err(|_| ArtifactError::Invalid)?;
+    original_key(&headers, &r.grant_id)?;
+    #[cfg(unix)]
+    {
+        let meter = api.audio.as_ref().ok_or(ArtifactError::Unavailable)?;
+        Ok(private(
+            Json(
+                api.store
+                    .grant_audio_input(meter, &actor, &owner, &r)
+                    .await?,
+            )
+            .into_response(),
+        ))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (actor, owner, r);
+        Err(ArtifactError::Unavailable.into())
+    }
+}
+async fn audio_grant_status(
+    State(api): State<Api>,
+    Path((owner, id)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Response, Error> {
+    let actor = api.identity.artifact_actor(&headers, false).await?;
+    Ok(private(
+        Json(api.store.audio_grant_status(&actor, &owner, &id).await?).into_response(),
+    ))
+}
+async fn revoke_audio_grant(
+    State(api): State<Api>,
+    Path((owner, id)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Response, Error> {
+    let actor = api.identity.artifact_actor(&headers, true).await?;
+    original_key(&headers, &id)?;
+    Ok(private(
+        Json(api.store.revoke_audio_input(&actor, &owner, &id).await?).into_response(),
+    ))
 }
 async fn audio_measurement(
     State(api): State<Api>,

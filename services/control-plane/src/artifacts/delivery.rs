@@ -4,14 +4,18 @@ use orange_protocol::grpc::worker;
 use prost::Message;
 #[derive(Clone)]
 pub struct ArtifactReader {
-    store: ArtifactStore,
+    pub(super) store: ArtifactStore,
     owns_io: bool,
+    #[cfg(feature = "transcription-input-tests")]
+    pub(super) audio_pause: Arc<Mutex<Option<super::audio_delivery::AudioPause>>>,
 }
 impl ArtifactStore {
     pub fn reader(&self) -> ArtifactReader {
         ArtifactReader {
             store: self.clone(),
             owns_io: false,
+            #[cfg(feature = "transcription-input-tests")]
+            audio_pause: Default::default(),
         }
     }
 }
@@ -30,6 +34,8 @@ impl ArtifactReader {
         }
         Ok(Self {
             owns_io: true,
+            #[cfg(feature = "transcription-input-tests")]
+            audio_pause: Default::default(),
             store: ArtifactStore {
                 inner: Arc::new(Inner {
                     pool,
@@ -76,25 +82,21 @@ impl ArtifactReader {
             .await?;
         receive.await.map_err(|_| ArtifactError::Unavailable)?
     }
-    async fn authority(
+    pub(super) async fn started_assignment(
         &self,
         tx: &mut Tx<'_>,
         sessions: &WorkerSessionStore,
         s: &DeviceSession,
-        r: &worker::InputReadRequest,
-    ) -> Result<(worker::InputArtifact, String), ArtifactError> {
+        session_id: &str,
+        lease: &worker::Lease,
+    ) -> Result<worker::Assignment, ArtifactError> {
         sessions
             .authorize_in(tx, s)
             .await
             .map_err(|_| ArtifactError::Forbidden)?;
-        if s.input_artifacts_version != 1
-            || r.session_id != s.session_id
-            || r.max_bytes == 0
-            || r.max_bytes > 32768
-        {
+        if s.input_artifacts_version != 1 || session_id != s.session_id {
             return Err(ArtifactError::Invalid);
         }
-        let lease = r.lease.as_ref().ok_or(ArtifactError::Invalid)?;
         let (node_state, generation): (String, i64) =
             sqlx::query_as("SELECT state,policy_generation FROM nodes WHERE node_id=$1")
                 .bind(&s.node_id)
@@ -121,12 +123,31 @@ impl ArtifactReader {
         let bytes: Vec<u8> = row.try_get("assignment")?;
         let assignment =
             worker::Assignment::decode(bytes.as_slice()).map_err(|_| ArtifactError::Integrity)?;
-        if assignment.lease.as_ref() != Some(lease)
+        if assignment.node_id != s.node_id
+            || assignment.session_id != s.session_id
+            || assignment.node_policy_generation != generation as u64
+            || assignment.lease.as_ref() != Some(lease)
             || orange_protocol::execution::assignment_digest(&assignment).as_deref()
                 != Some(assignment.payload_digest.as_str())
         {
             return Err(ArtifactError::Forbidden);
         }
+        Ok(assignment)
+    }
+    async fn authority(
+        &self,
+        tx: &mut Tx<'_>,
+        sessions: &WorkerSessionStore,
+        s: &DeviceSession,
+        r: &worker::InputReadRequest,
+    ) -> Result<(worker::InputArtifact, String), ArtifactError> {
+        if r.max_bytes == 0 || r.max_bytes > 32768 {
+            return Err(ArtifactError::Invalid);
+        }
+        let lease = r.lease.as_ref().ok_or(ArtifactError::Invalid)?;
+        let assignment = self
+            .started_assignment(tx, sessions, s, &r.session_id, lease)
+            .await?;
         let input = super::inputs::check_input_in(tx, &lease.job_id)
             .await?
             .ok_or(ArtifactError::Forbidden)?;

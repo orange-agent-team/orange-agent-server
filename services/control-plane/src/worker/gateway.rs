@@ -363,6 +363,48 @@ impl WorkerGateway for Gateway {
             .map_err(|_| Status::deadline_exceeded("renewal deadline"))??;
         Ok(Response::new(result))
     }
+    async fn read_transcription_input(
+        &self,
+        request: Request<worker::TranscriptionInputRead>,
+    ) -> Result<Response<worker::TranscriptionInputChunk>, Status> {
+        let _permit = self
+            .input_slots
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| Status::resource_exhausted("input request limit"))?;
+        let reader = self
+            .artifacts
+            .as_ref()
+            .ok_or_else(|| Status::unavailable("artifact reader unavailable"))?;
+        let peer = fingerprint(&request)?;
+        let body = request.into_inner();
+        let operation = async {
+            let s = self
+                .store
+                .input_peer(&peer, &body.session_id)
+                .await
+                .map_err(status)?;
+            reader
+                .read_transcription_input(&self.store, &s, &body)
+                .await
+                .map_err(|err| match err {
+                    crate::artifacts::ArtifactError::Invalid => {
+                        Status::invalid_argument("invalid audio range")
+                    }
+                    crate::artifacts::ArtifactError::Busy => {
+                        Status::resource_exhausted("input request limit")
+                    }
+                    crate::artifacts::ArtifactError::Integrity => {
+                        Status::data_loss("audio integrity mismatch")
+                    }
+                    _ => Status::permission_denied("audio input unavailable"),
+                })
+        };
+        let result = tokio::time::timeout(Duration::from_secs(5), operation)
+            .await
+            .map_err(|_| Status::deadline_exceeded("audio read deadline"))??;
+        Ok(Response::new(result))
+    }
     async fn read_input(
         &self,
         request: Request<worker::InputReadRequest>,

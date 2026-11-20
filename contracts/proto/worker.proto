@@ -3,7 +3,7 @@ package orange.worker.v1;
 import "google/protobuf/timestamp.proto";
 
 // Transport peer identity comes from mTLS, never from node_id alone.
-service WorkerGateway { rpc ReportTranscriptionObservation(TranscriptionObservation) returns (TranscriptionObservationReceipt); rpc Control(stream WorkerFrame) returns (stream ServerFrame); rpc ReadInput(InputReadRequest) returns (InputReadReply); rpc RenewExecution(ExecutionRenewalRequest) returns (ExecutionRenewalReply); rpc CommitOutput(stream OutputFrame) returns (OutputReceipt); rpc QueryOutput(OutputQuery) returns (OutputReceipt); rpc ConfirmCpuCleanup(CpuCleanupRequest) returns (CpuCleanupReceipt); }
+service WorkerGateway { rpc ReadTranscriptionInput(TranscriptionInputRead) returns (TranscriptionInputChunk); rpc ReportTranscriptionObservation(TranscriptionObservation) returns (TranscriptionObservationReceipt); rpc Control(stream WorkerFrame) returns (stream ServerFrame); rpc ReadInput(InputReadRequest) returns (InputReadReply); rpc RenewExecution(ExecutionRenewalRequest) returns (ExecutionRenewalReply); rpc CommitOutput(stream OutputFrame) returns (OutputReceipt); rpc QueryOutput(OutputQuery) returns (OutputReceipt); rpc ConfirmCpuCleanup(CpuCleanupRequest) returns (CpuCleanupReceipt); }
 message Lease {
   string lease_id = 1;
   string job_id = 2;
@@ -159,4 +159,16 @@ message TranscriptionObservationReceipt {
   string execution_profile_id = 6;
   string execution_profile_digest = 7;
   string observation_digest = 8;
+}
+
+// A consent identifier is useful only with its exact confirmed Job lease and observed mTLS session.
+// Request one aligned chunk at a time. The opaque projection binds consent, source and target.
+message TranscriptionInputRead {
+  uint32 version = 1; string session_id = 2; Lease lease = 3;
+  string grant_id = 4; string projection_digest = 5; uint64 offset = 6;
+}
+message TranscriptionInputChunk {
+  uint32 version = 1; string grant_id = 2; string projection_digest = 3;
+  string artifact_id = 4; string version_id = 5; string audio_sha256 = 6;
+  uint64 size_bytes = 7; uint64 offset = 8; bytes data = 9; string chunk_sha256 = 10; bool eof = 11;
 }

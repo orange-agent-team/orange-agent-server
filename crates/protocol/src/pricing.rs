@@ -55,7 +55,7 @@ pub struct TextPriceView {
 pub struct MeasureAudio {
     pub version_id: String,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AudioMeasurement {
     pub artifact_id: String,
@@ -70,4 +70,49 @@ pub struct AudioMeasurement {
     pub normalized_samples: String,
     pub normalized_sha256: String,
     pub duration_ms: String,
+}
+
+/// Consent to send one measured immutable version to the observed node for one invocation.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateTranscriptionInputGrant {
+    pub grant_id: String,
+    pub root_budget_id: String,
+    pub invocation_id: String,
+    pub upload_id: String,
+    pub observation_id: String,
+    pub node_id: String,
+    pub region_id: String,
+    pub execution_profile_digest: String,
+    pub language: Option<String>,
+    pub ttl_seconds: u32,
+    pub allow_remote_transcription: bool,
+    pub measurement: AudioMeasurement,
+}
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TranscriptionGrantReceipt {
+    pub grant_id: String,
+    pub invocation_id: String,
+    pub observation_id: String,
+    pub projection_digest: String,
+    pub expires_at_unix: String,
+    pub state: String,
+}
+pub const AUDIO_INPUT_CHUNK_BYTES: usize = 32_768;
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TranscriptionInputTarget {
+    pub observation_id: String,
+    pub node_id: String,
+    pub region_id: String,
+    pub model_version: String,
+    pub execution_profile_digest: String,
+}
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TranscriptionInputWithdrawal {
+    pub grant_id: String,
+    pub state: String,
 }

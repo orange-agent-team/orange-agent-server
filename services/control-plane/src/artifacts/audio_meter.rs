@@ -42,6 +42,19 @@ impl AudioMeter {
         upload: &str,
         version: &str,
     ) -> Result<AudioMeasurement, ArtifactError> {
+        self.measure_source(store, actor, owner, upload, version, false)
+            .await
+            .map(|(measurement, _, _)| measurement)
+    }
+    pub(super) async fn measure_source(
+        &self,
+        store: &ArtifactStore,
+        actor: &ArtifactActor,
+        owner: &str,
+        upload: &str,
+        version: &str,
+        chunk_hashes: bool,
+    ) -> Result<(AudioMeasurement, ReadStamp, Vec<String>), ArtifactError> {
         if !valid_id(upload) || !valid_id(version) {
             return Err(ArtifactError::Invalid);
         }
@@ -67,20 +80,21 @@ impl AudioMeter {
             .try_acquire()
             .map_err(|_| ArtifactError::Busy)?;
         let (source, data, stamp) = store.read(actor, owner, upload, version).await?;
+        let encoded = data.to_bytes();
         let (_stop, cancel) = tokio::sync::watch::channel(false);
-        let result =
-            self.client
-                .measure(&data.to_vec(), cancel)
-                .await
-                .map_err(|error| match error {
-                    ModelError::Invalid | ModelError::Limit | ModelError::NoSpeech => {
-                        ArtifactError::Invalid
-                    }
-                    ModelError::Busy => ArtifactError::Busy,
-                    ModelError::Timeout => ArtifactError::Expired,
-                    ModelError::Changed | ModelError::Protocol => ArtifactError::Integrity,
-                    ModelError::Cancelled | ModelError::Unavailable => ArtifactError::Unavailable,
-                });
+        let result = self
+            .client
+            .measure(&encoded, cancel)
+            .await
+            .map_err(|error| match error {
+                ModelError::Invalid | ModelError::Limit | ModelError::NoSpeech => {
+                    ArtifactError::Invalid
+                }
+                ModelError::Busy => ArtifactError::Busy,
+                ModelError::Timeout => ArtifactError::Expired,
+                ModelError::Changed | ModelError::Protocol => ArtifactError::Integrity,
+                ModelError::Cancelled | ModelError::Unavailable => ArtifactError::Unavailable,
+            });
         // Revocation also suppresses codec/error information learned by the decoder.
         store.check_read_scope(actor, &source, &stamp, true).await?;
         let result = result?;
@@ -91,19 +105,31 @@ impl AudioMeter {
         if measured.format != format {
             return Err(ArtifactError::Invalid);
         }
-        Ok(AudioMeasurement {
-            artifact_id: source.artifact_id,
-            version_id: source.version_id,
-            audio_sha256: result.audio_sha256,
-            model_version: result.model_version,
-            preprocessing: measured.preprocessing,
-            codec: measured.codec,
-            format: measured.format,
-            source_sample_rate: measured.sample_rate,
-            source_samples: measured.source_samples.to_string(),
-            normalized_samples: measured.normalized_samples.to_string(),
-            normalized_sha256: measured.normalized_sha256,
-            duration_ms: measured.duration_ms.to_string(),
-        })
+        let chunks = if chunk_hashes {
+            encoded
+                .chunks(orange_protocol::pricing::AUDIO_INPUT_CHUNK_BYTES)
+                .map(|part| hex::encode(Sha256::digest(part)))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        Ok((
+            AudioMeasurement {
+                artifact_id: source.artifact_id,
+                version_id: source.version_id,
+                audio_sha256: result.audio_sha256,
+                model_version: result.model_version,
+                preprocessing: measured.preprocessing,
+                codec: measured.codec,
+                format: measured.format,
+                source_sample_rate: measured.sample_rate,
+                source_samples: measured.source_samples.to_string(),
+                normalized_samples: measured.normalized_samples.to_string(),
+                normalized_sha256: measured.normalized_sha256,
+                duration_ms: measured.duration_ms.to_string(),
+            },
+            stamp,
+            chunks,
+        ))
     }
 }

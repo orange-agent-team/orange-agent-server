@@ -184,6 +184,32 @@ impl LocalObjects {
         }
         Ok(data)
     }
+    pub async fn verified_audio_chunk(
+        &self,
+        key: &str,
+        size: u64,
+        start: u64,
+        expected: &str,
+    ) -> Result<Vec<u8>, ArtifactError> {
+        use orange_protocol::pricing::AUDIO_INPUT_CHUNK_BYTES;
+        if size > orange_protocol::artifacts::MEDIA_LIMIT
+            || start >= size
+            || !start.is_multiple_of(AUDIO_INPUT_CHUNK_BYTES as u64)
+        {
+            return Err(ArtifactError::Invalid);
+        }
+        self.check_file(key)?;
+        if self.op.stat(key).await?.content_length() != size {
+            return Err(ArtifactError::Integrity);
+        }
+        let end = (start + AUDIO_INPUT_CHUNK_BYTES as u64).min(size);
+        let data = self.op.read_with(key).range(start..end).await?.to_vec();
+        self.check_file(key)?;
+        if data.len() as u64 != end - start || hex::encode(Sha256::digest(&data)) != expected {
+            return Err(ArtifactError::Integrity);
+        }
+        Ok(data)
+    }
     pub async fn remove(&self, key: &str) -> Result<(), ArtifactError> {
         if !self.writable {
             return Err(ArtifactError::StoragePolicy);
