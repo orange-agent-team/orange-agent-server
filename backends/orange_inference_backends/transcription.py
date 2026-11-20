@@ -385,7 +385,15 @@ if __name__ == "__main__":
         signal.signal(signal.SIGALRM, signal.SIG_DFL)
         signal.alarm(660)
         slot = claim_slot(Path(sys.argv[2]))
-        print('{"ready":true,"protocol":1}', flush=True)
+        ready = {"ready": True, "protocol": 1}
+        if "ORANGE_ASR_INSTANCE" in os.environ:
+            instance = str(uuid.UUID(os.environ["ORANGE_ASR_INSTANCE"]))
+            info = os.fstat(slot)
+            with Path(sys.executable).resolve(strict=True).open("rb") as executable:
+                digest = hashlib.file_digest(executable, "sha256").hexdigest()
+            ready.update(instance=instance, pid=os.getpid(), python_sha256=digest,
+                         slot_dev=str(info.st_dev), slot_ino=str(info.st_ino))
+        print(json.dumps(ready, separators=(",", ":")), flush=True)
         result = execute()
     except BlockingIOError:
         result = {"error": "slot_busy"}

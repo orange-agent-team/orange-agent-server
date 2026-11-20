@@ -1,5 +1,7 @@
 //! Fixed MC-05 CPU profile. Decoded usage and complete segments are candidates for host-side publication.
+mod owned;
 mod qualification;
+pub use owned::OwnedTranscription;
 pub use qualification::{ExecutionProfile, ObservedRuntime, Qualification};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -170,7 +172,7 @@ impl Client {
         audio: &[u8],
         cancel: watch::Receiver<bool>,
     ) -> Result<Candidate, Error> {
-        self.run(audio, None, None, cancel).await
+        self.run(audio, None, None, cancel, None).await
     }
     pub async fn transcribe(
         &self,
@@ -192,7 +194,7 @@ impl Client {
             return Err(Error::Changed);
         }
         accepted.measure.validate()?;
-        self.run(audio, Some(&accepted.measure), language, cancel)
+        self.run(audio, Some(&accepted.measure), language, cancel, None)
             .await
     }
     async fn run(
@@ -201,6 +203,7 @@ impl Client {
         measure: Option<&Measure>,
         language: Option<&str>,
         mut cancel: watch::Receiver<bool>,
+        mut owner: Option<&mut owned::Attempt>,
     ) -> Result<Candidate, Error> {
         if *cancel.borrow() || cancel.has_changed().is_err() {
             return Err(Error::Cancelled);
@@ -219,7 +222,8 @@ impl Client {
         }
         let frame=serde_json::to_vec(&json!({"protocol":1,"attempt_id":uuid::Uuid::new_v4().to_string(),"action":if measure.is_some(){"transcribe"}else{"measure"},"model_version":MODEL,"files":pin["files"],
             "audio_bytes":audio.len(),"audio_sha256":digest,"language":language,"expected_measure":measure})).map_err(|_|Error::Protocol)?;
-        let mut child = Command::new(&self.python)
+        let mut process = Command::new(&self.python);
+        process
             .args(["-I", "-B", "-c", RUNNER])
             .arg(&self.model)
             .arg(&self.slot)
@@ -230,9 +234,12 @@ impl Client {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
-            .kill_on_drop(true)
-            .spawn()
-            .map_err(|_| Error::Unavailable)?;
+            .kill_on_drop(true);
+        if let Some(a) = owner.as_ref() {
+            process.env("ORANGE_ASR_INSTANCE", a.instance.to_string());
+        }
+        let mut child = process.spawn().map_err(|_| Error::Unavailable)?;
+        let pid = child.id().ok_or(Error::Unavailable)?;
         let io = async {
             let mut out = BufReader::new(child.stdout.take().ok_or(Error::Unavailable)?);
             let mut first = Vec::new();
@@ -242,7 +249,9 @@ impl Client {
                 .await
                 .map_err(|_| Error::Unavailable)?;
             let hello: Value = serde_json::from_slice(&first).map_err(|_| Error::Protocol)?;
-            if hello != json!({"ready":true,"protocol":1}) {
+            if let Some(a) = owner.as_deref_mut() {
+                a.bind(&hello, &self.slot, pid)?;
+            } else if hello != json!({"ready":true,"protocol":1}) {
                 return Err(backend_error(&hello));
             }
             let mut input = child.stdin.take().ok_or(Error::Unavailable)?;
@@ -302,6 +311,13 @@ impl Client {
         let result = tokio::select! {biased;_=cancel.changed()=>Err(Error::Cancelled),v=tokio::time::timeout(deadline,io)=>v.unwrap_or(Err(Error::Timeout))};
         if result.is_err() && child.try_wait().map_err(|_| Error::Unavailable)?.is_none() {
             child.kill().await.map_err(|_| Error::Unavailable)?;
+        }
+        if let Some(a) = owner {
+            let status = child
+                .try_wait()
+                .map_err(|_| Error::Unavailable)?
+                .ok_or(Error::Unavailable)?;
+            a.reaped(&self.slot, pid, status)?;
         }
         result
     }

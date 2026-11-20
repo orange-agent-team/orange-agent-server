@@ -43,7 +43,10 @@ pub struct Qualification {
 }
 
 impl Client {
-    async fn observe(&self, mut cancel: watch::Receiver<bool>) -> Result<ObservedRuntime, Error> {
+    pub(super) async fn observe(
+        &self,
+        mut cancel: watch::Receiver<bool>,
+    ) -> Result<ObservedRuntime, Error> {
         if *cancel.borrow() || cancel.has_changed().is_err() {
             return Err(Error::Cancelled);
         }
