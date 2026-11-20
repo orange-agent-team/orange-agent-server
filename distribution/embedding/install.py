@@ -24,7 +24,7 @@ for name, expected in manifest["sha256"].items():
             raise SystemExit("Bundle digest mismatch: " + name)
 env = args.venv.absolute()
 env.mkdir(mode=0o700, exist_ok=False)
-venv.EnvBuilder(with_pip=True).create(env)
+venv.EnvBuilder(with_pip=True, symlinks=True).create(env)
 pip = [str(env / "bin/python"), "-I", "-m", "pip", "--isolated", "--disable-pip-version-check"]
 subprocess.run(pip + ["install", "--no-index", "--no-cache-dir", "--only-binary=:all:",
                       "--find-links", str(root / "wheels"), "--require-hashes", "-r",

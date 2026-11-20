@@ -81,7 +81,7 @@ manifest={'runtime_source':commit,'packaging_source':packaging,'target':native['
 files['manifest.json']=(json.dumps(manifest,indent=2)+'\n').encode()
 
 def archive(path):
-    with path.open('xb') as out,gzip.GzipFile(fileobj=out,filename='',mtime=0) as compressed:
+    with path.open('xb') as out,gzip.GzipFile(fileobj=out,mode='wb',filename='',mtime=0) as compressed:
         with tarfile.open(fileobj=compressed,mode='w') as tar:
             for name,data in sorted(files.items()):
                 entry=tarfile.TarInfo('orange-embedding/'+name)
