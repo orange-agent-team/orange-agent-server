@@ -23,13 +23,6 @@ fn source(
         .cloned()
         .ok_or_else(missing)
 }
-async fn opted(g: &mut UserSessionGuard, run: &str) -> Result<bool, UserApiError> {
-    sqlx::query_scalar("SELECT EXISTS(SELECT FROM cloud_document_source_opt_ins WHERE run_id=$1)")
-        .bind(run)
-        .fetch_one(&mut **g.transaction())
-        .await
-        .map_err(db)
-}
 fn map_source(e: Error) -> UserApiError {
     match e {
         Error::Denied => denied(),
@@ -51,7 +44,7 @@ pub(super) async fn inventory(
     h: HeaderMap,
 ) -> Result<Json<Value>, UserApiError> {
     let (mut g, active) = guard(&i, &h, &run, false, false).await?;
-    let opt = opted(&mut g, &run).await?;
+    let opt = super::external_grants::document_opted(&mut g, &run).await?;
     let faults = disabled(&mut g).await?;
     let sources: Vec<_> = i
         .notion_sources
@@ -84,7 +77,7 @@ pub(super) async fn grant(
 ) -> Result<Json<Value>, UserApiError> {
     let Json(mut c) = body.map_err(|_| AuthError::Invalid)?;
     let (mut g, _) = guard(&i, &h, &run, true, true).await?;
-    if !opted(&mut g, &run).await? {
+    if !super::external_grants::document_opted(&mut g, &run).await? {
         return Err(UserApiError(
             StatusCode::FORBIDDEN,
             "DOCUMENT_CONNECTORS_DISABLED",

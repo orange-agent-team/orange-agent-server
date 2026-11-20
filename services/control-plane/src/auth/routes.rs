@@ -30,6 +30,11 @@ pub(crate) fn hosted_connector_router(
 ) -> Router {
     model_connectors::router(i, s)
 }
+#[path = "confluence_connector.rs"]
+mod confluence_connector;
+pub fn confluence_router(i: UserIdentity, s: Option<crate::artifacts::ArtifactStore>) -> Router {
+    confluence_connector::router(i, s)
+}
 #[path = "external_grants.rs"]
 mod external_grants;
 #[path = "notion_connector.rs"]

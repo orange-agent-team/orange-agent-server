@@ -494,7 +494,7 @@ impl Client {
         )
         .await
     }
-    async fn verify_attachment<F, Fut>(
+    pub(super) async fn verify_attachment<F, Fut>(
         &self,
         s: &Space,
         m: &Attachment,

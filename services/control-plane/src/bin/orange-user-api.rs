@@ -87,6 +87,17 @@ async fn serve(
     } else {
         identity
     };
+    #[cfg(unix)]
+    let identity = if let Some(path) = env::var_os("ORANGE_CONFLUENCE_SOURCES") {
+        let mut identity = identity;
+        identity.confluence_sources =
+            orange_control_plane::confluence::registry::Sources::load_private(
+                std::path::Path::new(&path),
+            )?;
+        identity
+    } else {
+        identity
+    };
     let artifacts = if let Some(root) = env::var_os("ORANGE_ARTIFACT_ROOT") {
         let bytes = env::var("ORANGE_ARTIFACT_BYTE_LIMIT")
             .unwrap_or_else(|_| "1073741824".into())
@@ -107,7 +118,10 @@ async fn serve(
     } else {
         None
     };
-    let mut app = routes::router(identity.clone());
+    let mut app = routes::router(identity.clone()).merge(routes::confluence_router(
+        identity.clone(),
+        artifacts.clone(),
+    ));
     if let Some(objects) = &artifacts {
         app = app.merge(orange_control_plane::artifacts::http::router(
             identity,

@@ -20,13 +20,17 @@ use serde_json::{Value, json};
 use sqlx::PgPool;
 use tower::ServiceExt;
 use uuid::Uuid;
+#[cfg(all(unix, feature = "confluence-fixture-tests"))]
+#[path = "user_identity/confluence_consent.rs"]
+mod confluence_consent;
 #[cfg(all(
     unix,
     any(
         feature = "pg-view-tests",
         feature = "s3-source-tests",
         feature = "repository-fixture-tests",
-        feature = "notion-fixture-tests"
+        feature = "notion-fixture-tests",
+        feature = "confluence-fixture-tests"
     )
 ))]
 #[path = "user_identity/connector_run.rs"]

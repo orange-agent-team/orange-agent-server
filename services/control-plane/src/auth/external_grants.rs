@@ -59,3 +59,14 @@ pub(super) async fn complete(
     }
     Ok(())
 }
+
+pub(super) async fn document_opted(
+    g: &mut UserSessionGuard,
+    run: &str,
+) -> Result<bool, UserApiError> {
+    sqlx::query_scalar("SELECT EXISTS(SELECT FROM cloud_document_source_opt_ins WHERE run_id=$1)")
+        .bind(run)
+        .fetch_one(&mut **g.transaction())
+        .await
+        .map_err(db)
+}

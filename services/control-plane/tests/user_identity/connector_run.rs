@@ -99,7 +99,11 @@ pub(super) async fn browser(f: &Fixture, run: &str, driver: String) -> Value {
     receipt
 }
 
-#[cfg(any(feature = "repository-fixture-tests", feature = "notion-fixture-tests"))]
+#[cfg(any(
+    feature = "repository-fixture-tests",
+    feature = "notion-fixture-tests",
+    feature = "confluence-fixture-tests"
+))]
 pub(super) async fn opted_in(f: &Fixture, legacy: &str, flag: &str) -> String {
     use sqlx::Row;
     // Admission uses the real create handler. Only the platform Host's readiness is a fixture here.

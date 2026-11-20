@@ -24,6 +24,7 @@ pub struct UserIdentity {
     pub pool: PgPool,
     pub config: Arc<UserOidcConfig>,
     provider: OidcProvider,
+    pub confluence_sources: crate::confluence::registry::Sources,
     pub notion_sources: crate::notion::registry::Sources,
     pub repository_sources: crate::repo_connector::registry::Sources,
     pub s3_sources: crate::s3_sources::Sources,
@@ -95,6 +96,7 @@ impl UserIdentity {
             s3_sources: Default::default(),
             repository_sources: Default::default(),
             notion_sources: Default::default(),
+            confluence_sources: Default::default(),
             provider,
         })
     }

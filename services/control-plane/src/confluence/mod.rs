@@ -1,5 +1,6 @@
 //! CN-04 signed space navigation and version-bound attachment acquisition.
 mod adf;
+pub mod registry;
 mod wire;
 use crate::document_handles::Seals;
 use serde::{Deserialize, Serialize};
@@ -237,6 +238,47 @@ impl Source {
         })
         .transpose()
     }
+    pub(crate) fn expected_attachment(
+        &self,
+        s: &Scope,
+        a: &Action,
+    ) -> Result<Option<Attachment>, Error> {
+        match a {
+            Action::ReadAttachment { space, attachment } => {
+                Ok(Some(self.attachment_handle(s, space, attachment)?))
+            }
+            _ => Ok(None),
+        }
+    }
+    pub(crate) async fn current_attachment<F, Fut>(
+        &self,
+        s: &Scope,
+        alias: &str,
+        meta: &Attachment,
+        check: F,
+    ) -> Result<(), Error>
+    where
+        F: Fn() -> Fut + Send + Sync,
+        Fut: std::future::Future<Output = Result<(), Error>> + Send,
+    {
+        let space = self.space(s, alias)?;
+        if space.id != meta.space {
+            return Err(Error::Denied);
+        }
+        tokio::time::timeout(Duration::from_secs(30), async {
+            self.client
+                .verify_tenant(&self.registration, &check)
+                .await?;
+            self.client.verify_space(space, &check).await?;
+            self.client.verify_attachment(space, meta, &check).await?;
+            self.client
+                .verify_tenant(&self.registration, &check)
+                .await?;
+            self.client.verify_space(space, &check).await
+        })
+        .await
+        .map_err(|_| Error::Unavailable)?
+    }
     pub async fn execute<F, Fut>(&self, s: &Scope, a: Action, admit: F) -> Result<ResultData, Error>
     where
         F: Fn() -> Fut + Send + Sync,
@@ -395,5 +437,8 @@ impl Source {
     }
 }
 
+#[cfg(any(test, feature = "confluence-fixture-tests"))]
+#[doc(hidden)]
+pub mod fixtures;
 #[cfg(test)]
 mod tests;

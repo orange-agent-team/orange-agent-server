@@ -218,6 +218,7 @@ fn key_valid(key: &str) -> Result<(), ArtifactError> {
     let id = key
         .strip_prefix("staging-")
         .or_else(|| key.strip_prefix("published-"))
+        .or_else(|| key.strip_prefix("quarantine-"))
         .ok_or(ArtifactError::StoragePolicy)?;
     uuid::Uuid::parse_str(id).map_err(|_| ArtifactError::StoragePolicy)?;
     Ok(())

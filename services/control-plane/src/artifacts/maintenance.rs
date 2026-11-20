@@ -154,6 +154,7 @@ impl ArtifactStore {
             tx.commit().await?;
             cleaned += 1;
         }
-        Ok(cleaned)
+        let remaining = limit.saturating_sub(u16::try_from(cleaned).unwrap_or(u16::MAX));
+        Ok(cleaned + self.collect_quarantine(remaining).await?)
     }
 }

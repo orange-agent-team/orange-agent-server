@@ -10,6 +10,8 @@ pub(crate) mod inputs;
 mod maintenance;
 mod outputs;
 mod pricing;
+mod quarantine;
+pub(crate) use quarantine::QuarantineRequest;
 mod settlement;
 mod storage;
 mod transfer;
