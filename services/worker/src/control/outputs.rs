@@ -75,6 +75,29 @@ impl ControlConnection {
         )
         .await
     }
+    /// Enables the separately negotiated durable CPU cleanup channel for development-credit work.
+    pub async fn connect_managed_transcription(
+        config: ControlConfig,
+        node: &mut NodeJournal,
+        journal: &mut ExecutionJournal,
+    ) -> Result<Self, ControlError> {
+        Self::connect_execution_mode(
+            config,
+            node,
+            journal,
+            ControlVersions {
+                rejection_receipts_version: 1,
+                input_artifacts_version: 1,
+                renewal_version: 1,
+                output_version: 1,
+                cpu_cleanup_version: 1,
+                transcription_input_version: 1,
+                transcription_output_version: 1,
+                ..ControlVersions::default()
+            },
+        )
+        .await
+    }
     pub fn supports_output(&self) -> bool {
         self.output_version == 1
     }

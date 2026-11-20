@@ -62,6 +62,14 @@ pub fn build_router(
             get(audio_grant_status).delete(revoke_audio_grant),
         )
         .route("/api/v1/transcription-targets/{id}", get(audio_target))
+        .route(
+            "/api/v1/owners/{owner}/transcription-input-grants/{id}/prices",
+            get(audio_prices),
+        )
+        .route(
+            "/api/v1/owners/{owner}/transcription-quotes",
+            axum::routing::post(audio_quote),
+        )
         .route("/api/v1/text-prices", get(prices))
         .route(
             "/api/v1/owners/{owner}/text-quotes",
@@ -110,6 +118,36 @@ pub fn build_router(
             audio,
         })
         .merge(connectors)
+}
+async fn audio_prices(
+    State(api): State<Api>,
+    Path((owner, id)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Response, Error> {
+    let actor = api.identity.artifact_actor(&headers, false).await?;
+    Ok(private(
+        Json(api.store.audio_prices(&actor, &owner, &id).await?).into_response(),
+    ))
+}
+async fn audio_quote(
+    State(api): State<Api>,
+    Path(owner): Path<String>,
+    headers: HeaderMap,
+    body: Result<
+        Json<orange_protocol::pricing::CreateTranscriptionQuote>,
+        axum::extract::rejection::JsonRejection,
+    >,
+) -> Result<Response, Error> {
+    let actor = api.identity.artifact_actor(&headers, true).await?;
+    let Json(req) = body.map_err(|_| ArtifactError::Invalid)?;
+    original_key(&headers, &req.request_id)?;
+    Ok(private(
+        (
+            StatusCode::CREATED,
+            Json(api.store.audio_quote(&actor, &owner, &req).await?),
+        )
+            .into_response(),
+    ))
 }
 async fn audio_target(
     State(api): State<Api>,

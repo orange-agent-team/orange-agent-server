@@ -60,6 +60,7 @@ impl Store {
                 | orange_protocol::InvocationPurpose::Memory
                 | orange_protocol::InvocationPurpose::Title
                 | orange_protocol::InvocationPurpose::Continuation
+                | orange_protocol::InvocationPurpose::Transcription
         ) {
             return Err(StoreError::Invalid);
         }
@@ -167,10 +168,15 @@ impl Store {
             finish_submit(tx, Some(actor)).await?;
             return Ok(Decision::Prevented(receipt));
         }
-        let quote=sqlx::query("SELECT q.*,m.requester_id FROM quotes q LEFT JOIN quote_metering m USING(quote_id) JOIN budget_roots b ON b.root_budget_id=q.root_budget_id AND b.owner_id=q.owner_id WHERE q.quote_id=$1 AND q.owner_id=$2 FOR SHARE OF q,b").bind(&req.quote_id).bind(owner).fetch_optional(&mut *tx).await?.ok_or(StoreError::NotFound)?;
+        let quote=sqlx::query("SELECT q.*,COALESCE(m.requester_id,a.requester_id) AS requester_id,a.quote_id IS NOT NULL AS audio FROM quotes q LEFT JOIN quote_metering m USING(quote_id) LEFT JOIN transcription_quote_terms a USING(quote_id) JOIN budget_roots b ON b.root_budget_id=q.root_budget_id AND b.owner_id=q.owner_id WHERE q.quote_id=$1 AND q.owner_id=$2 FOR SHARE OF q,b").bind(&req.quote_id).bind(owner).fetch_optional(&mut *tx).await?.ok_or(StoreError::NotFound)?;
         if quote.try_get::<String, _>("root_budget_id")? != req.root_budget_id
             || quote.try_get::<String, _>("invocation_id")? != req.invocation_id
             || quote.try_get::<String, _>("projection_digest")? != req.request_projection_digest
+        {
+            return Err(StoreError::QuoteMismatch);
+        }
+        if quote.try_get::<bool, _>("audio")?
+            != (req.purpose == orange_protocol::InvocationPurpose::Transcription)
         {
             return Err(StoreError::QuoteMismatch);
         }

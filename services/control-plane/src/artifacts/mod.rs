@@ -21,6 +21,7 @@ pub(crate) use quarantine::QuarantineRequest;
 mod settlement;
 mod storage;
 mod transcription_output;
+pub(crate) mod transcription_pricing;
 mod transfer;
 pub use delivery::ArtifactReader;
 use orange_protocol::{

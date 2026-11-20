@@ -116,3 +116,34 @@ pub struct TranscriptionInputWithdrawal {
     pub grant_id: String,
     pub state: String,
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TranscriptionPrice {
+    pub price_version: String,
+    pub price_per_minute: crate::Money,
+    pub fee_bps: u16,
+}
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateTranscriptionQuote {
+    pub request_id: String,
+    pub grant_id: String,
+    pub price_version: String,
+}
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TranscriptionQuoteView {
+    pub quote_id: String,
+    pub grant_id: String,
+    pub root_budget_id: String,
+    pub invocation_id: String,
+    pub request_projection_digest: String,
+    pub price_version: String,
+    pub observation_id: String,
+    pub duration_ms: String,
+    pub price_per_minute: crate::Money,
+    pub max_amount: crate::Money,
+    pub fee_bps: u16,
+    pub expires_at_unix: String,
+}

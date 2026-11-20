@@ -162,6 +162,7 @@ impl Store {
                 | orange_protocol::InvocationPurpose::Memory
                 | orange_protocol::InvocationPurpose::Title
                 | orange_protocol::InvocationPurpose::Continuation
+                | orange_protocol::InvocationPurpose::Transcription
         ) {
             return Err(StoreError::Invalid);
         }
@@ -235,17 +236,24 @@ impl Store {
             origin,
         )
         .await?;
-        // Lock root before wallet on every path. PostgreSQL, not client memory, arbitrates.
-        let root = sqlx::query(
-            "SELECT * FROM budget_roots WHERE root_budget_id=$1 AND owner_id=$2 FOR UPDATE",
-        )
-        .bind(&req.root_budget_id)
-        .bind(owner)
-        .fetch_optional(&mut *tx)
-        .await?
-        .ok_or(StoreError::NotFound)?;
         if let Some(actor) = actor {
             check_budget_actor(&mut tx, &actor.user, owner, &req.root_budget_id).await?;
+        }
+        let asr_requester: Option<String> = sqlx::query_scalar(
+            "SELECT requester_id FROM transcription_quote_terms WHERE quote_id=$1 AND owner_id=$2",
+        )
+        .bind(&req.quote_id)
+        .bind(owner)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if asr_requester.as_deref().is_some_and(|u| {
+            actor.map(|a| a.user.as_str()) != Some(u)
+                || req.purpose != orange_protocol::InvocationPurpose::Transcription
+        }) || (actor.is_some()
+            && req.purpose == orange_protocol::InvocationPurpose::Transcription
+            && asr_requester.is_none())
+        {
+            return Err(StoreError::Forbidden);
         }
         let priced_requester: Option<String> = sqlx::query_scalar(
             "SELECT requester_id FROM quote_metering WHERE quote_id=$1 AND owner_id=$2",
@@ -282,6 +290,11 @@ impl Store {
             return Ok(view);
         }
         withdrawal::check_not_withdrawn(&mut tx, owner, actor, &req.invocation_id).await?;
+        if let Some(user) = asr_requester {
+            crate::artifacts::transcription_pricing::admitted(&mut tx, &req.quote_id, owner, &user)
+                .await
+                .map_err(artifact_error)?;
+        }
         let invalid_price:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM quote_metering m JOIN text_prices p USING(price_version) JOIN trusted_meter_profiles mp ON mp.profile_digest=m.meter_profile_digest WHERE m.quote_id=$1 AND (NOT p.enabled OR NOT mp.enabled))").bind(&req.quote_id).fetch_one(&mut *tx).await?;
         if invalid_price {
             return Err(StoreError::QuoteMismatch);
@@ -297,6 +310,15 @@ impl Store {
         {
             return Err(StoreError::QuoteMismatch);
         }
+        // Lock root before wallet on every path. PostgreSQL, not client memory, arbitrates.
+        let root = sqlx::query(
+            "SELECT * FROM budget_roots WHERE root_budget_id=$1 AND owner_id=$2 FOR UPDATE",
+        )
+        .bind(&req.root_budget_id)
+        .bind(owner)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(StoreError::NotFound)?;
         let maximum = credits(quote.try_get("max_amount")?)?;
         let next = budget_model(&root)?
             .reserve(maximum)

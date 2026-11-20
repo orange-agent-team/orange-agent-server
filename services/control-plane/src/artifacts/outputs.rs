@@ -113,12 +113,10 @@ impl ArtifactStore {
             let (input, source) = self
                 .transcript_source(tx, s, &assignment, &owner, &user, historical)
                 .await?;
-            // Financial admission is separate until trusted ASR prices, usage and settlement are installed.
-            let reserved: i64 = sqlx::query_scalar("SELECT reserved FROM jobs WHERE job_id=$1")
-                .bind(&lease.job_id)
-                .fetch_one(&mut **tx)
-                .await?;
-            if reserved != 0 {
+            let valid:bool=sqlx::query_scalar("SELECT j.reserved=0 OR EXISTS(SELECT 1 FROM transcription_quote_terms t WHERE t.quote_id=j.quote_id
+                AND t.requester_id=j.submitting_user_id AND t.grant_id=$2) FROM jobs j WHERE j.job_id=$1")
+                .bind(&lease.job_id).bind(&source.grant_id).fetch_one(&mut **tx).await?;
+            if !valid {
                 return Err(ArtifactError::PricingUnavailable);
             }
             (input, Some(source))
@@ -436,7 +434,16 @@ impl ArtifactStore {
             }
         }
         if result.is_err() && !t.replay {
-            sqlx::query("UPDATE artifact_transfers SET state='orphan',finished_at=clock_timestamp() WHERE transfer_id=$1 AND state='writing'").bind(&t.id).execute(&self.inner.pool).await?;
+            // All owned writers have closed. A rejected private transcript can enter
+            // physical collection immediately. An ambiguous or interrupted writer
+            // still follows the existing fenced orphan-retention path.
+            let state = if h.transcription_output_version == 1 && close_error.is_none() {
+                "purging"
+            } else {
+                "orphan"
+            };
+            sqlx::query("UPDATE artifact_transfers SET state=$2,finished_at=clock_timestamp() WHERE transfer_id=$1 AND state='writing'")
+                .bind(&t.id).bind(state).execute(&self.inner.pool).await?;
         }
         if let Some(e) = close_error {
             return Err(e);

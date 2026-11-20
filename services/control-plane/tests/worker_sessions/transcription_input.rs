@@ -31,7 +31,7 @@ impl Buyer {
             .execute(db.pool())
             .await
             .expect("buyer");
-        sqlx::query("INSERT INTO wallets(owner_id,gift) VALUES($1,1000)")
+        sqlx::query("INSERT INTO wallets(owner_id,gift) VALUES($1,10000)")
             .bind(&owner)
             .execute(db.pool())
             .await
@@ -126,6 +126,8 @@ enum Scenario {
     Publish,
     WithdrawOutput,
     InvalidOutput,
+    Priced,
+    CancelPriced,
 }
 #[tokio::test]
 async fn consent_and_confirmed_lease_gate_every_real_audio_chunk() {
@@ -144,6 +146,21 @@ async fn inconsistent_duration_cannot_publish_or_create_a_measurement_fact() {
     run_case(Scenario::InvalidOutput).await;
 }
 
+#[tokio::test]
+async fn priced_transcript_freezes_and_settles_development_credits_once() {
+    run_case(Scenario::Priced).await;
+}
+#[tokio::test]
+async fn cancelling_a_queued_transcript_releases_the_entire_reservation() {
+    run_case(Scenario::CancelPriced).await;
+}
+async fn balances(db: &Store, owner: &str) -> (i64, i64) {
+    sqlx::query_as("SELECT gift,reserved_gift FROM wallets WHERE owner_id=$1")
+        .bind(owner)
+        .fetch_one(db.pool())
+        .await
+        .expect("actual wallet")
+}
 async fn run_case(mode: Scenario) {
     let config = PathBuf::from(std::env::var("ORANGE_ASR_PROBE_FILE").expect("probe config"));
     let (_send, stop) = tokio::sync::watch::channel(false);
@@ -155,6 +172,8 @@ async fn run_case(mode: Scenario) {
         Scenario::Publish => "client-v",
         Scenario::WithdrawOutput => "client-w",
         Scenario::InvalidOutput => "client-x",
+        Scenario::Priced => "client-ec",
+        Scenario::CancelPriced => "client-ed",
     })
     .await;
     let db = &d.store;
@@ -211,6 +230,13 @@ async fn run_case(mode: Scenario) {
             &mut journal,
         )
         .await
+    } else if matches!(mode, Scenario::Priced | Scenario::CancelPriced) {
+        ControlConnection::connect_managed_transcription(
+            worker_config(&server, &d),
+            &mut node,
+            &mut journal,
+        )
+        .await
     } else {
         ControlConnection::connect_transcription_outputs(
             worker_config(&server, &d),
@@ -260,7 +286,7 @@ async fn run_case(mode: Scenario) {
             &Uuid::new_v4().to_string(),
             &CreateBudget {
                 scope_id: Uuid::new_v4().to_string(),
-                limit: "1000".to_owned().try_into().expect("budget"),
+                limit: "10000".to_owned().try_into().expect("budget"),
             },
         )
         .await
@@ -406,26 +432,231 @@ async fn run_case(mode: Scenario) {
         .await
         .expect("jobs");
     assert_eq!(no_jobs, 0);
-    // Separate trusted scheduler/admission fixture. The transport test exercises the real offer/ACK barrier.
-    let quote = Uuid::new_v4().to_string();
-    let job = Uuid::new_v4().to_string();
-    let submitted = SubmitJob {
-        root_budget_id: budget.root_budget_id.clone(),
-        invocation_id: invocation.clone(),
-        purpose: InvocationPurpose::Transcription,
-        quote_id: quote.clone(),
-        request_projection_digest: projection.to_owned(),
-    };
-    let mut tx = db.pool().begin().await.expect("queue fixture");
-    sqlx::query("INSERT INTO quotes(quote_id,owner_id,root_budget_id,invocation_id,projection_digest,price_version,max_amount,expires_at)
+    let priced = matches!(mode, Scenario::Priced | Scenario::CancelPriced);
+    let price_version = Uuid::new_v4().to_string();
+    let job = if priced {
+        let prices = format!("{status_path}/prices");
+        assert_eq!(
+            buyer.call(&app, "GET", &prices, "", vec![], 200).await,
+            json!([])
+        );
+        sqlx::query("INSERT INTO wallets(owner_id) VALUES($1)")
+            .bind(&d.owner)
+            .execute(db.pool())
+            .await
+            .expect("provider development wallet fixture");
+        sqlx::query("INSERT INTO transcription_prices(price_version,node_id,execution_profile_id,price_per_minute,fee_bps,review_digest,admission,enabled)
+           VALUES($1,$2,$3,12000,2000,$4,'development_only',true)").bind(&price_version).bind(&d.node).bind(&profile).bind(&fact.execution_profile_digest)
+           .execute(db.pool()).await.expect("explicit test-only price admission");
+        assert_eq!(
+            buyer.call(&app, "GET", &prices, "", vec![], 200).await,
+            json!([{"price_version":price_version,"price_per_minute":"12000","fee_bps":2000}])
+        );
+        let id = Uuid::new_v4().to_string();
+        let quote_url = format!("{base}/transcription-quotes");
+        let quote_req = json!({"grant_id":grant,"price_version":price_version,"request_id":id});
+        let mut forged = quote_req.clone();
+        forged["duration_ms"] = json!("1");
+        buyer
+            .call(
+                &app,
+                "POST",
+                &quote_url,
+                &id,
+                forged.to_string().into_bytes(),
+                422,
+            )
+            .await;
+        stranger
+            .call(
+                &app,
+                "POST",
+                &quote_url,
+                &id,
+                quote_req.to_string().into_bytes(),
+                403,
+            )
+            .await;
+        let quote = buyer
+            .call(
+                &app,
+                "POST",
+                &quote_url,
+                &id,
+                quote_req.to_string().into_bytes(),
+                201,
+            )
+            .await;
+        assert_eq!(
+            quote,
+            buyer
+                .call(
+                    &app,
+                    "POST",
+                    &quote_url,
+                    &id,
+                    quote_req.to_string().into_bytes(),
+                    201
+                )
+                .await
+        );
+        assert_eq!(quote["duration_ms"], "11000");
+        assert_eq!(quote["max_amount"], "2200");
+        let submit_url = format!("{base}/jobs");
+        let key = Uuid::new_v4().to_string();
+        let body = json!({"root_budget_id":budget.root_budget_id,"invocation_id":invocation,"purpose":"transcription","quote_id":quote["quote_id"],"request_projection_digest":projection});
+        let mut forged = body.clone();
+        forged["purpose"] = json!("primary");
+        buyer
+            .call(
+                &app,
+                "POST",
+                &submit_url,
+                &key,
+                forged.to_string().into_bytes(),
+                403,
+            )
+            .await;
+        let mut wrong = body.clone();
+        wrong["request_projection_digest"] = json!("0".repeat(64));
+        buyer
+            .call(
+                &app,
+                "POST",
+                &submit_url,
+                &key,
+                wrong.to_string().into_bytes(),
+                409,
+            )
+            .await;
+        sqlx::query("UPDATE transcription_prices SET enabled=false WHERE price_version=$1")
+            .bind(&price_version)
+            .execute(db.pool())
+            .await
+            .expect("withdraw price");
+        buyer
+            .call(
+                &app,
+                "POST",
+                &submit_url,
+                &key,
+                body.to_string().into_bytes(),
+                403,
+            )
+            .await;
+        assert_eq!(balances(db, &buyer.owner).await, (10000, 0));
+        sqlx::query("UPDATE transcription_prices SET enabled=true WHERE price_version=$1")
+            .bind(&price_version)
+            .execute(db.pool())
+            .await
+            .expect("restore same reviewed terms");
+        let a = if mode == Scenario::CancelPriced
+            && let Ok(driver) = std::env::var("ORANGE_AUDIO_CONSENT_BROWSER")
+        {
+            let screenshot =
+                PathBuf::from(std::env::var("ORANGE_AUDIO_CONSENT_SCREENSHOT").expect("evidence"))
+                    .with_file_name("transcription-price.png");
+            let flow = browser_flow(
+                &app,
+                &driver,
+                json!({"origin":buyer.origin,"token":buyer.token,"user":buyer.user,"owner":buyer.owner,
+                "invocation":invocation,"price_grant":grant,"node":d.node,"region":"local-test","budget":budget.root_budget_id,"screenshot":screenshot}),
+            );
+            tokio::pin!(flow);
+            loop {
+                tokio::select! {_=&mut flow=>break,_=tokio::time::sleep(Duration::from_secs(3))=>{
+                    conn.heartbeat_node_control("audio-price-test",&mut node).await.expect("renew provider heartbeat without taking the job");
+                }}
+            }
+            buyer
+                .call(
+                    &app,
+                    "GET",
+                    &format!("{base}/jobs/by-invocation/{invocation}"),
+                    "",
+                    vec![],
+                    200,
+                )
+                .await["job"]
+                .clone()
+        } else {
+            let (a, b) = tokio::join!(
+                buyer.call(
+                    &app,
+                    "POST",
+                    &submit_url,
+                    &key,
+                    body.to_string().into_bytes(),
+                    200
+                ),
+                buyer.call(
+                    &app,
+                    "POST",
+                    &submit_url,
+                    &key,
+                    body.to_string().into_bytes(),
+                    200
+                )
+            );
+            assert_eq!(a, b);
+            a
+        };
+        assert_eq!(a["reserved"], "2200");
+        assert_eq!(balances(db, &buyer.owner).await, (7800, 2200));
+        a["job_id"].as_str().expect("actual job id").to_owned()
+    } else {
+        // Separate trusted scheduler/admission fixture. The transport test exercises the real offer/ACK barrier.
+        let quote = Uuid::new_v4().to_string();
+        let job = Uuid::new_v4().to_string();
+        let submitted = SubmitJob {
+            root_budget_id: budget.root_budget_id.clone(),
+            invocation_id: invocation.clone(),
+            purpose: InvocationPurpose::Transcription,
+            quote_id: quote.clone(),
+            request_projection_digest: projection.to_owned(),
+        };
+        let mut tx = db.pool().begin().await.expect("queue fixture");
+        sqlx::query("INSERT INTO quotes(quote_id,owner_id,root_budget_id,invocation_id,projection_digest,price_version,max_amount,expires_at)
       VALUES($1,$2,$3,$4,$5,'input-transport-fixture',0,clock_timestamp()+interval '10 minutes')")
       .bind(&quote).bind(&buyer.owner).bind(&budget.root_budget_id).bind(&invocation).bind(projection).execute(&mut *tx).await.expect("quote fixture");
-    sqlx::query("INSERT INTO quote_execution_plans(quote_id,target_node_id,execution_profile_id,request_projection_digest,job_deadline)
+        sqlx::query("INSERT INTO quote_execution_plans(quote_id,target_node_id,execution_profile_id,request_projection_digest,job_deadline)
       VALUES($1,$2,$3,$4,clock_timestamp()+interval '10 minutes')").bind(&quote).bind(&d.node).bind(&profile).bind(projection).execute(&mut *tx).await.expect("plan fixture");
-    sqlx::query("INSERT INTO jobs(job_id,owner_id,root_budget_id,invocation_id,purpose,quote_id,request_digest,execution_state,reserved,held_gift,held_earned,held_purchased,submitting_user_id,input_required)
+        sqlx::query("INSERT INTO jobs(job_id,owner_id,root_budget_id,invocation_id,purpose,quote_id,request_digest,execution_state,reserved,held_gift,held_earned,held_purchased,submitting_user_id,input_required)
       VALUES($1,$2,$3,$4,'transcription',$5,$6,'queued',0,0,0,0,$7,true)").bind(&job).bind(&buyer.owner).bind(&budget.root_budget_id).bind(&invocation)
       .bind(&quote).bind(orange_protocol::request_digest("submit_job",&submitted).expect("digest")).bind(&buyer.user).execute(&mut *tx).await.expect("queued job fixture");
-    tx.commit().await.expect("queue");
+        tx.commit().await.expect("queue");
+        job
+    };
+    if mode == Scenario::CancelPriced {
+        let url = format!("{base}/jobs/{job}/cancel");
+        let key = Uuid::new_v4().to_string();
+        buyer
+            .call(&app, "POST", &url, &key, b"{}".to_vec(), 200)
+            .await;
+        buyer
+            .call(&app, "POST", &url, &key, b"{}".to_vec(), 200)
+            .await;
+        assert_eq!(balances(db, &buyer.owner).await, (10000, 0));
+        let budget_amounts: (i64, i64) =
+            sqlx::query_as("SELECT spent,reserved FROM budget_roots WHERE root_budget_id=$1")
+                .bind(&budget.root_budget_id)
+                .fetch_one(db.pool())
+                .await
+                .expect("released budget");
+        assert_eq!(budget_amounts, (0, 0));
+        let charges: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM job_settlements WHERE job_id=$1")
+                .bind(&job)
+                .fetch_one(db.pool())
+                .await
+                .expect("no income");
+        assert_eq!(charges, 0);
+        drop(conn);
+        drop(raw);
+        server.stop().await;
+        store.drain().await.expect("store closed");
+        return;
+    }
     let record = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let poll = conn
@@ -597,6 +828,12 @@ async fn run_case(mode: Scenario) {
         let mut result = received
             .output(candidate, &fact.profile.compute_type)
             .expect("checked transcript");
+        assert!(
+            conn.commit_transcription_output(&mut journal, &record.command_id, &result)
+                .await
+                .is_err(),
+            "local output cannot bypass its durable CPU cleanup evidence"
+        );
         if mode == Scenario::InvalidOutput {
             result.measurement.duration_ms = "1".into();
         }
@@ -648,7 +885,7 @@ async fn run_case(mode: Scenario) {
             "text header cannot commit audio"
         );
         let job_result = format!("{base}/jobs/{job}/result");
-        if mode == Scenario::Publish {
+        if matches!(mode, Scenario::Publish | Scenario::Priced) {
             let receipt = raw
                 .commit_output(tokio_stream::iter(frames()))
                 .await
@@ -676,6 +913,30 @@ async fn run_case(mode: Scenario) {
                     .into_inner(),
                 receipt
             );
+            if priced {
+                let actual:(i64,i64,i64)=sqlx::query_as("SELECT charge,platform_fee,provider_pending FROM job_settlements WHERE job_id=$1 AND provider_owner_id=$2")
+                    .bind(&job).bind(&d.owner).fetch_one(db.pool()).await.expect("actual immutable settlement");
+                assert_eq!(actual, (2200, 440, 1760));
+                assert_eq!(balances(db, &buyer.owner).await, (7800, 0));
+                let earned: i64 =
+                    sqlx::query_scalar("SELECT pending_earned FROM wallets WHERE owner_id=$1")
+                        .bind(&d.owner)
+                        .fetch_one(db.pool())
+                        .await
+                        .expect("provider wallet");
+                assert_eq!(earned, 1760);
+                let budget_amounts: (i64, i64) = sqlx::query_as(
+                    "SELECT spent,reserved FROM budget_roots WHERE root_budget_id=$1",
+                )
+                .bind(&budget.root_budget_id)
+                .fetch_one(db.pool())
+                .await
+                .expect("settled budget");
+                assert_eq!(budget_amounts, (2200, 0));
+                let ledger:(i64,i64,i64)=sqlx::query_as("SELECT count(DISTINCT transaction_id),sum(amount)::bigint,sum(amount) FILTER(WHERE account='platform:fees')::bigint FROM ledger_transactions JOIN ledger_entries USING(transaction_id) WHERE business_key=$1")
+                    .bind(format!("settle:{job}")).fetch_one(db.pool()).await.expect("ledger balancing");
+                assert_eq!(ledger, (1, 0, 440));
+            }
             let v = buyer.call(&app, "GET", &job_result, "", vec![], 200).await;
             let url = format!(
                 "{base}/uploads/{}/content?version_id={}",
@@ -709,6 +970,15 @@ async fn run_case(mode: Scenario) {
                 .call(&app, "DELETE", &endpoint, upload, vec![], 200)
                 .await;
             buyer.call(&app, "GET", &job_result, "", vec![], 403).await;
+            assert!(
+                raw.query_output(worker::OutputQuery {
+                    session_id: w.session_id.clone(),
+                    original: Some(h.clone())
+                })
+                .await
+                .is_err(),
+                "historical Worker receipt still requires a readable source"
+            );
             store
                 .collect(50)
                 .await
@@ -757,6 +1027,24 @@ async fn run_case(mode: Scenario) {
             assert_eq!(facts, 0);
             buyer.call(&app, "GET", &job_result, "", vec![], 409).await;
             store.collect(50).await.expect("orphan transfer collected");
+        }
+        if matches!(mode, Scenario::WithdrawOutput | Scenario::InvalidOutput) {
+            let removed:Vec<(String,String,String,bool,bool,i64)>=sqlx::query_as("SELECT t.stage_key,t.published_key,t.state,t.stage_deleted,t.published_deleted,t.reserved_bytes FROM artifact_transfers t JOIN worker_output_uploads w USING(artifact_id) WHERE w.job_id=$1")
+                .bind(&job).fetch_all(db.pool()).await.expect("private object cleanup");
+            assert_eq!(removed.len(), 1);
+            for (stage, published, state, stage_deleted, published_deleted, reserved) in removed {
+                assert_eq!(state, "purged");
+                assert!(stage_deleted && published_deleted);
+                assert_eq!(reserved, 0);
+                for key in [stage, published] {
+                    assert_eq!(
+                        std::fs::metadata(root.path().join(key))
+                            .expect_err("private bytes actually removed")
+                            .kind(),
+                        std::io::ErrorKind::NotFound
+                    );
+                }
+            }
         }
         drop(conn);
         drop(raw);

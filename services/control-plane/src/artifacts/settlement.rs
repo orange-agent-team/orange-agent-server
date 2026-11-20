@@ -8,7 +8,7 @@ impl ArtifactStore {
         sqlx::query("SET LOCAL lock_timeout='3s'")
             .execute(&mut *tx)
             .await?;
-        let identity=sqlx::query("SELECT j.owner_id,j.root_budget_id,m.provider_owner_id FROM jobs j JOIN quote_metering m USING(quote_id) JOIN job_usage_facts u USING(job_id) WHERE j.job_id=$1").bind(job).fetch_optional(&mut *tx).await?;
+        let identity=sqlx::query("SELECT owner_id,root_budget_id,provider_owner_id,modality FROM current_metered_deliveries WHERE job_id=$1").bind(job).fetch_optional(&mut *tx).await?;
         let Some(identity) = identity else {
             return Ok(false);
         };
@@ -61,53 +61,58 @@ impl ArtifactStore {
         if row.try_get::<String, _>("settlement_state")? != "pending" {
             return Err(ArtifactError::Conflict);
         }
-        let quote=sqlx::query("SELECT q.*,m.price_version AS snapshot_price_version,m.input_units,m.output_limit,m.input_price,m.output_price,m.fee_bps,m.provider_owner_id,m.meter_profile_digest,m.owner_id AS snapshot_owner FROM quotes q JOIN quote_metering m USING(quote_id) WHERE q.quote_id=$1").bind(row.try_get::<String,_>("quote_id")?).fetch_one(&mut *tx).await?;
-        let fact=sqlx::query("SELECT u.*,c.response_digest AS committed_digest FROM job_usage_facts u JOIN job_response_commits c USING(job_id) WHERE u.job_id=$1").bind(job).fetch_one(&mut *tx).await?;
         let held = row.try_get::<i64, _>("reserved")?;
-        if quote.try_get::<String, _>("snapshot_price_version")?
-            != quote.try_get::<String, _>("price_version")?
-            || quote.try_get::<String, _>("owner_id")? != owner
-            || quote.try_get::<String, _>("snapshot_owner")? != owner
-            || quote.try_get::<String, _>("root_budget_id")? != root_id
-            || quote.try_get::<String, _>("invocation_id")?
-                != row.try_get::<String, _>("invocation_id")?
-            || quote.try_get::<String, _>("provider_owner_id")? != provider
-            || quote.try_get::<i64, _>("max_amount")? != held
-            || fact.try_get::<String, _>("response_digest")?
-                != fact.try_get::<String, _>("committed_digest")?
-            || fact.try_get::<String, _>("request_projection_digest")?
-                != quote.try_get::<String, _>("projection_digest")?
-            || fact.try_get::<String, _>("meter_profile_digest")?
-                != quote.try_get::<String, _>("meter_profile_digest")?
-            || fact.try_get::<i64, _>("input_units")? != quote.try_get::<i64, _>("input_units")?
-        {
-            return Err(ArtifactError::Integrity);
-        }
         let credit = |n| Credits::new(n).map_err(|_| ArtifactError::Integrity);
-        let pricing = TextQuote {
-            input_units: quote.try_get::<i64, _>("input_units")? as u64,
-            output_limit: quote.try_get::<i64, _>("output_limit")? as u64,
-            input_price: credit(quote.try_get("input_price")?)?,
-            output_price: credit(quote.try_get("output_price")?)?,
-        };
-        if pricing
-            .maximum()
-            .map_err(|_| ArtifactError::Integrity)?
-            .units()
-            != held
-        {
-            return Err(ArtifactError::Integrity);
-        }
-        let charge = pricing
-            .charge(
-                TextDelivery::CommittedSuccess,
-                fact.try_get::<i64, _>("output_units")? as u64,
-                fact.try_get("has_tools")?,
-            )
-            .map_err(|_| ArtifactError::Integrity)?;
-        let (fee, earned) =
-            orange_domain::split_fee(charge, quote.try_get::<i32, _>("fee_bps")? as u16)
+        let (charge, fee_bps) = if identity.try_get::<&str, _>("modality")? == "transcription" {
+            super::transcription_pricing::committed_charge(&mut tx, job, held).await?
+        } else {
+            let quote=sqlx::query("SELECT q.*,m.price_version AS snapshot_price_version,m.input_units,m.output_limit,m.input_price,m.output_price,m.fee_bps,m.provider_owner_id,m.meter_profile_digest,m.owner_id AS snapshot_owner FROM quotes q JOIN quote_metering m USING(quote_id) WHERE q.quote_id=$1").bind(row.try_get::<String,_>("quote_id")?).fetch_one(&mut *tx).await?;
+            let fact=sqlx::query("SELECT u.*,c.response_digest AS committed_digest FROM job_usage_facts u JOIN job_response_commits c USING(job_id) WHERE u.job_id=$1").bind(job).fetch_one(&mut *tx).await?;
+            if quote.try_get::<String, _>("snapshot_price_version")?
+                != quote.try_get::<String, _>("price_version")?
+                || quote.try_get::<String, _>("owner_id")? != owner
+                || quote.try_get::<String, _>("snapshot_owner")? != owner
+                || quote.try_get::<String, _>("root_budget_id")? != root_id
+                || quote.try_get::<String, _>("invocation_id")?
+                    != row.try_get::<String, _>("invocation_id")?
+                || quote.try_get::<String, _>("provider_owner_id")? != provider
+                || quote.try_get::<i64, _>("max_amount")? != held
+                || fact.try_get::<String, _>("response_digest")?
+                    != fact.try_get::<String, _>("committed_digest")?
+                || fact.try_get::<String, _>("request_projection_digest")?
+                    != quote.try_get::<String, _>("projection_digest")?
+                || fact.try_get::<String, _>("meter_profile_digest")?
+                    != quote.try_get::<String, _>("meter_profile_digest")?
+                || fact.try_get::<i64, _>("input_units")?
+                    != quote.try_get::<i64, _>("input_units")?
+            {
+                return Err(ArtifactError::Integrity);
+            }
+            let pricing = TextQuote {
+                input_units: quote.try_get::<i64, _>("input_units")? as u64,
+                output_limit: quote.try_get::<i64, _>("output_limit")? as u64,
+                input_price: credit(quote.try_get("input_price")?)?,
+                output_price: credit(quote.try_get("output_price")?)?,
+            };
+            if pricing
+                .maximum()
+                .map_err(|_| ArtifactError::Integrity)?
+                .units()
+                != held
+            {
+                return Err(ArtifactError::Integrity);
+            }
+            let charge = pricing
+                .charge(
+                    TextDelivery::CommittedSuccess,
+                    fact.try_get::<i64, _>("output_units")? as u64,
+                    fact.try_get("has_tools")?,
+                )
                 .map_err(|_| ArtifactError::Integrity)?;
+            (charge, quote.try_get::<i32, _>("fee_bps")? as u16)
+        };
+        let (fee, earned) =
+            orange_domain::split_fee(charge, fee_bps).map_err(|_| ArtifactError::Integrity)?;
         let next = crate::store::budget_model(&root)
             .map_err(|_| ArtifactError::Integrity)?
             .settle(credit(held)?, charge)
@@ -173,7 +178,7 @@ impl ArtifactStore {
         if !(1..=100).contains(&limit) {
             return Err(ArtifactError::Invalid);
         }
-        let jobs:Vec<String>=sqlx::query_scalar("SELECT j.job_id FROM jobs j JOIN job_usage_facts u USING(job_id) JOIN worker_output_uploads w USING(job_id) JOIN artifacts a ON a.artifact_id=w.artifact_id WHERE j.execution_state='succeeded' AND j.settlement_state='pending' AND a.root_id=$1 ORDER BY u.measured_at LIMIT $2").bind(&self.inner.objects.root_id).bind(i64::from(limit)).fetch_all(&self.inner.pool).await?;
+        let jobs:Vec<String>=sqlx::query_scalar("SELECT j.job_id FROM jobs j JOIN current_metered_deliveries u USING(job_id) JOIN worker_output_uploads w USING(job_id) JOIN artifacts a ON a.artifact_id=w.artifact_id WHERE j.execution_state='succeeded' AND j.settlement_state='pending' AND a.root_id=$1 ORDER BY u.committed_at LIMIT $2").bind(&self.inner.objects.root_id).bind(i64::from(limit)).fetch_all(&self.inner.pool).await?;
         let mut settled = 0;
         let mut failed = 0;
         for job in jobs {
@@ -183,7 +188,7 @@ impl ArtifactStore {
                 Err(_) => failed += 1,
             }
         }
-        let terminal:Vec<String>=sqlx::query_scalar("SELECT c.job_id FROM worker_cpu_cleanup_receipts c JOIN jobs j USING(job_id) JOIN job_inputs i USING(job_id) JOIN artifacts a ON a.artifact_id=i.artifact_id WHERE a.root_id=$1 AND ((j.settlement_state='pending' AND j.execution_state IN('failed','cancelled')) OR (j.settlement_state='settled' AND EXISTS(SELECT 1 FROM artifact_pins p WHERE p.reference_id='job-input:'||j.job_id OR p.reference_id='job-output:'||j.job_id))) ORDER BY c.created_at LIMIT $2").bind(&self.inner.objects.root_id).bind(i64::from(limit)).fetch_all(&self.inner.pool).await?;
+        let terminal:Vec<String>=sqlx::query_scalar("SELECT c.job_id FROM worker_cpu_cleanup_receipts c JOIN jobs j USING(job_id) LEFT JOIN job_inputs i USING(job_id) LEFT JOIN transcription_quote_terms t ON t.quote_id=j.quote_id LEFT JOIN transcription_input_grants g ON g.owner_id=t.owner_id AND g.grant_id=t.grant_id JOIN artifacts a ON a.artifact_id=coalesce(i.artifact_id,g.artifact_id) WHERE a.root_id=$1 AND ((j.settlement_state='pending' AND j.execution_state IN('failed','cancelled')) OR (j.settlement_state='settled' AND EXISTS(SELECT 1 FROM artifact_pins p WHERE p.reference_id='job-input:'||j.job_id OR p.reference_id='job-output:'||j.job_id))) ORDER BY c.created_at LIMIT $2").bind(&self.inner.objects.root_id).bind(i64::from(limit)).fetch_all(&self.inner.pool).await?;
         for job in terminal {
             if crate::store_cleanup::finalize(&self.inner.pool, &job)
                 .await

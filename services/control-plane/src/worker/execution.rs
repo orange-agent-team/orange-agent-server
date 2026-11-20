@@ -146,6 +146,28 @@ pub(crate) async fn eligible_plan(
 ) -> Result<sqlx::postgres::PgRow, SessionError> {
     let row = sqlx::query("SELECT p.*,j.root_budget_id,j.invocation_id,j.purpose,j.request_digest,r.model_version_id,r.model_sha256,r.execution_profile_digest,floor(extract(epoch FROM p.job_deadline))::bigint AS deadline FROM jobs j JOIN quotes q USING(quote_id) JOIN quote_execution_plans p USING(quote_id) JOIN reviewed_execution_profiles r USING(execution_profile_id) WHERE j.job_id=$1 AND p.target_node_id=$2 AND q.owner_id=j.owner_id AND q.root_budget_id=j.root_budget_id AND q.invocation_id=j.invocation_id AND q.max_amount=j.reserved AND p.request_projection_digest=q.projection_digest AND r.enabled AND NOT EXISTS(SELECT 1 FROM quote_metering qm JOIN text_prices tp ON tp.price_version=qm.price_version JOIN trusted_meter_profiles mp ON mp.profile_digest=qm.meter_profile_digest WHERE qm.quote_id=j.quote_id AND (NOT tp.enabled OR NOT mp.enabled OR qm.price_version<>q.price_version OR tp.execution_profile_id<>p.execution_profile_id OR tp.node_id<>p.target_node_id OR qm.provider_owner_id<>(SELECT owner_id FROM nodes WHERE node_id=p.target_node_id) OR mp.descriptor->>'execution_digest'<>r.execution_profile_digest)) AND p.job_deadline>clock_timestamp()+interval '1 second' FOR SHARE OF r")
         .bind(job).bind(node).fetch_optional(&mut **tx).await?.ok_or(SessionError::Stale)?;
+    if row.try_get::<&str, _>("purpose")? == "transcription" {
+        let terms=sqlx::query("SELECT j.quote_id,j.reserved,j.owner_id,j.submitting_user_id,
+                EXISTS(SELECT 1 FROM transcription_quote_terms t WHERE t.quote_id=j.quote_id) AS priced FROM jobs j WHERE j.job_id=$1")
+            .bind(job).fetch_one(&mut **tx).await?;
+        if terms.try_get::<bool, _>("priced")? {
+            crate::artifacts::transcription_pricing::admitted(
+                tx,
+                terms.try_get("quote_id")?,
+                terms.try_get("owner_id")?,
+                terms
+                    .try_get::<Option<&str>, _>("submitting_user_id")?
+                    .ok_or(SessionError::Unauthorized)?,
+            )
+            .await
+            .map_err(|err| match err {
+                crate::artifacts::ArtifactError::Database(e) => SessionError::Database(e),
+                _ => SessionError::Stale,
+            })?;
+        } else if terms.try_get::<i64, _>("reserved")? != 0 {
+            return Err(SessionError::Unauthorized);
+        }
+    }
     let submitted = SubmitJob {
         root_budget_id: row.try_get("root_budget_id")?,
         invocation_id: row.try_get("invocation_id")?,
@@ -272,7 +294,10 @@ impl WorkerSessionStore {
         }
         let candidates = if s.transcription_input_version == 1 {
             sqlx::query_scalar(next_input_candidate_sql!("((j.purpose<>'transcription' AND (NOT j.input_required OR ($2=1 AND EXISTS(SELECT 1 FROM job_inputs i WHERE i.job_id=j.job_id)))) OR
-             (j.purpose='transcription' AND j.input_required AND $3=1 AND EXISTS(SELECT 1 FROM transcription_input_candidates c WHERE c.owner_id=j.owner_id AND c.invocation_id=j.invocation_id AND c.root_budget_id=j.root_budget_id AND c.author_id=j.submitting_user_id AND c.node_id=p.target_node_id AND c.execution_profile_id=p.execution_profile_id AND c.projection_digest=q.projection_digest AND c.session_id=$4 AND c.connection_epoch=$5)))")).bind(&s.node_id).bind(s.input_artifacts_version as i32).bind(s.transcription_input_version as i32).bind(&s.session_id).bind(s.connection_epoch)
+             (j.purpose='transcription' AND j.input_required AND $3=1
+                  AND NOT EXISTS(SELECT 1 FROM transcription_quote_terms qt JOIN transcription_prices pr USING(price_version)
+                                 WHERE qt.quote_id=j.quote_id AND NOT pr.enabled)
+                  AND EXISTS(SELECT 1 FROM transcription_input_candidates c WHERE c.owner_id=j.owner_id AND c.invocation_id=j.invocation_id AND c.root_budget_id=j.root_budget_id AND c.author_id=j.submitting_user_id AND c.node_id=p.target_node_id AND c.execution_profile_id=p.execution_profile_id AND c.projection_digest=q.projection_digest AND c.session_id=$4 AND c.connection_epoch=$5)))")).bind(&s.node_id).bind(s.input_artifacts_version as i32).bind(s.transcription_input_version as i32).bind(&s.session_id).bind(s.connection_epoch)
         } else {
             sqlx::query_scalar(next_input_candidate_sql!("(j.purpose<>'transcription' AND (NOT j.input_required OR ($2=1 AND EXISTS(SELECT 1 FROM job_inputs i WHERE i.job_id=j.job_id))))")).bind(&s.node_id).bind(s.input_artifacts_version as i32)
         };

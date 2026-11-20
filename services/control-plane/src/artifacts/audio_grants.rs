@@ -41,7 +41,7 @@ pub(super) async fn observed_target(
             crate::worker::SessionError::Database(err) => ArtifactError::Database(err),
             _ => ArtifactError::NotReady,
         })?;
-    let row=sqlx::query("SELECT o.node_id,n.region_id,o.model_version,o.session_id,o.connection_epoch,o.execution_profile_id,o.execution_profile_digest,o.observation_digest
+    let row=sqlx::query("SELECT o.node_id,n.region_id,n.owner_id AS provider_owner_id,s.transcription_output_version,s.cpu_cleanup_version,o.model_version,o.session_id,o.connection_epoch,o.execution_profile_id,o.execution_profile_digest,o.observation_digest
         FROM worker_transcription_profile_observations o JOIN reviewed_execution_profiles p USING(execution_profile_id)
         JOIN worker_sessions s ON s.node_id=o.node_id AND s.session_id=o.session_id AND s.connection_epoch=o.connection_epoch
         JOIN nodes n ON n.node_id=s.node_id WHERE o.observation_id=$1 AND n.environment='dev' AND n.state='online' AND s.certificate_sha256=$2
@@ -88,7 +88,7 @@ async fn selected_target(
     }
     Ok(target)
 }
-async fn checked_source_row(
+pub(super) async fn checked_source_row(
     tx: &mut Tx<'_>,
     user: &str,
     owner: &str,

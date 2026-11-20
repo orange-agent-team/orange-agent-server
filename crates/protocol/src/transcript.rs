@@ -84,3 +84,71 @@ impl TranscriptionResult {
         text.trim() == self.text
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn transcript_matches_exact_measurement_profile_language_and_complete_timed_document() {
+        let m = AudioMeasurement {
+            artifact_id: "a".into(),
+            version_id: "v".into(),
+            audio_sha256: "a".repeat(64),
+            model_version: "whisper-small-ct2-int8-cpu-v1".into(),
+            preprocessing: "mono-16khz-s16-f32-v1".into(),
+            format: "wav".into(),
+            codec: "pcm_s16le".into(),
+            source_sample_rate: 16000,
+            source_samples: "176000".into(),
+            normalized_samples: "176000".into(),
+            normalized_sha256: "b".repeat(64),
+            duration_ms: "11000".into(),
+        };
+        let template = TranscriptionResult {
+            version: 1,
+            request_projection_digest: "c".repeat(64),
+            execution_profile_digest: "d".repeat(64),
+            measurement: m.clone(),
+            language: "en".into(),
+            language_probability: 1.,
+            compute_type: "int8_float32".into(),
+            text: "Hello world.".into(),
+            segments: vec![
+                TimedText {
+                    start_ms: 0,
+                    end_ms: 2000,
+                    text: " Hello".into(),
+                },
+                TimedText {
+                    start_ms: 2000,
+                    end_ms: 10000,
+                    text: " world.".into(),
+                },
+            ],
+        };
+        let valid = |r: &TranscriptionResult| {
+            r.matches(
+                &m,
+                &template.request_projection_digest,
+                &template.execution_profile_digest,
+                "int8_float32",
+                Some("en"),
+            )
+        };
+        assert!(valid(&template));
+        for case in 0..8 {
+            let mut r = template.clone();
+            match case {
+                0 => r.segments[1].start_ms = 1000,
+                1 => r.segments[1].end_ms = 11001,
+                2 => r.measurement.duration_ms = "1".into(),
+                3 => r.text = "uncommitted".into(),
+                4 => r.language = "zh".into(),
+                5 => r.language_probability = f64::NAN,
+                6 => r.execution_profile_digest = "0".repeat(64),
+                _ => r.compute_type = "float32".into(),
+            }
+            assert!(!valid(&r));
+        }
+    }
+}
