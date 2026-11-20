@@ -141,17 +141,18 @@ pub(super) async fn grant(
     let digest = orange_protocol::request_digest("repository.consent.v1", &(&run, f, &c))
         .map_err(|_| AuthError::Invalid)?;
     let req = key(&h)?;
-    let old=sqlx::query("SELECT grant_id,request_digest FROM repository_source_grants WHERE run_id=$1 AND provider=$2 AND request_key=$3").bind(&run).bind(&name).bind(req).fetch_optional(&mut **g.transaction()).await.map_err(db)?;
-    let grant = if let Some(row) = old {
-        if digest != row.get::<String, _>("request_digest") {
-            return Err(conflict());
-        }
-        row.get("grant_id")
-    } else {
-        let id = uuid::Uuid::new_v4().to_string();
-        sqlx::query("INSERT INTO repository_source_grants(run_id,provider,grant_id,source_id,source_digest,request_key,request_digest,repository_ids,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,clock_timestamp()+make_interval(secs=>$9))").bind(&run).bind(&name).bind(&id).bind(c.source_id).bind(c.source_digest).bind(req).bind(digest).bind(c.repository_ids).bind(f64::from(c.duration_seconds)).execute(&mut **g.transaction()).await.map_err(db)?;
-        id
-    };
+    let grant = super::external_grants::Consent {
+        run: &run,
+        provider: f.name(),
+        source: &c.source_id,
+        source_digest: &s.digest,
+        roots: &c.repository_ids,
+        seconds: c.duration_seconds,
+        key: req,
+        digest: &digest,
+    }
+    .issue(&mut g)
+    .await?;
     g.finish().await?;
     Ok(Json(json!({"grant_id":grant})))
 }
@@ -162,14 +163,7 @@ pub(super) async fn revoke(
 ) -> Result<StatusCode, UserApiError> {
     let f = provider(&name)?;
     let (mut g, _) = guard(&i, &h, &run, true, false).await?;
-    sqlx::query("SELECT grant_id FROM repository_source_grants WHERE run_id=$1 AND provider=$2 AND grant_id=$3").bind(run).bind(f.name()).bind(&id).fetch_optional(&mut **g.transaction()).await.map_err(db)?.ok_or_else(missing)?;
-    sqlx::query(
-        "INSERT INTO repository_source_revocations(grant_id) VALUES($1) ON CONFLICT DO NOTHING",
-    )
-    .bind(id)
-    .execute(&mut **g.transaction())
-    .await
-    .map_err(db)?;
+    super::external_grants::revoke(&mut g, &run, f.name(), &id).await?;
     g.finish().await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -440,10 +434,7 @@ async fn finalize(
     }
     let (mut g, _) = guard(i, h, run, true, true).await?;
     live(i, &mut g, run, f, id).await?;
-    let found=sqlx::query("UPDATE repository_source_calls SET finished_at=clock_timestamp() WHERE run_id=$1 AND provider=$2 AND grant_id=$3 AND request_key=$4 AND until_at>clock_timestamp() AND finished_at IS NULL").bind(run).bind(f.name()).bind(id).bind(req).execute(&mut **g.transaction()).await.map_err(db)?;
-    if found.rows_affected() != 1 {
-        return Err(denied());
-    }
+    super::external_grants::complete(&mut g, run, f.name(), id, req).await?;
     Ok(g)
 }
 pub(super) async fn perform(

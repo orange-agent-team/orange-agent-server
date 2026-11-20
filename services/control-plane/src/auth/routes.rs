@@ -30,6 +30,10 @@ pub(crate) fn hosted_connector_router(
 ) -> Router {
     model_connectors::router(i, s)
 }
+#[path = "external_grants.rs"]
+mod external_grants;
+#[path = "notion_connector.rs"]
+mod notion_connector;
 #[path = "repository_connectors.rs"]
 mod repository_connectors;
 #[path = "s3_connectors.rs"]
@@ -62,6 +66,18 @@ use serde::Deserialize;
 use std::sync::Arc;
 pub fn router(identity: UserIdentity) -> Router {
     Router::new()
+        .route(
+            "/api/v1/agent/runs/{run}/connectors/notion",
+            get(notion_connector::inventory).post(notion_connector::grant),
+        )
+        .route(
+            "/api/v1/agent/runs/{run}/connectors/notion/{grant}",
+            axum::routing::delete(notion_connector::revoke),
+        )
+        .route(
+            "/api/v1/agent/runs/{run}/connectors/notion/{grant}/actions",
+            axum::routing::post(notion_connector::perform),
+        )
         .route(
             "/api/v1/agent/runs/{run}/connectors/{provider}",
             get(repository_connectors::list).post(repository_connectors::grant),

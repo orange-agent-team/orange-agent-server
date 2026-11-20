@@ -2039,6 +2039,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "hex",
+ "hmac 0.13.0",
  "httpdate",
  "libc",
  "opendal",

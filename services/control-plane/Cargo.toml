@@ -78,6 +78,7 @@ sqlx.workspace = true
 uuid.workspace = true
 openidconnect.workspace = true
 sha2.workspace = true
+hmac = "=0.13.0"
 sha1 = "=0.11.0"
 httpdate = "=1.0.3"
 hex.workspace = true
