@@ -1,0 +1,18 @@
+{
+  "profile": "dev-gvisor-linux-arm64-v1",
+  "architecture": "aarch64",
+  "release": "20261116.0",
+  "archive": "gvisor-aarch64.tar.bz2",
+  "url": "https://storage.googleapis.com/gvisor/releases/release/20261116.0/aarch64/gvisor.tar.bz2",
+  "sha256": "c849ede41d4349b008e775a71c1021bee8ff648432f8751178727c9066c1e353",
+  "size_bytes": 77679372,
+  "rust_version": "1.97.1",
+  "target": "aarch64-unknown-linux-musl",
+  "workspace_bytes": 1048576,
+  "memory_bytes": 134217728,
+  "pids": 32,
+  "cpu_quota": 50000,
+  "cpu_period": 100000,
+  "source_tag": "release-20261116.0",
+  "release_page": "https://github.com/gvisor/gvisor/releases/tag/release-20261116.0"
+}
