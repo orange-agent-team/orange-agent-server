@@ -742,51 +742,51 @@ pub(crate) async fn stop_cloud_job(
     tx: &mut Transaction<'_, Postgres>,
     run: &str,
 ) -> Result<(), StoreError> {
-    let link=sqlx::query("SELECT j.job_id,j.root_budget_id,j.owner_id FROM cloud_model_jobs m JOIN jobs j USING(job_id)
+    let links=sqlx::query("SELECT j.job_id,j.root_budget_id,j.owner_id FROM cloud_model_jobs m JOIN jobs j USING(job_id)
         JOIN cloud_runs r ON r.run_id=m.run_id AND r.root_budget_id=j.root_budget_id AND r.owner_id=j.owner_id
-        WHERE m.run_id=$1").bind(run).fetch_optional(&mut **tx).await?;
-    let Some(link) = link else {
-        return Ok(());
-    };
-    let owner: String = link.try_get("owner_id")?;
-    let job: String = link.try_get("job_id")?;
-    let root = sqlx::query(
-        "SELECT * FROM budget_roots WHERE root_budget_id=$1 AND owner_id=$2 FOR UPDATE",
-    )
-    .bind(link.try_get::<String, _>("root_budget_id")?)
-    .bind(&owner)
-    .fetch_one(&mut **tx)
-    .await?;
-    sqlx::query("SELECT owner_id FROM wallets WHERE owner_id=$1 FOR UPDATE")
+        WHERE m.run_id=$1 AND j.execution_state IN ('queued','running','cancelling') ORDER BY j.job_id").bind(run).fetch_all(&mut **tx).await?;
+    for link in links {
+        let owner: String = link.try_get("owner_id")?;
+        let job: String = link.try_get("job_id")?;
+        let root = sqlx::query(
+            "SELECT * FROM budget_roots WHERE root_budget_id=$1 AND owner_id=$2 FOR UPDATE",
+        )
+        .bind(link.try_get::<String, _>("root_budget_id")?)
         .bind(&owner)
         .fetch_one(&mut **tx)
         .await?;
-    let row = sqlx::query("SELECT * FROM jobs WHERE job_id=$1 AND owner_id=$2 FOR UPDATE")
-        .bind(&job)
-        .bind(&owner)
-        .fetch_one(&mut **tx)
-        .await?;
-    let state: String = row.try_get("execution_state")?;
-    match state.as_str() {
-        "queued" => {
-            queue_expiry::release_queue(tx, &root, &row, queue_expiry::QueueEnd::Cancelled).await?;
-        }
-        "running" => {
-            if row.try_get::<String, _>("settlement_state")? != "pending" {
-                return Err(StoreError::InvalidTransition);
+        sqlx::query("SELECT owner_id FROM wallets WHERE owner_id=$1 FOR UPDATE")
+            .bind(&owner)
+            .fetch_one(&mut **tx)
+            .await?;
+        let row = sqlx::query("SELECT * FROM jobs WHERE job_id=$1 AND owner_id=$2 FOR UPDATE")
+            .bind(&job)
+            .bind(&owner)
+            .fetch_one(&mut **tx)
+            .await?;
+        let state: String = row.try_get("execution_state")?;
+        match state.as_str() {
+            "queued" => {
+                queue_expiry::release_queue(tx, &root, &row, queue_expiry::QueueEnd::Cancelled)
+                    .await?;
             }
-            let digest = request_digest("cloud.run.stop-model.v1", &(run, &job))
-                .map_err(|_| StoreError::Invalid)?;
-            let changed=sqlx::query("UPDATE jobs SET execution_state='cancelling' WHERE job_id=$1 AND execution_state='running' AND settlement_state='pending'")
+            "running" => {
+                if row.try_get::<String, _>("settlement_state")? != "pending" {
+                    return Err(StoreError::InvalidTransition);
+                }
+                let digest = request_digest("cloud.run.stop-model.v1", &(run, &job))
+                    .map_err(|_| StoreError::Invalid)?;
+                let changed=sqlx::query("UPDATE jobs SET execution_state='cancelling' WHERE job_id=$1 AND execution_state='running' AND settlement_state='pending'")
                 .bind(&job).execute(&mut **tx).await?;
-            if changed.rows_affected() != 1 {
-                return Err(StoreError::Conflict);
+                if changed.rows_affected() != 1 {
+                    return Err(StoreError::Conflict);
+                }
+                emit(tx, &owner, &job, "job.cancel_requested", &digest).await?;
             }
-            emit(tx, &owner, &job, "job.cancel_requested", &digest).await?;
+            // Existing terminal, cancelling or uncertain facts retain their original
+            // accounting, retention and device-cleanup responsibilities.
+            _ => {}
         }
-        // Existing terminal, cancelling or uncertain facts retain their original
-        // accounting, retention and device-cleanup responsibilities.
-        _ => {}
     }
     Ok(())
 }

@@ -116,9 +116,14 @@ pub(super) async fn exercise(c: Setup<'_>, driver: &str) {
     let gate_release = private.path().join("queue-release");
     let expiry_op = private.path().join("expiry-operation");
     let expiry_locked = private.path().join("expiry-locked");
+    let continuing = std::env::var_os("ORANGE_CLOUD_CONTINUATION").is_some();
     let tool_cases = std::env::var_os("ORANGE_CLOUD_DIRECTORY_TOOLS").is_some();
-    let packet = json!({"api":format!("http://{}/",c.api),"cookie":c.cookie,"user":c.user,"owner":c.owner,"budget":c.budget,"price":c.price,"model":profile().model_version,
-        "expiry_operation":expiry_op,"expiry_locked":expiry_locked,"directory_cases":tool_cases,"tool_screenshot":evidence.join("actual-approved-directory.png"),"gate_quote":gate_quote,"gate_locked":gate_locked,"gate_release":gate_release,"oracle_input":input_file,"oracle_output":output_file,"screenshot":evidence.join("actual-hosted-model.png")});
+    let web_origin = format!(
+        "https://127.0.0.1:{}",
+        std::env::var("ORANGE_WEB_COMPUTE_QA_PORT").unwrap_or_else(|_| "43127".into())
+    );
+    let packet = json!({"api":format!("http://{}/",c.api),"origin":web_origin,"cookie":c.cookie,"user":c.user,"owner":c.owner,"budget":c.budget,"price":c.price,"model":profile().model_version,
+        "expiry_operation":expiry_op,"expiry_locked":expiry_locked,"continuation_case":continuing,"continuation_screenshot":evidence.join("actual-tool-continuation.png"),"directory_cases":tool_cases,"tool_screenshot":evidence.join("actual-approved-directory.png"),"gate_quote":gate_quote,"gate_locked":gate_locked,"gate_release":gate_release,"oracle_input":input_file,"oracle_output":output_file,"screenshot":evidence.join("actual-hosted-model.png")});
     let mut fd = browser.stdin.take().expect("private stdin");
     fd.write_all(&serde_json::to_vec(&packet).expect("packet"))
         .await
@@ -128,7 +133,13 @@ pub(super) async fn exercise(c: Setup<'_>, driver: &str) {
     let (finish_expiry, expiry_done) = tokio::sync::oneshot::channel();
     let wait_browser = async {
         let result = tokio::time::timeout(
-            Duration::from_secs(if tool_cases { 440 } else { 230 }),
+            Duration::from_secs(if continuing {
+                540
+            } else if tool_cases {
+                440
+            } else {
+                230
+            }),
             browser.wait_with_output(),
         )
         .await;
@@ -336,7 +347,7 @@ pub(super) async fn exercise(c: Setup<'_>, driver: &str) {
         .expect("directory cases")
         .clone();
     if tool_cases {
-        assert_eq!(directory.len(), 3);
+        assert_eq!(directory.len(), if continuing { 4 } else { 3 });
         for case in &mut directory {
             let run = case["run_id"].as_str().expect("tool Run");
             let op = case["operation_id"].as_str().expect("tool op");
@@ -397,13 +408,63 @@ pub(super) async fn exercise(c: Setup<'_>, driver: &str) {
                 } else {
                     assert_eq!(facts.get::<String, _>("state"), "succeeded");
                     assert!(facts.get::<Option<String>, _>("artifact_id").is_some());
-                    assert_eq!(facts.get::<String, _>("status"), "paused");
+                    assert_eq!(
+                        facts.get::<String, _>("status"),
+                        if case["scenario"] == "continued" {
+                            "completed"
+                        } else {
+                            "paused"
+                        }
+                    );
                 }
             } else {
                 assert_eq!(permits, 0);
                 assert!(guest.get("tool_dispatch").is_none());
                 assert_eq!(facts.get::<String, _>("state"), "failed");
                 assert_eq!(facts.get::<String, _>("status"), "paused");
+            }
+            if case["scenario"] == "continued" {
+                let actual=sqlx::query("SELECT t.ordinal,t.invocation_id,t.version_id,t.parent_operation,j.job_id,j.execution_state,j.settlement_state,j.charge,o.kind,
+                    js.transaction_id,i.artifact_id FROM cloud_model_turns t JOIN cloud_job_turns m USING(turn_id,run_id) JOIN jobs j USING(job_id)
+                    JOIN job_inputs i USING(job_id) JOIN cloud_model_outcomes o USING(turn_id,job_id) JOIN job_settlements js USING(job_id)
+                    WHERE t.run_id=$1 AND t.owner_id=$2 AND j.root_budget_id=$3 AND j.owner_id=t.owner_id ORDER BY t.ordinal")
+                    .bind(run).bind(c.owner).bind(c.budget).fetch_all(c.pool).await.expect("two true model settlements");
+                assert_eq!(actual.len(), 2);
+                assert_eq!(actual[0].get::<String, _>("kind"), "tool_request");
+                assert_eq!(actual[1].get::<String, _>("kind"), "final");
+                assert_eq!(actual[0].get::<String, _>("job_id"), case["job_id"]);
+                assert_eq!(
+                    actual[1].get::<String, _>("job_id"),
+                    case["continuation"]["second_job"]
+                );
+                assert_ne!(
+                    actual[0].get::<String, _>("transaction_id"),
+                    actual[1].get::<String, _>("transaction_id")
+                );
+                assert_eq!(actual[1].get::<String, _>("parent_operation"), op);
+                assert_eq!(
+                    actual[1].get::<String, _>("version_id"),
+                    case["continuation"]["derived_version"]
+                );
+                let sum: i64 = actual
+                    .iter()
+                    .map(|r| {
+                        assert_eq!(r.get::<String, _>("settlement_state"), "settled");
+                        r.get::<i64, _>("charge")
+                    })
+                    .sum();
+                assert_eq!(
+                    sum.to_string(),
+                    case["continuation"]["settled_microcredits"]
+                );
+                assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM cloud_workspace_claims c JOIN cloud_workspaces w USING(workspace_id) WHERE w.run_id=$1")
+                    .bind(run).fetch_one(c.pool).await.expect("same original workspace"),1);
+                case["continuation"]["turn_count"] = json!(2);
+                case["continuation"]["two_independent_settlements"] = json!(true);
+                case["continuation"]["turn_charges_microcredits"] = json!([
+                    actual[0].get::<i64, _>("charge").to_string(),
+                    actual[1].get::<i64, _>("charge").to_string()
+                ]);
             }
             case["dispatch_count"] = json!(permits);
         }

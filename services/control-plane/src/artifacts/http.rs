@@ -29,6 +29,11 @@ pub fn router(identity: UserIdentity, store: ArtifactStore) -> Router {
             axum::routing::post(cloud_submit),
         )
         .route("/api/v1/agent/runs/{run}/model/result", get(cloud_result))
+        .route(
+            "/api/v1/agent/runs/{run}/model/continuation",
+            axum::routing::post(cloud_continuation),
+        )
+        .route("/api/v1/agent/runs/{run}/model/history", get(cloud_history))
         .route("/api/v1/text-prices", get(prices))
         .route(
             "/api/v1/owners/{owner}/text-quotes",
@@ -550,5 +555,34 @@ async fn cloud_result(
     let actor = api.identity.artifact_actor(&headers, false).await?;
     Ok(private(
         Json(api.store.cloud_result(&actor, &run).await?).into_response(),
+    ))
+}
+
+async fn cloud_continuation(
+    State(api): State<Api>,
+    headers: HeaderMap,
+    Path(run): Path<String>,
+    body: Result<Json<EmptyCloudRequest>, axum::extract::rejection::JsonRejection>,
+) -> Result<Response, Error> {
+    let _ = body.map_err(|_| ArtifactError::Invalid)?;
+    let actor = api.identity.artifact_actor(&headers, true).await?;
+    Ok(private(
+        Json(
+            api.store
+                .prepare_continuation(&actor, &run, cloud_key(&headers)?)
+                .await?,
+        )
+        .into_response(),
+    ))
+}
+
+async fn cloud_history(
+    State(api): State<Api>,
+    headers: HeaderMap,
+    Path(run): Path<String>,
+) -> Result<Response, Error> {
+    let actor = api.identity.artifact_actor(&headers, false).await?;
+    Ok(private(
+        Json(api.store.cloud_history(&actor, &run).await?).into_response(),
     ))
 }

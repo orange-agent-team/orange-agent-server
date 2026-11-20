@@ -210,9 +210,8 @@ impl ArtifactStore {
         let source =
             crate::cloud_model::quote_authority(&mut tx, owner, &actor.user, r, origin).await?;
         if let Some(row) = &source
-            && (row.try_get::<String, _>("invocation_id")? != request.invocation_id
-                || row.try_get::<String, _>("request_projection_digest")?
-                    != measured.request_digest())
+            && (row.invocation_id != request.invocation_id
+                || row.projection != measured.request_digest())
         {
             return Err(ArtifactError::Conflict);
         }
@@ -274,13 +273,13 @@ impl ArtifactStore {
         sqlx::query("INSERT INTO quote_execution_plans(quote_id,target_node_id,execution_profile_id,request_projection_digest,job_deadline) VALUES($1,$2,$3,$4,date_trunc('second',clock_timestamp()+interval '5 minutes'))").bind(&quote).bind(price.try_get::<String,_>("node_id")?).bind(price.try_get::<String,_>("execution_profile_id")?).bind(measured.request_digest()).execute(&mut *tx).await?;
         sqlx::query("INSERT INTO quote_metering(quote_id,request_id,owner_id,requester_id,request_digest,input_artifact_id,input_version_id,input_units,output_limit,price_version,meter_profile_digest,provider_owner_id,input_price,output_price,fee_bps) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)").bind(&quote).bind(&r.request_id).bind(owner).bind(&actor.user).bind(&digest).bind(&input.artifact_id).bind(&input.version_id).bind(measured.units() as i64).bind(i64::from(r.output_limit)).bind(&r.price_version).bind(measured.profile_digest()).bind(price.try_get::<String,_>("provider_owner_id")?).bind(pricing.input_price.units()).bind(pricing.output_price.units()).bind(price.try_get::<i32,_>("fee_bps")?).execute(&mut *tx).await?;
         if let Some(row) = source {
-            let run: String = row.try_get("run_id")?;
+            let run = row.run_id;
             sqlx::query(
                 "INSERT INTO cloud_model_quotes(quote_id,run_id,allocation_id) VALUES($1,$2,$3)",
             )
             .bind(&quote)
             .bind(&run)
-            .bind(row.try_get::<String, _>("allocation_id")?)
+            .bind(row.allocation_id)
             .execute(&mut *tx)
             .await?;
             crate::cloud_model::live(&mut tx, &run, owner, &actor.user).await?;

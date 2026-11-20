@@ -20,7 +20,9 @@ p.add_argument('--web-repo',required=True,type=Path)
 p.add_argument('--model-runtime-root',type=Path,default=root/'.local/model-runtime')
 p.add_argument('--node',type=Path,default=shutil.which('node'))
 p.add_argument('--directory-tools',action='store_true',help='Also qualify approved and rejected real model-requested directory operations')
+p.add_argument('--continuation',action='store_true',help='Also verify one funded model continuation from a committed tool result')
 args=p.parse_args()
+if args.continuation and not args.directory_tools:raise SystemExit('Continuation requires the directory tool acceptance')
 identity=json.loads(args.identity_config.read_text())
 if identity.get('environment')!='dev' or urlsplit(identity['issuer']).hostname not in ('localhost','127.0.0.1','::1'):
     raise SystemExit('Isolated development issuer on loopback required')
@@ -37,6 +39,8 @@ with database(args.database_url_file,'orange_cloud_model_') as (name,url),tempfi
     env=dict(os.environ,ORANGE_TEST_DATABASE_URL=url,ORANGE_TEST_USER_CONFIG_FILE=str(args.identity_config.resolve()),
              ORANGE_TEST_MODEL_RUNTIME_ROOT=str(args.model_runtime_root.resolve()),ORANGE_CLOUD_MODEL_BROWSER=str(web/'apps/web/scripts/real-cloud-model.mjs'),
              ORANGE_CLOUD_MODEL_QA_DIR=str(tls),ORANGE_CLOUD_MODEL_EVIDENCE=str(evidence),ORANGE_CLOUD_QA_PYTHON=sys.executable)
+    env.pop('ORANGE_CLOUD_CONTINUATION',None)
+    if args.continuation:env.update(ORANGE_CLOUD_CONTINUATION='1',ORANGE_WEB_COMPUTE_QA_PORT='43128')
     env.pop('ORANGE_CLOUD_DIRECTORY_TOOLS',None)
     if args.directory_tools:env['ORANGE_CLOUD_DIRECTORY_TOOLS']='1'
     subprocess.run([sys.executable,root/'scripts/check-web-compute.py','--web-repo',web,'--node',args.node],env=env,cwd=root,check=True)
@@ -46,5 +50,11 @@ with database(args.database_url_file,'orange_cloud_model_') as (name,url),tempfi
     print('PASS hosted model Run, actual CPU provider and development ledger. Evidence: '+str(evidence.relative_to(root)))
     if args.directory_tools:
         tools=result.get('directory_runs',[])
-        if [(r['scenario'],r['terminal'],r['dispatch_count']) for r in tools]!=[('approved','succeeded',1),('rejected','failed',0),('expired_after_dispatch','unknown',1)]:
+        expected=[('approved','succeeded',1),('rejected','failed',0),('expired_after_dispatch','unknown',1)]
+        if args.continuation:expected.append(('continued','succeeded',1))
+        if [(r['scenario'],r['terminal'],r['dispatch_count']) for r in tools]!=expected:
             raise SystemExit('Directory approval and rejection were not independently verified')
+    if args.continuation:
+        end=tools[-1].get('continuation',{})
+        if end.get('turn_count')!=2 or not end.get('revocation_denied_all_three') or not end.get('two_independent_settlements'):
+            raise SystemExit('Missing causal or financial continuation evidence')

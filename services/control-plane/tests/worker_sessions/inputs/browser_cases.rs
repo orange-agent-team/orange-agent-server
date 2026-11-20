@@ -48,7 +48,10 @@ async fn actual_browser_quote_model_settlement_cleanup_and_deleted_content() {
             .expect("private identity config"),
     )
     .expect("JSON");
-    identity["user_origin"] = serde_json::json!("https://127.0.0.1:43127");
+    let port = std::env::var("ORANGE_WEB_COMPUTE_QA_PORT").unwrap_or_else(|_| "43127".into());
+    assert!(matches!(port.as_str(), "43127" | "43128"));
+    let user_origin = format!("https://127.0.0.1:{port}");
+    identity["user_origin"] = serde_json::json!(user_origin);
     std::fs::write(
         &identity_config,
         serde_json::to_vec(&identity).expect("JSON"),
@@ -114,7 +117,7 @@ async fn actual_browser_quote_model_settlement_cleanup_and_deleted_content() {
     host::event(&mut events, "ready").await;
 
     let fixture = config_root.path().join("browser.json");
-    std::fs::write(&fixture,serde_json::to_vec(&serde_json::json!({"api":format!("http://{http}/"),"origin":"https://127.0.0.1:43127","cookie":c.f.headers.get("cookie").expect("cookie fixture").to_str().expect("cookie"),"user":c.f.user,"owner":c.f.owner,"budget":c.budget,"price":c.price})).expect("JSON")).expect("fixture");
+    std::fs::write(&fixture,serde_json::to_vec(&serde_json::json!({"api":format!("http://{http}/"),"origin":user_origin,"cookie":c.f.headers.get("cookie").expect("cookie fixture").to_str().expect("cookie"),"user":c.f.user,"owner":c.f.owner,"budget":c.budget,"price":c.price})).expect("JSON")).expect("fixture");
     std::fs::set_permissions(&fixture, std::fs::Permissions::from_mode(0o600)).expect("private");
     let mut browser = Command::new(std::env::var("ORANGE_WEB_NODE_BINARY").expect("pinned Node"))
         .arg(std::env::var("ORANGE_WEB_COMPUTE_DRIVER").expect("explicit Web driver"))

@@ -14,13 +14,15 @@ parser=argparse.ArgumentParser()
 parser.add_argument('--web-repo',required=True,type=Path)
 parser.add_argument('--node',default=shutil.which('node'))
 args=parser.parse_args()
-reserve_origins(43127)
+port=int(os.environ.get('ORANGE_WEB_COMPUTE_QA_PORT','43127'))
+if port not in (43127,43128):raise SystemExit('Private compute QA origin required')
+reserve_origins(port)
 web=args.web_repo.resolve()
 driver=web/'apps/web/scripts/real-compute-driver.mjs'
 if not driver.is_file() or not (web/'apps/web/dist/index.html').is_file():raise SystemExit('Explicit built Web compute checkout required')
 if not args.node or subprocess.check_output([args.node,'--version'],text=True).strip()!='v22.23.2':raise SystemExit('Pinned Node22.23.2 required')
 with socket.socket() as probe:
-    if probe.connect_ex(('127.0.0.1',43127))==0:raise SystemExit('Isolated browser port43127 occupied; do not replace an unknown process')
+    if probe.connect_ex(('127.0.0.1',port))==0:raise SystemExit(f'Isolated browser port {port} occupied; do not replace an unknown process')
 build_env={**os.environ,'PATH':str(Path(args.node).parent)+os.pathsep+os.environ.get('PATH','')}
 subprocess.run([args.node,web/'scripts/check.mjs'],cwd=web,env=build_env,check=True)
 subprocess.run([sys.executable,web/'scripts/local-tls.py'],cwd=web,check=True)

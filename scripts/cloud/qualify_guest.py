@@ -277,9 +277,18 @@ with prepare_directory() as temp:
                 watcher.register(child.stdout,selectors.EVENT_READ)
                 if not watcher.select(timeout=40) or child.stdout.readline()!=b'ORANGE_WORKSPACE_PROBE_READY\n':
                     raise RuntimeError('Missing running workload barrier: '+stderr.read_text(errors='replace')[-1800:])
-            record=json.loads(subprocess.check_output([*args,'state',instance],timeout=10))
-            if record.get('id')!=instance or record.get('status')!='running':
-                raise RuntimeError('Missing running OCI state')
+            # The in-sandbox ready line and runsc's host-side state file are
+            # independently published. Wait only for this already-created ID.
+            state_deadline=time.monotonic()+3
+            while True:
+                record=json.loads(subprocess.check_output([*args,'state',instance],timeout=10))
+                phase=record.get('status')
+                if record.get('id')!=instance:
+                    raise RuntimeError('Observed a different OCI instance')
+                if phase=='running':break
+                if phase not in ('creating','created') or time.monotonic()>=state_deadline:
+                    raise RuntimeError('Missing running OCI state; observed '+str(phase))
+                time.sleep(0.05)
             limits={key:(cgroup/key).read_text().strip() for key in ['memory.max','pids.max','cpu.max']}
             expected={'memory.max':str(profile['memory_bytes']),'pids.max':str(profile['pids']),
                       'cpu.max':str(profile['cpu_quota'])+' '+str(profile['cpu_period'])}

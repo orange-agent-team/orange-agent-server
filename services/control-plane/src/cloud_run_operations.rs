@@ -411,27 +411,44 @@ pub(super) async fn commit(
     {
         return Err(changed());
     }
+    let continuing: bool = phase == "succeeded"
+        && sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM cloud_continuation_options WHERE run_id=$1)",
+        )
+        .bind(&a.run_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(db_error)?;
+    let next = if continuing {
+        "waiting_approval"
+    } else if phase == "unknown" {
+        "recovery_required"
+    } else {
+        "paused"
+    };
     let rev: i64 = sqlx::query_scalar(
         "UPDATE cloud_runs SET status=$2,version=version+1 WHERE run_id=$1 RETURNING version",
     )
     .bind(&a.run_id)
-    .bind(if phase == "unknown" {
-        "recovery_required"
-    } else {
-        "paused"
-    })
+    .bind(next)
     .fetch_one(&mut *tx)
     .await
     .map_err(db_error)?;
     sqlx::query("INSERT INTO cloud_run_events(run_id,run_version,kind) VALUES($1,$2,$3)")
         .bind(&a.run_id)
         .bind(rev)
-        .bind(format!("tool_{phase}"))
+        .bind(if continuing {
+            "tool_result_ready_for_continuation".to_owned()
+        } else {
+            format!("tool_{phase}")
+        })
         .execute(&mut *tx)
         .await
         .map_err(db_error)?;
-    sqlx::query("UPDATE cloud_workspaces SET status='draining',version=version+1,epoch=epoch+1,lease_until=NULL WHERE run_id=$1 AND status='ready'")
-        .bind(&a.run_id).execute(&mut *tx).await.map_err(db_error)?;
+    if !continuing {
+        sqlx::query("UPDATE cloud_workspaces SET status='draining',version=version+1,epoch=epoch+1,lease_until=NULL WHERE run_id=$1 AND status='ready'")
+            .bind(&a.run_id).execute(&mut *tx).await.map_err(db_error)?;
+    }
     tx.commit().await.map_err(db_error)?;
     Ok(out)
 }

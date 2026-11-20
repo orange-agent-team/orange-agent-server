@@ -1,6 +1,9 @@
 //! Model proposals originate from the exact request staged by the platform Host.
 //! A proposal and a quote are not a wallet reservation or permission to run a tool.
+#[path = "cloud_model_lineage.rs"]
+mod lineage;
 use crate::{artifacts::ArtifactError, store::StoreError};
+pub(crate) use lineage::{continuation_lineage, turn_context};
 use orange_protocol::{
     model::{GenerateRequest, Role},
     pricing::CreateTextQuote,
@@ -23,19 +26,26 @@ pub(crate) struct Selection {
         deserialize_with = "tool_choice"
     )]
     pub tool: Option<crate::cloud_tools::Choice>,
+    #[serde(default, skip_serializing_if = "disabled")]
+    pub continue_after_tool: bool,
 }
 fn tool_choice<'de, D: serde::Deserializer<'de>>(
     d: D,
 ) -> Result<Option<crate::cloud_tools::Choice>, D::Error> {
     crate::cloud_tools::Choice::deserialize(d).map(Some)
 }
+fn disabled(v: &bool) -> bool {
+    !*v
+}
 impl Selection {
     pub(crate) fn valid(&self) -> bool {
-        self.tool.as_ref().is_none_or(|t| {
-            t.name == crate::cloud_tools::NAME
-                && crate::cloud_tools::stamp()
-                    .is_ok_and(|(_, digest, _)| digest == t.execution_digest)
-        }) && valid_id(&self.price_version)
+        (!self.continue_after_tool || self.tool.is_some())
+            && self.tool.as_ref().is_none_or(|t| {
+                t.name == crate::cloud_tools::NAME
+                    && crate::cloud_tools::stamp()
+                        .is_ok_and(|(_, digest, _)| digest == t.execution_digest)
+            })
+            && valid_id(&self.price_version)
             && valid_id(&self.model_version)
             && valid_id(&self.invocation_id)
             && (1..=4096).contains(&self.output_limit)
@@ -115,19 +125,24 @@ pub(crate) async fn register(
             SELECT r.run_id,$2,w.workspace_id,$3,$4,$5,r.user_id FROM cloud_runs r JOIN cloud_workspaces w USING(run_id) WHERE r.run_id=$1")
             .bind(run).bind(uuid::Uuid::new_v4().to_string()).bind(version).bind(digest).bind(policy).execute(&mut **tx).await?;
     }
+    if s.continue_after_tool {
+        sqlx::query("INSERT INTO cloud_continuation_options(run_id,authorized_by) SELECT run_id,user_id FROM cloud_runs WHERE run_id=$1")
+            .bind(run).execute(&mut **tx).await?;
+    }
     Ok(())
 }
 pub(crate) async fn selection(
     tx: &mut Tx<'_>,
     run: &str,
 ) -> Result<Option<Selection>, sqlx::Error> {
-    let row=sqlx::query("SELECT p.price_version,p.model_version,p.invocation_id,p.output_limit,c.execution_digest FROM cloud_model_plans p LEFT JOIN cloud_directory_capabilities c USING(run_id) WHERE p.run_id=$1")
+    let row=sqlx::query("SELECT p.price_version,p.model_version,p.invocation_id,p.output_limit,c.execution_digest,EXISTS(SELECT 1 FROM cloud_continuation_options o WHERE o.run_id=p.run_id) AS followup FROM cloud_model_plans p LEFT JOIN cloud_directory_capabilities c USING(run_id) WHERE p.run_id=$1")
         .bind(run).fetch_optional(&mut **tx).await?;
     row.map(|r| {
         Ok(Selection {
             price_version: r.try_get("price_version")?,
             model_version: r.try_get("model_version")?,
             invocation_id: r.try_get("invocation_id")?,
+            continue_after_tool: r.try_get("followup")?,
             tool: r
                 .try_get::<Option<String>, _>("execution_digest")?
                 .map(|execution_digest| crate::cloud_tools::Choice {
@@ -189,15 +204,15 @@ pub(crate) async fn quote_request(
     user: &str,
     key: &str,
 ) -> Result<CreateTextQuote, ArtifactError> {
-    let r = live(tx, run, owner, user).await?;
+    let r = turn_context(tx, run, owner, user, None).await?;
     Ok(CreateTextQuote {
-        request_id: orange_protocol::request_digest("cloud.quote-key.v1", &(run, key))
+        request_id: orange_protocol::request_digest("cloud.quote-key.v1", &(r.turn_id, key))
             .map_err(|_| ArtifactError::Invalid)?,
-        root_budget_id: r.try_get("root_budget_id")?,
-        price_version: r.try_get("price_version")?,
-        input_upload_id: r.try_get("upload_id")?,
-        input_version_id: r.try_get("input_version_id")?,
-        output_limit: r.try_get::<i32, _>("output_limit")? as u32,
+        root_budget_id: r.root_budget_id,
+        price_version: r.price_version,
+        input_upload_id: r.upload_id,
+        input_version_id: r.input_version_id,
+        output_limit: r.output_limit,
     })
 }
 pub(crate) async fn quote_authority(
@@ -206,9 +221,10 @@ pub(crate) async fn quote_authority(
     user: &str,
     req: &CreateTextQuote,
     run: Option<&str>,
-) -> Result<Option<PgRow>, ArtifactError> {
+) -> Result<Option<lineage::TurnContext>, ArtifactError> {
     let origin: Option<String> = sqlx::query_scalar(
-        "SELECT run_id FROM cloud_model_plans WHERE input_version_id=$1 AND owner_id=$2",
+        "SELECT run_id FROM cloud_model_plans WHERE input_version_id=$1 AND owner_id=$2
+        UNION SELECT run_id FROM cloud_model_turns WHERE version_id=$1 AND owner_id=$2",
     )
     .bind(&req.input_version_id)
     .bind(owner)
@@ -218,11 +234,11 @@ pub(crate) async fn quote_authority(
         return Err(ArtifactError::Forbidden);
     }
     if let Some(id) = run {
-        let row = live(tx, id, owner, user).await?;
-        if row.try_get::<String, _>("root_budget_id")? != req.root_budget_id
-            || row.try_get::<String, _>("price_version")? != req.price_version
-            || row.try_get::<String, _>("upload_id")? != req.input_upload_id
-            || i64::from(row.try_get::<i32, _>("output_limit")?) != i64::from(req.output_limit)
+        let row = turn_context(tx, id, owner, user, Some(&req.input_version_id)).await?;
+        if row.root_budget_id != req.root_budget_id
+            || row.price_version != req.price_version
+            || row.upload_id != req.input_upload_id
+            || row.output_limit != req.output_limit
         {
             return Err(ArtifactError::Conflict);
         }
@@ -255,7 +271,9 @@ pub(crate) async fn authorize_submit(
     origin: Option<&str>,
 ) -> Result<(), StoreError> {
     let linked: Option<String> = sqlx::query_scalar(
-        "SELECT run_id FROM cloud_model_plans WHERE owner_id=$1 AND invocation_id=$2",
+        "SELECT run_id FROM cloud_model_plans WHERE owner_id=$1 AND invocation_id=$2
+        UNION SELECT run_id FROM cloud_model_turns WHERE owner_id=$1 AND invocation_id=$2
+        UNION SELECT run_id FROM cloud_continuation_intents WHERE owner_id=$1 AND invocation_id=$2",
     )
     .bind(owner)
     .bind(&req.invocation_id)
@@ -268,12 +286,18 @@ pub(crate) async fn authorize_submit(
         .await
         .map_err(crate::store::artifact_error)?;
     if let Some(id) = origin {
-        let row = live(tx, id, owner, user.ok_or(StoreError::Forbidden)?)
+        let row = turn_context(tx, id, owner, user.ok_or(StoreError::Forbidden)?, None)
             .await
             .map_err(crate::store::artifact_error)?;
-        if row.try_get::<String, _>("request_projection_digest")? != req.request_projection_digest
-            || row.try_get::<String, _>("root_budget_id")? != req.root_budget_id
-            || req.purpose != orange_protocol::InvocationPurpose::Primary
+        if row.invocation_id != req.invocation_id
+            || row.projection != req.request_projection_digest
+            || row.root_budget_id != req.root_budget_id
+            || req.purpose
+                != if row.ordinal == 1 {
+                    orange_protocol::InvocationPurpose::Primary
+                } else {
+                    orange_protocol::InvocationPurpose::Continuation
+                }
         {
             return Err(StoreError::Forbidden);
         }
@@ -284,26 +308,51 @@ pub(crate) async fn authorize_submit(
 /// Cloud results expose only a settled committed candidate while its original
 /// input and owner are still available. Applies to direct artifact reads too.
 pub(crate) async fn output_access(tx: &mut Tx<'_>, artifact: &str) -> Result<(), ArtifactError> {
-    let run:Option<String>=sqlx::query_scalar("SELECT m.run_id FROM worker_output_uploads w JOIN cloud_model_jobs m USING(job_id) WHERE w.artifact_id=$1")
+    let derived=sqlx::query("SELECT i.run_id,i.owner_id,i.user_id,t.turn_id FROM artifact_uploads u
+        JOIN cloud_continuation_intents i ON i.owner_id=u.owner_id AND i.upload_id=u.upload_id
+        LEFT JOIN cloud_model_turns t ON t.turn_id=i.turn_id AND t.artifact_id=u.artifact_id WHERE u.artifact_id=$1")
         .bind(artifact).fetch_optional(&mut **tx).await?;
-    let Some(run) = run else {
-        return Ok(());
-    };
-    let available=sqlx::query("SELECT f.run_id FROM cloud_model_results f JOIN cloud_runs r USING(run_id)
-        JOIN artifacts a ON a.artifact_id=r.input_artifact_id AND a.version_id=r.input_version_id AND a.owner_id=r.owner_id
-        WHERE f.run_id=$1 AND f.artifact_id=$2 AND r.status='completed' AND a.state='available' AND a.creator_id=r.user_id FOR SHARE OF r,a")
-        .bind(run).bind(artifact).fetch_optional(&mut **tx).await?;
-    if available.is_none() {
-        return Err(ArtifactError::NotReady);
+    if let Some(row) = derived {
+        if row.try_get::<Option<String>, _>("turn_id")?.is_none() {
+            return Err(ArtifactError::NotReady);
+        }
+        continuation_lineage(
+            tx,
+            row.try_get("run_id")?,
+            row.try_get("owner_id")?,
+            row.try_get("user_id")?,
+        )
+        .await?;
+    }
+    let job:Option<String>=sqlx::query_scalar("SELECT m.job_id FROM worker_output_uploads w JOIN cloud_model_jobs m USING(job_id) WHERE w.artifact_id=$1")
+        .bind(artifact).fetch_optional(&mut **tx).await?;
+    if let Some(job) = job {
+        let row=sqlx::query("SELECT r.run_id,r.owner_id,r.user_id,t.ordinal FROM cloud_model_results f JOIN cloud_runs r USING(run_id)
+            JOIN cloud_job_turns jt ON jt.job_id=f.job_id JOIN cloud_model_turns t ON t.turn_id=jt.turn_id
+            JOIN artifacts a ON a.artifact_id=r.input_artifact_id AND a.version_id=r.input_version_id AND a.owner_id=r.owner_id
+            JOIN artifacts model_input ON model_input.artifact_id=t.artifact_id AND model_input.version_id=t.version_id
+            WHERE f.job_id=$1 AND f.artifact_id=$2 AND r.status='completed' AND a.state='available' AND a.creator_id=r.user_id
+              AND model_input.state='available' AND model_input.owner_id=r.owner_id FOR SHARE OF r,a,model_input")
+            .bind(job).bind(artifact).fetch_optional(&mut **tx).await?.ok_or(ArtifactError::NotReady)?;
+        if row.try_get::<i32, _>("ordinal")? == 2 {
+            continuation_lineage(
+                tx,
+                row.try_get("run_id")?,
+                row.try_get("owner_id")?,
+                row.try_get("user_id")?,
+            )
+            .await?;
+        }
     }
     Ok(())
 }
 pub(crate) async fn reconcile_one(pool: &sqlx::PgPool) -> Result<bool, sqlx::Error> {
     let mut tx = pool.begin().await?;
-    let row=sqlx::query("SELECT r.run_id,w.workspace_id,m.job_id,j.execution_state,j.settlement_state,r.owner_id,r.user_id,p.model_version
+    let row=sqlx::query("SELECT r.run_id,w.workspace_id,m.job_id,jt.turn_id,turn.ordinal,j.execution_state,j.settlement_state,r.owner_id,r.user_id,p.model_version
         FROM cloud_runs r JOIN cloud_workspaces w USING(run_id) JOIN cloud_model_jobs m USING(run_id)
+        JOIN cloud_job_turns jt ON jt.job_id=m.job_id JOIN cloud_model_turns turn ON turn.turn_id=jt.turn_id
         JOIN cloud_model_plans p ON p.run_id=r.run_id JOIN jobs j ON j.job_id=m.job_id AND j.owner_id=r.owner_id AND j.root_budget_id=r.root_budget_id
-        WHERE r.status='running' AND w.status='ready' AND (j.execution_state IN ('failed','cancelled') OR
+        WHERE r.status='running' AND w.status='ready' AND NOT EXISTS(SELECT 1 FROM cloud_model_outcomes done WHERE done.turn_id=jt.turn_id) AND (j.execution_state IN ('failed','cancelled') OR
          (j.execution_state='succeeded' AND j.settlement_state='settled')) ORDER BY r.sequence LIMIT 1 FOR UPDATE OF r,w SKIP LOCKED")
         .fetch_optional(&mut *tx).await?;
     let Some(row) = row else {
@@ -321,30 +370,54 @@ pub(crate) async fn reconcile_one(pool: &sqlx::PgPool) -> Result<bool, sqlx::Err
             FROM cloud_runs r JOIN cloud_workspaces w USING(run_id) JOIN cloud_pool_hosts h USING(host_instance_id)
             JOIN cloud_model_plans plan USING(run_id) JOIN cloud_model_proposals p USING(run_id) JOIN cloud_model_jobs m USING(run_id)
             JOIN jobs j ON j.job_id=m.job_id AND j.submitting_user_id=r.user_id AND j.quote_id=m.quote_id
-            JOIN quote_metering q ON q.quote_id=j.quote_id AND q.input_artifact_id=r.input_artifact_id AND q.input_version_id=r.input_version_id
+            JOIN cloud_job_turns jt ON jt.job_id=j.job_id JOIN cloud_model_turns turn ON turn.turn_id=jt.turn_id AND turn.run_id=r.run_id
+            JOIN quote_metering q ON q.quote_id=j.quote_id AND q.input_artifact_id=turn.artifact_id AND q.input_version_id=turn.version_id
+            JOIN artifacts model_input ON model_input.artifact_id=turn.artifact_id AND model_input.version_id=turn.version_id
             JOIN job_response_commits c ON c.job_id=j.job_id JOIN job_usage_facts u ON u.job_id=j.job_id
             JOIN artifacts src ON src.artifact_id=r.input_artifact_id AND src.version_id=r.input_version_id
             JOIN artifacts dst ON dst.artifact_id=c.artifact_id AND dst.version_id=c.version_id
             JOIN owners o ON o.owner_id=r.owner_id JOIN users person ON person.user_id=r.user_id AND person.personal_owner_id=r.owner_id
             WHERE r.run_id=$1 AND m.job_id=$2 AND src.owner_id=r.owner_id AND src.state='available' AND dst.owner_id=r.owner_id AND dst.state='available'
-              AND u.response_digest=c.response_digest AND u.request_projection_digest=p.request_projection_digest
+              AND u.response_digest=c.response_digest AND u.request_projection_digest=turn.projection_digest AND model_input.state='available' AND model_input.owner_id=r.owner_id
               AND (plan.execution_protocol=0 OR EXISTS(SELECT 1 FROM cloud_run_leases lease WHERE lease.run_id=r.run_id AND lease.allocation_id=p.allocation_id
                   AND lease.lease_until>FLOOR(EXTRACT(EPOCH FROM clock_timestamp()))::bigint))
               AND h.enabled AND h.credential_expires_at>clock_timestamp() AND h.live_until>clock_timestamp()
               AND w.lease_until>clock_timestamp() AND w.expires_at>clock_timestamp() AND o.state='active' AND person.active
-            FOR SHARE OF h,src,dst,o,person")
+            FOR SHARE OF h,src,dst,o,person,model_input")
             .bind(&run).bind(&job).fetch_optional(&mut *tx).await?;
-        if let Some(proof) = proof {
+        let lineage_live = if row.try_get::<i32, _>("ordinal")? == 2 {
+            match continuation_lineage(
+                &mut tx,
+                &run,
+                row.try_get("owner_id")?,
+                row.try_get("user_id")?,
+            )
+            .await
+            {
+                Ok(_) => true,
+                Err(ArtifactError::NotReady) => false,
+                Err(ArtifactError::Database(e)) => return Err(e),
+                Err(_) => {
+                    return Err(sqlx::Error::Protocol(
+                        "unreadable cloud model lineage".into(),
+                    ));
+                }
+            }
+        } else {
+            true
+        };
+        if let Some(proof) = proof.filter(|_| lineage_live) {
             if proof.try_get::<bool, _>("has_tools")? {
                 let count=sqlx::query("INSERT INTO cloud_tool_responses(run_id,job_id,commit_id,artifact_id,version_id,response_digest)
-                    SELECT $1,$2,$3,$4,$5,$6 FROM cloud_directory_capabilities c WHERE run_id=$1 AND NOT EXISTS
+                    SELECT $1,$2,$3,$4,$5,$6 FROM cloud_directory_capabilities c WHERE run_id=$1 AND $7=1 AND NOT EXISTS
                     (SELECT 1 FROM cloud_directory_revocations v WHERE v.run_id=c.run_id)")
                     .bind(&run).bind(&job).bind(proof.try_get::<String,_>("commit_id")?).bind(proof.try_get::<String,_>("artifact_id")?)
-                    .bind(proof.try_get::<String,_>("version_id")?).bind(proof.try_get::<String,_>("response_digest")?).execute(&mut *tx).await?.rows_affected();
+                    .bind(proof.try_get::<String,_>("version_id")?).bind(proof.try_get::<String,_>("response_digest")?).bind(row.try_get::<i32,_>("ordinal")?).execute(&mut *tx).await?.rows_affected();
                 if count == 1 {
                     let rev:i64=sqlx::query_scalar("UPDATE cloud_runs SET status='waiting_approval',version=version+1 WHERE run_id=$1 RETURNING version")
                         .bind(&run).fetch_one(&mut *tx).await?;
                     sqlx::query("INSERT INTO cloud_run_events(run_id,run_version,kind) VALUES($1,$2,'model_tool_response_committed')").bind(run).bind(rev).execute(&mut *tx).await?;
+                    record_outcome(&mut tx, row.try_get("turn_id")?, &job, "tool_request").await?;
                     tx.commit().await?;
                     return Ok(true);
                 }
@@ -377,6 +450,17 @@ pub(crate) async fn reconcile_one(pool: &sqlx::PgPool) -> Result<bool, sqlx::Err
         .bind(event)
         .execute(&mut *tx)
         .await?;
+    record_outcome(
+        &mut tx,
+        row.try_get("turn_id")?,
+        &job,
+        if state == "completed" {
+            "final"
+        } else {
+            "stopped"
+        },
+    )
+    .await?;
     tx.commit().await?;
     Ok(true)
 }
@@ -391,20 +475,16 @@ pub(crate) async fn bind_submitted_input(
     job: &str,
 ) -> Result<(), StoreError> {
     let bound=sqlx::query("INSERT INTO job_inputs(job_id,artifact_id,version_id,owner_id,authorizing_user_id,artifact_sha256,size_bytes,projection_digest)
-        SELECT j.job_id,a.artifact_id,a.version_id,r.owner_id,r.user_id,a.sha256,a.size_bytes,p.request_projection_digest
-        FROM cloud_runs r JOIN cloud_model_plans plan USING(run_id,owner_id) JOIN cloud_model_proposals p USING(run_id)
-        JOIN cloud_workspace_input_reads i ON i.receipt_id=p.input_receipt_id AND i.allocation_id=p.allocation_id
-        JOIN artifacts a ON a.artifact_id=i.artifact_id AND a.version_id=i.version_id AND a.sha256=i.sha256
-        JOIN cloud_model_quotes cq ON cq.run_id=r.run_id AND cq.allocation_id=p.allocation_id JOIN quotes q ON q.quote_id=cq.quote_id
-        JOIN quote_metering m ON m.quote_id=q.quote_id JOIN quote_execution_plans ep ON ep.quote_id=q.quote_id
-        JOIN jobs j ON j.quote_id=q.quote_id AND j.owner_id=r.owner_id AND j.root_budget_id=r.root_budget_id
-        WHERE r.run_id=$1 AND j.job_id=$2 AND j.submitting_user_id=r.user_id AND j.input_required AND j.execution_state='queued' AND j.settlement_state='pending'
-          AND j.invocation_id=plan.invocation_id AND q.invocation_id=j.invocation_id AND q.owner_id=r.owner_id AND q.root_budget_id=r.root_budget_id
-          AND q.max_amount=j.reserved AND q.projection_digest=p.request_projection_digest AND ep.request_projection_digest=p.request_projection_digest AND ep.job_deadline>clock_timestamp()
-          AND m.requester_id=r.user_id AND m.input_artifact_id=a.artifact_id AND m.input_version_id=a.version_id
-          AND plan.input_version_id=a.version_id AND r.input_artifact_id=a.artifact_id AND r.input_version_id=a.version_id
-          AND i.model_projection_digest=p.request_projection_digest AND a.owner_id=r.owner_id AND a.creator_id=r.user_id
-          AND a.resource_id IS NULL AND a.state='available' AND a.media_type='application/json' AND a.size_bytes BETWEEN 1 AND 262144 RETURNING owner_id,artifact_id,projection_digest")
+        SELECT j.job_id,a.artifact_id,a.version_id,r.owner_id,r.user_id,a.sha256,a.size_bytes,t.projection_digest
+        FROM jobs j JOIN cloud_quote_turns qt ON qt.quote_id=j.quote_id JOIN cloud_model_turns t ON t.turn_id=qt.turn_id AND t.run_id=qt.run_id
+        JOIN cloud_runs r ON r.run_id=t.run_id AND r.owner_id=t.owner_id JOIN artifacts a ON a.artifact_id=t.artifact_id AND a.version_id=t.version_id
+        JOIN quotes q ON q.quote_id=j.quote_id JOIN quote_metering m ON m.quote_id=q.quote_id JOIN quote_execution_plans ep ON ep.quote_id=q.quote_id
+        WHERE r.run_id=$1 AND j.job_id=$2 AND j.owner_id=r.owner_id AND j.root_budget_id=r.root_budget_id AND j.submitting_user_id=r.user_id
+          AND j.input_required AND j.execution_state='queued' AND j.settlement_state='pending' AND j.invocation_id=t.invocation_id AND q.invocation_id=j.invocation_id
+          AND q.owner_id=r.owner_id AND q.root_budget_id=r.root_budget_id AND q.max_amount=j.reserved AND q.projection_digest=t.projection_digest
+          AND ep.request_projection_digest=t.projection_digest AND ep.job_deadline>clock_timestamp() AND m.requester_id=r.user_id AND m.input_artifact_id=a.artifact_id
+          AND m.input_version_id=a.version_id AND a.owner_id=r.owner_id AND a.creator_id=r.user_id AND a.resource_id IS NULL AND a.state='available' AND a.media_type='application/json'
+          AND a.size_bytes BETWEEN 1 AND 262144 RETURNING owner_id,artifact_id,projection_digest")
         .bind(run).bind(job).fetch_optional(&mut **tx).await?.ok_or(StoreError::Conflict)?;
     crate::artifacts::inputs::record_input_bound(
         tx,
@@ -414,5 +494,19 @@ pub(crate) async fn bind_submitted_input(
         bound.try_get("projection_digest")?,
     )
     .await?;
+    Ok(())
+}
+async fn record_outcome(
+    tx: &mut Tx<'_>,
+    turn: &str,
+    job: &str,
+    kind: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("INSERT INTO cloud_model_outcomes(turn_id,job_id,kind) VALUES($1,$2,$3)")
+        .bind(turn)
+        .bind(job)
+        .bind(kind)
+        .execute(&mut **tx)
+        .await?;
     Ok(())
 }

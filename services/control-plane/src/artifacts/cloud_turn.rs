@@ -27,17 +27,40 @@ impl ArtifactStore {
                 .await?
                 .ok_or(ArtifactError::Forbidden)?;
         authority::scope(&mut tx, actor, &owner, false).await?;
-        let row=sqlx::query("SELECT r.status,r.root_budget_id,r.input_version_id,p.model_version,p.price_version,p.invocation_id,p.output_limit,cap.execution_digest AS tool_digest,revoked.receipt_id AS revoked_directory,
-            m.request_projection_digest,j.job_id,f.commit_id,tool.run_id AS tool_response,op.state AS tool_state,a.state AS result_state,src.state AS source_state
+        let row=sqlx::query("SELECT r.status,r.root_budget_id,r.input_version_id AS original_version,coalesce(turn.version_id,r.input_version_id) AS input_version_id,coalesce(turn.upload_id,initial_upload.upload_id) AS current_upload_id,
+            p.model_version,p.price_version,coalesce(turn.invocation_id,p.invocation_id) AS invocation_id,p.output_limit,cap.execution_digest AS tool_digest,
+            revoked.receipt_id AS revoked_directory,turn.projection_digest AS request_projection_digest,j.job_id,tool.run_id AS tool_response,op.state AS tool_state,
+            f.commit_id,a.state AS result_state,src.state AS source_state,coalesce(turn.ordinal,1) AS ordinal,prepared.state AS prepared_state,
+            EXISTS(SELECT 1 FROM cloud_continuation_options opt WHERE opt.run_id=r.run_id) AS continuing
             FROM cloud_runs r JOIN cloud_model_plans p USING(run_id,owner_id) JOIN artifacts src ON src.artifact_id=r.input_artifact_id
-            LEFT JOIN cloud_directory_capabilities cap USING(run_id) LEFT JOIN cloud_directory_revocations revoked USING(run_id) LEFT JOIN cloud_model_proposals m USING(run_id) LEFT JOIN cloud_model_jobs j USING(run_id)
-            LEFT JOIN cloud_tool_responses tool ON tool.run_id=r.run_id LEFT JOIN cloud_operation_intents intent ON intent.run_id=r.run_id
-            LEFT JOIN cloud_operation_state op ON op.operation_id=intent.operation_id LEFT JOIN cloud_model_results f ON f.run_id=r.run_id LEFT JOIN artifacts a ON a.artifact_id=f.artifact_id AND a.version_id=f.version_id
+            JOIN artifact_uploads initial_upload ON initial_upload.artifact_id=src.artifact_id AND initial_upload.owner_id=r.owner_id
+            LEFT JOIN LATERAL(SELECT t.* FROM cloud_model_turns t WHERE t.run_id=r.run_id ORDER BY t.ordinal DESC LIMIT 1) turn ON true
+            LEFT JOIN artifacts prepared ON prepared.artifact_id=turn.artifact_id AND prepared.version_id=turn.version_id
+            LEFT JOIN cloud_job_turns j ON j.turn_id=turn.turn_id LEFT JOIN cloud_directory_capabilities cap ON cap.run_id=r.run_id
+            LEFT JOIN cloud_directory_revocations revoked ON revoked.run_id=r.run_id LEFT JOIN cloud_tool_responses tool ON tool.run_id=r.run_id
+            LEFT JOIN cloud_operation_intents intent ON intent.run_id=r.run_id LEFT JOIN cloud_operation_state op ON op.operation_id=intent.operation_id
+            LEFT JOIN cloud_model_results f ON f.run_id=r.run_id AND f.job_id=j.job_id LEFT JOIN artifacts a ON a.artifact_id=f.artifact_id AND a.version_id=f.version_id
             WHERE r.run_id=$1 AND r.owner_id=$2 AND r.user_id=$3")
             .bind(run).bind(&owner).bind(&actor.user).fetch_optional(&mut *tx).await?.ok_or(ArtifactError::NotFound)?;
+        let ordinal: i32 = row.try_get("ordinal")?;
+        let continuing: bool = row.try_get("continuing")?;
+        let derived_ok = if ordinal == 2 {
+            match crate::cloud_model::continuation_lineage(&mut tx, run, &owner, &actor.user).await
+            {
+                Ok(_) => {
+                    row.try_get::<Option<String>, _>("prepared_state")?
+                        .as_deref()
+                        == Some("available")
+                }
+                Err(ArtifactError::NotReady) => false,
+                Err(e) => return Err(e),
+            }
+        } else {
+            true
+        };
         let job: Option<String> = row.try_get("job_id")?;
         let proposal: Option<String> = row.try_get("request_projection_digest")?;
-        let stage = if row.try_get::<String, _>("source_state")? != "available" {
+        let stage = if !derived_ok || row.try_get::<String, _>("source_state")? != "available" {
             "unavailable"
         } else {
             match row.try_get::<String, _>("status")?.as_str() {
@@ -48,7 +71,19 @@ impl ArtifactStore {
                     "result_available"
                 }
                 "waiting_approval"
-                    if row.try_get::<Option<String>, _>("tool_response")?.is_some() =>
+                    if continuing
+                        && ordinal == 1
+                        && row.try_get::<Option<String>, _>("tool_state")?.as_deref()
+                            == Some("succeeded")
+                        && row
+                            .try_get::<Option<String>, _>("revoked_directory")?
+                            .is_none() =>
+                {
+                    "continuation_ready"
+                }
+                "waiting_approval"
+                    if ordinal == 1
+                        && row.try_get::<Option<String>, _>("tool_response")?.is_some() =>
                 {
                     "waiting_tool"
                 }
@@ -71,6 +106,12 @@ impl ArtifactStore {
             "input_version_id":row.try_get::<String,_>("input_version_id")?,"model_version":row.try_get::<String,_>("model_version")?,
             "price_version":row.try_get::<String,_>("price_version")?,"invocation_id":row.try_get::<String,_>("invocation_id")?,
             "output_limit":row.try_get::<i32,_>("output_limit")?,"stage":stage});
+        if continuing {
+            result["turn"] = json!(ordinal);
+            result["model_input_upload_id"] = json!(row.try_get::<String, _>("current_upload_id")?);
+            result["source_input_version_id"] =
+                json!(row.try_get::<String, _>("original_version")?);
+        }
         if let Some(digest) = row.try_get::<Option<String>, _>("tool_digest")? {
             result["tool"] = json!({"name":crate::cloud_tools::NAME,"execution_digest":digest});
         }
@@ -103,22 +144,26 @@ impl ArtifactStore {
                 .fetch_one(&mut *tx)
                 .await?;
         authority::scope(&mut tx, actor, &owner, true).await?;
-        let model = crate::cloud_model::live(&mut tx, run, &owner, &actor.user).await?;
+        let model =
+            crate::cloud_model::turn_context(&mut tx, run, &owner, &actor.user, None).await?;
         let quote=sqlx::query("SELECT q.max_amount,q.projection_digest,q.invocation_id,q.root_budget_id FROM cloud_model_quotes l JOIN quotes q USING(quote_id)
-            JOIN quote_metering m USING(quote_id) WHERE l.quote_id=$1 AND l.run_id=$2 AND l.allocation_id=$3 AND q.owner_id=$4 AND m.requester_id=$5")
-            .bind(&c.quote_id).bind(run).bind(model.try_get::<String,_>("allocation_id")?).bind(&owner).bind(&actor.user)
+            JOIN quote_metering m USING(quote_id) JOIN cloud_quote_turns t ON t.quote_id=l.quote_id AND t.run_id=l.run_id WHERE t.turn_id=$6 AND l.quote_id=$1 AND l.run_id=$2 AND l.allocation_id=$3 AND q.owner_id=$4 AND m.requester_id=$5")
+            .bind(&c.quote_id).bind(run).bind(model.allocation_id).bind(&owner).bind(&actor.user).bind(model.turn_id)
             .fetch_optional(&mut *tx).await?.ok_or(ArtifactError::NotFound)?;
         if quote.try_get::<i64, _>("max_amount")? != c.max_amount.0.units()
             || quote.try_get::<String, _>("projection_digest")? != c.request_projection_digest
-            || model.try_get::<String, _>("request_projection_digest")?
-                != c.request_projection_digest
+            || model.projection != c.request_projection_digest
         {
             return Err(ArtifactError::Conflict);
         }
         let req = SubmitJob {
             root_budget_id: quote.try_get("root_budget_id")?,
             invocation_id: quote.try_get("invocation_id")?,
-            purpose: InvocationPurpose::Primary,
+            purpose: if model.ordinal == 1 {
+                InvocationPurpose::Primary
+            } else {
+                InvocationPurpose::Continuation
+            },
             quote_id: c.quote_id,
             request_projection_digest: c.request_projection_digest,
         };

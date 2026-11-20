@@ -122,3 +122,14 @@ mod tests {
         verify_output(&envelope).expect("catalog output check");
     }
 }
+
+pub(crate) fn model_output(value: &Value) -> Result<(), ()> {
+    let c = catalog()?;
+    c.tools
+        .validate_output(
+            &c.tools.pin(NAME).map_err(|_| ())?,
+            value,
+            OutputChannel::Model,
+        )
+        .map_err(|_| ())
+}

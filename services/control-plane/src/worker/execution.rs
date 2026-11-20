@@ -65,7 +65,7 @@ pub(crate) async fn job_authority(tx: &mut Tx<'_>, job: &str) -> Result<String, 
     let cloud:Option<(String,String,String)>=sqlx::query_as("SELECT r.run_id,r.owner_id,r.user_id FROM cloud_model_jobs m JOIN cloud_runs r USING(run_id) WHERE m.job_id=$1")
         .bind(job).fetch_optional(&mut **tx).await?;
     if let Some((run, owner, user)) = cloud {
-        crate::cloud_model::live(tx, &run, &owner, &user)
+        crate::cloud_model::turn_context(tx, &run, &owner, &user, None)
             .await
             .map_err(|e| match e {
                 crate::artifacts::ArtifactError::Database(e) => SessionError::Database(e),
