@@ -9,6 +9,8 @@ use tokio_stream::StreamExt;
 const BYTE_LIMIT: usize = 1024 * 1024;
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("source login or read-role privilege refused")]
+    SourceAuthority,
     #[error("unregistered connector resource")]
     Denied,
     #[error("registered view or read role changed")]
@@ -21,7 +23,14 @@ pub enum Error {
     Unavailable,
 }
 impl From<sqlx::Error> for Error {
-    fn from(_: sqlx::Error) -> Self {
+    fn from(err: sqlx::Error) -> Self {
+        if let sqlx::Error::Database(db) = &err {
+            match db.code().as_deref() {
+                Some("28000" | "28P01" | "42501") => return Self::SourceAuthority,
+                Some("42P01" | "42703") => return Self::Changed,
+                _ => {}
+            }
+        }
         Self::Unavailable
     }
 }
@@ -135,7 +144,7 @@ impl Registration {
         let role_ok:bool=sqlx::query_scalar("SELECT current_database()=$1 AND current_user=$2 AND session_user=current_user AND current_setting('transaction_read_only')='on' AND rolcanlogin AND NOT (rolsuper OR rolcreaterole OR rolcreatedb OR rolreplication OR rolbypassrls) AND NOT EXISTS(SELECT 1 FROM pg_auth_members WHERE member=r.oid) FROM pg_roles r WHERE rolname=current_user")
             .bind(&self.database).bind(&self.read_role).fetch_one(&mut *tx).await?;
         if !role_ok {
-            return Err(Error::Denied);
+            return Err(Error::SourceAuthority);
         }
         let result = match action {
             Action::ListViews {} => {
@@ -183,10 +192,7 @@ impl View {
         // Hold a relation read lock while comparing its definition and reading rows.
         let mut lock = QueryBuilder::new("LOCK TABLE ONLY ");
         lock.push(self.relation_sql()).push(" IN ACCESS SHARE MODE");
-        lock.build()
-            .execute(&mut **tx)
-            .await
-            .map_err(|_| Error::Changed)?;
+        lock.build().execute(&mut **tx).await.map_err(Error::from)?;
         let row=sqlx::query("SELECT c.oid::bigint AS oid, pg_get_viewdef(c.oid,false) AS definition, jsonb_object_agg(a.attname,t.typname) AS columns FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace JOIN pg_attribute a ON a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped JOIN pg_type t ON t.oid=a.atttypid AND t.typnamespace='pg_catalog'::regnamespace WHERE n.nspname=$1 AND c.relname=$2 AND c.relkind='v' AND c.relowner<>(SELECT oid FROM pg_roles WHERE rolname=current_user) AND has_table_privilege(c.oid,'SELECT') AND NOT has_table_privilege(c.oid,'INSERT,UPDATE,DELETE,TRUNCATE,TRIGGER') GROUP BY c.oid")
             .bind(&self.schema).bind(&self.relation).fetch_optional(&mut **tx).await?.ok_or(Error::Changed)?;
         let definition: String = row.try_get("definition")?;

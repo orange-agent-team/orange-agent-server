@@ -1,14 +1,9 @@
 use super::*;
-use orange_control_plane::{artifacts::ArtifactStore, pg_view_sources::Sources};
-use orange_protocol::artifacts::CreateUpload;
+use orange_control_plane::pg_view_sources::Sources;
 use sha2::{Digest, Sha256};
 use std::io::Write;
 
-fn keyed(f: &Fixture, k: &str) -> HeaderMap {
-    let mut h = headers(f);
-    h.insert("idempotency-key", k.parse().expect("key"));
-    h
-}
+use super::connector_run::keyed;
 
 #[tokio::test]
 async fn scoped_source_reads_require_live_run_and_grant_at_delivery() {
@@ -39,94 +34,13 @@ async fn scoped_source_reads_require_live_run_and_grant_at_delivery() {
         .expect("write file");
     f.identity.pg_sources = Sources::load_development_file(file.path()).expect("registered source");
     f.router = auth::routes::router(f.identity.clone());
-    let root = tempfile::tempdir().expect("object root");
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).expect("private");
-    let store = ArtifactStore::open_local(f.pool.clone(), root.path(), 1048576, 100)
-        .await
-        .expect("object store");
-    let actor = f
-        .identity
-        .artifact_actor(&headers(&f), true)
-        .await
-        .expect("actor");
-    let upload = CreateUpload {
-        upload_id: Uuid::new_v4().to_string(),
-        size_bytes: "1".into(),
-        media_type: "text/plain".into(),
-        sha256: hex::encode(Sha256::digest(b"x")),
-    };
-    store
-        .begin_upload(&actor, &f.user, &upload)
-        .await
-        .expect("reserve");
-    let input = store
-        .put(
-            actor,
-            f.user.clone(),
-            upload.upload_id,
-            tokio_stream::iter(vec![Ok(opendal::Buffer::from(vec![b'x']))]),
-        )
-        .await
-        .expect("publish");
-    let (code, budget) = request(
-        &f,
-        "POST",
-        "/api/v1/account/budgets",
-        Some(json!({"scope_id":"views","limit":"100"})),
-        keyed(&f, "budget"),
-    )
-    .await;
-    assert_eq!(code, StatusCode::OK);
-    let run = Uuid::new_v4().to_string();
-    sqlx::query("INSERT INTO cloud_runs(run_id,owner_id,user_id,request_key,request_digest,root_budget_id,input_artifact_id,input_version_id,status) VALUES($1,$2,$2,'test',$3,$4,$5,$6,'running')").bind(&run).bind(&f.user).bind("a".repeat(64)).bind(budget["root_budget_id"].as_str().expect("budget")).bind(input.artifact_id).bind(input.version_id).execute(&f.pool).await.expect("fixture running Run");
+    let (run, _root) = super::connector_run::active_run(&f).await;
     if let Ok(driver) = std::env::var("ORANGE_CN05_BROWSER") {
-        use tokio::io::AsyncWriteExt;
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("test listener");
-        let addr = listener.local_addr().expect("address");
-        let app = f.router.clone();
-        let serving =
-            tokio::spawn(async move { axum::serve(listener, app).await.expect("serve test API") });
-        let dir =
-            std::path::PathBuf::from(std::env::var("ORANGE_CN05_EVIDENCE").expect("evidence"));
-        let mut child =
-            tokio::process::Command::new(std::env::var("ORANGE_CN05_NODE").expect("node"))
-                .arg(driver)
-                .env_clear()
-                .stdin(std::process::Stdio::piped())
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .kill_on_drop(true)
-                .spawn()
-                .expect("Chrome driver");
-        let packet = json!({"api":format!("http://{addr}"),"origin":f.identity.config.user_origin,"token":f.token,"run":run,"screenshot":dir.join("rows.png")});
-        let mut input = child.stdin.take().expect("private pipe");
-        input
-            .write_all(&serde_json::to_vec(&packet).expect("JSON"))
-            .await
-            .expect("send private fixture");
-        drop(input);
-        let out = tokio::time::timeout(
-            std::time::Duration::from_secs(120),
-            child.wait_with_output(),
-        )
-        .await
-        .expect("driver deadline")
-        .expect("browser");
-        serving.abort();
-        assert!(
-            out.status.success(),
-            "{}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        let receipt: Value = serde_json::from_slice(&out.stdout).expect("browser receipt");
+        let receipt = super::connector_run::browser(&f, &run, driver).await;
         assert_eq!(
             receipt,
             json!({"approved":true,"listed":true,"described":true,"queried":true,"revoked_after_reload":true})
         );
-        std::fs::write(dir.join("browser.json"), out.stdout).expect("save receipt");
     }
     let base = format!("/api/v1/agent/runs/{run}/connectors/postgres");
     assert_eq!(
@@ -253,6 +167,124 @@ async fn scoped_source_reads_require_live_run_and_grant_at_delivery() {
         .await
         .0,
         StatusCode::FORBIDDEN
+    );
+    // Revoke the source's SELECT privilege. Restoring it does not reopen an old platform grant.
+    let mut fresh = fixture().await;
+    let (run2, _root2) = super::connector_run::active_run(&fresh).await;
+    config["owner_id"] = json!(fresh.user);
+    fn configure(f: &mut Fixture, c: &Value) {
+        let mut file = tempfile::NamedTempFile::new().expect("private configuration");
+        file.write_all(&serde_json::to_vec(&[c]).expect("json"))
+            .expect("write");
+        f.identity.pg_sources = Sources::load_development_file(file.path()).expect("load");
+        f.router = auth::routes::router(f.identity.clone());
+    }
+    configure(&mut fresh, &config);
+    let base2 = format!("/api/v1/agent/runs/{run2}/connectors/postgres");
+    let inv = request(&fresh, "GET", &base2, None, headers(&fresh))
+        .await
+        .1;
+    let mut terms = json!({"source_id":"sales-db","source_digest":inv["sources"][0]["source_digest"],"view_ids":["sales"],"duration_seconds":120});
+    let grant2 = request(
+        &fresh,
+        "POST",
+        &base2,
+        Some(terms.clone()),
+        keyed(&fresh, "source-grant"),
+    )
+    .await
+    .1;
+    let acts = format!(
+        "{base2}/{}/actions",
+        grant2["grant_id"].as_str().expect("grant")
+    );
+    let role = config["registration"]["read_role"].as_str().expect("role");
+    assert!(
+        role.len() == 37
+            && role.starts_with("cn05_")
+            && role[5..].bytes().all(|b| b.is_ascii_hexdigit())
+    );
+    sqlx::QueryBuilder::new("REVOKE SELECT ON source.sales FROM ")
+        .push(role)
+        .build()
+        .execute(&source)
+        .await
+        .expect("fixture role revoke");
+    let action = json!({"action":"list_views"});
+    assert_eq!(
+        request(
+            &fresh,
+            "POST",
+            &acts,
+            Some(action.clone()),
+            keyed(&fresh, "refused")
+        )
+        .await
+        .0,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    sqlx::QueryBuilder::new("GRANT SELECT ON source.sales TO ")
+        .push(role)
+        .build()
+        .execute(&source)
+        .await
+        .expect("fixture role restore");
+    configure(&mut fresh, &config);
+    assert_eq!(
+        request(&fresh, "GET", &base2, None, headers(&fresh))
+            .await
+            .1["sources"],
+        json!([])
+    );
+    assert_eq!(
+        request(
+            &fresh,
+            "POST",
+            &acts,
+            Some(action.clone()),
+            keyed(&fresh, "still-disabled")
+        )
+        .await
+        .0,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM pg_view_calls WHERE run_id=$1")
+        .bind(&run2)
+        .fetch_one(&fresh.pool)
+        .await
+        .expect("dispatch count");
+    assert_eq!(count, 1);
+    config["credential_revision"] = json!("restored-v2");
+    configure(&mut fresh, &config);
+    let inv = request(&fresh, "GET", &base2, None, headers(&fresh))
+        .await
+        .1;
+    assert_ne!(terms["source_digest"], inv["sources"][0]["source_digest"]);
+    terms["source_digest"] = inv["sources"][0]["source_digest"].clone();
+    let g3 = request(
+        &fresh,
+        "POST",
+        &base2,
+        Some(terms),
+        keyed(&fresh, "new-source"),
+    )
+    .await
+    .1;
+    let acts = format!(
+        "{base2}/{}/actions",
+        g3["grant_id"].as_str().expect("fresh grant")
+    );
+    assert_eq!(
+        request(
+            &fresh,
+            "POST",
+            &acts,
+            Some(action),
+            keyed(&fresh, "recovered")
+        )
+        .await
+        .0,
+        StatusCode::OK
     );
     source.close().await;
 }

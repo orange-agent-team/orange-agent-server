@@ -1,0 +1,10 @@
+{
+  "project": "seaweedfs/seaweedfs",
+  "release": "4.52",
+  "release_commit": "984eac6a790be89e2a11de175a7413e1e3e32dd3",
+  "platform": "darwin-arm64",
+  "asset": "https://github.com/seaweedfs/seaweedfs/releases/download/4.52/darwin_arm64.tar.gz",
+  "bytes": 44736490,
+  "sha256": "7aed4f7db8048a8aedab47a71ea4dd3875caa5abdb925d6aa72fb65438a47910",
+  "weed_sha256": "96d670fc120b7010935c848bdf6241a60d74869cf3722fad9d9138c7d2a1a490"
+}

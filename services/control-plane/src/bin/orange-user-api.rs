@@ -56,6 +56,16 @@ async fn serve(
     } else {
         identity
     };
+    #[cfg(unix)]
+    let identity = if let Some(path) = env::var_os("ORANGE_S3_SOURCES") {
+        let mut identity = identity;
+        identity.s3_sources = orange_control_plane::s3_sources::Sources::load_development_file(
+            std::path::Path::new(&path),
+        )?;
+        identity
+    } else {
+        identity
+    };
     let artifacts = if let Some(root) = env::var_os("ORANGE_ARTIFACT_ROOT") {
         let bytes = env::var("ORANGE_ARTIFACT_BYTE_LIMIT")
             .unwrap_or_else(|_| "1073741824".into())
