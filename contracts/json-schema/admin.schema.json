@@ -3009,6 +3009,197 @@
         "data"
       ],
       "additionalProperties": false
+    },
+    "TextPriceDraftScope": {
+      "type": "object",
+      "properties": {
+        "environment": {
+          "const": "dev"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "platform",
+            "tenant"
+          ]
+        },
+        "scope_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        }
+      },
+      "required": [
+        "environment",
+        "kind",
+        "scope_id"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "platform"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "scope_id": {
+                "const": "platform"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "TextPriceDraftTerms": {
+      "type": "object",
+      "properties": {
+        "scope": {
+          "$ref": "#/$defs/TextPriceDraftScope"
+        },
+        "node_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "execution_profile_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "meter_profile_digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "input_price": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18})$",
+          "description": "Nonnegative development credits in integer units representable as signed int64. The maximum quote must also fit int64."
+        },
+        "output_price": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18})$",
+          "description": "Nonnegative development credits in integer units representable as signed int64. The maximum quote must also fit int64."
+        },
+        "output_limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4096
+        },
+        "fee_bps": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000
+        }
+      },
+      "required": [
+        "scope",
+        "node_id",
+        "execution_profile_id",
+        "meter_profile_digest",
+        "input_price",
+        "output_price",
+        "output_limit",
+        "fee_bps"
+      ],
+      "additionalProperties": false
+    },
+    "TextPriceDraft": {
+      "type": "object",
+      "properties": {
+        "price_version_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "terms": {
+          "$ref": "#/$defs/TextPriceDraftTerms"
+        },
+        "provider_owner_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "target_version": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "review_report_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "created_by": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "state": {
+          "enum": [
+            "draft",
+            "scheduled",
+            "active",
+            "blocked"
+          ]
+        },
+        "effective_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "Z$"
+        },
+        "publication_action_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        }
+      },
+      "required": [
+        "price_version_id",
+        "terms",
+        "provider_owner_id",
+        "target_version",
+        "review_report_id",
+        "created_by",
+        "created_at",
+        "state"
+      ],
+      "additionalProperties": false
+    },
+    "TextPriceDraftList": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TextPriceDraft"
+          },
+          "minItems": 0,
+          "maxItems": 200
+        },
+        "next_cursor": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "additionalProperties": false
     }
   },
   "$ref": "#/$defs/AdminActionCreate"
