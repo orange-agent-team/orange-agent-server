@@ -24,6 +24,7 @@ pub struct UserIdentity {
     pub pool: PgPool,
     pub config: Arc<UserOidcConfig>,
     provider: OidcProvider,
+    pub s3_sources: crate::s3_sources::Sources,
     pub pg_sources: crate::pg_view_sources::Sources,
 }
 pub struct UserLoginStart {
@@ -89,6 +90,7 @@ impl UserIdentity {
             pool,
             config: Arc::new(config),
             pg_sources: Default::default(),
+            s3_sources: Default::default(),
             provider,
         })
     }

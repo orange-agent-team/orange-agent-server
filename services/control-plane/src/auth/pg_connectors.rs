@@ -10,42 +10,7 @@ use serde_json::{Value, json};
 use sqlx::Row;
 use std::collections::BTreeSet;
 
-fn db(_: sqlx::Error) -> UserApiError {
-    AuthError::Unavailable.into()
-}
-fn missing() -> UserApiError {
-    UserApiError(StatusCode::NOT_FOUND, "NOT_FOUND")
-}
-fn denied() -> UserApiError {
-    UserApiError(StatusCode::FORBIDDEN, "CONNECTOR_AUTHORITY_REQUIRED")
-}
-fn key(headers: &HeaderMap) -> Result<&str, UserApiError> {
-    headers
-        .get("idempotency-key")
-        .and_then(|v| v.to_str().ok())
-        .filter(|s| valid_id(s))
-        .ok_or(AuthError::Invalid.into())
-}
-async fn guard(
-    identity: &UserIdentity,
-    headers: &HeaderMap,
-    run: &str,
-    write: bool,
-    active: bool,
-) -> Result<(UserSessionGuard, bool), UserApiError> {
-    let mut g = identity.authenticate(headers).await?;
-    if write {
-        check_write(headers, &identity.config.user_origin, &g.view().csrf_token)?;
-    }
-    let owner = g.view().personal_owner_id.clone();
-    let user = g.view().user_id.clone();
-    let live:bool=sqlx::query_scalar("SELECT r.status IN ('running','paused','waiting_approval') AND a.state='available' FROM cloud_runs r JOIN artifacts a ON a.artifact_id=r.input_artifact_id AND a.version_id=r.input_version_id WHERE r.run_id=$1 AND r.owner_id=$2 AND r.user_id=$3 FOR UPDATE OF r FOR SHARE OF a")
-        .bind(run).bind(owner).bind(user).fetch_optional(&mut **g.transaction()).await.map_err(db)?.ok_or_else(missing)?;
-    if active && !live {
-        return Err(denied());
-    }
-    Ok((g, live))
-}
+use super::connector_access::{capacity, db, denied, guard, key, missing};
 fn source(identity: &UserIdentity, owner: &str, id: &str) -> Result<Arc<Source>, UserApiError> {
     identity
         .pg_sources
@@ -171,14 +136,8 @@ pub(super) async fn perform(
     let (mut g, _) = guard(&identity, &headers, &run, true, true).await?;
     let (s, views) = authority(&identity, &mut g, &run, &id).await?;
     let request = key(&headers)?;
+    capacity(&mut g, &run).await?;
     let tx = g.transaction();
-    let available:bool=sqlx::query_scalar("SELECT count(*)<100 AND count(*) FILTER(WHERE finished_at IS NULL AND until_at>clock_timestamp())<4 FROM pg_view_calls WHERE run_id=$1").bind(&run).fetch_one(&mut **tx).await.map_err(db)?;
-    if !available {
-        return Err(UserApiError(
-            StatusCode::TOO_MANY_REQUESTS,
-            "CONNECTOR_LIMIT",
-        ));
-    }
     let inserted=sqlx::query("INSERT INTO pg_view_calls(run_id,request_key,grant_id,until_at) VALUES($1,$2,$3,clock_timestamp()+interval '35 seconds') ON CONFLICT DO NOTHING").bind(&run).bind(request).bind(&id).execute(&mut **tx).await.map_err(db)?;
     if inserted.rows_affected() != 1 {
         return Err(UserApiError(

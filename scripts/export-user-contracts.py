@@ -16,7 +16,7 @@ if not target.is_dir():
 commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
 entries = {}
 payloads = {}
-for family in ("user", "account", "artifacts", "pricing", "cloud-agent", "pg-connector"):
+for family in ("user", "account", "artifacts", "pricing", "cloud-agent", "pg-connector", "s3-connector"):
     for source, name in [
         (f"contracts/json-schema/{family}.schema.json", f"{family}.schema.json"),
         (f"contracts/openapi/{family}.v1.json", f"{family}.openapi.json"),
@@ -25,8 +25,8 @@ for family in ("user", "account", "artifacts", "pricing", "cloud-agent", "pg-con
         json.loads(raw)
         entries[name] = {"source": source, "sha256": hashlib.sha256(raw).hexdigest()}
         payloads[name] = raw
-snapshot = {"version": "0.10.0", "source_repository": "orange-agent-server", "source_commit": commit, "files": entries}
+snapshot = {"version": "0.11.0", "source_repository": "orange-agent-server", "source_commit": commit, "files": entries}
 for name, raw in payloads.items():
     (target / name).write_bytes(raw)
 (target / "snapshot.json").write_text(json.dumps(snapshot, indent=2) + "\n")
-print("Exported 12 pinned user contract files from", commit)
+print("Exported", len(entries), "pinned user contract files from", commit)

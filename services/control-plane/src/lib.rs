@@ -6,6 +6,7 @@ mod cloud_model;
 #[cfg(unix)]
 pub mod cloud_node;
 mod cloud_tools;
+mod connector_file;
 pub mod events;
 pub mod http;
 pub mod meter_bootstrap;
@@ -13,6 +14,7 @@ pub mod pg_view_sources;
 pub mod pg_views;
 pub mod queue;
 pub mod s3_objects;
+pub mod s3_sources;
 pub mod store;
 mod store_cleanup;
 pub mod team;

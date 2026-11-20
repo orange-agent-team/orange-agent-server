@@ -18,8 +18,12 @@ pub async fn expire_cloud_workspaces(pool: &sqlx::PgPool) -> Result<usize, sqlx:
     }
     Ok(count)
 }
+#[path = "connector_access.rs"]
+mod connector_access;
 #[path = "pg_connectors.rs"]
 mod pg_connectors;
+#[path = "s3_connectors.rs"]
+mod s3_connectors;
 #[path = "support.rs"]
 mod support;
 use super::{
@@ -48,6 +52,22 @@ use serde::Deserialize;
 use std::sync::Arc;
 pub fn router(identity: UserIdentity) -> Router {
     Router::new()
+        .route(
+            "/api/v1/agent/runs/{run}/connectors/s3",
+            get(s3_connectors::list).post(s3_connectors::grant),
+        )
+        .route(
+            "/api/v1/agent/runs/{run}/connectors/s3/{grant}",
+            axum::routing::delete(s3_connectors::revoke),
+        )
+        .route(
+            "/api/v1/agent/runs/{run}/connectors/s3/{grant}/actions",
+            axum::routing::post(s3_connectors::perform),
+        )
+        .route(
+            "/api/v1/agent/runs/{run}/connectors/s3/{grant}/artifacts/{artifact}/content",
+            axum::routing::post(s3_connectors::download),
+        )
         .route(
             "/api/v1/agent/runs/{run}/connectors/postgres",
             get(pg_connectors::list).post(pg_connectors::grant),
