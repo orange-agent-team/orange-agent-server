@@ -410,8 +410,17 @@ impl ArtifactStore {
         expected: &ArtifactView,
         stamp: &ReadStamp,
     ) -> Result<(), ArtifactError> {
+        self.check_read_scope(actor, expected, stamp, false).await
+    }
+    pub(super) async fn check_read_scope(
+        &self,
+        actor: &ArtifactActor,
+        expected: &ArtifactView,
+        stamp: &ReadStamp,
+        write_session: bool,
+    ) -> Result<(), ArtifactError> {
         let mut tx = self.inner.pool.begin().await?;
-        authority::scope(&mut tx, actor, &expected.owner_id, false).await?;
+        authority::scope(&mut tx, actor, &expected.owner_id, write_session).await?;
         let row = self
             .row_in(&mut tx, &expected.owner_id, &expected.upload_id)
             .await?;

@@ -16,8 +16,22 @@ struct Api {
     identity: UserIdentity,
     store: ArtifactStore,
     downloads: Arc<Semaphore>,
+    #[cfg(unix)]
+    audio: Option<AudioMeter>,
 }
 pub fn router(identity: UserIdentity, store: ArtifactStore) -> Router {
+    build_router(
+        identity,
+        store,
+        #[cfg(unix)]
+        None,
+    )
+}
+pub fn build_router(
+    identity: UserIdentity,
+    store: ArtifactStore,
+    #[cfg(unix)] audio: Option<AudioMeter>,
+) -> Router {
     let connectors = crate::auth::routes::hosted_connector_router(identity.clone(), store.clone());
     Router::new()
         .route("/api/v1/agent/runs/{run}/model", get(cloud_status))
@@ -35,6 +49,10 @@ pub fn router(identity: UserIdentity, store: ArtifactStore) -> Router {
             axum::routing::post(cloud_continuation),
         )
         .route("/api/v1/agent/runs/{run}/model/history", get(cloud_history))
+        .route(
+            "/api/v1/owners/{owner}/uploads/{upload}/transcription-measurements",
+            axum::routing::post(audio_measurement),
+        )
         .route("/api/v1/text-prices", get(prices))
         .route(
             "/api/v1/owners/{owner}/text-quotes",
@@ -79,8 +97,36 @@ pub fn router(identity: UserIdentity, store: ArtifactStore) -> Router {
             identity,
             store,
             downloads: Arc::new(Semaphore::new(2)),
+            #[cfg(unix)]
+            audio,
         })
         .merge(connectors)
+}
+async fn audio_measurement(
+    State(api): State<Api>,
+    Path((owner, upload)): Path<(String, String)>,
+    headers: HeaderMap,
+    body: Result<
+        Json<orange_protocol::pricing::MeasureAudio>,
+        axum::extract::rejection::JsonRejection,
+    >,
+) -> Result<Response, Error> {
+    let actor = api.identity.artifact_actor(&headers, true).await?;
+    original_key(&headers, &upload)?;
+    let Json(request) = body.map_err(|_| ArtifactError::Invalid)?;
+    #[cfg(unix)]
+    {
+        let meter = api.audio.as_ref().ok_or(ArtifactError::Unavailable)?;
+        let measured = meter
+            .measure(&api.store, &actor, &owner, &upload, &request.version_id)
+            .await?;
+        Ok(private(Json(measured).into_response()))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (actor, owner, upload, request);
+        Err(ArtifactError::Unavailable.into())
+    }
 }
 struct Error(StatusCode, &'static str);
 async fn prices(State(api): State<Api>, headers: HeaderMap) -> Result<Response, Error> {

@@ -122,10 +122,25 @@ async fn serve(
         identity.clone(),
         artifacts.clone(),
     ));
+    #[cfg(unix)]
+    let audio = env::var_os("ORANGE_AUDIO_METER_CONFIG")
+        .map(|path| {
+            orange_control_plane::artifacts::AudioMeter::from_file(std::path::Path::new(&path))
+        })
+        .transpose()?;
+    if env::var_os("ORANGE_AUDIO_METER_CONFIG").is_some() && artifacts.is_none() {
+        return Err("Audio measurement requires the private artifact writer".into());
+    }
+    #[cfg(not(unix))]
+    if env::var_os("ORANGE_AUDIO_METER_CONFIG").is_some() {
+        return Err("No qualified audio decoder for this target".into());
+    }
     if let Some(objects) = &artifacts {
-        app = app.merge(orange_control_plane::artifacts::http::router(
+        app = app.merge(orange_control_plane::artifacts::http::build_router(
             identity,
             objects.clone(),
+            #[cfg(unix)]
+            audio,
         ));
     }
     let api_listener = tokio::net::TcpListener::bind(address).await?;

@@ -49,3 +49,25 @@ pub struct TextPriceView {
     pub output_limit: String,
     pub fee_bps: u16,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MeasureAudio {
+    pub version_id: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AudioMeasurement {
+    pub artifact_id: String,
+    pub version_id: String,
+    pub audio_sha256: String,
+    pub model_version: String,
+    pub preprocessing: String,
+    pub format: String,
+    pub codec: String,
+    pub source_sample_rate: u32,
+    pub source_samples: String,
+    pub normalized_samples: String,
+    pub normalized_sha256: String,
+    pub duration_ms: String,
+}

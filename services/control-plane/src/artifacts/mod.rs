@@ -1,5 +1,9 @@
 //! Input object storage. Only available immutable versions can be read; Worker
 //! delivery and output publication require separate Job/lease authorization.
+#[cfg(unix)]
+mod audio_meter;
+#[cfg(unix)]
+pub use audio_meter::AudioMeter;
 pub(crate) mod authority;
 mod cloud_followup;
 mod cloud_turn;
