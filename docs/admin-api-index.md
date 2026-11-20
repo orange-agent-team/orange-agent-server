@@ -1,6 +1,6 @@
 # Admin API接口索引
 
-日期：2026-11-04；草案0.1.0。以下39个操作、17种类型化管理动作与权威OpenAPI一致；只是设计，服务尚未实现。每个schema字段/required/enum/错误与参数限制以[OpenAPI](../contracts/openapi/admin.v1.json)和[JSON Schema](../contracts/json-schema/admin.schema.json)为准。
+契约 0.1.5 定义 43 个路径、45 个 HTTP 操作和 18 种管理动作。下方保留初版索引，并补入对账事项变更。登录、step-up、会话撤销上下文及范围权限查询参见当前契约。[OpenAPI](../contracts/openapi/admin.v1.json) · [JSON Schema](../contracts/json-schema/admin.schema.json)
 
 ## 操作清单
 
@@ -29,6 +29,7 @@
 | `GET` | `/admin/v1/ledger/transactions/{transaction_id}` | `getLedgerTransaction` | `无body` | `LedgerTransaction` | `ledger.read` |
 | `GET` | `/admin/v1/reconciliation-cases` | `listReconciliationCase` | `无body` | `ReconciliationCaseList` | `cases.read` |
 | `GET` | `/admin/v1/reconciliation-cases/{case_id}` | `getReconciliationCase` | `无body` | `ReconciliationCase` | `cases.read` |
+| GET | /admin/v1/reconciliation-cases/{case_id}/activity | listReconciliationCaseChanges | 无body | ReconciliationCaseActivity | cases.read |
 | `GET` | `/admin/v1/risk-cases` | `listRiskCase` | `无body` | `RiskCaseList` | `risk.read` |
 | `GET` | `/admin/v1/risk-cases/{case_id}` | `getRiskCase` | `无body` | `RiskCase` | `risk.read` |
 | `GET` | `/admin/v1/releases` | `listRelease` | `无body` | `ReleaseList` | `releases.read` |
@@ -63,6 +64,7 @@
 | account.restrict | accounts.restrict | single_operator | 不需要独立批准，但仍需实时授权/审计 |
 | credential.revoke | credentials.revoke | single_operator | 不需要独立批准，但仍需实时授权/审计 |
 | payment.refund | payments.refund | maker_checker | payments.refund.approve |
+| case.update | cases.edit 或 cases.close | 分派、备注为 single_operator，关闭为 maker_checker | cases.close.approve |
 | ledger.reverse | ledger.reverse | maker_checker | ledger.reverse.approve |
 | pricing.publish | pricing.publish | maker_checker | pricing.publish.approve |
 | release.rollout | releases.rollout | maker_checker | releases.rollout.approve |

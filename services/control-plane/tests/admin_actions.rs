@@ -712,6 +712,19 @@ async fn case_assignment_notes_and_independently_approved_close_are_scoped_and_e
     let create_case = |key: &'static str, body: Value| {
         http(&f, &f.maker, "POST", "/admin/v1/actions", key, "", body)
     };
+    let invalid = edit(
+        "1",
+        json!({"change":"assign","case_id":case,"assignee_id":f.stranger.id}),
+    );
+    assert_eq!(
+        create_case("ineligible", invalid).await.0,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    sqlx::query("INSERT INTO wallets(owner_id,gift) VALUES($1,17)")
+        .bind(&owner)
+        .execute(&f.pool)
+        .await
+        .expect("owned test credits");
     let assignment = edit(
         "1",
         json!({"change":"assign","case_id":case,"assignee_id":f.checker.id}),
@@ -863,4 +876,20 @@ async fn case_assignment_notes_and_independently_approved_close_are_scoped_and_e
     assert_eq!(status, StatusCode::OK, "{history}");
     assert_eq!(history["data"][1]["payload"]["change"], "note");
     assert!(history["next_cursor"].is_string());
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT gift FROM wallets WHERE owner_id=$1")
+            .bind(&owner)
+            .fetch_one(&f.pool)
+            .await
+            .expect("wallet"),
+        17
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM ledger_transactions WHERE owner_id=$1")
+            .bind(&owner)
+            .fetch_one(&f.pool)
+            .await
+            .expect("ledger remains empty"),
+        0
+    );
 }

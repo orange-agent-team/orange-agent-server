@@ -9,7 +9,7 @@ E03源码移入本仓库，提供共享库及独立云Host入口；桌面固定�
 四个目录已初始化为独立本地Git仓库，已有应用清单和部分实现；下方文档保留设计背景。管理前端为独立E11，消费本服务端管理API。当前管理写入边界见[节点操作与审批实现](docs/admin-actions-implementation.md)，完整计划仍未完成。
 
 - [管理控制面契约](docs/admin-control-plane.md)：Admin身份、动作、审批、持久化与业务调用。
-- [39个管理操作索引](docs/admin-api-index.md)：路径、请求/响应schema、权限与17类动作政策。
+- [管理操作索引](docs/admin-api-index.md)：路径、请求/响应schema、权限与动作政策。
 - [Admin OpenAPI草案](contracts/openapi/admin.v1.json)：管理API的权威机器可读定义。
 - [Admin JSON Schema](contracts/json-schema/admin.schema.json)：类型与命令校验模型。
 

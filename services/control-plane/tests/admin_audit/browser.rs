@@ -49,8 +49,26 @@ pub(super) async fn run(
     let evidence = PathBuf::from(
         std::env::var("ORANGE_AUDIT_BROWSER_EVIDENCE").expect("owned evidence directory"),
     );
+    let issuer: String =
+        sqlx::query_scalar("SELECT issuer FROM admin_principals WHERE principal_id=$1")
+            .bind(principal)
+            .fetch_one(pool)
+            .await
+            .expect("fixture issuer");
+    let mut finance = Vec::new();
+    for _ in 0..2 {
+        let who = Uuid::new_v4().to_string();
+        sqlx::query("INSERT INTO admin_principals(principal_id,issuer,subject) VALUES($1,$2,$1)")
+            .bind(&who)
+            .bind(&issuer)
+            .execute(pool)
+            .await
+            .expect("finance principal");
+        sqlx::query("INSERT INTO admin_grants(principal_id,role,environment,scope_kind,scope_id,expires_at) VALUES($1,'finance_operator','dev','tenant',$2,FLOOR(EXTRACT(EPOCH FROM clock_timestamp()))::bigint+3600)").bind(&who).bind(a).execute(pool).await.expect("finance fixture grant");
+        finance.push(serde_json::json!({"id":who,"cookie":format!("{SESSION_COOKIE}={}",session(pool,&who).await)}));
+    }
     let fixture = evidence.join("browser-private.json");
-    let bytes=serde_json::to_vec(&serde_json::json!({"api":format!("http://{address}/"),"origin":"https://127.0.0.1:43141","cookie":format!("{SESSION_COOKIE}={token}"),"principal":principal,"scope_a":a,"scope_b":b,"scope_c":third})).expect("fixture JSON");
+    let bytes=serde_json::to_vec(&serde_json::json!({"api":format!("http://{address}/"),"origin":"https://127.0.0.1:43112","cookie":format!("{SESSION_COOKIE}={token}"),"principal":principal,"scope_a":a,"scope_b":b,"scope_c":third,"finance":finance})).expect("fixture JSON");
     let mut options = std::fs::OpenOptions::new();
     use std::os::unix::fs::OpenOptionsExt;
     options.write(true).create_new(true).mode(0o600);
@@ -140,10 +158,31 @@ pub(super) async fn run(
         "pagination_and_detail",
         "revoked_content_cleared",
         "global_aggregate_unchanged_after_scope_revocation",
-        "no_ui_mutations",
         "session_fixture",
     ] {
         assert_eq!(report[field], true, "missing browser evidence: {field}");
     }
     assert_eq!(report["mfa_issuance_certified"], false);
+    assert_eq!(report["case_write_ui"], true);
+    assert_eq!(report["audit_ui_mutations"], 0);
+    assert_eq!(report["case_edits"]["action_posts"], 7);
+    let closed:(String,i64,String,String)=sqlx::query_as("SELECT state,version,assigned_to,resolution_ref FROM reconciliation_cases WHERE case_id='browser-case-050'").fetch_one(pool).await.expect("independent DB confirmation");
+    assert_eq!(
+        closed,
+        (
+            "resolved".into(),
+            4,
+            finance[1]["id"].as_str().expect("checker").into(),
+            "browser-proof".into()
+        )
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM reconciliation_case_edits WHERE case_id='browser-case-050'"
+        )
+        .fetch_one(pool)
+        .await
+        .expect("exact count"),
+        3
+    );
 }

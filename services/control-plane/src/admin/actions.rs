@@ -449,7 +449,7 @@ pub async fn create(
     let mut tx = begin(&identity).await?;
     let session = authenticate(&identity, &headers, &mut tx).await?;
     let principal = &session.view.principal_id;
-    let deadline = actor(
+    let mut deadline = actor(
         &mut tx,
         principal,
         &request.scope,
@@ -460,6 +460,10 @@ pub async fn create(
         load(&mut tx, &action).await?.doc
     } else {
         target(&mut tx, &request).await?;
+        if let ActionPayload::Case(edit) = &request.payload {
+            deadline =
+                deadline.min(case_edit::assignee_deadline(&mut tx, edit, &request.scope).await?);
+        }
         let time = now(&mut tx).await?;
         let action = uuid::Uuid::new_v4().to_string();
         let dual = request.checker_permission().is_some();

@@ -34,8 +34,9 @@ if args.admin_repo:
     snapshot=json.loads((args.admin_repo/'docs/contracts/snapshot.json').read_text())
     for entry in snapshot['files'].values():
         if hashlib.sha256((ROOT/entry['source']).read_bytes()).hexdigest()!=entry['sha256']:raise SystemExit('Browser consumer differs from tested producer contract')
+    if json.loads(args.identity_config.read_text()).get('admin_origin') != 'https://127.0.0.1:43112':raise SystemExit('Browser writes require the configured loopback Admin origin')
     with socket.socket() as probe:
-        if probe.connect_ex(('127.0.0.1',43141))==0:raise SystemExit('Owned audit browser port43141 occupied;do not replace an unknown process')
+        if probe.connect_ex(('127.0.0.1',43112))==0:raise SystemExit('Owned audit browser port43112 occupied;do not replace an unknown process')
     subprocess.run([str(args.node),str(args.admin_repo/'scripts/check.mjs')],cwd=args.admin_repo,check=True)
     subprocess.run([sys.executable,str(args.admin_repo/'scripts/local-tls.py')],cwd=args.admin_repo,check=True)
 name='orange_audit_test_'+uuid.uuid4().hex
