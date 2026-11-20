@@ -110,6 +110,17 @@ pub(crate) async fn fence(
     Ok(())
 }
 
+pub(crate) fn model_output(value: &Value) -> Result<(), ()> {
+    let c = catalog()?;
+    c.tools
+        .validate_output(
+            &c.tools.pin(NAME).map_err(|_| ())?,
+            value,
+            OutputChannel::Model,
+        )
+        .map_err(|_| ())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -121,15 +132,4 @@ mod tests {
         assert_eq!(envelope, json!({"kind":"list_directory","data":raw}));
         verify_output(&envelope).expect("catalog output check");
     }
-}
-
-pub(crate) fn model_output(value: &Value) -> Result<(), ()> {
-    let c = catalog()?;
-    c.tools
-        .validate_output(
-            &c.tools.pin(NAME).map_err(|_| ())?,
-            value,
-            OutputChannel::Model,
-        )
-        .map_err(|_| ())
 }
