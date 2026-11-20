@@ -33,6 +33,10 @@ pub fn router(identity: AdminIdentity) -> Router {
             "/admin/v1/support-grants",
             get(super::actions::support::directory),
         )
+        .route(
+            "/admin/v1/principals/{principal}/role-bindings/{role}",
+            get(super::actions::roles::review),
+        )
         .route("/admin/v1/auth/start", get(start))
         .route("/admin/v1/auth/callback", get(callback))
         .route("/admin/v1/auth/step-up", post(step_up))
@@ -239,7 +243,8 @@ fn readable_actions(permissions: &BTreeSet<String>) -> Vec<String> {
         ("release.revoke", "releases.read"),
         ("feature.disable", "features.read"),
         ("feature.enable", "features.read"),
-        ("admin.role_grant", "audit.read"),
+        ("admin.role_grant", "admins.roles.read"),
+        ("admin.role_revoke", "admins.roles.read"),
         ("support_access.grant", "support.read"),
         ("support_access.revoke", "support.read"),
     ]

@@ -85,11 +85,13 @@ pub enum ActionPayload {
     Node(NodePayload),
     Case(case_edit::Edit),
     Price(prices::Publish),
+    Role(roles::Binding),
     SupportGrant(support::Issue),
     SupportRevoke(support::Revoke),
 }
 mod case_edit;
 pub(super) mod prices;
+pub(super) mod roles;
 pub(super) mod support;
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -144,6 +146,7 @@ fn reason(value: &str, min: usize) -> bool {
 impl ActionRequest {
     fn policy(&self) -> &'static str {
         match self.payload {
+            ActionPayload::Role(_) => "admin-role-governance-v1",
             ActionPayload::Case(_) => "admin-case-policy-v1",
             ActionPayload::Price(_) => "admin-text-price-v1",
             ActionPayload::SupportGrant(_) | ActionPayload::SupportRevoke(_) => "admin-support-v1",
@@ -152,6 +155,7 @@ impl ActionRequest {
     }
     fn read_permission(&self) -> &'static str {
         match self.payload {
+            ActionPayload::Role(_) => "admins.roles.read",
             ActionPayload::Case(_) => "cases.read",
             ActionPayload::Price(_) => "pricing.read",
             ActionPayload::SupportGrant(_) | ActionPayload::SupportRevoke(_) => "support.read",
@@ -160,6 +164,8 @@ impl ActionRequest {
     }
     fn checker_permission(&self) -> Option<&'static str> {
         match (&self.action_type[..], &self.payload) {
+            ("admin.role_grant", ActionPayload::Role(_)) => Some("admins.grant.approve"),
+            ("admin.role_revoke", ActionPayload::Role(_)) => Some("admins.revoke.approve"),
             ("support_access.grant", ActionPayload::SupportGrant(_)) => {
                 Some("support.grant.approve")
             }
@@ -173,23 +179,16 @@ impl ActionRequest {
     }
 
     fn permission(&self) -> Result<&'static str, AdminError> {
-        match self.action_type.as_str() {
-            "support_access.grant" if matches!(self.payload, ActionPayload::SupportGrant(_)) => {
-                Ok("support.grant")
-            }
-            "support_access.revoke" if matches!(self.payload, ActionPayload::SupportRevoke(_)) => {
-                Ok("support.revoke")
-            }
-            "pricing.publish" if matches!(self.payload, ActionPayload::Price(_)) => {
-                Ok("pricing.publish")
-            }
-            "case.update" => match &self.payload {
-                ActionPayload::Case(edit) => Ok(edit.permission()),
-                _ => Err(AdminError::Invalid),
-            },
-            "node.drain" => Ok("nodes.drain"),
-            "node.quarantine" => Ok("nodes.quarantine"),
-            "node.resume" => Ok("nodes.resume"),
+        match (self.action_type.as_str(), &self.payload) {
+            ("admin.role_grant", ActionPayload::Role(_)) => Ok("admins.grant"),
+            ("admin.role_revoke", ActionPayload::Role(_)) => Ok("admins.revoke"),
+            ("node.drain", ActionPayload::Node(_)) => Ok("nodes.drain"),
+            ("node.quarantine", ActionPayload::Node(_)) => Ok("nodes.quarantine"),
+            ("node.resume", ActionPayload::Node(_)) => Ok("nodes.resume"),
+            ("case.update", ActionPayload::Case(edit)) => Ok(edit.permission()),
+            ("pricing.publish", ActionPayload::Price(_)) => Ok("pricing.publish"),
+            ("support_access.grant", ActionPayload::SupportGrant(_)) => Ok("support.grant"),
+            ("support_access.revoke", ActionPayload::SupportRevoke(_)) => Ok("support.revoke"),
             _ => Err(AdminError::Invalid),
         }
     }
@@ -215,6 +214,7 @@ impl ActionRequest {
             ActionPayload::Price(p) if self.action_type == "pricing.publish" => {
                 return p.validate(self);
             }
+            ActionPayload::Role(p) => return p.validate(self),
             ActionPayload::SupportGrant(p) => return p.validate(self),
             ActionPayload::SupportRevoke(p) => return p.validate(self),
             ActionPayload::Case(_) | ActionPayload::Price(_) => return Err(AdminError::Invalid),
@@ -450,6 +450,10 @@ async fn target(tx: &mut Tx<'_>, request: &ActionRequest) -> Result<(i64, String
             support::check_revoke(tx, request, p).await?;
             return Ok((1, "issued".into()));
         }
+        ActionPayload::Role(p) => {
+            roles::target(tx, request, p).await?;
+            return Ok((1, "reviewed".into()));
+        }
         ActionPayload::Price(p) => return prices::target(tx, request, p).await,
         ActionPayload::Case(edit) => return case_edit::target(tx, request, edit).await,
         ActionPayload::Node(node) => node,
@@ -492,6 +496,9 @@ pub async fn create(
         &["actions.create", request.permission()?],
     )
     .await?;
+    if let ActionPayload::Role(binding) = &request.payload {
+        binding.authorize_participant(principal, deadline)?;
+    }
     let doc = if let Some(action) = prior(&mut tx, principal, key, &hash).await? {
         load(&mut tx, &action).await?.doc
     } else {
@@ -518,6 +525,10 @@ pub async fn create(
             .bind(time + 900)
             .execute(&mut *tx)
             .await?;
+        if let ActionPayload::Role(_) = &request.payload {
+            roles::witness(&mut tx, &action, principal, &request, "maker", true).await?;
+        }
+
         remember(&mut tx, principal, key, &hash, &action).await?;
         event(&mut tx, principal, &doc, "action.created", &request.reason).await?;
         doc
@@ -614,6 +625,27 @@ async fn mutate(
     {
         return Err(AdminError::Forbidden);
     }
+    if let ActionPayload::Role(binding) = &m.request.payload
+        && !matches!(mutation, Mutation::Cancel(_))
+    {
+        binding.authorize_participant(principal, deadline)?;
+        roles::witness(
+            &mut tx,
+            action,
+            text(&m.doc, "requested_by")?,
+            &m.request,
+            "maker",
+            false,
+        )
+        .await?;
+        if matches!(mutation, Mutation::Execute(_))
+            && let Some(checker) = m.doc["approvals"]
+                .get(0)
+                .and_then(|v| v["approver_id"].as_str())
+        {
+            roles::witness(&mut tx, action, checker, &m.request, "checker", false).await?;
+        }
+    }
     // Execution always revalidates the maker and every independent approval, even
     // for an idempotent retry after grants have been revoked.
     if matches!(mutation, Mutation::Execute(_) | Mutation::Decide(_)) {
@@ -676,6 +708,11 @@ async fn mutate(
                 check_preview(&m.doc, &decision.payload_digest, &decision.policy_version)?;
                 target(&mut tx, &m.request).await?;
                 let time = now(&mut tx).await?;
+                if matches!(m.request.payload, ActionPayload::Role(_))
+                    && decision.decision == "approve"
+                {
+                    roles::witness(&mut tx, action, principal, &m.request, "checker", true).await?;
+                }
                 m.doc["approvals"] = json!([{"approval_id":uuid::Uuid::new_v4().to_string(),"approver_id":principal,"decision":decision.decision,"payload_digest":decision.payload_digest,"policy_version":decision.policy_version,"decided_at":timestamp(time)?,"expires_at":timestamp(m.expires)?}]);
                 m.doc["state"] = json!(if decision.decision == "approve" {
                     "ready"
@@ -700,6 +737,12 @@ async fn mutate(
                 }
                 let (version, node_state) = target(&mut tx, &m.request).await?;
                 match &m.request.payload {
+                    ActionPayload::Role(binding) => {
+                        roles::apply(&mut tx, &m.request, binding).await?;
+                        m.doc["business_ref"] = json!(binding.principal_id);
+                        m.doc["state"] = json!("succeeded");
+                        why = "Scoped administrator role binding changed".into();
+                    }
                     ActionPayload::SupportGrant(p) => {
                         let maker = text(&m.doc, "requested_by")?;
                         let checker = text(&m.doc["approvals"][0], "approver_id")?;

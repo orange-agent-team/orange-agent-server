@@ -898,3 +898,6 @@ async fn case_assignment_notes_and_independently_approved_close_are_scoped_and_e
 
 #[path = "admin_actions/prices.rs"]
 mod price_drafts;
+
+#[path = "admin_actions/roles.rs"]
+mod role_bindings;

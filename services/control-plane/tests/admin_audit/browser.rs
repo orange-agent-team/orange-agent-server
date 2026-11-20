@@ -56,7 +56,13 @@ pub(super) async fn run(
             .await
             .expect("fixture issuer");
     let mut finance = Vec::new();
-    for _ in 0..2 {
+    let mut governance = Vec::new();
+    for role in [
+        "finance_operator",
+        "finance_operator",
+        "platform_admin",
+        "security_operator",
+    ] {
         let who = Uuid::new_v4().to_string();
         sqlx::query("INSERT INTO admin_principals(principal_id,issuer,subject) VALUES($1,$2,$1)")
             .bind(&who)
@@ -64,15 +70,20 @@ pub(super) async fn run(
             .execute(pool)
             .await
             .expect("finance principal");
-        sqlx::query("INSERT INTO admin_grants(principal_id,role,environment,scope_kind,scope_id,expires_at) VALUES($1,'finance_operator','dev','tenant',$2,FLOOR(EXTRACT(EPOCH FROM clock_timestamp()))::bigint+3600)").bind(&who).bind(a).execute(pool).await.expect("finance fixture grant");
-        finance.push(serde_json::json!({"id":who,"cookie":format!("{SESSION_COOKIE}={}",session(pool,&who).await)}));
+        sqlx::query("INSERT INTO admin_grants(principal_id,role,environment,scope_kind,scope_id,expires_at) VALUES($1,$3,'dev','tenant',$2,FLOOR(EXTRACT(EPOCH FROM clock_timestamp()))::bigint+3600)").bind(&who).bind(a).bind(role).execute(pool).await.expect("finance fixture grant");
+        let group = if role == "finance_operator" {
+            &mut finance
+        } else {
+            &mut governance
+        };
+        group.push(serde_json::json!({"id":who,"cookie":format!("{SESSION_COOKIE}={}",session(pool,&who).await)}));
     }
     let node = Uuid::new_v4().to_string();
     sqlx::query("INSERT INTO nodes(node_id,owner_id,environment,region_id,state) VALUES($1,$2,'dev','browser-region','online')")
         .bind(&node).bind(a).execute(pool).await.expect("browser price node");
     let terms = crate::price_fixture::seed(pool, a, &node).await;
     let fixture = evidence.join("browser-private.json");
-    let bytes=serde_json::to_vec(&serde_json::json!({"api":format!("http://{address}/"),"origin":"https://127.0.0.1:43112","cookie":format!("{SESSION_COOKIE}={token}"),"principal":principal,"scope_a":a,"scope_b":b,"scope_c":third,"finance":finance,"price_terms":terms})).expect("fixture JSON");
+    let bytes=serde_json::to_vec(&serde_json::json!({"api":format!("http://{address}/"),"origin":"https://127.0.0.1:43112","cookie":format!("{SESSION_COOKIE}={token}"),"principal":principal,"scope_a":a,"scope_b":b,"scope_c":third,"finance":finance,"governance":governance,"price_terms":terms})).expect("fixture JSON");
     let mut options = std::fs::OpenOptions::new();
     use std::os::unix::fs::OpenOptionsExt;
     options.write(true).create_new(true).mode(0o600);
@@ -187,6 +198,12 @@ pub(super) async fn run(
             finance[1]["id"].as_str().expect("checker").into()
         )
     );
+    assert_eq!(report["role_binding"]["post_count"], 6);
+    let role_state:(bool,i64,i64)=sqlx::query_as("SELECT g.revoked,v.revision,p.policy_version FROM admin_grants g
+        JOIN admin_role_revisions v USING(principal_id,role,environment,scope_kind,scope_id) JOIN admin_principals p USING(principal_id)
+        WHERE g.principal_id=$1 AND g.role='auditor' AND g.scope_id=$2")
+        .bind(finance[0]["id"].as_str().expect("target")).bind(a).fetch_one(pool).await.expect("role governance database receipt");
+    assert_eq!(role_state, (true, 2, 3));
     let closed:(String,i64,String,String)=sqlx::query_as("SELECT state,version,assigned_to,resolution_ref FROM reconciliation_cases WHERE case_id='browser-case-050'").fetch_one(pool).await.expect("independent DB confirmation");
     assert_eq!(
         closed,
