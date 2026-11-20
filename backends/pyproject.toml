@@ -1,0 +1,19 @@
+[project]
+name = "orange-inference-backends"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+dependencies = []
+
+[project.optional-dependencies]
+embedding = [
+    "numpy==2.2.6",
+    "onnxruntime==1.23.2",
+    "tokenizers==0.22.1",
+]
+
+[build-system]
+requires = ["setuptools==80.9.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["orange_inference_backends"]

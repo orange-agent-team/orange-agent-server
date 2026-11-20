@@ -41,3 +41,17 @@ python3 scripts/check-local-model.py
 ```sh
 python3 scripts/check-real-agent.py --model-protocol responses
 ```
+
+## MP-03 本地向量接口
+
+固定的 `multilingual-e5-small-onnx-cpu-v1` 配置通过私有 Unix socket 提供 `POST /v1/embeddings`，Rust 客户端入口为 `LlamaClient::embed`。请求可传单个文本或 1 至 32 个文本，编码为 float，输出维度 384。每段上限 512 个 token，包含模型特殊 token。检索调用方应给查询和候选段落分别使用发布者规定的 query 与 passage 前缀。[发布者模型说明](https://huggingface.co/intfloat/multilingual-e5-small)
+
+E04 在本地私有目录创建套接字，将临时凭据经启动者的专用管道交付。每次请求调用一个固定 E09 CPU 子进程，核对 ONNX 与 tokenizer 的完整 SHA-256，再对整批执行平均池化和 L2 归一化。Rust 核对索引、行数、固定维度、有限数值、单位范数和用量。单槽被占用时返回 429。输入含过长段落时返回 422 并拒绝整批。实际分词数汇总为 usage，开发配置未接入资金账本。
+
+```sh
+python3 scripts/prepare-local-embedding.py
+(cd backends && uv sync --locked --python 3.12 --extra embedding)
+python3 scripts/check-local-embedding.py
+```
+
+启动器使用 `orange-embedding-host <虚拟环境 Python 的绝对路径> <模型缓存目录的绝对路径>`，对应的 Cargo feature 为 `embedding-host`。父进程保持 stdin 打开并独占读取 stdout 中的会话凭据。关闭 stdin 后服务等待在途子进程退出并回收套接字。该版本每批重新装载权重。GPU、持久预热、远程调度和开发账本的嵌入计费仍需分别验收。

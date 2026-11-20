@@ -2000,6 +2000,7 @@ version = "0.1.0"
 name = "orange-model-runtime"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "hex",
  "jsonschema",
  "libc",

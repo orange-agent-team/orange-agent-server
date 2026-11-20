@@ -137,15 +137,17 @@ impl LlamaClient {
         }
         Ok(())
     }
-    async fn json(&self, path: &str, body: Value) -> Result<Value, ModelError> {
-        let response = self
-            .client
+    async fn post(&self, path: &str, body: &Value) -> Result<Response, ModelError> {
+        self.client
             .post(self.url(path)?)
             .bearer_auth(&self.key)
-            .json(&body)
+            .json(body)
             .send()
             .await
-            .map_err(|_| ModelError::Unavailable)?;
+            .map_err(|_| ModelError::Unavailable)
+    }
+    async fn json(&self, path: &str, body: Value) -> Result<Value, ModelError> {
+        let response = self.post(path, &body).await?;
         serde_json::from_slice(&bounded(response).await?).map_err(|_| ModelError::Protocol)
     }
     fn request(&self, request: &GenerateRequest, stream: bool) -> Result<Value, ModelError> {
@@ -190,6 +192,37 @@ impl LlamaClient {
             return Err(ModelError::Limit);
         }
         Ok(count)
+    }
+    /// Text-only MP-03 route, restricted to the separately audited local embedding profile.
+    pub async fn embed(
+        &self,
+        texts: &[String],
+        mut cancellation: watch::Receiver<bool>,
+    ) -> Result<crate::embeddings::BatchResult, ModelError> {
+        crate::embeddings::validate_texts(texts)?;
+        if self.model != crate::embeddings::PROFILE {
+            return Err(ModelError::Invalid);
+        }
+        if *cancellation.borrow() {
+            return Err(ModelError::Cancelled);
+        }
+        let body = json!({"model":self.model,"input":texts,"encoding_format":"float"});
+        let fetch = async {
+            let response = self.post("v1/embeddings", &body).await?;
+            match response.status().as_u16() {
+                400 => return Err(ModelError::Invalid),
+                413 | 422 => return Err(ModelError::Limit),
+                _ => {}
+            }
+            serde_json::from_slice::<crate::embeddings::BatchResult>(&bounded(response).await?)
+                .map_err(|_| ModelError::Protocol)
+        };
+        let mut batch = tokio::select! {
+            _=cancellation.changed()=>return Err(ModelError::Cancelled),
+            result=fetch=>result?,
+        };
+        batch.verify(texts.len())?;
+        Ok(batch)
     }
     /// Whole-content retokenization; caller chooses a versioned canonical projection.
     pub async fn tokenize(&self, content: &str) -> Result<Vec<i64>, ModelError> {

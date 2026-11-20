@@ -7,6 +7,11 @@ publish.workspace = true
 
 [features]
 process-test-fixture = []
+embedding-host = ["dep:axum", "dep:tempfile"]
+
+[[bin]]
+name = "orange-embedding-host"
+required-features = ["embedding-host"]
 
 [[bin]]
 name = "model-process-fixture"
@@ -17,6 +22,7 @@ name = "supervisor"
 required-features = ["process-test-fixture"]
 
 [dependencies]
+axum = { workspace = true, optional = true }
 jsonschema.workspace = true
 orange-domain.workspace = true
 orange-protocol.workspace = true
@@ -29,6 +35,7 @@ sha2.workspace = true
 hex.workspace = true
 libc.workspace = true
 uuid.workspace = true
+tempfile = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true
