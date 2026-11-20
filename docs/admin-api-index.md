@@ -1,6 +1,6 @@
 # Admin API接口索引
 
-契约 0.1.8 定义 45 个路径、52 个 HTTP 操作和 18 种管理动作。下方保留初版索引，并补入对账事项变更。登录、step-up、会话撤销上下文及范围权限查询参见当前契约。[OpenAPI](../contracts/openapi/admin.v1.json) · [JSON Schema](../contracts/json-schema/admin.schema.json)
+契约 0.1.10 定义 47 个路径、54 个 HTTP 操作和 19 种管理动作。下方保留初版索引，并补入对账事项变更。登录、step-up、会话撤销上下文及范围权限查询参见当前契约。[OpenAPI](../contracts/openapi/admin.v1.json) · [JSON Schema](../contracts/json-schema/admin.schema.json)
 
 ## 操作清单
 
@@ -82,3 +82,5 @@ OIDC登录/回调的完整协议、用户API和云Host等另按整体接口计�
 
 
 开发文本定价使用 GET /admin/v1/price-drafts、GET /admin/v1/price-drafts/{price_id} 和 POST /admin/v1/price-drafts。草稿限定 dev 的租户或平台范围。费率使用整数字符串表示每千计量单位的微积分，生效时间使用 UTC 整秒。发布沿用 pricing.publish 的独立审批和固定摘要。
+
+支持操作通过 GET /admin/v1/support-authorizations/{id} 核对用户授权。support_access.grant 需要客服申请、安全人员独立批准及执行。support_access.revoke 可由拥有相应租户权限的客服或安全管理员执行。授权记录通过 GET /admin/v1/support-grants 和 GET /admin/v1/support-grants/{id} 查询。正文按次通过 POST /admin/v1/support-content 核对。
