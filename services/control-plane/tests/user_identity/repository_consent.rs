@@ -12,47 +12,14 @@ use std::sync::{
 use std::time::Duration;
 use tokio::sync::Notify;
 
-#[tokio::test]
-async fn third_party_access_requires_creation_opt_in_and_live_selected_grant() {
-    let mut f = fixture().await;
-    let outsider = fixture().await;
-    let (legacy, _root) = active_run(&f).await;
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("private provider fixture");
-    let addr = listener.local_addr().expect("fixture address");
-    let calls = Arc::new(AtomicUsize::new(0));
-    let reached = Arc::new(Notify::new());
-    let release = Arc::new(Notify::new());
-    let count = calls.clone();
-    let begin = reached.clone();
-    let resume = release.clone();
-    let api=Router::new().fallback(axum::routing::any(move |r:Request<Body>|{
-        let count=count.clone();let begin=begin.clone();let resume=resume.clone();
-        async move{
-            count.fetch_add(1,Ordering::SeqCst);
-            assert_eq!(r.method(),"GET");assert_eq!(r.headers()["authorization"],"Bearer local-read-token");
-            let doc=match r.uri().path(){
-                "/repos/acme/notes"=>json!({"id":17,"full_name":"acme/notes","default_branch":"main"}),
-                "/api/v4/projects/17"=>json!({"id":17,"path_with_namespace":"acme/notes","default_branch":"main"}),
-                "/repos/acme/notes/issues/1"=>{
-                    begin.notify_one();resume.notified().await;
-                    json!({"id":100,"number":1,"title":"Restricted fixture","state":"open","updated_at":"2026-01-01T00:00:00Z","body":"private fixture bytes","repository_url":format!("http://{addr}/repos/acme/notes")})
-                }
-                _=>panic!("unexpected fixture request")
-            };
-            axum::Json(doc)
-        }
-    }));
-    let server =
-        tokio::spawn(async move { axum::serve(listener, api).await.expect("serve fixture") });
+fn register(f: &mut Fixture, addr: std::net::SocketAddr, changes: bool) {
     for provider in [Provider::Github, Provider::Gitlab] {
         let repo = Repository {
             id: 17,
             path: "acme/notes".into(),
             file_prefixes: vec!["docs".into()],
             issues: true,
-            changes: false,
+            changes,
         };
         let registration = Registration {
             provider,
@@ -65,13 +32,75 @@ async fn third_party_access_requires_creation_opt_in_and_live_selected_grant() {
             provider.name().into(),
             Arc::new(Registered {
                 owner: f.user.clone(),
-                digest: hex::encode(Sha256::digest(provider.name().as_bytes())),
+                digest: hex::encode(Sha256::digest(if changes {
+                    format!("{}-with-changes", provider.name())
+                } else {
+                    provider.name().to_owned()
+                })),
                 registration,
                 reader,
             }),
         );
     }
     f.router = auth::routes::router(f.identity.clone());
+}
+
+#[tokio::test]
+async fn third_party_access_requires_creation_opt_in_and_live_selected_grant() {
+    let mut f = fixture().await;
+    let outsider = fixture().await;
+    let (legacy, _root) = active_run(&f).await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("private provider fixture");
+    let addr = listener.local_addr().expect("fixture address");
+    let calls = Arc::new(AtomicUsize::new(0));
+    let reached = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let gate = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let block = gate.clone();
+    let count = calls.clone();
+    let begin = reached.clone();
+    let resume = release.clone();
+    let api=Router::new().fallback(axum::routing::any(move |r:Request<Body>|{
+        let block=block.clone();let count=count.clone();let begin=begin.clone();let resume=resume.clone();
+        async move{
+            count.fetch_add(1,Ordering::SeqCst);
+            use axum::response::IntoResponse;
+            assert!(matches!(r.method().as_str(),"GET"|"HEAD"));assert_eq!(r.headers()["authorization"],"Bearer local-read-token");
+            let bytes=b"registered file\n";
+            let oid=hex::encode(sha1::Sha1::new().chain_update(format!("blob {}\0",bytes.len())).chain_update(bytes).finalize());
+            let commit="1".repeat(40);let tree="2".repeat(40);let child="3".repeat(40);
+            let issue=json!({"id":100,"project_id":17,"iid":1,"number":1,"title":"Restricted fixture","state":"open","updated_at":"2026-01-01T00:00:00Z","body":"private fixture bytes","description":"private fixture bytes","repository_url":format!("http://{addr}/repos/acme/notes")});
+            let change=json!({"id":101,"target_project_id":17,"base":{"repo":{"id":17}},"number":2,"iid":2,"title":"Review fixture","state":"open","updated_at":"2026-01-01T00:00:00Z","body":"reviewed changes","description":"reviewed changes"});
+            let path=r.uri().path();
+            let doc=match path{
+                "/repos/acme/notes"=>json!({"id":17,"full_name":"acme/notes","default_branch":"main"}),
+                "/api/v4/projects/17"=>json!({"id":17,"path_with_namespace":"acme/notes","default_branch":"main"}),
+                "/repos/acme/notes/pulls"|"/api/v4/projects/17/merge_requests"=>json!([change]),
+                "/repos/acme/notes/pulls/2"|"/api/v4/projects/17/merge_requests/2"=>change,
+                "/repos/acme/notes/issues"|"/api/v4/projects/17/issues"=>json!([issue]),
+                "/repos/acme/notes/issues/1"|"/api/v4/projects/17/issues/1"=>{
+                    if block.swap(false,Ordering::SeqCst){begin.notify_one();resume.notified().await;}
+                    issue
+                }
+                x if x.starts_with("/repos/acme/notes/commits/")=>json!({"sha":commit,"commit":{"tree":{"sha":tree}}}),
+                x if x.starts_with("/api/v4/projects/17/repository/commits/")=>json!({"id":commit}),
+                x if x==format!("/repos/acme/notes/git/trees/{tree}")=>json!({"sha":tree,"truncated":false,"tree":[{"path":"docs","mode":"040000","type":"tree","sha":child}]}),
+                x if x==format!("/repos/acme/notes/git/trees/{child}")=>json!({"sha":child,"truncated":false,"tree":[{"path":"scope.txt","mode":"100644","type":"blob","sha":oid,"size":bytes.len()}]}),
+                "/api/v4/projects/17/repository/tree"=>json!([{"path":"docs/scope.txt","mode":"100644","type":"blob","id":oid}]),
+                "/api/v4/projects/17/repository/files/docs%2Fscope.txt" if r.method()=="HEAD"=>{
+                    return ([("x-gitlab-commit-id",commit),("x-gitlab-file-path","docs/scope.txt".to_owned()),("x-gitlab-blob-id",oid),("x-gitlab-content-sha256",hex::encode(Sha256::digest(bytes))),("x-gitlab-size",bytes.len().to_string())],"").into_response();
+                },
+                x if x==format!("/repos/acme/notes/git/blobs/{oid}")||x==format!("/api/v4/projects/17/repository/blobs/{oid}/raw")=>return bytes.as_slice().into_response(),
+                _=>panic!("unexpected fixture request: {path}")
+            };
+            axum::Json(doc).into_response()
+        }
+    }));
+    let server =
+        tokio::spawn(async move { axum::serve(listener, api).await.expect("serve fixture") });
+    register(&mut f, addr, false);
     let terms = json!({"source_id":"github","source_digest":hex::encode(Sha256::digest(b"github")),"repository_ids":["17"],"duration_seconds":180});
     let old = format!("/api/v1/agent/runs/{legacy}/connectors/github");
     assert_eq!(
@@ -238,5 +267,13 @@ async fn third_party_access_requires_creation_opt_in_and_live_selected_grant() {
     .await;
     assert_eq!(code, StatusCode::OK, "{v}");
     assert_eq!(v["data"]["data"][0]["id"], "17");
+    if let Ok(driver) = std::env::var("ORANGE_REPOSITORY_BROWSER") {
+        register(&mut f, addr, true);
+        let evidence = super::connector_run::browser(&f, run, driver).await;
+        assert_eq!(
+            evidence,
+            json!({"providers":["github","gitlab"],"read_issue":true,"read_change":true,"file_verified":true,"revoked_after_reload":true})
+        );
+    }
     server.abort();
 }

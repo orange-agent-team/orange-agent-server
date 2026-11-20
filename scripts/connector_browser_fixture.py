@@ -7,6 +7,7 @@ def prepare_browser(web, root, family):
     if not web:
         return {}
     drivers={"CN05":("real-pg-connector.mjs","pg-view-evidence"),"CN06":("real-s3-connector.mjs","s3-browser-evidence")}
+    drivers['REPOSITORY']=('real-repository-connector.mjs','repository-browser-evidence')
     script,directory=drivers[family]
     reserve_origins(43122)
     web=web.resolve()

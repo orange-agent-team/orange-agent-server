@@ -53,7 +53,6 @@ pub(super) async fn active_run(f: &Fixture) -> (String, tempfile::TempDir) {
     (run, root)
 }
 
-#[cfg(any(feature = "pg-view-tests", feature = "s3-source-tests"))]
 pub(super) async fn browser(f: &Fixture, run: &str, driver: String) -> Value {
     use tokio::io::AsyncWriteExt;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
