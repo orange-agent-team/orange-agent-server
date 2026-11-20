@@ -140,6 +140,22 @@ impl ControlConnection {
             stop_at,
         })
     }
+    pub(crate) fn confirm_input_renewal(
+        &mut self,
+        journal: &mut ExecutionJournal,
+        broker: &mut Broker,
+        supervisor: &Supervisor,
+        started: &mut super::execution::StartedExecution,
+        renewal: VerifiedRenewal,
+    ) -> Result<(), ControlError> {
+        if &renewal.request.grant != started.grant() || Instant::now() >= started.stop_at() {
+            return Err(ControlError::Stale);
+        }
+        let deadline = renewal.stop_at.min(self.stop_at);
+        self.confirm_renewal(journal, broker, supervisor, renewal)?;
+        started.renew_until(deadline);
+        Ok(())
+    }
     pub fn confirm_renewal(
         &mut self,
         journal: &mut ExecutionJournal,

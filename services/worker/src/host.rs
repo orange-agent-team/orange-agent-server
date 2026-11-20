@@ -8,7 +8,10 @@ mod tests;
 use crate::{
     broker::*,
     control::{ControlConfig, ControlConnection, ControlError},
-    cpu::{CpuExecutionSpec, CpuResources, cpu_profile_digest, spawn_cpu},
+    cpu::{
+        CpuExecutionSpec, CpuResources, TranscriptionExecutionSpec, cpu_profile_digest, spawn_cpu,
+        spawn_transcription,
+    },
     execution_journal::{ExecutionJournal, ExecutionJournalError},
     node_journal::{JournalError, NodeJournal},
 };
@@ -76,13 +79,26 @@ async fn flush_cleanups(
     }
     for command in resources.journal.pending_cleanups()? {
         if !resources.connection.is_current_locally() {
-            let fresh = ControlConnection::connect_managed_cpu(
-                config.control(capabilities)?,
-                &mut resources.node_journal,
-                &mut resources.journal,
-                config.commit_outputs,
-            )
-            .await?;
+            let fresh = if config
+                .transcription_observation
+                .as_ref()
+                .is_some_and(|o| o.allow_remote_execution)
+            {
+                ControlConnection::connect_managed_transcription(
+                    config.control(capabilities)?,
+                    &mut resources.node_journal,
+                    &mut resources.journal,
+                )
+                .await?
+            } else {
+                ControlConnection::connect_managed_cpu(
+                    config.control(capabilities)?,
+                    &mut resources.node_journal,
+                    &mut resources.journal,
+                    config.commit_outputs,
+                )
+                .await?
+            };
             std::mem::replace(&mut resources.connection, fresh).close();
         }
         resources
@@ -125,20 +141,43 @@ impl ResourceProbe for EmptyCpuAdmission {
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                 Err(e) => return Err(e.into()),
             }
-            let lease = File::options()
-                .read(true)
-                .write(true)
-                .create(true)
-                .truncate(false)
-                .mode(0o600)
-                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-                .open(self.root.join("engine.lease"))?;
-            let m = lease.metadata()?;
-            if !m.is_file() || m.uid() != config::uid() || m.nlink() != 1 || m.mode() & 0o077 != 0 {
-                return Err(BrokerError::StoragePolicy);
+            let mut slots = Vec::new();
+            let mut identities = Vec::new();
+            for name in ["engine.lease", "transcription.lock"] {
+                let lease = File::options()
+                    .read(true)
+                    .write(true)
+                    .create(true)
+                    .truncate(false)
+                    .mode(0o600)
+                    .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+                    .open(self.root.join(name))?;
+                let m = lease.metadata()?;
+                if !m.is_file()
+                    || m.uid() != config::uid()
+                    || m.nlink() != 1
+                    || m.mode() & 0o077 != 0
+                {
+                    return Err(BrokerError::StoragePolicy);
+                }
+                lease.try_lock().map_err(|_| BrokerError::Occupied)?;
+                identities.push((name, m.dev().to_string(), m.ino().to_string()));
+                slots.push(lease);
             }
-            lease.try_lock().map_err(|_| BrokerError::Occupied)?;
-            Ok(ProbeObservation{device_id:c.device_id.clone(),challenge_nonce:c.nonce.clone(),prior_grant_id:None,all_managed_tasks_joined:true,all_managed_processes_exited:true,device_probe_available:true,device_healthy:true,evidence_digest:orange_protocol::request_digest("worker.empty-owned-cpu.v1",&serde_json::json!({"root":self.root,"device":m.dev().to_string(),"inode":m.ino().to_string(),"challenge":c.nonce})).map_err(|_|BrokerError::Invalid)?})
+            Ok(ProbeObservation {
+                device_id: c.device_id.clone(),
+                challenge_nonce: c.nonce.clone(),
+                prior_grant_id: None,
+                all_managed_tasks_joined: true,
+                all_managed_processes_exited: true,
+                device_probe_available: true,
+                device_healthy: true,
+                evidence_digest: orange_protocol::request_digest(
+                    "worker.empty-owned-cpu.v1",
+                    &serde_json::json!({"root":self.root,"slots":identities,"challenge":c.nonce}),
+                )
+                .map_err(|_| BrokerError::Invalid)?,
+            })
         })
     }
 }
@@ -178,16 +217,50 @@ pub async fn run(
         ExecutionJournal::open(&root.join("execution.sqlite"), config.node_id.clone())?;
     journal.bind_cpu_root(&model_root)?;
     let mut node = NodeJournal::open(&root.join("node.sqlite"), config.node_id.clone())?;
+    let mut approved_profiles = vec![ApprovedProfile {
+        id: config.profile_id.clone(),
+        model_sha256: config.profile.model_sha256.clone(),
+        execution_digest: profile_digest,
+    }];
+    let observation = if let Some(settings) = &config.transcription_observation {
+        let slot = settings
+            .allow_remote_execution
+            .then_some(model_root.as_path());
+        let result =
+            transcription_profile::prepare(&settings.private_probe_file, slot, stop.clone()).await;
+        if *stop.borrow() {
+            return Ok(());
+        }
+        match result {
+            Ok((client, fact)) => {
+                if settings.allow_remote_execution {
+                    approved_profiles.push(ApprovedProfile {
+                        id: settings.execution_profile_id.clone(),
+                        model_sha256: fact.profile.model_sha256.clone(),
+                        execution_digest: fact.execution_profile_digest.clone(),
+                    });
+                }
+                Some((
+                    settings,
+                    std::sync::Arc::new(client),
+                    std::sync::Arc::new(fact),
+                ))
+            }
+            Err(_) if settings.allow_remote_execution => return Err(HostError::Configuration),
+            Err(_) => {
+                emit(&events, event("transcription_probe_failed"));
+                None
+            }
+        }
+    } else {
+        None
+    };
     let mut broker = Broker::open(
         &root.join("broker.sqlite"),
         BrokerConfig {
             owner_identity: owner,
             devices: vec!["cpu".into()],
-            approved_profiles: vec![ApprovedProfile {
-                id: config.profile_id.clone(),
-                model_sha256: config.profile.model_sha256.clone(),
-                execution_digest: profile_digest,
-            }],
+            approved_profiles,
         },
     )?;
     broker.bind_enrolled_node(&config.node_id)?;
@@ -206,22 +279,17 @@ pub async fn run(
     if *stop.borrow() {
         return Ok(());
     }
-    let observation = if let Some(settings) = &config.transcription_observation {
-        let result = probe_transcription(&settings.private_probe_file, stop.clone()).await;
-        if *stop.borrow() {
-            return Ok(());
-        }
-        match result {
-            Ok(fact) => Some((&settings.execution_profile_id, fact)),
-            Err(_) => {
-                emit(&events, event("transcription_probe_failed"));
-                None
-            }
-        }
-    } else {
-        None
-    };
-    let connection = if config.confirm_cleanup {
+    let connection = if observation
+        .as_ref()
+        .is_some_and(|(settings, _, _)| settings.allow_remote_execution)
+    {
+        ControlConnection::connect_managed_transcription(
+            config.control(&capabilities)?,
+            &mut node,
+            &mut journal,
+        )
+        .await?
+    } else if config.confirm_cleanup {
         ControlConnection::connect_managed_cpu(
             config.control(&capabilities)?,
             &mut node,
@@ -292,14 +360,14 @@ pub async fn run(
         if *stop.borrow() {
             break;
         }
-        if let Some((profile, fact)) = &observation
+        if let Some((settings, _, fact)) = &observation
             && observed_session.as_deref()
                 != Some(resources.connection.identity().session_id.as_str())
         {
             use crate::control::ObservationFailure;
             let result = resources
                 .connection
-                .report_transcription_profile(profile, fact)
+                .report_transcription_profile(&settings.execution_profile_id, fact)
                 .await;
             observed_session = Some(resources.connection.identity().session_id.clone());
             match result {
@@ -341,14 +409,32 @@ pub async fn run(
             if pending_output.is_some() {
                 return Err(HostError::Configuration);
             }
-            let spec = CpuExecutionSpec {
-                command_id: record.command_id,
-                profile_id: config.profile_id.clone(),
-                profile: config.profile.model(),
-                runtime_directory: model_root.clone(),
-                capability_snapshot: "cpu-host".into(),
+            let mut execution = if record.assignment.transcription_input.is_some() {
+                let (settings, client, fact) = observation
+                    .as_ref()
+                    .filter(|(s, _, _)| s.allow_remote_execution)
+                    .ok_or(HostError::Configuration)?;
+                spawn_transcription(
+                    resources,
+                    TranscriptionExecutionSpec {
+                        command_id: record.command_id,
+                        profile_id: settings.execution_profile_id.clone(),
+                        client: client.clone(),
+                        qualification: fact.clone(),
+                        runtime_directory: model_root.clone(),
+                        capability_snapshot: "cpu-host".into(),
+                    },
+                )
+            } else {
+                let spec = CpuExecutionSpec {
+                    command_id: record.command_id,
+                    profile_id: config.profile_id.clone(),
+                    profile: config.profile.model(),
+                    runtime_directory: model_root.clone(),
+                    capability_snapshot: "cpu-host".into(),
+                };
+                spawn_cpu(resources, spec)
             };
-            let mut execution = spawn_cpu(resources, spec);
             let exit = tokio::select! {
                 _=stop.changed()=>{execution.cancel();execution.wait().await?},
                 result=execution.wait()=>result?,
@@ -368,6 +454,28 @@ pub async fn run(
             resources = exit.resources;
             if !exit.report.cleanup_confirmed {
                 return Err(HostError::PrivateState);
+            }
+            if let Some(transcript) = exit.report.transcript {
+                let result = resources
+                    .connection
+                    .commit_transcription_output(
+                        &mut resources.journal,
+                        &exit.report.command_id,
+                        &transcript,
+                    )
+                    .await;
+                emit(
+                    &events,
+                    HostEvent {
+                        command_id: Some(exit.report.command_id.clone()),
+                        cleanup_confirmed: true,
+                        ..event(if result.is_ok() {
+                            "response_committed"
+                        } else {
+                            "output_unconfirmed"
+                        })
+                    },
+                );
             }
             if pending_output.is_some() {
                 if config.commit_outputs {

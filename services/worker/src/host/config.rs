@@ -31,6 +31,8 @@ pub struct WorkerConfig {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TranscriptionObservationConfig {
+    #[serde(default)]
+    pub allow_remote_execution: bool,
     pub execution_profile_id: String,
     pub private_probe_file: PathBuf,
 }
@@ -121,7 +123,11 @@ impl WorkerConfig {
             || uri.authority().is_none_or(|v| v.as_str().contains('@'))
             || !orange_protocol::valid_id(&self.node_id)
             || self.transcription_observation.as_ref().is_some_and(|o| {
-                !orange_protocol::valid_id(&o.execution_profile_id)
+                (o.allow_remote_execution
+                    && (!self.commit_outputs
+                        || !self.confirm_cleanup
+                        || o.execution_profile_id == self.profile_id))
+                    || !orange_protocol::valid_id(&o.execution_profile_id)
                     || !o.private_probe_file.is_absolute()
             })
             || !orange_protocol::valid_id(&self.profile_id)

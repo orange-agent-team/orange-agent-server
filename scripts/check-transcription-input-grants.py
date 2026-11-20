@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 from owned_postgres import database
+from qualified_worker_fixture import prepare
 from acceptance_origins import reserve_origins
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -15,6 +16,7 @@ parser=argparse.ArgumentParser()
 for name, default in (("database-url-file",".local/database-url"),("identity-config",".local/identity/user-config.json"),
                       ("python",".local/transcription-venv/bin/python"),("model-cache",".local/transcription-model")):
     parser.add_argument("--"+name,type=Path,default=ROOT/default)
+parser.add_argument("--text-runtime",type=Path,default=ROOT/".local/model-runtime")
 parser.add_argument("--web-repo",type=Path)
 args=parser.parse_args()
 browser={}
@@ -32,4 +34,5 @@ with database(args.database_url_file,"orange_audio_grant_") as (_,url), database
     env={k:v for k,v in os.environ.items() if not k.startswith("ORANGE_")}
     env.update(**browser,ORANGE_TEST_DATABASE_URL=url,ORANGE_AUDIO_OLD_DATABASE_URL=old,ORANGE_AUDIO_GRANT_TESTS="1",ORANGE_ASR_PROBE_FILE=str(config),
                ORANGE_TEST_USER_CONFIG_FILE=str(args.identity_config.resolve()),ORANGE_AUDIO_SAMPLE=str(args.model_cache.resolve()/"jfk.wav"),CARGO_NET_OFFLINE="true")
+    prepare(ROOT,folder,args.text_runtime,env)
     subprocess.run([sys.executable,ROOT/"scripts/check-worker-session.py"],cwd=ROOT,env=env,check=True)

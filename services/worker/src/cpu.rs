@@ -1,5 +1,6 @@
 //! Owned CPU execution of one authorized assignment. Model output stays an
 //! unsubmitted candidate; no cloud success, settlement or GPU-cleanup claim.
+use crate::control::{TranscriptionDownload, VerifiedTranscriptionInput};
 use crate::{
     broker::*,
     control::{
@@ -8,12 +9,14 @@ use crate::{
     execution_journal::{ExecutionJournal, ExecutionJournalError, ExecutionRecord, RejectionKind},
     node_journal::NodeJournal,
 };
+use orange_model_runtime::transcription::{Client as AsrClient, Qualification, TranscriptionExit};
 use orange_model_runtime::{
     ResponseCandidate,
     supervisor::{CpuProfile, ManagedCpuModel, ProcessRecord},
 };
-use orange_protocol::request_digest;
+use orange_protocol::{request_digest, transcript::TranscriptionResult};
 use serde::Serialize;
+use std::sync::Arc;
 use std::{
     path::PathBuf,
     time::{Duration, Instant},
@@ -49,6 +52,29 @@ pub struct CpuExecutionSpec {
     pub runtime_directory: PathBuf,
     pub capability_snapshot: String,
 }
+pub struct TranscriptionExecutionSpec {
+    pub command_id: String,
+    pub profile_id: String,
+    pub runtime_directory: PathBuf,
+    pub capability_snapshot: String,
+    pub client: Arc<AsrClient>,
+    pub qualification: Arc<Qualification>,
+}
+enum Backend {
+    Text(CpuProfile),
+    Audio(Arc<AsrClient>, Arc<Qualification>),
+}
+struct Plan {
+    command_id: String,
+    profile_id: String,
+    runtime_directory: PathBuf,
+    capability_snapshot: String,
+    backend: Backend,
+}
+enum Input {
+    Text(orange_protocol::model::GenerateRequest),
+    Audio(Box<VerifiedTranscriptionInput>),
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CpuPhase {
     Preparing,
@@ -64,6 +90,8 @@ pub struct CpuRunReport {
     pub instance_id: String,
     pub outcome: String,
     pub response: Option<ResponseCandidate>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transcript: Option<TranscriptionResult>,
     pub cleanup_confirmed: bool,
     pub authority_checks: u64,
     pub supervision_renewals: u64,
@@ -110,6 +138,33 @@ pub fn cpu_profile_digest(profile: &CpuProfile) -> Result<String, CpuError> {
     profile.execution_digest().map_err(|_| CpuError::Invalid)
 }
 pub fn spawn_cpu(resources: CpuResources, spec: CpuExecutionSpec) -> CpuWorkerHandle {
+    spawn(
+        resources,
+        Plan {
+            command_id: spec.command_id,
+            profile_id: spec.profile_id,
+            runtime_directory: spec.runtime_directory,
+            capability_snapshot: spec.capability_snapshot,
+            backend: Backend::Text(spec.profile),
+        },
+    )
+}
+pub fn spawn_transcription(
+    resources: CpuResources,
+    spec: TranscriptionExecutionSpec,
+) -> CpuWorkerHandle {
+    spawn(
+        resources,
+        Plan {
+            command_id: spec.command_id,
+            profile_id: spec.profile_id,
+            runtime_directory: spec.runtime_directory,
+            capability_snapshot: spec.capability_snapshot,
+            backend: Backend::Audio(spec.client, spec.qualification),
+        },
+    )
+}
+fn spawn(resources: CpuResources, spec: Plan) -> CpuWorkerHandle {
     let (cancel, receiver) = watch::channel(false);
     let (progress, phases) = watch::channel(CpuPhase::Preparing);
     let (send, result) = oneshot::channel();
@@ -127,6 +182,8 @@ pub fn spawn_cpu(resources: CpuResources, spec: CpuExecutionSpec) -> CpuWorkerHa
     }
 }
 struct EngineResult {
+    transcript: Option<TranscriptionResult>,
+    owned: Option<TranscriptionExit>,
     response: Option<ResponseCandidate>,
     stopped: Option<ProcessRecord>,
     cancelled: bool,
@@ -147,6 +204,8 @@ async fn engine(
             Ok(model) => model,
             Err(_) => {
                 return EngineResult {
+                    owned: None,
+                    transcript: None,
                     response: None,
                     stopped: None,
                     cancelled: *cancel.borrow(),
@@ -169,11 +228,62 @@ async fn engine(
         Err(_) => None,
     };
     EngineResult {
+        owned: None,
+        transcript: None,
         response,
         stopped,
         cancelled: *cancel.borrow(),
         error,
     }
+}
+async fn audio_engine(
+    client: Arc<AsrClient>,
+    fact: Arc<Qualification>,
+    instance: String,
+    input: Box<VerifiedTranscriptionInput>,
+    cancel: watch::Receiver<bool>,
+    ready: mpsc::Sender<()>,
+) -> EngineResult {
+    let mut out = EngineResult {
+        response: None,
+        transcript: None,
+        owned: None,
+        stopped: None,
+        cancelled: false,
+        error: Some("ASR_PROCESS_UNCONFIRMED"),
+    };
+    let Ok(id) = uuid::Uuid::parse_str(&instance) else {
+        return out;
+    };
+    let attempt = orange_model_runtime::transcription::TranscriptionAttempt {
+        instance: id,
+        ready: Some(ready),
+    };
+    if let Ok(run) = client
+        .transcribe_owned(
+            &input.audio,
+            &input.accepted,
+            input.language.as_deref(),
+            &fact,
+            attempt,
+            cancel.clone(),
+        )
+        .await
+    {
+        out.transcript = run
+            .result
+            .ok()
+            .and_then(|v| input.output(v, &fact.profile.compute_type).ok());
+        out.stopped = Some(run.exit.process.clone());
+        out.error = if out.transcript.is_some() {
+            None
+        } else {
+            Some("TRANSCRIPTION_FAILED")
+        };
+        out.owned = Some(run.exit);
+    }
+    out.cancelled = *cancel.borrow();
+    out
 }
 async fn authority_cycle(
     connection: &mut ControlConnection,
@@ -206,7 +316,7 @@ async fn authority_cycle(
 }
 async fn run(
     mut r: CpuResources,
-    spec: CpuExecutionSpec,
+    spec: Plan,
     cancel: watch::Sender<bool>,
     mut user_cancel: watch::Receiver<bool>,
     progress: watch::Sender<CpuPhase>,
@@ -215,12 +325,27 @@ async fn run(
         .journal
         .record(&spec.command_id)?
         .ok_or(CpuError::Invalid)?;
-    let profile_digest = cpu_profile_digest(&spec.profile)?;
+    let (profile_digest, model_sha, model_version, valid_input) = match &spec.backend {
+        Backend::Text(p) => (
+            cpu_profile_digest(p)?,
+            p.model_sha256.as_str(),
+            p.model_version.as_str(),
+            record.assignment.transcription_input.is_none()
+                && record.assignment.input_artifacts.len() == 1,
+        ),
+        Backend::Audio(_, q) => (
+            q.execution_profile_digest.clone(),
+            q.profile.model_sha256.as_str(),
+            q.profile.model_version,
+            record.assignment.transcription_input.is_some()
+                && record.assignment.input_artifacts.is_empty(),
+        ),
+    };
     if record.state != "received"
-        || record.assignment.input_artifacts.len() != 1
+        || !valid_input
         || spec.profile_id != record.assignment.execution_profile_id
-        || spec.profile.model_version != record.assignment.model_version_id
-        || spec.profile.model_sha256 != record.assignment.model_sha256
+        || model_version != record.assignment.model_version_id
+        || model_sha != record.assignment.model_sha256
         || profile_digest != record.assignment.execution_profile_digest
     {
         return Err(CpuError::Invalid);
@@ -251,6 +376,7 @@ async fn run(
                     }
                     .into(),
                     response: None,
+                    transcript: None,
                     cleanup_confirmed: false,
                     authority_checks: 0,
                     supervision_renewals: 0,
@@ -280,14 +406,60 @@ async fn run(
             return Err(error.into());
         }
     };
-    let started = authorized.confirm(&mut r.journal, &mut r.broker, &r.supervisor)?;
+    let mut started = authorized.confirm(&mut r.journal, &mut r.broker, &r.supervisor)?;
     let _ = progress.send(CpuPhase::Fetching);
-    let request = match r
-        .connection
-        .fetch_model_input(&mut r.journal, &started, &spec.command_id)
-        .await
-    {
-        Ok(value) => value,
+    let fetch = async {
+        if matches!(&spec.backend, Backend::Text(_)) {
+            return r
+                .connection
+                .fetch_model_input(&mut r.journal, &started, &spec.command_id)
+                .await
+                .map(Input::Text);
+        }
+        let mut download = TranscriptionDownload::for_record(&record)?;
+        let mut next_renewal = Instant::now() + Duration::from_secs(3);
+        loop {
+            if *user_cancel.borrow() {
+                return Err(ControlError::Stale);
+            }
+            if Instant::now() >= next_renewal {
+                let notices = r
+                    .connection
+                    .heartbeat_node_control(&spec.capability_snapshot, &mut r.node_journal)
+                    .await?;
+                if !notices.is_empty()
+                    || r.connection
+                        .policy_changed_since(record.assignment.node_policy_generation)
+                {
+                    return Err(ControlError::Stale);
+                }
+                let ticket = r
+                    .connection
+                    .prepare_renewal(&mut r.journal, &spec.command_id)?;
+                let renewed = r.connection.renew_execution(ticket).await?;
+                r.connection.confirm_input_renewal(
+                    &mut r.journal,
+                    &mut r.broker,
+                    &r.supervisor,
+                    &mut started,
+                    renewed,
+                )?;
+                next_renewal = Instant::now() + Duration::from_secs(3);
+            }
+            r.broker
+                .renew(&r.supervisor, &grant, None)
+                .map_err(|_| ControlError::Stale)?;
+            if r.connection
+                .read_transcription_chunk(&r.journal, &started, &spec.command_id, &mut download)
+                .await?
+            {
+                return Ok(Input::Audio(Box::new(download.finish()?)));
+            }
+        }
+    }
+    .await;
+    let request = match fetch {
+        Ok(v) => v,
         Err(error) => {
             r.broker.begin_drain(&r.supervisor, &grant)?;
             return Err(error.into());
@@ -308,14 +480,25 @@ async fn run(
         .ok_or(CpuError::Invalid)?;
     let _ = progress.send(CpuPhase::Starting);
     let (ready, mut readiness) = mpsc::channel(1);
-    let mut task = tokio::spawn(engine(
-        spec.runtime_directory.clone(),
-        spec.profile,
-        instance.clone(),
-        request,
-        user_cancel.clone(),
-        ready,
-    ));
+    let mut task = match (spec.backend, request) {
+        (Backend::Text(p), Input::Text(req)) => tokio::spawn(engine(
+            spec.runtime_directory.clone(),
+            p,
+            instance.clone(),
+            req,
+            user_cancel.clone(),
+            ready,
+        )),
+        (Backend::Audio(client, fact), Input::Audio(req)) => tokio::spawn(audio_engine(
+            client,
+            fact,
+            instance.clone(),
+            req,
+            user_cancel.clone(),
+            ready,
+        )),
+        _ => return Err(CpuError::Invalid),
+    };
     let mut local_tick = tokio::time::interval(Duration::from_secs(1));
     local_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut completed: Option<(EngineResult, Instant)> = None;
@@ -368,7 +551,7 @@ async fn run(
                         if value.is_some(){if r.journal.cpu_phase(&spec.command_id,"generating").is_err(){authority_lost=true;let _=cancel.send(true);break 'owner;}let _=progress.send(CpuPhase::Generating);}generating=true;
                     }
                     result=&mut task,if completed.is_none()=>{
-                        match result {Ok(result)=>completed=Some((result,Instant::now())),Err(_)=>{completed=Some((EngineResult{response:None,stopped:None,cancelled:true,error:Some("MODEL_TASK_FAILED")},Instant::now()));authority_lost=true;let _=cancel.send(true);break 'owner;}}
+                        match result {Ok(result)=>completed=Some((result,Instant::now())),Err(_)=>{completed=Some((EngineResult{transcript:None,owned:None,response:None,stopped:None,cancelled:true,error:Some("MODEL_TASK_FAILED")},Instant::now()));authority_lost=true;let _=cancel.send(true);break 'owner;}}
                     }
                     result=&mut cycle=>break result,
                 }
@@ -436,6 +619,8 @@ async fn run(
         result
     } else {
         task.await.unwrap_or(EngineResult {
+            owned: None,
+            transcript: None,
             response: None,
             stopped: None,
             cancelled: true,
@@ -451,11 +636,16 @@ async fn run(
     } else {
         None
     };
+    let mut transcript = if !authority_lost && !engine.cancelled && !requested_cancel {
+        engine.transcript
+    } else {
+        None
+    };
     let mut outcome = if authority_lost {
         "authority_lost"
     } else if engine.cancelled || requested_cancel {
         "cancelled"
-    } else if response.is_some() {
+    } else if response.is_some() || transcript.is_some() {
         "computed_unsubmitted"
     } else {
         "failed"
@@ -466,6 +656,7 @@ async fn run(
             grant: grant.clone(),
             record: record.clone(),
             root: spec.runtime_directory,
+            audio: engine.owned.as_ref(),
         };
         if r.broker
             .release(&r.supervisor, &grant, &proof)
@@ -478,11 +669,16 @@ async fn run(
     if cleanup_digest.is_none() {
         outcome = "cleanup_unknown";
         response = None;
+        transcript = None;
     }
-    let response_digest = response
-        .as_ref()
-        .map(|v| request_digest("worker.cpu.candidate.v1", v).map_err(|_| CpuError::Invalid))
-        .transpose()?;
+    let response_digest = if let Some(t) = &transcript {
+        Some(request_digest("worker.transcription.result.v1", t).map_err(|_| CpuError::Invalid)?)
+    } else {
+        response
+            .as_ref()
+            .map(|v| request_digest("worker.cpu.candidate.v1", v).map_err(|_| CpuError::Invalid))
+            .transpose()?
+    };
     let error_code = if outcome == "cleanup_unknown" {
         Some("CLEANUP_UNCONFIRMED")
     } else if authority_lost {
@@ -510,6 +706,7 @@ async fn run(
             instance_id: instance,
             outcome: outcome.into(),
             response,
+            transcript,
             cleanup_confirmed: cleanup_digest.is_some(),
             authority_checks: checks,
             supervision_renewals: renewals,
@@ -522,12 +719,13 @@ async fn run(
         resources: r,
     })
 }
-struct CpuCleanupProof {
+struct CpuCleanupProof<'a> {
+    audio: Option<&'a TranscriptionExit>,
     grant: Grant,
     record: ProcessRecord,
     root: PathBuf,
 }
-impl CpuCleanupProof {
+impl CpuCleanupProof<'_> {
     fn digest(&self) -> Result<String, CpuError> {
         request_digest(
             "worker.cpu.cleanup.v1",
@@ -536,7 +734,7 @@ impl CpuCleanupProof {
         .map_err(|_| CpuError::Invalid)
     }
 }
-impl ResourceProbe for CpuCleanupProof {
+impl ResourceProbe for CpuCleanupProof<'_> {
     fn inspect<'a>(&'a self, challenge: &'a ProbeChallenge) -> ProbeFuture<'a> {
         Box::pin(async move {
             if challenge.prior_grant.as_ref() != Some(&self.grant)
@@ -548,17 +746,23 @@ impl ResourceProbe for CpuCleanupProof {
             {
                 return Err(BrokerError::EvidenceRequired);
             }
-            use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
-            let file = std::fs::OpenOptions::new()
-                .read(true)
-                .write(true)
-                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-                .open(self.root.join("engine.lease"))?;
-            let metadata = file.metadata()?;
-            if !metadata.is_file() || metadata.nlink() != 1 || metadata.mode() & 0o077 != 0 {
-                return Err(BrokerError::EvidenceRequired);
+            if let Some(witness) = self.audio {
+                if !witness.holds_slot(&self.root) {
+                    return Err(BrokerError::EvidenceRequired);
+                }
+            } else {
+                use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+                let file = std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+                    .open(self.root.join("engine.lease"))?;
+                let metadata = file.metadata()?;
+                if !metadata.is_file() || metadata.nlink() != 1 || metadata.mode() & 0o077 != 0 {
+                    return Err(BrokerError::EvidenceRequired);
+                }
+                file.try_lock().map_err(|_| BrokerError::EvidenceRequired)?;
             }
-            file.try_lock().map_err(|_| BrokerError::EvidenceRequired)?;
             Ok(ProbeObservation {
                 device_id: challenge.device_id.clone(),
                 challenge_nonce: challenge.nonce.clone(),

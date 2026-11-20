@@ -31,19 +31,19 @@ async fn actual_child_exit_retains_exclusive_slot_until_consumed() {
             &measured,
             Some("en"),
             &fact,
-            instance,
+            instance.into(),
             cancel.clone(),
         )
         .await
         .expect("owned run");
-    assert!(run.holds_slot(slot.path()));
-    assert_eq!(run.process.instance_id, instance.to_string());
+    assert!(run.exit.holds_slot(slot.path()));
+    assert_eq!(run.exit.process.instance_id, instance.to_string());
     assert_eq!(
-        run.process.executable_sha256,
+        run.exit.process.executable_sha256,
         fact.profile.runtime.python_sha256
     );
-    assert_eq!(run.process.exit_code, Some(0));
-    assert!(run.process.pid.is_some_and(|pid| pid > 0));
+    assert_eq!(run.exit.process.exit_code, Some(0));
+    assert!(run.exit.process.pid.is_some_and(|pid| pid > 0));
     let candidate = run.result.as_ref().expect("transcript");
     assert_eq!(
         hex::encode(Sha256::digest(
@@ -68,7 +68,14 @@ async fn actual_child_exit_retains_exclusive_slot_until_consumed() {
     // A second owner cannot run or borrow the retired process's evidence.
     assert!(
         client
-            .transcribe_owned(&audio, &measured, None, &fact, uuid::Uuid::new_v4(), cancel)
+            .transcribe_owned(
+                &audio,
+                &measured,
+                None,
+                &fact,
+                uuid::Uuid::new_v4().into(),
+                cancel
+            )
             .await
             .is_err()
     );
@@ -76,4 +83,21 @@ async fn actual_child_exit_retains_exclusive_slot_until_consumed() {
     other
         .try_lock()
         .expect("slot released by the owning witness");
+    drop(other);
+    let (stop, cancel) = watch::channel(false);
+    let (notify, mut ready) = tokio::sync::mpsc::channel(1);
+    let attempt = orange_model_runtime::transcription::TranscriptionAttempt {
+        instance: uuid::Uuid::new_v4(),
+        ready: Some(notify),
+    };
+    let execution = client.transcribe_owned(&audio, &measured, Some("en"), &fact, attempt, cancel);
+    tokio::pin!(execution);
+    tokio::select! {v=ready.recv()=>assert_eq!(v,Some(())),_=&mut execution=>panic!("owned inference ended before the acknowledged start")}
+    stop.send(true).expect("cancel live child");
+    let cancelled = execution.await.expect("actual cancelled child reaped");
+    assert!(matches!(
+        cancelled.result,
+        Err(orange_model_runtime::transcription::Error::Cancelled)
+    ));
+    assert!(cancelled.exit.holds_slot(slot.path()));
 }

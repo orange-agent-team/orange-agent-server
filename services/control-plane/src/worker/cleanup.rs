@@ -77,14 +77,26 @@ impl WorkerSessionStore {
         ) {
             return Err(SessionError::Stale);
         }
-        let profile=sqlx::query("SELECT p.*,r.model_version_id,r.model_sha256,r.execution_profile_digest FROM reviewed_cpu_profiles p JOIN reviewed_execution_profiles r USING(execution_profile_id) WHERE p.execution_profile_id=$1 FOR SHARE OF p,r").bind(&a.execution_profile_id).fetch_optional(&mut *tx).await?.ok_or(SessionError::Unauthorized)?;
-        let execution_digest=request_digest("orange-owned-cpu-v1",&serde_json::json!({"backend_sha256":profile.try_get::<String,_>("executable_sha256")?,"model_sha256":profile.try_get::<String,_>("model_sha256")?,"model_bytes":profile.try_get::<i64,_>("model_bytes")?.to_string(),"model_version":profile.try_get::<String,_>("model_version_id")?,"context_tokens":profile.try_get::<i32,_>("context_tokens")?,"startup_timeout_ms":profile.try_get::<i64,_>("startup_timeout_ms")?.to_string(),"gpu_layers":0,"parallel":1,"threads":2})).map_err(|_|SessionError::Invalid)?;
-        if execution_digest != a.execution_profile_digest
-            || execution_digest != profile.try_get::<String, _>("execution_profile_digest")?
-            || evidence.process.executable_sha256
-                != profile.try_get::<String, _>("executable_sha256")?
-        {
-            return Err(SessionError::Invalid);
+        if let Some(audio) = &a.transcription_input {
+            let valid:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM worker_transcription_profile_observations o JOIN transcription_process_identities i USING(observation_id)
+                WHERE o.observation_id=$1 AND o.session_id=$2 AND o.connection_epoch=$3 AND o.node_id=$4 AND o.execution_profile_id=$5
+                AND o.execution_profile_digest=$6 AND o.model_version=$7 AND o.model_sha256=$8 AND i.python_sha256=$9)")
+                .bind(&audio.observation_id).bind(&a.session_id).bind(i64::try_from(lease.connection_epoch).map_err(|_|SessionError::Invalid)?)
+                .bind(&s.node_id).bind(&a.execution_profile_id).bind(&a.execution_profile_digest).bind(&a.model_version_id).bind(&a.model_sha256)
+                .bind(&evidence.process.executable_sha256).fetch_one(&mut *tx).await?;
+            if !valid || evidence.process.pid.is_none() {
+                return Err(SessionError::Invalid);
+            }
+        } else {
+            let profile=sqlx::query("SELECT p.*,r.model_version_id,r.model_sha256,r.execution_profile_digest FROM reviewed_cpu_profiles p JOIN reviewed_execution_profiles r USING(execution_profile_id) WHERE p.execution_profile_id=$1 FOR SHARE OF p,r").bind(&a.execution_profile_id).fetch_optional(&mut *tx).await?.ok_or(SessionError::Unauthorized)?;
+            let execution_digest=request_digest("orange-owned-cpu-v1",&serde_json::json!({"backend_sha256":profile.try_get::<String,_>("executable_sha256")?,"model_sha256":profile.try_get::<String,_>("model_sha256")?,"model_bytes":profile.try_get::<i64,_>("model_bytes")?.to_string(),"model_version":profile.try_get::<String,_>("model_version_id")?,"context_tokens":profile.try_get::<i32,_>("context_tokens")?,"startup_timeout_ms":profile.try_get::<i64,_>("startup_timeout_ms")?.to_string(),"gpu_layers":0,"parallel":1,"threads":2})).map_err(|_|SessionError::Invalid)?;
+            if execution_digest != a.execution_profile_digest
+                || execution_digest != profile.try_get::<String, _>("execution_profile_digest")?
+                || evidence.process.executable_sha256
+                    != profile.try_get::<String, _>("executable_sha256")?
+            {
+                return Err(SessionError::Invalid);
+            }
         }
         let response: Option<String> =
             sqlx::query_scalar("SELECT commit_id FROM job_response_commits WHERE job_id=$1")

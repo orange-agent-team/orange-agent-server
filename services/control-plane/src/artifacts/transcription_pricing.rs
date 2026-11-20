@@ -49,6 +49,21 @@ async fn active_data(
     audio_grants::checked_source_row(tx, user, owner, &grant, &source).await?;
     Ok((grant, target))
 }
+// Apply this additional admission to new offers. Version 55 orders retain their
+// immutable terms after the migration, even when their old report lacked a process identity.
+async fn require_new_offer_identity(
+    tx: &mut Tx<'_>,
+    observation: &str,
+) -> Result<(), ArtifactError> {
+    sqlx::query(
+        "SELECT observation_id FROM transcription_process_identities WHERE observation_id=$1",
+    )
+    .bind(observation)
+    .fetch_optional(&mut **tx)
+    .await?
+    .ok_or(ArtifactError::PricingUnavailable)?;
+    Ok(())
+}
 async fn price(
     tx: &mut Tx<'_>,
     target: &sqlx::postgres::PgRow,
@@ -96,6 +111,7 @@ impl ArtifactStore {
         let (grant, target) = active_data(&mut tx, owner, &actor.user, grant_id).await?;
         sqlx::query("SELECT root_budget_id FROM budget_roots WHERE root_budget_id=$1 AND owner_id=$2 AND state='active' FOR SHARE")
             .bind(grant.try_get::<&str,_>("root_budget_id")?).bind(owner).fetch_optional(&mut *tx).await?.ok_or(ArtifactError::Forbidden)?;
+        require_new_offer_identity(&mut tx, grant.try_get("observation_id")?).await?;
         let rows = match price(&mut tx, &target, None).await? {
             Some(r) => vec![TranscriptionPrice {
                 price_version: r.try_get("price_version")?,
@@ -146,6 +162,7 @@ impl ArtifactStore {
             authority::finish(tx, actor).await?;
             return Ok(result);
         }
+        require_new_offer_identity(&mut tx, grant.try_get("observation_id")?).await?;
         let duration = grant.try_get::<serde_json::Value, _>("measurement")?["duration_ms"]
             .as_str()
             .and_then(|s| s.parse::<i64>().ok())

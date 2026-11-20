@@ -1,7 +1,7 @@
 //! Fixed MC-05 CPU profile. Decoded usage and complete segments are candidates for host-side publication.
 mod owned;
 mod qualification;
-pub use owned::OwnedTranscription;
+pub use owned::{OwnedTranscription, TranscriptionAttempt, TranscriptionExit};
 pub use qualification::{ExecutionProfile, ObservedRuntime, Qualification};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -312,7 +312,9 @@ impl Client {
         if result.is_err() && child.try_wait().map_err(|_| Error::Unavailable)?.is_none() {
             child.kill().await.map_err(|_| Error::Unavailable)?;
         }
-        if let Some(a) = owner {
+        if let Some(a) = owner
+            && a.bound()
+        {
             let status = child
                 .try_wait()
                 .map_err(|_| Error::Unavailable)?

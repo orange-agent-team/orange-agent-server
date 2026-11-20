@@ -9,10 +9,13 @@ use uuid::Uuid;
 /// The lock keeps the exact retired slot unavailable until the Broker has recorded release.
 pub struct OwnedTranscription {
     pub result: Result<Candidate, Error>,
+    pub exit: TranscriptionExit,
+}
+pub struct TranscriptionExit {
     pub process: ProcessRecord,
     slot: File,
 }
-impl OwnedTranscription {
+impl TranscriptionExit {
     pub fn holds_slot(&self, root: &Path) -> bool {
         matches!((self.slot.metadata(),std::fs::symlink_metadata(root.join("transcription.lock"))),
             (Ok(fd),Ok(path)) if private(&fd) && private(&path) && fd.dev()==path.dev() && fd.ino()==path.ino())
@@ -26,8 +29,21 @@ fn private(meta: &std::fs::Metadata) -> bool {
         && meta.uid() == rustix::process::geteuid().as_raw()
 }
 
+pub struct TranscriptionAttempt {
+    pub instance: Uuid,
+    pub ready: Option<tokio::sync::mpsc::Sender<()>>,
+}
+impl From<Uuid> for TranscriptionAttempt {
+    fn from(instance: Uuid) -> Self {
+        Self {
+            instance,
+            ready: None,
+        }
+    }
+}
 pub(super) struct Attempt {
     pub instance: Uuid,
+    ready: Option<tokio::sync::mpsc::Sender<()>>,
     executable: String,
     model: String,
     slot: Option<File>,
@@ -55,10 +71,16 @@ impl Attempt {
         match slot.try_lock() {
             Err(std::fs::TryLockError::WouldBlock) => {
                 self.slot = Some(slot);
+                if let Some(ready) = self.ready.take() {
+                    let _ = ready.try_send(());
+                }
                 Ok(())
             }
             _ => Err(Error::Changed),
         }
+    }
+    pub(super) fn bound(&self) -> bool {
+        self.slot.is_some()
     }
     pub(super) fn reaped(
         &mut self,
@@ -98,7 +120,7 @@ impl Client {
         accepted: &Candidate,
         language: Option<&str>,
         qualified: &Qualification,
-        instance: Uuid,
+        attempt: TranscriptionAttempt,
         cancel: watch::Receiver<bool>,
     ) -> Result<OwnedTranscription, Error> {
         if accepted.model_version != MODEL
@@ -122,7 +144,8 @@ impl Client {
             return Err(Error::Changed);
         }
         let mut a = Attempt {
-            instance,
+            instance: attempt.instance,
+            ready: attempt.ready,
             executable: qualified.profile.runtime.python_sha256.clone(),
             model: qualified.profile.model_sha256.clone(),
             slot: None,
@@ -140,8 +163,7 @@ impl Client {
         match (a.stopped, a.slot) {
             (Some(process), Some(slot)) => Ok(OwnedTranscription {
                 result,
-                process,
-                slot,
+                exit: TranscriptionExit { process, slot },
             }),
             _ => Err(result.err().unwrap_or(Error::Unavailable)),
         }

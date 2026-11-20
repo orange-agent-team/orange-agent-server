@@ -218,57 +218,97 @@ impl ControlConnection {
         )
         .await
     }
-    pub async fn read_transcription_chunk(
+    pub(super) async fn check_transcription_authority(
         &mut self,
-        journal: &ExecutionJournal,
-        started: &StartedExecution,
-        command: &str,
-        download: &mut TranscriptionDownload,
-    ) -> Result<bool, ControlError> {
-        if self.transcription_input_version != 1
-            || self.input_artifacts_version != 1
+        record: &crate::execution_journal::ExecutionRecord,
+    ) -> Result<(), ControlError> {
+        if record.state != "running"
+            || record.assignment.session_id != self.identity.session_id
+            || self.transcription_input_version != 1
             || !self.is_current_locally()
         {
             return Err(ControlError::Stale);
         }
-        let record = journal
-            .record(command)
-            .map_err(|_| ControlError::Unavailable)?
-            .ok_or(ControlError::Invalid)?;
-        if record.state != "running"
-            || record.grant.as_ref() != Some(started.grant())
-            || record.assignment.session_id != self.identity.session_id
-            || record.assignment.payload_digest != download.assignment_digest
-        {
-            return Err(ControlError::Stale);
-        }
-        let end = self
-            .stop_at
-            .min(started.stop_at())
-            .min(Instant::now() + Duration::from_secs(5));
-        if Instant::now() >= end {
-            return Err(ControlError::Stale);
-        }
-        let request = worker::TranscriptionInputRead {
-            version: 1,
-            session_id: self.identity.session_id.clone(),
-            lease: record.assignment.lease,
-            grant_id: download.grant_id.clone(),
-            projection_digest: download.projection.clone(),
-            offset: download.buffer.len() as u64,
-        };
+        let mut check = TranscriptionDownload::for_record(record)?;
+        let deadline = self.stop_at.min(Instant::now() + Duration::from_secs(5));
+        self.active = false;
         let reply = tokio::time::timeout_at(
-            tokio::time::Instant::from_std(end),
-            self.input_client.read_transcription_input(request),
+            tokio::time::Instant::from_std(deadline),
+            self.input_client
+                .read_transcription_input(worker::TranscriptionInputRead {
+                    version: 1,
+                    session_id: self.identity.session_id.clone(),
+                    lease: record.assignment.lease.clone(),
+                    grant_id: check.grant_id.clone(),
+                    projection_digest: check.projection.clone(),
+                    offset: 0,
+                }),
         )
         .await
         .map_err(|_| ControlError::Unavailable)?
         .map_err(status)?
         .into_inner();
-        if Instant::now() >= end || !self.is_current_locally() {
+        check.accept(reply)?;
+        if Instant::now() >= deadline {
             return Err(ControlError::Stale);
         }
-        download.accept(reply)
+        self.active = true;
+        Ok(())
+    }
+    pub fn read_transcription_chunk<'a>(
+        &'a mut self,
+        journal: &ExecutionJournal,
+        started: &'a StartedExecution,
+        command: &str,
+        download: &'a mut TranscriptionDownload,
+    ) -> impl std::future::Future<Output = Result<bool, ControlError>> + Send + 'a {
+        let record = journal
+            .record(command)
+            .map_err(|_| ControlError::Unavailable)
+            .and_then(|v| v.ok_or(ControlError::Invalid));
+        async move {
+            let record = record?;
+            if self.transcription_input_version != 1
+                || self.input_artifacts_version != 1
+                || !self.is_current_locally()
+            {
+                return Err(ControlError::Stale);
+            }
+            if record.state != "running"
+                || record.grant.as_ref() != Some(started.grant())
+                || record.assignment.session_id != self.identity.session_id
+                || record.assignment.payload_digest != download.assignment_digest
+            {
+                return Err(ControlError::Stale);
+            }
+            let end = self
+                .stop_at
+                .min(started.stop_at())
+                .min(Instant::now() + Duration::from_secs(5));
+            if Instant::now() >= end {
+                return Err(ControlError::Stale);
+            }
+            let request = worker::TranscriptionInputRead {
+                version: 1,
+                session_id: self.identity.session_id.clone(),
+                lease: record.assignment.lease,
+                grant_id: download.grant_id.clone(),
+                projection_digest: download.projection.clone(),
+                offset: download.buffer.len() as u64,
+            };
+            let reply = tokio::time::timeout_at(
+                tokio::time::Instant::from_std(end),
+                self.input_client.read_transcription_input(request),
+            )
+            .await
+            .map_err(|_| ControlError::Unavailable)?
+            .map_err(status)?
+            .into_inner();
+            if Instant::now() >= end || !self.is_current_locally() {
+                return Err(ControlError::Stale);
+            }
+            download.accept(reply)
+        }
     }
 }
 

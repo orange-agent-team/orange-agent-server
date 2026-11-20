@@ -74,6 +74,15 @@ impl WorkerSessionStore {
             execution_profile_digest: report.execution_profile_digest.clone(),
             observation_digest: digest,
         };
+        let descriptor: serde_json::Value = serde_json::from_slice(&report.profile_descriptor_json)
+            .map_err(|_| ObservationError::Invalid)?;
+        if let Some(sha) = descriptor["runtime"]["python_sha256"]
+            .as_str()
+            .filter(|s| orange_protocol::valid_digest(s))
+        {
+            sqlx::query("INSERT INTO transcription_process_identities(observation_id,python_sha256) VALUES($1,$2) ON CONFLICT DO NOTHING")
+                .bind(&receipt.observation_id).bind(sha).execute(&mut *tx).await?;
+        }
         sessions::finish(tx, session).await?;
         Ok(receipt)
     }

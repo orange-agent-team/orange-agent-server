@@ -128,6 +128,8 @@ enum Scenario {
     InvalidOutput,
     Priced,
     CancelPriced,
+    Resident,
+    ResidentRevoked,
 }
 #[tokio::test]
 async fn consent_and_confirmed_lease_gate_every_real_audio_chunk() {
@@ -154,6 +156,99 @@ async fn priced_transcript_freezes_and_settles_development_credits_once() {
 async fn cancelling_a_queued_transcript_releases_the_entire_reservation() {
     run_case(Scenario::CancelPriced).await;
 }
+#[tokio::test]
+async fn foreground_provider_serves_a_priced_asr_order_and_closes_its_own_cpu_grant() {
+    run_case(Scenario::Resident).await;
+}
+
+#[tokio::test]
+async fn resident_lost_delivery_after_source_withdrawal_closes_the_attempt_and_refunds_full_hold() {
+    run_case(Scenario::ResidentRevoked).await;
+}
+struct Resident {
+    child: tokio::process::Child,
+    lines: tokio::io::Lines<tokio::io::BufReader<tokio::process::ChildStdout>>,
+}
+impl Resident {
+    async fn wait_event(&mut self, state: &str) {
+        tokio::time::timeout(Duration::from_secs(80), async {
+            loop {
+                let line = self
+                    .lines
+                    .next_line()
+                    .await
+                    .expect("worker event")
+                    .expect("resident Worker exited unexpectedly");
+                let event: Value = serde_json::from_str(&line).expect("event");
+                eprintln!("resident event {:?} {:?}", event["state"], event["outcome"]);
+                if event["state"] == state {
+                    return;
+                }
+            }
+        })
+        .await
+        .expect("resident Worker event deadline");
+    }
+    async fn stop(mut self) {
+        let pid = self.child.id().expect("owned worker").to_string();
+        assert!(
+            tokio::process::Command::new("/bin/kill")
+                .args(["-TERM", &pid])
+                .status()
+                .await
+                .expect("stop owned Worker")
+                .success()
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_secs(10), self.child.wait())
+                .await
+                .expect("graceful stop")
+                .expect("exit")
+                .success()
+        );
+    }
+}
+async fn start_resident(
+    server: &Running,
+    d: &Device,
+    profile: &str,
+    probe: &std::path::Path,
+    private: &std::path::Path,
+) -> Resident {
+    use tokio::io::AsyncBufReadExt;
+    let tls = PathBuf::from(std::env::var("ORANGE_WORKER_TLS_DIR").expect("TLS"));
+    let text: Value = serde_json::from_slice(
+        &std::fs::read(
+            std::env::var("ORANGE_OBSERVATION_TEXT_PROFILE").expect("text configuration"),
+        )
+        .expect("profile"),
+    )
+    .expect("JSON");
+    let state = private.join("resident");
+    std::fs::create_dir(&state).expect("state");
+    std::fs::set_permissions(&state, std::fs::Permissions::from_mode(0o700)).expect("private");
+    let path = state.join("config.json");
+    let cfg = json!({"protocol":1,"environment":"development","state_directory":state,"endpoint":format!("https://127.0.0.1:{}",server.port),"server_name":"localhost","server_ca":tls.join("ca.pem"),
+        "certificate":tls.join(format!("{}.pem",d.certificate)),"private_key":tls.join(format!("{}.key",d.certificate)),"node_id":d.node,"allow_remote_contribution":true,
+        "profile_id":"text-profile","profile":text,"transcription_observation":{"execution_profile_id":profile,"private_probe_file":probe,"allow_remote_execution":true}});
+    std::fs::write(&path, serde_json::to_vec(&cfg).expect("json")).expect("config");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("private file");
+    let mut child = tokio::process::Command::new(
+        std::env::var("ORANGE_OBSERVATION_WORKER").expect("foreground binary"),
+    )
+    .arg(path)
+    .env_clear()
+    .env("PATH", "/usr/bin:/bin")
+    .stdout(std::process::Stdio::piped())
+    .stderr(std::process::Stdio::inherit())
+    .kill_on_drop(true)
+    .spawn()
+    .expect("real foreground Worker");
+    let lines = tokio::io::BufReader::new(child.stdout.take().expect("worker events")).lines();
+    let mut resident = Resident { child, lines };
+    resident.wait_event("transcription_profile_observed").await;
+    resident
+}
 async fn balances(db: &Store, owner: &str) -> (i64, i64) {
     sqlx::query_as("SELECT gift,reserved_gift FROM wallets WHERE owner_id=$1")
         .bind(owner)
@@ -174,6 +269,8 @@ async fn run_case(mode: Scenario) {
         Scenario::InvalidOutput => "client-x",
         Scenario::Priced => "client-ec",
         Scenario::CancelPriced => "client-ed",
+        Scenario::Resident => "client-ee",
+        Scenario::ResidentRevoked => "client-ef",
     })
     .await;
     let db = &d.store;
@@ -230,7 +327,10 @@ async fn run_case(mode: Scenario) {
             &mut journal,
         )
         .await
-    } else if matches!(mode, Scenario::Priced | Scenario::CancelPriced) {
+    } else if matches!(
+        mode,
+        Scenario::Priced | Scenario::CancelPriced | Scenario::Resident | Scenario::ResidentRevoked
+    ) {
         ControlConnection::connect_managed_transcription(
             worker_config(&server, &d),
             &mut node,
@@ -250,10 +350,18 @@ async fn run_case(mode: Scenario) {
     let profile = Uuid::new_v4().to_string();
     sqlx::query("INSERT INTO reviewed_execution_profiles(execution_profile_id,model_version_id,model_sha256,execution_profile_digest) VALUES($1,$2,$3,$4)")
       .bind(&profile).bind(fact.profile.model_version).bind(&fact.profile.model_sha256).bind(&fact.execution_profile_digest).execute(db.pool()).await.expect("independent review fixture");
-    let observation = conn
+    let mut observation = conn
         .report_transcription_profile(&profile, &fact)
         .await
         .expect("actual observation");
+    let resident = if matches!(mode, Scenario::Resident | Scenario::ResidentRevoked) {
+        let proc = start_resident(&server, &d, &profile, &config, private.path()).await;
+        observation.observation_id=sqlx::query_scalar("SELECT o.observation_id FROM worker_transcription_profile_observations o JOIN worker_sessions s USING(node_id,session_id,connection_epoch) WHERE o.node_id=$1 AND o.execution_profile_id=$2 ORDER BY o.connection_epoch DESC LIMIT 1")
+            .bind(&d.node).bind(&profile).fetch_one(db.pool()).await.expect("actual foreground observation");
+        Some(proc)
+    } else {
+        None
+    };
     let raw_audio =
         std::fs::read(std::env::var("ORANGE_AUDIO_SAMPLE").expect("sample")).expect("audio");
     let base = format!("/api/v1/owners/{}", buyer.owner);
@@ -432,8 +540,16 @@ async fn run_case(mode: Scenario) {
         .await
         .expect("jobs");
     assert_eq!(no_jobs, 0);
-    let priced = matches!(mode, Scenario::Priced | Scenario::CancelPriced);
+    let priced = matches!(
+        mode,
+        Scenario::Priced | Scenario::CancelPriced | Scenario::Resident | Scenario::ResidentRevoked
+    );
     let price_version = Uuid::new_v4().to_string();
+    let publish_gate = if mode == Scenario::ResidentRevoked {
+        Some(store.pause_verified_transcript_publication().await)
+    } else {
+        None
+    };
     let job = if priced {
         let prices = format!("{status_path}/prices");
         assert_eq!(
@@ -627,6 +743,96 @@ async fn run_case(mode: Scenario) {
         tx.commit().await.expect("queue");
         job
     };
+    if let Some(mut process) = resident {
+        if let Some((arrived, resume)) = publish_gate {
+            tokio::time::timeout(Duration::from_secs(70), arrived)
+                .await
+                .expect("provider reached publication")
+                .expect("verified private bytes");
+            buyer
+                .call(&app, "DELETE", &status_path, &grant, vec![], 200)
+                .await;
+            resume
+                .send(())
+                .expect("allow final live authorization check");
+        }
+        process.wait_event("cloud_cleanup_confirmed").await;
+        let proof:(String,String,String)=sqlx::query_as("SELECT r.evidence->'process'->>'pid',r.evidence->'process'->>'executable_sha256',a.state FROM worker_cpu_cleanup_receipts r JOIN worker_execution_attempts a USING(attempt_id) WHERE r.job_id=$1").bind(&job).fetch_one(db.pool()).await.expect("actual kernel-backed cleanup receipt");
+        assert!(proof.0.parse::<u32>().expect("PID") > 0);
+        assert_eq!(proof.1, fact.profile.runtime.python_sha256);
+        assert_eq!(proof.2, "closed");
+        if mode == Scenario::ResidentRevoked {
+            let release:(i64,i64)=sqlx::query_as("SELECT j.charge,r.released FROM jobs j JOIN job_cleanup_releases r USING(job_id) WHERE j.job_id=$1 AND j.execution_state='failed' AND j.settlement_state='settled'")
+                .bind(&job).fetch_one(db.pool()).await.expect("exact cleanup releases original hold");
+            assert_eq!(release, (0, 2200));
+            assert_eq!(balances(db, &buyer.owner).await, (10000, 0));
+            let effects:i64=sqlx::query_scalar("SELECT (SELECT count(*) FROM job_response_commits WHERE job_id=$1)+(SELECT count(*) FROM job_settlements WHERE job_id=$1)+(SELECT count(*) FROM transcription_response_facts WHERE job_id=$1)")
+                .bind(&job).fetch_one(db.pool()).await.expect("no output or income");
+            assert_eq!(effects, 0);
+            let earned: i64 =
+                sqlx::query_scalar("SELECT pending_earned FROM wallets WHERE owner_id=$1")
+                    .bind(&d.owner)
+                    .fetch_one(db.pool())
+                    .await
+                    .expect("no provider income");
+            assert_eq!(earned, 0);
+        } else {
+            let settled: (i64, i64, i64) = sqlx::query_as(
+                "SELECT charge,platform_fee,provider_pending FROM job_settlements WHERE job_id=$1",
+            )
+            .bind(&job)
+            .fetch_one(db.pool())
+            .await
+            .expect("real provider settlement");
+            assert_eq!(settled, (2200, 440, 1760));
+            let result = buyer
+                .call(
+                    &app,
+                    "GET",
+                    &format!("{base}/jobs/{job}/result"),
+                    "",
+                    vec![],
+                    200,
+                )
+                .await;
+            let content = buyer
+                .call(
+                    &app,
+                    "GET",
+                    &format!(
+                        "{base}/uploads/{}/content?version_id={}",
+                        result["upload_id"].as_str().expect("upload"),
+                        result["version_id"].as_str().expect("version")
+                    ),
+                    "",
+                    vec![],
+                    200,
+                )
+                .await;
+            assert_eq!(
+                hex::encode(Sha256::digest(
+                    content["text"].as_str().expect("transcript").as_bytes()
+                )),
+                fact.transcript_sha256
+            );
+            assert_eq!(balances(db, &buyer.owner).await, (7800, 0));
+        }
+        let pins: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM artifact_pins WHERE reference_id=$1 OR reference_id=$2",
+        )
+        .bind(format!("job-input:{job}"))
+        .bind(format!("job-output:{job}"))
+        .fetch_one(db.pool())
+        .await
+        .expect("post-receipt pin release");
+        assert_eq!(pins, 0);
+        process.stop().await;
+        drop(conn);
+        drop(raw);
+        server.stop().await;
+        store.drain().await.expect("objects closed");
+        return;
+    }
     if mode == Scenario::CancelPriced {
         let url = format!("{base}/jobs/{job}/cancel");
         let key = Uuid::new_v4().to_string();

@@ -121,6 +121,9 @@ impl ControlConnection {
         if self.input_artifacts_version != 1 || !self.is_current_locally() {
             return Err(ControlError::Stale);
         }
+        if record.assignment.transcription_input.is_some() {
+            return self.check_transcription_authority(record).await;
+        }
         if record.state != "running"
             || record.assignment.session_id != self.identity.session_id
             || record.assignment.input_artifacts.len() != 1
