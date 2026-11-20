@@ -5,6 +5,8 @@ use std::{collections::BTreeMap, sync::Arc};
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Config {
+    #[serde(default)]
+    credential_revision: Option<String>,
     source_id: String,
     owner_id: String,
     registration: Registration,
@@ -38,6 +40,8 @@ impl Sources {
                 &(&c.source_id, &c.owner_id, &c.registration, &c.access_key),
             )
             .map_err(|_| "invalid registration")?;
+            let digest =
+                crate::connector_file::revision_digest(digest, c.credential_revision.as_deref())?;
             let reader = c
                 .registration
                 .open_development(&c.access_key, &c.secret_key)

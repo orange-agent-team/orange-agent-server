@@ -168,5 +168,123 @@ async fn scoped_source_reads_require_live_run_and_grant_at_delivery() {
         .0,
         StatusCode::FORBIDDEN
     );
+    // Revoke the source's SELECT privilege. Restoring it does not reopen an old platform grant.
+    let mut fresh = fixture().await;
+    let (run2, _root2) = super::connector_run::active_run(&fresh).await;
+    config["owner_id"] = json!(fresh.user);
+    fn configure(f: &mut Fixture, c: &Value) {
+        let mut file = tempfile::NamedTempFile::new().expect("private configuration");
+        file.write_all(&serde_json::to_vec(&[c]).expect("json"))
+            .expect("write");
+        f.identity.pg_sources = Sources::load_development_file(file.path()).expect("load");
+        f.router = auth::routes::router(f.identity.clone());
+    }
+    configure(&mut fresh, &config);
+    let base2 = format!("/api/v1/agent/runs/{run2}/connectors/postgres");
+    let inv = request(&fresh, "GET", &base2, None, headers(&fresh))
+        .await
+        .1;
+    let mut terms = json!({"source_id":"sales-db","source_digest":inv["sources"][0]["source_digest"],"view_ids":["sales"],"duration_seconds":120});
+    let grant2 = request(
+        &fresh,
+        "POST",
+        &base2,
+        Some(terms.clone()),
+        keyed(&fresh, "source-grant"),
+    )
+    .await
+    .1;
+    let acts = format!(
+        "{base2}/{}/actions",
+        grant2["grant_id"].as_str().expect("grant")
+    );
+    let role = config["registration"]["read_role"].as_str().expect("role");
+    assert!(
+        role.len() == 37
+            && role.starts_with("cn05_")
+            && role[5..].bytes().all(|b| b.is_ascii_hexdigit())
+    );
+    sqlx::QueryBuilder::new("REVOKE SELECT ON source.sales FROM ")
+        .push(role)
+        .build()
+        .execute(&source)
+        .await
+        .expect("fixture role revoke");
+    let action = json!({"action":"list_views"});
+    assert_eq!(
+        request(
+            &fresh,
+            "POST",
+            &acts,
+            Some(action.clone()),
+            keyed(&fresh, "refused")
+        )
+        .await
+        .0,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    sqlx::QueryBuilder::new("GRANT SELECT ON source.sales TO ")
+        .push(role)
+        .build()
+        .execute(&source)
+        .await
+        .expect("fixture role restore");
+    configure(&mut fresh, &config);
+    assert_eq!(
+        request(&fresh, "GET", &base2, None, headers(&fresh))
+            .await
+            .1["sources"],
+        json!([])
+    );
+    assert_eq!(
+        request(
+            &fresh,
+            "POST",
+            &acts,
+            Some(action.clone()),
+            keyed(&fresh, "still-disabled")
+        )
+        .await
+        .0,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM pg_view_calls WHERE run_id=$1")
+        .bind(&run2)
+        .fetch_one(&fresh.pool)
+        .await
+        .expect("dispatch count");
+    assert_eq!(count, 1);
+    config["credential_revision"] = json!("restored-v2");
+    configure(&mut fresh, &config);
+    let inv = request(&fresh, "GET", &base2, None, headers(&fresh))
+        .await
+        .1;
+    assert_ne!(terms["source_digest"], inv["sources"][0]["source_digest"]);
+    terms["source_digest"] = inv["sources"][0]["source_digest"].clone();
+    let g3 = request(
+        &fresh,
+        "POST",
+        &base2,
+        Some(terms),
+        keyed(&fresh, "new-source"),
+    )
+    .await
+    .1;
+    let acts = format!(
+        "{base2}/{}/actions",
+        g3["grant_id"].as_str().expect("fresh grant")
+    );
+    assert_eq!(
+        request(
+            &fresh,
+            "POST",
+            &acts,
+            Some(action),
+            keyed(&fresh, "recovered")
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
     source.close().await;
 }

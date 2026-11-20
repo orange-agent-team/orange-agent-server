@@ -106,7 +106,7 @@ async fn approved_source_view_uses_actual_read_role_and_bounded_queries() {
     ));
     assert!(matches!(
         registry.execute(&admin, &grant, Action::ListViews {}).await,
-        Err(Error::Denied)
+        Err(Error::SourceAuthority)
     ));
     assert!(matches!(
         registry

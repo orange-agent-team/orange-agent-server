@@ -38,7 +38,7 @@ async fn s3_receipts_and_delivery_require_the_original_live_authority() {
     .expect("config");
     cfg["owner_id"] = json!(f.user);
     let mut file = tempfile::NamedTempFile::new().expect("private file");
-    file.write_all(&serde_json::to_vec(&[cfg]).expect("config bytes"))
+    file.write_all(&serde_json::to_vec(&[&cfg]).expect("config bytes"))
         .expect("private configuration");
     f.identity.s3_sources =
         orange_control_plane::s3_sources::Sources::load_development_file(file.path())
@@ -200,5 +200,120 @@ async fn s3_receipts_and_delivery_require_the_original_live_authority() {
         .await
         .0,
         StatusCode::TOO_MANY_REQUESTS
+    );
+    // A signing refusal must survive a fresh in-memory registry and must not disable another revision.
+    let mut recovery = fixture().await;
+    let (run2, _root2) = active_run(&recovery).await;
+    cfg["owner_id"] = json!(recovery.user);
+    let mut corrupted = cfg.clone();
+    corrupted["secret_key"] = json!("retired-test-key");
+    fn register(f: &mut Fixture, cfg: &Value) {
+        let mut file = tempfile::NamedTempFile::new().expect("private config");
+        file.write_all(&serde_json::to_vec(&[cfg]).expect("json"))
+            .expect("config");
+        f.identity.s3_sources =
+            orange_control_plane::s3_sources::Sources::load_development_file(file.path())
+                .expect("loaded");
+        f.router = auth::routes::router(f.identity.clone());
+    }
+    register(&mut recovery, &corrupted);
+    let base = format!("/api/v1/agent/runs/{run2}/connectors/s3");
+    let inventory = request(&recovery, "GET", &base, None, headers(&recovery))
+        .await
+        .1;
+    let terms0 = json!({"source_id":"documents","source_digest":inventory["sources"][0]["source_digest"],"duration_seconds":180});
+    let grant0 = request(
+        &recovery,
+        "POST",
+        &base,
+        Some(terms0.clone()),
+        keyed(&recovery, "fault-grant"),
+    )
+    .await
+    .1;
+    let actions0 = format!(
+        "{base}/{}/actions",
+        grant0["grant_id"].as_str().expect("grant")
+    );
+    let listing = json!({"action":"list_objects","limit":1});
+    assert_eq!(
+        request(
+            &recovery,
+            "POST",
+            &actions0,
+            Some(listing.clone()),
+            keyed(&recovery, "fault")
+        )
+        .await
+        .0,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    register(&mut recovery, &cfg);
+    let inventory = request(&recovery, "GET", &base, None, headers(&recovery))
+        .await
+        .1;
+    assert_eq!(inventory["sources"], json!([]));
+    assert_eq!(
+        request(
+            &recovery,
+            "POST",
+            &actions0,
+            Some(listing.clone()),
+            keyed(&recovery, "after-reload")
+        )
+        .await
+        .0,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    assert_eq!(
+        request(
+            &recovery,
+            "POST",
+            &base,
+            Some(terms0.clone()),
+            keyed(&recovery, "stale-regrant")
+        )
+        .await
+        .0,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    let used: i64 = sqlx::query_scalar("SELECT count(*) FROM s3_source_calls WHERE run_id=$1")
+        .bind(&run2)
+        .fetch_one(&recovery.pool)
+        .await
+        .expect("source dispatches");
+    assert_eq!(used, 1);
+    cfg["credential_revision"] = json!("rotated-v2");
+    register(&mut recovery, &cfg);
+    let inventory = request(&recovery, "GET", &base, None, headers(&recovery))
+        .await
+        .1;
+    let mut terms2 = terms0.clone();
+    terms2["source_digest"] = inventory["sources"][0]["source_digest"].clone();
+    assert_ne!(terms0, terms2);
+    let grant2 = request(
+        &recovery,
+        "POST",
+        &base,
+        Some(terms2),
+        keyed(&recovery, "rotated-grant"),
+    )
+    .await
+    .1;
+    let actions2 = format!(
+        "{base}/{}/actions",
+        grant2["grant_id"].as_str().expect("new grant")
+    );
+    assert_eq!(
+        request(
+            &recovery,
+            "POST",
+            &actions2,
+            Some(listing),
+            keyed(&recovery, "rotated")
+        )
+        .await
+        .0,
+        StatusCode::OK
     );
 }

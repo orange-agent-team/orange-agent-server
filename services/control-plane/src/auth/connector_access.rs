@@ -46,3 +46,58 @@ pub(super) async fn capacity(g: &mut UserSessionGuard, run: &str) -> Result<(), 
     }
     Ok(())
 }
+
+pub(super) async fn check_source(
+    g: &mut UserSessionGuard,
+    digest: &str,
+) -> Result<(), UserApiError> {
+    let tx = g.transaction();
+    sqlx::query("SELECT pg_advisory_xact_lock_shared(hashtextextended($1, 649775))")
+        .bind(digest)
+        .execute(&mut **tx)
+        .await
+        .map_err(db)?;
+    let refused: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT FROM connector_credential_faults WHERE source_digest=$1)",
+    )
+    .bind(digest)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(db)?;
+    if refused {
+        return Err(UserApiError(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "SOURCE_REGISTRATION_DISABLED",
+        ));
+    }
+    Ok(())
+}
+pub(super) async fn disable_source(
+    i: &UserIdentity,
+    owner: &str,
+    kind: &str,
+    digest: &str,
+) -> Result<(), UserApiError> {
+    let mut tx = i.pool.begin().await.map_err(db)?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,649775))")
+        .bind(digest)
+        .execute(&mut *tx)
+        .await
+        .map_err(db)?;
+    sqlx::query("INSERT INTO connector_credential_faults(owner_id,connector_kind,source_digest) VALUES($1,$2,$3) ON CONFLICT DO NOTHING").bind(owner).bind(kind).bind(digest).execute(&mut *tx).await.map_err(db)?;
+    tx.commit().await.map_err(db)?;
+    Ok(())
+}
+pub(super) async fn disabled(
+    g: &mut UserSessionGuard,
+) -> Result<std::collections::BTreeSet<String>, UserApiError> {
+    let owner = g.view().personal_owner_id.clone();
+    let rows = sqlx::query_scalar(
+        "SELECT source_digest FROM connector_credential_faults WHERE owner_id=$1",
+    )
+    .bind(owner)
+    .fetch_all(&mut **g.transaction())
+    .await
+    .map_err(db)?;
+    Ok(rows.into_iter().collect())
+}

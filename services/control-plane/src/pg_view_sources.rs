@@ -9,6 +9,8 @@ use std::{collections::BTreeMap, net::IpAddr, sync::Arc, time::Duration};
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Config {
+    #[serde(default)]
+    credential_revision: Option<String>,
     source_id: String,
     owner_id: String,
     address: IpAddr,
@@ -58,6 +60,8 @@ impl Sources {
                 ),
             )
             .map_err(|_| "invalid source identity")?;
+            let digest =
+                crate::connector_file::revision_digest(digest, c.credential_revision.as_deref())?;
             let options = PgConnectOptions::new()
                 .host(&c.address.to_string())
                 .port(c.port)

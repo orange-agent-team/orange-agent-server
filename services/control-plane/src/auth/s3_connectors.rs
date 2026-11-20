@@ -1,5 +1,6 @@
 //! Run-scoped external S3 reads. A receipt refers to one immutable byte identity.
 use super::connector_access::{capacity, db, denied, guard, key, missing};
+use super::connector_access::{check_source, disable_source, disabled};
 use super::*;
 use crate::{
     auth::users::UserSessionGuard,
@@ -27,6 +28,7 @@ async fn live(
     let row=sqlx::query("SELECT source_id,source_digest FROM s3_source_grants g WHERE run_id=$1 AND grant_id=$2 AND expires_at>clock_timestamp() AND NOT EXISTS(SELECT FROM s3_source_revocations r WHERE r.grant_id=g.grant_id)")
         .bind(run).bind(id).fetch_optional(&mut **g.transaction()).await.map_err(db)?.ok_or_else(denied)?;
     let source = registered(i, &g.view().personal_owner_id, row.get("source_id"))?;
+    check_source(g, &source.digest).await?;
     if source.digest != row.get::<String, _>("source_digest") {
         return Err(denied());
     }
@@ -49,7 +51,8 @@ pub(super) async fn list(
     headers: HeaderMap,
 ) -> Result<Json<Value>, UserApiError> {
     let (mut g, readable) = guard(&i, &headers, &run, false, false).await?;
-    let sources:Vec<_>=i.s3_sources.0.iter().filter(|(_,s)|s.owner==g.view().personal_owner_id).map(|(id,s)|json!({"source_id":id,"source_digest":s.digest,"bucket":s.registration.bucket,"prefix":s.registration.prefix})).collect();
+    let faults = disabled(&mut g).await?;
+    let sources:Vec<_>=i.s3_sources.0.iter().filter(|(_,s)|s.owner==g.view().personal_owner_id && !faults.contains(&s.digest)).map(|(id,s)|json!({"source_id":id,"source_digest":s.digest,"bucket":s.registration.bucket,"prefix":s.registration.prefix})).collect();
     let grants:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_object('grant_id',g.grant_id,'source_id',g.source_id,'source_digest',g.source_digest,'expires_at',g.expires_at,'revoked',r.grant_id IS NOT NULL) FROM s3_source_grants g LEFT JOIN s3_source_revocations r USING(grant_id) WHERE run_id=$1 ORDER BY expires_at DESC,grant_id LIMIT 100")
         .bind(run).fetch_all(&mut **g.transaction()).await.map_err(db)?;
     g.finish().await?;
@@ -73,6 +76,7 @@ pub(super) async fn grant(
     let Json(c) = body.map_err(|_| AuthError::Invalid)?;
     let (mut g, _) = guard(&i, &headers, &run, true, true).await?;
     let s = registered(&i, &g.view().personal_owner_id, &c.source_id)?;
+    check_source(&mut g, &s.digest).await?;
     if s.digest != c.source_digest || !(1..=3600).contains(&c.duration_seconds) {
         return Err(AuthError::Invalid.into());
     }
@@ -222,6 +226,9 @@ pub(super) async fn perform(
                 })
         }
     };
+    if source.reader.authorization_refused() {
+        disable_source(&i, &source.owner, "s3", &source.digest).await?;
+    }
     let mut g = delivered(&i, &headers, &run, &id, req).await?;
     let data = match fetched {
         Ok(ResultData::Metadata(value)) => value,
@@ -256,6 +263,9 @@ pub(super) async fn download(
     admit(&mut g, &run, &id, req, &digest).await?;
     g.finish().await?;
     let fetched = source.reader.read(&head).await;
+    if source.reader.authorization_refused() {
+        disable_source(&i, &source.owner, "s3", &source.digest).await?;
+    }
     let g = delivered(&i, &headers, &run, &id, req).await?;
     g.finish().await?;
     let read = fetched.map_err(source_error)?;

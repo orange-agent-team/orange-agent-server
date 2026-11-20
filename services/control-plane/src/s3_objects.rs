@@ -55,6 +55,7 @@ fn relative(key: &str) -> bool {
 }
 #[derive(Clone)]
 struct Transport {
+    rejected: std::sync::Arc<std::sync::atomic::AtomicBool>,
     client: reqwest::Client,
     origin: reqwest::Url,
     bucket_path: String,
@@ -82,6 +83,9 @@ impl HttpTransport for Transport {
             || !matches!(parts.method, Method::HEAD | Method::GET)
             || !body.is_empty()
         {
+            return Err(blocked());
+        }
+        if self.rejected.load(std::sync::atomic::Ordering::Acquire) {
             return Err(blocked());
         }
         let head = parts.method == Method::HEAD;
@@ -119,6 +123,11 @@ impl HttpTransport for Transport {
             .send()
             .await
             .map_err(|_| unavailable())?;
+        if matches!(reply.status().as_u16(), 401 | 403) {
+            self.rejected
+                .store(true, std::sync::atomic::Ordering::Release);
+            return Err(blocked());
+        }
         if reply.status().is_redirection() {
             return Err(blocked());
         }
@@ -178,6 +187,7 @@ pub struct Content {
 
 #[derive(Clone)]
 pub struct Source {
+    rejected: std::sync::Arc<std::sync::atomic::AtomicBool>,
     op: Operator,
 }
 impl Registration {
@@ -221,7 +231,9 @@ impl Registration {
             .connect_timeout(Duration::from_secs(3))
             .build()
             .map_err(|_| Error::Unavailable)?;
+        let rejected = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let transport = Transport {
+            rejected: rejected.clone(),
             bucket_path: format!("/{}", self.bucket),
             prefix: format!("{}/", self.prefix),
             client,
@@ -229,11 +241,15 @@ impl Registration {
         };
         let ctx = OperationContext::new().with_http_transport(HttpTransporter::new(transport));
         Ok(Source {
+            rejected,
             op: Operator::new(backend)?.with_context(ctx),
         })
     }
 }
 impl Source {
+    pub fn authorization_refused(&self) -> bool {
+        self.rejected.load(std::sync::atomic::Ordering::Acquire)
+    }
     pub async fn list(&self, after: Option<&str>, limit: usize) -> Result<Listing, Error> {
         if !(1..=100).contains(&limit) || after.is_some_and(|s| !relative(s)) {
             return Err(Error::Invalid);

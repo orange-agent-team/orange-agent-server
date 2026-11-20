@@ -15,3 +15,5 @@ python3 scripts/check-pg-views.py --database-url-file .local/database-url --iden
 用户在运行详情中读取可授权资源，提交源摘要、视图 ID 集合、有效期与幂等键。每次读取需要当前用户会话、相同运行、有效的输入产物及未撤销的授权。每 Run 最多 100 次读取，允许同时保留 4 个请求。动作在独立源连接池执行，交付前再次检查同一授权；在途撤权会丢弃读取结果。重复的动作键返回 409；重新授权产生新授权 ID。查询输出中的 bigint 及分页游标编码为十进制字符串。
 
 接口与载荷见 [CN-05 OpenAPI](../contracts/openapi/pg-connector.v1.json) 与 [JSON Schema](../contracts/json-schema/pg-connector.schema.json)。联合测试使用真实的开发 OIDC 发现和两套隔离数据库，其中用户会话和已运行的 Run 是显式测试记录。
+
+平台会记录源端登录、专用角色属性或 SELECT 权限的明确拒绝，后续请求在连接源前即被拦截。恢复源端权限并重新加载相同登记不会恢复旧 Run 授权。管理员确认源已修复后可设置新的 credential_revision，用户核对新的登记摘要并重新授权。

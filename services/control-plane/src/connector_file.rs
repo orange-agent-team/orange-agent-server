@@ -26,3 +26,17 @@ pub(crate) fn read_private(path: &std::path::Path) -> Result<Vec<u8>, &'static s
     }
     Ok(bytes)
 }
+
+pub(crate) fn revision_digest(
+    digest: String,
+    revision: Option<&str>,
+) -> Result<String, &'static str> {
+    match revision {
+        None => Ok(digest),
+        Some(s) if orange_protocol::valid_id(s) => {
+            orange_protocol::request_digest("connector.credential-revision.v1", &(digest, s))
+                .map_err(|_| "invalid source credential revision")
+        }
+        Some(_) => Err("invalid source credential revision"),
+    }
+}
