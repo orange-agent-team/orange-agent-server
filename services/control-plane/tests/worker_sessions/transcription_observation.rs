@@ -360,3 +360,81 @@ async fn foreground_worker_reports_only_after_explicit_configuration() {
     server.stop().await;
     writer.drain().await.expect("private writer stopped");
 }
+
+#[tokio::test]
+async fn populated_schema_50_keeps_its_live_worker_and_does_not_invent_observations() {
+    let url = std::env::var("ORANGE_ASR_UPGRADE_DATABASE_URL").expect("dedicated older database");
+    assert!(
+        url.rsplit('/')
+            .next()
+            .is_some_and(|db| db.starts_with("orange_asr_old_"))
+    );
+    let store = Store::connect(&url).await.expect("actual PostgreSQL");
+    let history = sqlx::migrate!();
+    let old = sqlx::migrate::Migrator::with_migrations(
+        history
+            .iter()
+            .filter(|m| m.version <= 50)
+            .cloned()
+            .collect(),
+    );
+    old.run(store.pool())
+        .await
+        .expect("apply original fifty migrations and checksums");
+    let prior: i64 = sqlx::query_scalar("SELECT max(version) FROM _sqlx_migrations WHERE success")
+        .fetch_one(store.pool())
+        .await
+        .expect("source version");
+    assert_eq!(prior, 50);
+    let d = device_in(store.clone(), "client-u").await;
+    let profile = Uuid::new_v4().to_string();
+    sqlx::query("INSERT INTO reviewed_execution_profiles(execution_profile_id,model_version_id,model_sha256,execution_profile_digest)
+          VALUES($1,'historical-text',$2,$3)").bind(&profile).bind("0".repeat(64)).bind("1".repeat(64))
+        .execute(store.pool()).await.expect("existing independently reviewed text profile");
+    let server = Running::start(&store).await;
+    let mut rpc = server
+        .client(Some(&d.certificate))
+        .await
+        .expect("pre-upgrade mTLS");
+    let (sender, mut stream) = control(&mut rpc, hello(&d.node))
+        .await
+        .expect("existing protocol handshake");
+    let before = welcome(&mut stream).await;
+    heartbeat(&sender, &mut stream, &d.node, &before)
+        .await
+        .expect("old schema heartbeat");
+    store.migrate().await.expect("upgrade live database");
+    store.migrate().await.expect("idempotent upgrade");
+    heartbeat(&sender, &mut stream, &d.node, &before)
+        .await
+        .expect("same certificate, session and epoch after upgrade");
+    let retained: (String, i64) =
+        sqlx::query_as("SELECT session_id,connection_epoch FROM worker_sessions WHERE node_id=$1")
+            .bind(&d.node)
+            .fetch_one(store.pool())
+            .await
+            .expect("unchanged live session");
+    assert_eq!(
+        retained,
+        (before.session_id, before.connection_epoch as i64)
+    );
+    let observations: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM worker_transcription_profile_observations")
+            .fetch_one(store.pool())
+            .await
+            .expect("observations");
+    assert_eq!(observations, 0);
+    assert!(
+        sqlx::query_scalar::<_, bool>(
+            "SELECT enabled FROM reviewed_execution_profiles WHERE execution_profile_id=$1"
+        )
+        .bind(&profile)
+        .fetch_one(store.pool())
+        .await
+        .expect("retained text profile")
+    );
+    drop(sender);
+    drop(stream);
+    drop(rpc);
+    server.stop().await;
+}

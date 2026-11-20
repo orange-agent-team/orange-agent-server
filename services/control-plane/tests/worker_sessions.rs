@@ -54,6 +54,9 @@ async fn device(certificate: &str) -> Device {
     .await
     .expect("connect");
     store.migrate().await.expect("migrate");
+    device_in(store, certificate).await
+}
+async fn device_in(store: Store, certificate: &str) -> Device {
     let owner = Uuid::new_v4().to_string();
     let user = Uuid::new_v4().to_string();
     let node = Uuid::new_v4().to_string();

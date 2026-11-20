@@ -18,3 +18,5 @@ WorkerGateway 提供 ReportTranscriptionObservation RPC。发送方需要有效�
 迁移 0051 保存不可变的设备、会话 epoch、配置、公开录音和计算精度事实。相同请求返回已有回执，相同键替换配置、同一 epoch 重复创建另一回执都会拒绝。换会话后须使用新 epoch。撤销审核或设备凭证后旧回执也不能通过该 RPC 重新取得。历史记录不构成当前可调度资源。设备自报加 mTLS 不等同于远程硬件证明。
 
 `python3 scripts/check-transcription-observation.py` 在独立数据库与临时 mTLS 上验收。测试使用经真实录音观测的 CPU profile，并显式建立独立的开发审核夹具。覆盖并发重复、配置替换、描述符重复字段、其他设备证书、过期 epoch、撤销和数据库不可变性。前台 Worker 实际运行默认、已获审核、审核撤销三个配置状态。该入口不会创建 Job、报价或账本交易。[协议定义](../contracts/proto/worker.proto)
+
+兼容门槛在另一个空 PostgreSQL 数据库上按原 SQLx 校验和依次应用 1 至 50 号迁移，填入已有审核配置并维持一条旧协议 Worker 控制会话。应用 0051 后再运行一次迁移，原证书、session_id、epoch 和心跳仍有效；既有审核配置保留，新增观测表为空。该验收验证真实旧结构与真实在线连接，未使用历史生产数据。
