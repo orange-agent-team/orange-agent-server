@@ -35,3 +35,5 @@ python3 scripts/check-embedding-distribution.py --profile transcription
 ```
 
 另可运行 `python3 scripts/check-transcription-corpus.py` 检查 60 秒中英文输入。每种语言由一段已固定摘要的真人录音完整重复、句间留白，再补零至恰好 60 秒。每种输入实跑两遍，记录时长、样本数、时间段、英文词错误或中文字符错误，并采样宿主与本次子进程的 RSS。完整静音应返回 NoSpeech 且不交付候选文本。两种短录音的重复结果只用于这些固定样本的回归。[中文录音来源与参考文本](https://github.com/modelscope/FunASR/wiki/%E5%BF%AB%E9%80%9F%E6%8E%A8%E7%90%86)
+
+语料验收同时保留周期采样和进程退出观测。仅在此资源测试中，私有启动器 exec 到相同的受审 Python 解释器，注册 at-exit 回调并原样执行 Rust 宿主提供的 runner。回调对仍然存活的宿主与该子进程采集同一时点的 RSS，并从 Darwin RUSAGE_SELF 读取子进程实际驻留高水位。每份输入都必须收齐预检及推理两个不同 attempt 的退出观测。短进程即便结束于两次轮询之间也可核实；进程归属、取消及启动者崩溃仍由未加观测器的独立真实运行检验。

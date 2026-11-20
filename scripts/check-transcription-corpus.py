@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import shutil
 import signal
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -56,8 +57,8 @@ def edit_distance(left, right):
     return row[-1]
 
 
-def transcribe(binary, slot, audio):
-    cmd = [binary, "transcribe", ROOT / ".local/transcription-venv/bin/python", CACHE, slot, audio]
+def transcribe(binary, python, slot, audio):
+    cmd = [binary, "transcribe", python, CACHE, slot, audio]
     with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                           env={"PATH": "/usr/bin:/bin"}) as proc:
         start = time.monotonic()
@@ -88,10 +89,16 @@ def transcribe(binary, slot, audio):
                     proc.kill()
                     proc.wait()
         out, err = proc.communicate()
-        require(observed > 0, "No parent/child RSS sample recorded")
+        exits=[json.loads(f.read_bytes()) for f in slot.glob("rss-*.json")]
+        require(len(exits)==2 and len({x["attempt"] for x in exits})==2 and
+                all(x["parent"]==proc.pid and x["combined_rss_bytes"]>0 and x["backend_peak_rss_bytes"]>0 for x in exits),
+                "Could not observe both real preflight and inference exits for "+audio.name+": "+err.decode()[:180])
+        observed=max(observed,*(x["combined_rss_bytes"] for x in exits))
         return proc.returncode, out, err.decode(), {
             "elapsed_seconds": round(time.monotonic() - start, 3),
             "max_observed_host_plus_child_rss_bytes": observed,
+            "max_backend_peak_rss_bytes": max(x["backend_peak_rss_bytes"] for x in exits),
+            "measured_backend_exits": len(exits),
         }
 
 
@@ -105,6 +112,13 @@ def main():
     results = {}
     with tempfile.TemporaryDirectory(prefix="orange-asr-corpus-") as folder:
         folder = Path(folder)
+        # exec preserves the pid and standard streams. The observer executes the
+        # exact native host's runner, registering only an at-exit resource reading.
+        python=folder/"observe-python"
+        interpreter=shlex.quote(str(ROOT/".local/transcription-venv/bin/python"))
+        observer=shlex.quote(str(ROOT/"scripts/transcription_rss_observer.py"))
+        python.write_text(f'#!/bin/sh\nexec {interpreter} -I -B {observer} "$@"\n')
+        python.chmod(0o700)
         for language in ("zh", "en", "silence"):
             audio = folder / (language + ".wav")
             if language == "silence":
@@ -116,7 +130,7 @@ def main():
             for run in range(2):
                 slot = folder / f"{language}-{run}"
                 slot.mkdir(mode=0o700)
-                code, out, err, metrics = transcribe(binary, slot, audio)
+                code, out, err, metrics = transcribe(binary, python, slot, audio)
                 if language == "silence":
                     require(code != 0 and not out and "NoSpeech" in err, "Silence returned a transcript")
                 else:
@@ -148,7 +162,7 @@ def main():
     dest.mkdir(parents=True, exist_ok=True)
     report = {"model": MODEL["model_version"], "duration_ms_each": 60000,
               "fixture_method": "Complete repetitions of pinned human recordings with one-second gaps, then digital silence to 60 seconds",
-              "memory_method": "Maximum observed sum of native host and its direct Python child RSS sampled every ~200 ms, not unique or hard peak memory",
+              "memory_method": "Approximate 200 ms parent+child RSS samples plus a simultaneous exit sample for each real backend invocation. Separate Darwin RUSAGE_SELF high-water bytes per backend. RSS sums can count shared memory twice.",
               "results": results}
     (dest / "corpus.json").write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report))
