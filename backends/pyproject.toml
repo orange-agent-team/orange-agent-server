@@ -1,10 +1,11 @@
 [project]
 name = "orange-inference-backends"
-version = "0.1.1"
+version = "0.2.0"
 requires-python = ">=3.12,<3.13"
 dependencies = []
 
 [project.optional-dependencies]
+transcription = ["faster-whisper==1.2.1", "numpy==2.2.6"]
 embedding = [
     "numpy==2.2.6",
     "onnxruntime==1.23.2",

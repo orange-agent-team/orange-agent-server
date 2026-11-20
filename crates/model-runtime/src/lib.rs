@@ -9,6 +9,8 @@ pub mod stream;
 #[cfg(unix)]
 pub mod supervisor;
 pub mod tool_schema;
+#[cfg(unix)]
+pub mod transcription;
 pub use orange_protocol::model::{
     GenerateRequest, Message, NativeUsage, ResponseCandidate, Role, ToolCall, ToolDefinition,
 };

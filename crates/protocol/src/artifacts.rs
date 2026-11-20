@@ -36,6 +36,7 @@ impl CreateUpload {
                 | "audio/mpeg"
                 | "audio/flac"
                 | "audio/ogg"
+                | "audio/mp4"
                 | "video/mp4"
         );
         if !media
@@ -64,6 +65,18 @@ pub struct ArtifactView {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn m4a_uses_the_approved_audio_artifact_ceiling() {
+        let mut upload = CreateUpload {
+            upload_id: "audio-source".into(),
+            sha256: "a".repeat(64),
+            size_bytes: MEDIA_LIMIT.to_string(),
+            media_type: "audio/mp4".into(),
+        };
+        assert_eq!(upload.size(), Some(MEDIA_LIMIT));
+        upload.size_bytes = (MEDIA_LIMIT + 1).to_string();
+        assert_eq!(upload.size(), None);
+    }
     #[test]
     fn lengths_are_canonical_and_media_has_the_stricter_limit() {
         let mut r = CreateUpload {
