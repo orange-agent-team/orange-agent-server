@@ -25,7 +25,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
     let store = Store::connect(&env::var("DATABASE_URL")?).await?;
     store.migrate().await?;
-    let identity = AdminIdentity::discover(store.pool().clone(), config).await?;
+    let mut identity = AdminIdentity::discover(store.pool().clone(), config).await?;
+    if let Some(root) = env::var_os("ORANGE_ADMIN_SUPPORT_ROOT") {
+        let reader = orange_control_plane::artifacts::ArtifactReader::open_local(
+            store.pool().clone(),
+            std::path::Path::new(&root),
+        )
+        .await?;
+        identity = identity.with_support_reader(reader);
+    }
     let listener = tokio::net::TcpListener::bind(address).await?;
     eprintln!(
         "Development Admin API listening on {}; node intents/approvals enabled, device completion remains separate",

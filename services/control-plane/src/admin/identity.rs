@@ -18,6 +18,7 @@ pub struct AdminIdentity {
     pub pool: PgPool,
     pub config: Arc<OidcConfig>,
     provider: OidcProvider,
+    pub(super) support_reader: Option<crate::artifacts::ArtifactReader>,
 }
 pub struct LoginStart {
     pub authorization_url: String,
@@ -25,6 +26,11 @@ pub struct LoginStart {
 }
 
 impl AdminIdentity {
+    pub fn with_support_reader(mut self, reader: crate::artifacts::ArtifactReader) -> Self {
+        self.support_reader = Some(reader);
+        self
+    }
+
     pub async fn revocation_context(
         &self,
         headers: &HeaderMap,
@@ -86,6 +92,7 @@ impl AdminIdentity {
             pool,
             config: Arc::new(config),
             provider,
+            support_reader: None,
         })
     }
     pub async fn start(&self, existing: Option<&CurrentSession>) -> Result<LoginStart, AdminError> {

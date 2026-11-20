@@ -218,6 +218,9 @@ async fn exact_personal_text_version_requires_explicit_consent_and_permanent_rev
             .1["status"],
         "expired"
     );
+    if let Ok(config) = std::env::var("ORANGE_TEST_SUPPORT_ADMIN_CONFIG") {
+        combined::verify(&f, &store, &first, &terms(&first), &config).await;
+    }
     if let Ok(driver) = std::env::var("ORANGE_SUPPORT_BROWSER_DRIVER") {
         browser_consent_and_revocation_with_real_user_router(driver).await;
     }
@@ -296,3 +299,6 @@ async fn browser_consent_and_revocation_with_real_user_router(driver: String) {
     )
     .expect("browser evidence");
 }
+
+#[path = "support_combined.rs"]
+mod combined;

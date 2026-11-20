@@ -17,6 +17,22 @@ mod cases;
 
 pub fn router(identity: AdminIdentity) -> Router {
     Router::new()
+        .route(
+            "/admin/v1/support-authorizations/{id}",
+            get(super::actions::support::review),
+        )
+        .route(
+            "/admin/v1/support-grants/{id}",
+            get(super::actions::support::detail),
+        )
+        .route(
+            "/admin/v1/support-content",
+            post(super::actions::support::read_content),
+        )
+        .route(
+            "/admin/v1/support-grants",
+            get(super::actions::support::directory),
+        )
         .route("/admin/v1/auth/start", get(start))
         .route("/admin/v1/auth/callback", get(callback))
         .route("/admin/v1/auth/step-up", post(step_up))
@@ -225,6 +241,7 @@ fn readable_actions(permissions: &BTreeSet<String>) -> Vec<String> {
         ("feature.enable", "features.read"),
         ("admin.role_grant", "audit.read"),
         ("support_access.grant", "support.read"),
+        ("support_access.revoke", "support.read"),
     ]
     .into_iter()
     .filter(|(_, permission)| permissions.contains(*permission))

@@ -202,3 +202,54 @@ impl ArtifactReader {
         })
     }
 }
+
+impl ArtifactReader {
+    /// Called with a transfer reference selected by the guarded support query.
+    /// Verify the whole immutable object before projecting a bounded UTF-8 range.
+    pub(crate) async fn support_excerpt(
+        &self,
+        root: &str,
+        key: &str,
+        size: u64,
+        digest: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<(String, bool), ArtifactError> {
+        if root != self.store.inner.objects.root_id
+            || size > 104857600
+            || limit == 0
+            || limit > 65536
+        {
+            return Err(ArtifactError::Invalid);
+        }
+        let slot = self
+            .store
+            .inner
+            .slots
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| ArtifactError::Busy)?;
+        let bytes = self.store.inner.objects.read(key, size).await?.to_bytes();
+        let expected = digest.to_owned();
+        tokio::task::spawn_blocking(move || {
+            let _slot = slot;
+            if hex::encode(Sha256::digest(&bytes)) != expected {
+                return Err(ArtifactError::Integrity);
+            }
+            let s = std::str::from_utf8(&bytes).map_err(|_| ArtifactError::Invalid)?;
+            if offset > s.len() || !s.is_char_boundary(offset) {
+                return Err(ArtifactError::Invalid);
+            }
+            let mut end = offset.saturating_add(limit).min(s.len());
+            while !s.is_char_boundary(end) {
+                end -= 1;
+            }
+            if end == offset && end < s.len() {
+                return Err(ArtifactError::Invalid);
+            }
+            Ok((s[offset..end].to_owned(), end < s.len()))
+        })
+        .await
+        .map_err(|_| ArtifactError::Integrity)?
+    }
+}

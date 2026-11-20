@@ -85,9 +85,12 @@ pub enum ActionPayload {
     Node(NodePayload),
     Case(case_edit::Edit),
     Price(prices::Publish),
+    SupportGrant(support::Issue),
+    SupportRevoke(support::Revoke),
 }
 mod case_edit;
 pub(super) mod prices;
+pub(super) mod support;
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct NodePayload {
@@ -143,6 +146,7 @@ impl ActionRequest {
         match self.payload {
             ActionPayload::Case(_) => "admin-case-policy-v1",
             ActionPayload::Price(_) => "admin-text-price-v1",
+            ActionPayload::SupportGrant(_) | ActionPayload::SupportRevoke(_) => "admin-support-v1",
             ActionPayload::Node(_) => POLICY,
         }
     }
@@ -150,11 +154,15 @@ impl ActionRequest {
         match self.payload {
             ActionPayload::Case(_) => "cases.read",
             ActionPayload::Price(_) => "pricing.read",
+            ActionPayload::SupportGrant(_) | ActionPayload::SupportRevoke(_) => "support.read",
             ActionPayload::Node(_) => "nodes.read",
         }
     }
     fn checker_permission(&self) -> Option<&'static str> {
         match (&self.action_type[..], &self.payload) {
+            ("support_access.grant", ActionPayload::SupportGrant(_)) => {
+                Some("support.grant.approve")
+            }
             ("pricing.publish", ActionPayload::Price(_)) => Some("pricing.publish.approve"),
             ("node.resume", ActionPayload::Node(_)) => Some("nodes.resume.approve"),
             ("case.update", ActionPayload::Case(case_edit::Edit::Close { .. })) => {
@@ -166,6 +174,12 @@ impl ActionRequest {
 
     fn permission(&self) -> Result<&'static str, AdminError> {
         match self.action_type.as_str() {
+            "support_access.grant" if matches!(self.payload, ActionPayload::SupportGrant(_)) => {
+                Ok("support.grant")
+            }
+            "support_access.revoke" if matches!(self.payload, ActionPayload::SupportRevoke(_)) => {
+                Ok("support.revoke")
+            }
             "pricing.publish" if matches!(self.payload, ActionPayload::Price(_)) => {
                 Ok("pricing.publish")
             }
@@ -201,6 +215,8 @@ impl ActionRequest {
             ActionPayload::Price(p) if self.action_type == "pricing.publish" => {
                 return p.validate(self);
             }
+            ActionPayload::SupportGrant(p) => return p.validate(self),
+            ActionPayload::SupportRevoke(p) => return p.validate(self),
             ActionPayload::Case(_) | ActionPayload::Price(_) => return Err(AdminError::Invalid),
             ActionPayload::Node(node) if id(&node.node_id) => node,
             _ => return Err(AdminError::Invalid),
@@ -426,6 +442,14 @@ fn response(doc: Value, status: StatusCode) -> Result<Response, AdminError> {
 }
 async fn target(tx: &mut Tx<'_>, request: &ActionRequest) -> Result<(i64, String), AdminError> {
     let node = match &request.payload {
+        ActionPayload::SupportGrant(p) => {
+            support::check_issue(tx, request, p).await?;
+            return Ok((1, "authorized".into()));
+        }
+        ActionPayload::SupportRevoke(p) => {
+            support::check_revoke(tx, request, p).await?;
+            return Ok((1, "issued".into()));
+        }
         ActionPayload::Price(p) => return prices::target(tx, request, p).await,
         ActionPayload::Case(edit) => return case_edit::target(tx, request, edit).await,
         ActionPayload::Node(node) => node,
@@ -579,6 +603,17 @@ async fn mutate(
     {
         return Err(AdminError::Forbidden);
     }
+    if matches!(m.request.payload, ActionPayload::SupportGrant(_))
+        && !matches!(mutation, Mutation::Cancel(_))
+        && sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM admin_support_invalidated_actions WHERE action_id=$1)",
+        )
+        .bind(action)
+        .fetch_one(&mut *tx)
+        .await?
+    {
+        return Err(AdminError::Forbidden);
+    }
     // Execution always revalidates the maker and every independent approval, even
     // for an idempotent retry after grants have been revoked.
     if matches!(mutation, Mutation::Execute(_) | Mutation::Decide(_)) {
@@ -665,6 +700,21 @@ async fn mutate(
                 }
                 let (version, node_state) = target(&mut tx, &m.request).await?;
                 match &m.request.payload {
+                    ActionPayload::SupportGrant(p) => {
+                        let maker = text(&m.doc, "requested_by")?;
+                        let checker = text(&m.doc["approvals"][0], "approver_id")?;
+                        let grant = support::issue(&mut tx, p, action, maker, checker).await?;
+                        deadline = deadline.min(support::seconds(&p.expires_at)?);
+                        m.doc["business_ref"] = json!(grant);
+                        m.doc["state"] = json!("succeeded");
+                        why = "Scoped support grant issued".into();
+                    }
+                    ActionPayload::SupportRevoke(p) => {
+                        support::revoke(&mut tx, p, action).await?;
+                        m.doc["business_ref"] = json!(p.grant_id);
+                        m.doc["state"] = json!("succeeded");
+                        why = "Scoped support grant revoked".into();
+                    }
                     ActionPayload::Price(p) => {
                         let checker = text(&m.doc["approvals"][0], "approver_id")?;
                         prices::publish(&mut tx, p, action, checker, principal).await?;
