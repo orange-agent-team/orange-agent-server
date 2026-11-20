@@ -212,6 +212,17 @@ pub(super) async fn create(
         id
     } else {
         if let Some(m) = &c.model {
+            if let Some(family) = m
+                .tool
+                .as_ref()
+                .and_then(|c| crate::hosted_connectors::family(&c.name))
+                && !super::model_connectors::available(&identity, &owner, family, tx).await?
+            {
+                return Err(UserApiError(
+                    StatusCode::FORBIDDEN,
+                    "CONNECTOR_SOURCE_REQUIRED",
+                ));
+            }
             crate::store::lock_model_invocation(tx, &owner, &m.invocation_id).await?;
         }
         let budget=sqlx::query("SELECT root_budget_id FROM budget_roots WHERE root_budget_id=$1 AND owner_id=$2 AND state='active' FOR SHARE")

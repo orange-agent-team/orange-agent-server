@@ -19,7 +19,7 @@ fn registered(i: &UserIdentity, owner: &str, id: &str) -> Result<Arc<Registered>
         .cloned()
         .ok_or_else(missing)
 }
-async fn live(
+pub(super) async fn live(
     i: &UserIdentity,
     g: &mut UserSessionGuard,
     run: &str,
@@ -194,10 +194,24 @@ pub(super) async fn perform(
     body: Result<Json<Action>, JsonRejection>,
 ) -> Result<Json<Value>, UserApiError> {
     let Json(action) = body.map_err(|_| AuthError::Invalid)?;
-    let req = key(&headers)?;
+    perform_checked(i, run, id, headers, action, None).await
+}
+pub(super) async fn perform_checked(
+    i: Arc<UserIdentity>,
+    run: String,
+    id: String,
+    headers: HeaderMap,
+    action: Action,
+    permit: Option<&super::model_connectors::ReadPermit<'_>>,
+) -> Result<Json<Value>, UserApiError> {
+    let protected = permit.map(|p| p.key());
+    let req = protected.as_deref().unwrap_or(key(&headers)?);
     let digest = orange_protocol::request_digest("cn06.read.v1", &(&run, &id, &action))
         .map_err(|_| AuthError::Invalid)?;
     let (mut g, _) = guard(&i, &headers, &run, true, true).await?;
+    if let Some(p) = permit {
+        p.check(&mut g, &run, &id).await?;
+    }
     let source = live(&i, &mut g, &run, &id).await?;
     if let Some(prior) = admit(&mut g, &run, &id, req, &digest).await? {
         g.finish().await?;
@@ -230,6 +244,9 @@ pub(super) async fn perform(
         disable_source(&i, &source.owner, "s3", &source.digest).await?;
     }
     let mut g = delivered(&i, &headers, &run, &id, req).await?;
+    if let Some(p) = permit {
+        p.check(&mut g, &run, &id).await?;
+    }
     let data = match fetched {
         Ok(ResultData::Metadata(value)) => value,
         Ok(ResultData::Artifact { head, digest }) => {
@@ -252,6 +269,7 @@ pub(super) async fn download(
     headers: HeaderMap,
 ) -> Result<Response, UserApiError> {
     let (mut g, _) = guard(&i, &headers, &run, true, true).await?;
+
     let source = live(&i, &mut g, &run, &id).await?;
     let saved=sqlx::query("SELECT head,content_sha256 FROM s3_artifact_receipts WHERE artifact_id=$1 AND run_id=$2 AND grant_id=$3").bind(&artifact_id).bind(&run).bind(&id).fetch_optional(&mut **g.transaction()).await.map_err(db)?.ok_or_else(missing)?;
     let head: Head =

@@ -113,7 +113,7 @@ pub(super) async fn revoke(
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn authority(
+pub(super) async fn authority(
     identity: &UserIdentity,
     g: &mut UserSessionGuard,
     run: &str,
@@ -137,9 +137,23 @@ pub(super) async fn perform(
     body: Result<Json<Action>, JsonRejection>,
 ) -> Result<Json<Value>, UserApiError> {
     let Json(action) = body.map_err(|_| AuthError::Invalid)?;
+    perform_checked(identity, run, id, headers, action, None).await
+}
+pub(super) async fn perform_checked(
+    identity: Arc<UserIdentity>,
+    run: String,
+    id: String,
+    headers: HeaderMap,
+    action: Action,
+    permit: Option<&super::model_connectors::ReadPermit<'_>>,
+) -> Result<Json<Value>, UserApiError> {
     let (mut g, _) = guard(&identity, &headers, &run, true, true).await?;
+    if let Some(p) = permit {
+        p.check(&mut g, &run, &id).await?;
+    }
     let (s, views) = authority(&identity, &mut g, &run, &id).await?;
-    let request = key(&headers)?;
+    let protected = permit.map(|p| p.key());
+    let request = protected.as_deref().unwrap_or(key(&headers)?);
     capacity(&mut g, &run).await?;
     let tx = g.transaction();
     let inserted=sqlx::query("INSERT INTO pg_view_calls(run_id,request_key,grant_id,until_at) VALUES($1,$2,$3,clock_timestamp()+interval '35 seconds') ON CONFLICT DO NOTHING").bind(&run).bind(request).bind(&id).execute(&mut **tx).await.map_err(db)?;
@@ -155,6 +169,9 @@ pub(super) async fn perform(
         disable_source(&identity, &s.owner_id, "postgres", &s.digest).await?;
     }
     let (mut g, _) = guard(&identity, &headers, &run, true, true).await?;
+    if let Some(p) = permit {
+        p.check(&mut g, &run, &id).await?;
+    }
     authority(&identity, &mut g, &run, &id).await?;
     let current=sqlx::query("UPDATE pg_view_calls SET finished_at=clock_timestamp() WHERE run_id=$1 AND request_key=$2 AND finished_at IS NULL AND until_at>clock_timestamp()").bind(&run).bind(request).execute(&mut **g.transaction()).await.map_err(db)?;
     if current.rows_affected() != 1 {

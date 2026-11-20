@@ -28,8 +28,8 @@ impl ArtifactStore {
                 .ok_or(ArtifactError::Forbidden)?;
         authority::scope(&mut tx, actor, &owner, false).await?;
         let row=sqlx::query("SELECT r.status,r.root_budget_id,r.input_version_id AS original_version,coalesce(turn.version_id,r.input_version_id) AS input_version_id,coalesce(turn.upload_id,initial_upload.upload_id) AS current_upload_id,
-            p.model_version,p.price_version,coalesce(turn.invocation_id,p.invocation_id) AS invocation_id,p.output_limit,cap.execution_digest AS tool_digest,
-            revoked.receipt_id AS revoked_directory,turn.projection_digest AS request_projection_digest,j.job_id,tool.run_id AS tool_response,op.state AS tool_state,
+            p.model_version,p.price_version,coalesce(turn.invocation_id,p.invocation_id) AS invocation_id,p.output_limit,COALESCE(cap.execution_digest,cp.execution_digest) AS tool_digest,COALESCE(cp.tool_name,'list_directory') AS tool_name,
+            revoked.receipt_id AS revoked_directory,turn.projection_digest AS request_projection_digest,j.job_id,COALESCE(tool.run_id,cc.run_id) AS tool_response,COALESCE(op.state,ce.state) AS tool_state,
             f.commit_id,a.state AS result_state,src.state AS source_state,coalesce(turn.ordinal,1) AS ordinal,prepared.state AS prepared_state,
             EXISTS(SELECT 1 FROM cloud_continuation_options opt WHERE opt.run_id=r.run_id) AS continuing
             FROM cloud_runs r JOIN cloud_model_plans p USING(run_id,owner_id) JOIN artifacts src ON src.artifact_id=r.input_artifact_id
@@ -37,7 +37,7 @@ impl ArtifactStore {
             LEFT JOIN LATERAL(SELECT t.* FROM cloud_model_turns t WHERE t.run_id=r.run_id ORDER BY t.ordinal DESC LIMIT 1) turn ON true
             LEFT JOIN artifacts prepared ON prepared.artifact_id=turn.artifact_id AND prepared.version_id=turn.version_id
             LEFT JOIN cloud_job_turns j ON j.turn_id=turn.turn_id LEFT JOIN cloud_directory_capabilities cap ON cap.run_id=r.run_id
-            LEFT JOIN cloud_directory_revocations revoked ON revoked.run_id=r.run_id LEFT JOIN cloud_tool_responses tool ON tool.run_id=r.run_id
+            LEFT JOIN cloud_connector_plans cp ON cp.run_id=r.run_id LEFT JOIN cloud_connector_model_commits cc ON cc.run_id=r.run_id LEFT JOIN cloud_connector_effect_receipts ce ON ce.run_id=r.run_id LEFT JOIN cloud_directory_revocations revoked ON revoked.run_id=r.run_id LEFT JOIN cloud_tool_responses tool ON tool.run_id=r.run_id
             LEFT JOIN cloud_operation_intents intent ON intent.run_id=r.run_id LEFT JOIN cloud_operation_state op ON op.operation_id=intent.operation_id
             LEFT JOIN cloud_model_results f ON f.run_id=r.run_id AND f.job_id=j.job_id LEFT JOIN artifacts a ON a.artifact_id=f.artifact_id AND a.version_id=f.version_id
             WHERE r.run_id=$1 AND r.owner_id=$2 AND r.user_id=$3")
@@ -113,7 +113,8 @@ impl ArtifactStore {
                 json!(row.try_get::<String, _>("original_version")?);
         }
         if let Some(digest) = row.try_get::<Option<String>, _>("tool_digest")? {
-            result["tool"] = json!({"name":crate::cloud_tools::NAME,"execution_digest":digest});
+            result["tool"] =
+                json!({"name":row.try_get::<String,_>("tool_name")?,"execution_digest":digest});
         }
         if let Some(job) = job {
             result["job_id"] = json!(job);

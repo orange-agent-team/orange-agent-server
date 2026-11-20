@@ -18,6 +18,7 @@ struct Api {
     downloads: Arc<Semaphore>,
 }
 pub fn router(identity: UserIdentity, store: ArtifactStore) -> Router {
+    let connectors = crate::auth::routes::hosted_connector_router(identity.clone(), store.clone());
     Router::new()
         .route("/api/v1/agent/runs/{run}/model", get(cloud_status))
         .route(
@@ -79,6 +80,7 @@ pub fn router(identity: UserIdentity, store: ArtifactStore) -> Router {
             store,
             downloads: Arc::new(Semaphore::new(2)),
         })
+        .merge(connectors)
 }
 struct Error(StatusCode, &'static str);
 async fn prices(State(api): State<Api>, headers: HeaderMap) -> Result<Response, Error> {

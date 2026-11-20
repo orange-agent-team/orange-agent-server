@@ -8,6 +8,7 @@ pub mod cloud_node;
 mod cloud_tools;
 mod connector_file;
 pub mod events;
+mod hosted_connectors;
 pub mod http;
 pub mod meter_bootstrap;
 pub mod pg_view_sources;

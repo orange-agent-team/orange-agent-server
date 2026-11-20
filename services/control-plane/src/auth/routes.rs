@@ -20,8 +20,16 @@ pub async fn expire_cloud_workspaces(pool: &sqlx::PgPool) -> Result<usize, sqlx:
 }
 #[path = "connector_access.rs"]
 mod connector_access;
+#[path = "model_connectors.rs"]
+mod model_connectors;
 #[path = "pg_connectors.rs"]
 mod pg_connectors;
+pub(crate) fn hosted_connector_router(
+    i: UserIdentity,
+    s: crate::artifacts::ArtifactStore,
+) -> Router {
+    model_connectors::router(i, s)
+}
 #[path = "s3_connectors.rs"]
 mod s3_connectors;
 #[path = "support.rs"]
@@ -52,6 +60,10 @@ use serde::Deserialize;
 use std::sync::Arc;
 pub fn router(identity: UserIdentity) -> Router {
     Router::new()
+        .route(
+            "/api/v1/agent/connector-tools",
+            get(model_connectors::catalog),
+        )
         .route(
             "/api/v1/agent/runs/{run}/connectors/s3",
             get(s3_connectors::list).post(s3_connectors::grant),

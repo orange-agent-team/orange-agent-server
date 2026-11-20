@@ -39,11 +39,18 @@ fn disabled(v: &bool) -> bool {
 }
 impl Selection {
     pub(crate) fn valid(&self) -> bool {
-        (!self.continue_after_tool || self.tool.is_some())
+        (!self.continue_after_tool
+            || self
+                .tool
+                .as_ref()
+                .is_some_and(|t| t.name == crate::cloud_tools::NAME))
             && self.tool.as_ref().is_none_or(|t| {
-                t.name == crate::cloud_tools::NAME
-                    && crate::cloud_tools::stamp()
+                if t.name == crate::cloud_tools::NAME {
+                    crate::cloud_tools::stamp()
                         .is_ok_and(|(_, digest, _)| digest == t.execution_digest)
+                } else {
+                    crate::hosted_connectors::digest(&t.name).is_ok_and(|d| d == t.execution_digest)
+                }
             })
             && valid_id(&self.price_version)
             && valid_id(&self.model_version)
@@ -68,12 +75,16 @@ impl Selection {
             || req.messages[0].tool_call_id.is_some()
             || !match &self.tool {
                 None => req.tools.is_empty(),
-                Some(_) => {
+                Some(choice) => {
                     req.tools.len() == 1
                         && serde_json::to_value(&req.tools[0]).ok()
-                            == crate::cloud_tools::definition()
-                                .ok()
-                                .and_then(|v| serde_json::to_value(v).ok())
+                            == (if choice.name == crate::cloud_tools::NAME {
+                                crate::cloud_tools::definition()
+                            } else {
+                                crate::hosted_connectors::definition(&choice.name)
+                            })
+                            .ok()
+                            .and_then(|v| serde_json::to_value(v).ok())
                 }
             }
         {
@@ -116,14 +127,24 @@ pub(crate) async fn register(
         return Err(StoreError::Conflict);
     }
     if let Some(choice) = &s.tool {
-        let (version, digest, policy) =
-            crate::cloud_tools::stamp().map_err(|_| StoreError::Invalid)?;
-        if choice.execution_digest != digest {
-            return Err(StoreError::Conflict);
-        }
-        sqlx::query("INSERT INTO cloud_directory_capabilities(run_id,capability_id,workspace_id,tool_version,execution_digest,policy_version,created_by)
+        if let Some(family) = crate::hosted_connectors::family(&choice.name) {
+            if crate::hosted_connectors::digest(&choice.name).map_err(|_| StoreError::Invalid)?
+                != choice.execution_digest
+            {
+                return Err(StoreError::Conflict);
+            }
+            sqlx::query("INSERT INTO cloud_connector_plans(run_id,tool_name,connector_kind,execution_digest) VALUES($1,$2,$3,$4)")
+                .bind(run).bind(&choice.name).bind(family).bind(&choice.execution_digest).execute(&mut **tx).await?;
+        } else {
+            let (version, digest, policy) =
+                crate::cloud_tools::stamp().map_err(|_| StoreError::Invalid)?;
+            if choice.execution_digest != digest {
+                return Err(StoreError::Conflict);
+            }
+            sqlx::query("INSERT INTO cloud_directory_capabilities(run_id,capability_id,workspace_id,tool_version,execution_digest,policy_version,created_by)
             SELECT r.run_id,$2,w.workspace_id,$3,$4,$5,r.user_id FROM cloud_runs r JOIN cloud_workspaces w USING(run_id) WHERE r.run_id=$1")
             .bind(run).bind(uuid::Uuid::new_v4().to_string()).bind(version).bind(digest).bind(policy).execute(&mut **tx).await?;
+        }
     }
     if s.continue_after_tool {
         sqlx::query("INSERT INTO cloud_continuation_options(run_id,authorized_by) SELECT run_id,user_id FROM cloud_runs WHERE run_id=$1")
@@ -135,7 +156,7 @@ pub(crate) async fn selection(
     tx: &mut Tx<'_>,
     run: &str,
 ) -> Result<Option<Selection>, sqlx::Error> {
-    let row=sqlx::query("SELECT p.price_version,p.model_version,p.invocation_id,p.output_limit,c.execution_digest,EXISTS(SELECT 1 FROM cloud_continuation_options o WHERE o.run_id=p.run_id) AS followup FROM cloud_model_plans p LEFT JOIN cloud_directory_capabilities c USING(run_id) WHERE p.run_id=$1")
+    let row=sqlx::query("SELECT p.price_version,p.model_version,p.invocation_id,p.output_limit,COALESCE(c.execution_digest,cp.execution_digest) AS execution_digest,COALESCE(cp.tool_name,'list_directory') AS tool_name,EXISTS(SELECT 1 FROM cloud_continuation_options o WHERE o.run_id=p.run_id) AS followup FROM cloud_model_plans p LEFT JOIN cloud_directory_capabilities c USING(run_id) LEFT JOIN cloud_connector_plans cp USING(run_id) WHERE p.run_id=$1")
         .bind(run).fetch_optional(&mut **tx).await?;
     row.map(|r| {
         Ok(Selection {
@@ -146,7 +167,7 @@ pub(crate) async fn selection(
             tool: r
                 .try_get::<Option<String>, _>("execution_digest")?
                 .map(|execution_digest| crate::cloud_tools::Choice {
-                    name: crate::cloud_tools::NAME.into(),
+                    name: r.get("tool_name"),
                     execution_digest,
                 }),
             output_limit: r.try_get::<i32, _>("output_limit")? as u32,
@@ -347,6 +368,9 @@ pub(crate) async fn output_access(tx: &mut Tx<'_>, artifact: &str) -> Result<(),
     Ok(())
 }
 pub(crate) async fn reconcile_one(pool: &sqlx::PgPool) -> Result<bool, sqlx::Error> {
+    if crate::hosted_connectors::reconcile(pool).await? {
+        return Ok(true);
+    }
     let mut tx = pool.begin().await?;
     let row=sqlx::query("SELECT r.run_id,w.workspace_id,m.job_id,jt.turn_id,turn.ordinal,j.execution_state,j.settlement_state,r.owner_id,r.user_id,p.model_version
         FROM cloud_runs r JOIN cloud_workspaces w USING(run_id) JOIN cloud_model_jobs m USING(run_id)
@@ -413,6 +437,14 @@ pub(crate) async fn reconcile_one(pool: &sqlx::PgPool) -> Result<bool, sqlx::Err
                     (SELECT 1 FROM cloud_directory_revocations v WHERE v.run_id=c.run_id)")
                     .bind(&run).bind(&job).bind(proof.try_get::<String,_>("commit_id")?).bind(proof.try_get::<String,_>("artifact_id")?)
                     .bind(proof.try_get::<String,_>("version_id")?).bind(proof.try_get::<String,_>("response_digest")?).bind(row.try_get::<i32,_>("ordinal")?).execute(&mut *tx).await?.rows_affected();
+                let count = if count == 0 && row.try_get::<i32, _>("ordinal")? == 1 {
+                    sqlx::query("INSERT INTO cloud_connector_model_commits(run_id,job_id,commit_id,artifact_id,version_id,response_digest)
+                        SELECT run_id,$2,$3,$4,$5,$6 FROM cloud_connector_plans WHERE run_id=$1").bind(&run).bind(&job)
+                        .bind(proof.try_get::<String,_>("commit_id")?).bind(proof.try_get::<String,_>("artifact_id")?).bind(proof.try_get::<String,_>("version_id")?)
+                        .bind(proof.try_get::<String,_>("response_digest")?).execute(&mut *tx).await?.rows_affected()
+                } else {
+                    count
+                };
                 if count == 1 {
                     let rev:i64=sqlx::query_scalar("UPDATE cloud_runs SET status='waiting_approval',version=version+1 WHERE run_id=$1 RETURNING version")
                         .bind(&run).fetch_one(&mut *tx).await?;
