@@ -21,7 +21,7 @@ pub(super) async fn lookup(
     id: &str,
     chunk: Option<i32>,
 ) -> Result<Option<sqlx::postgres::PgRow>, ArtifactError> {
-    Ok(sqlx::query("SELECT g.grant_id,g.author_id,g.invocation_id,g.root_budget_id,g.upload_id,g.region_id,g.observation_id,g.projection_digest,g.request_digest,g.organization_policy,g.acl_version,g.measurement,g.chunk_digests[$3] AS chunk_sha,floor(extract(epoch FROM g.expires_at))::bigint AS expires,
+    Ok(sqlx::query("SELECT g.grant_id,g.author_id,g.language,g.invocation_id,g.root_budget_id,g.upload_id,g.region_id,g.observation_id,g.projection_digest,g.request_digest,g.organization_policy,g.acl_version,g.measurement,g.chunk_digests[$3] AS chunk_sha,floor(extract(epoch FROM g.expires_at))::bigint AS expires,
         CASE WHEN x.grant_id IS NOT NULL THEN 'revoked' WHEN g.expires_at<=clock_timestamp() THEN 'expired' ELSE 'active' END AS grant_state
         FROM transcription_input_grants g LEFT JOIN transcription_input_revocations x ON x.owner_id=g.owner_id AND x.grant_id=g.grant_id AND x.revoked_by=g.author_id
         WHERE g.owner_id=$1 AND g.grant_id=$2")

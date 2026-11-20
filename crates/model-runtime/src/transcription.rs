@@ -82,7 +82,7 @@ fn language_ok(s: &str) -> bool {
     (2..=3).contains(&s.len()) && s.bytes().all(|c| c.is_ascii_lowercase())
 }
 impl Measure {
-    fn validate(&self) -> Result<(), Error> {
+    pub fn validate(&self) -> Result<(), Error> {
         let rate = u64::from(self.sample_rate);
         if self.preprocessing != "mono-16khz-s16-f32-v1"
             || !(8000..=192000).contains(&rate)

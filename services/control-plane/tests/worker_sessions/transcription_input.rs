@@ -107,47 +107,48 @@ async fn consent_and_confirmed_lease_gate_every_real_audio_chunk() {
     let identity = UserIdentity::discover(db.pool().clone(), cfg)
         .await
         .expect("actual OIDC discovery");
+    let users = orange_control_plane::auth::routes::router(identity.clone());
     let app = http::build_router(
         identity,
         store.clone(),
         Some(AudioMeter::from_file(&config).expect("meter")),
-    );
+    )
+    .merge(users);
     let reader = store.reader();
     let server = Running::start_with_input(db, Some(reader.clone())).await;
     let mut raw = server
         .client(Some(&d.certificate))
         .await
         .expect("device TLS");
-    let mut h = execution_cases::execution_hello(&d.node, 2);
-    if let Some(worker_frame::Body::Hello(body)) = &mut h.body {
-        body.node_control_version = 2;
-        body.rejection_receipts_version = 1;
-        body.input_artifacts_version = 1;
-    }
-    let (sender, mut stream) = control(&mut raw, h).await.expect("control");
-    let w = welcome(&mut stream).await;
+    use orange_worker::{
+        broker::{ApprovedProfile, Broker, BrokerConfig, VerifiedPeer},
+        control::{ControlConnection, TranscriptionDownload},
+        execution_journal::ExecutionJournal,
+        node_journal::NodeJournal,
+    };
+    let private = tempfile::tempdir().expect("worker state");
+    std::fs::set_permissions(private.path(), std::fs::Permissions::from_mode(0o700))
+        .expect("private journals");
+    let mut node = NodeJournal::open(&private.path().join("node.sqlite"), d.node.clone())
+        .expect("node journal");
+    let mut journal =
+        ExecutionJournal::open(&private.path().join("execution.sqlite"), d.node.clone())
+            .expect("execution journal");
+    let mut conn = ControlConnection::connect_execution_with_inputs(
+        worker_config(&server, &d),
+        &mut node,
+        &mut journal,
+    )
+    .await
+    .expect("negotiated lease-bound input");
+    let w = conn.identity().clone();
     let profile = Uuid::new_v4().to_string();
     sqlx::query("INSERT INTO reviewed_execution_profiles(execution_profile_id,model_version_id,model_sha256,execution_profile_digest) VALUES($1,$2,$3,$4)")
       .bind(&profile).bind(fact.profile.model_version).bind(&fact.profile.model_sha256).bind(&fact.execution_profile_digest).execute(db.pool()).await.expect("independent review fixture");
-    let observation = raw
-        .report_transcription_observation(worker::TranscriptionObservation {
-            observation_version: 1,
-            session_id: w.session_id.clone(),
-            request_id: Uuid::new_v4().to_string(),
-            execution_profile_id: profile.clone(),
-            execution_profile_digest: fact.execution_profile_digest.clone(),
-            model_version: fact.profile.model_version.into(),
-            model_sha256: fact.profile.model_sha256.clone(),
-            sample_sha256: fact.sample_sha256.clone(),
-            duration_ms: fact.sample_duration_ms,
-            normalized_samples: fact.normalized_samples,
-            transcript_sha256: fact.transcript_sha256.clone(),
-            compute_type: fact.profile.compute_type.clone(),
-            profile_descriptor_json: serde_json::to_vec(&fact.profile).expect("descriptor"),
-        })
+    let observation = conn
+        .report_transcription_profile(&profile, &fact)
         .await
-        .expect("observation")
-        .into_inner();
+        .expect("actual observation");
     let raw_audio =
         std::fs::read(std::env::var("ORANGE_AUDIO_SAMPLE").expect("sample")).expect("audio");
     let base = format!("/api/v1/owners/{}", buyer.owner);
@@ -307,6 +308,45 @@ async fn consent_and_confirmed_lease_gate_every_real_audio_chunk() {
             409,
         )
         .await;
+    if let Ok(driver) = std::env::var("ORANGE_AUDIO_CONSENT_BROWSER") {
+        use tokio::io::AsyncWriteExt;
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("owned API");
+        let addr = listener.local_addr().expect("port");
+        let (shutdown, done) = oneshot::channel();
+        let router = app.clone();
+        let api = tokio::spawn(async move {
+            axum::serve(listener, router)
+                .with_graceful_shutdown(async {
+                    let _ = done.await;
+                })
+                .await
+                .expect("API");
+        });
+        let fixture = json!({"origin":buyer.origin,"api":format!("http://{addr}"),"token":buyer.token,"upload":upload,"node":d.node,
+            "observation":observation.observation_id,"budget":budget.root_budget_id,"region":"local-test",
+            "screenshot":std::env::var("ORANGE_AUDIO_CONSENT_SCREENSHOT").expect("output")});
+        let mut browser =
+            tokio::process::Command::new(std::env::var("ORANGE_AUDIO_CONSENT_NODE").expect("Node"))
+                .arg(driver)
+                .stdin(std::process::Stdio::piped())
+                .kill_on_drop(true)
+                .spawn()
+                .expect("actual Chrome driver");
+        let mut stdin = browser.stdin.take().expect("private fixture pipe");
+        stdin
+            .write_all(&serde_json::to_vec(&fixture).expect("fixture"))
+            .await
+            .expect("send fixture");
+        drop(stdin);
+        let status=tokio::time::timeout(Duration::from_secs(90),async{
+            loop{tokio::select!{r=browser.wait()=>break r.expect("driver exit"),_=tokio::time::sleep(Duration::from_secs(3))=>{
+                conn.poll_execution("audio-input-test",&mut node,&mut journal).await.expect("maintain observed peer during UI selection");
+            }}}
+        }).await.expect("browser deadline");
+        let _ = shutdown.send(());
+        api.await.expect("API stopped");
+        assert!(status.success(), "browser flow");
+    }
     let no_jobs: i64 = sqlx::query_scalar("SELECT count(*) FROM jobs")
         .fetch_one(db.pool())
         .await
@@ -332,10 +372,29 @@ async fn consent_and_confirmed_lease_gate_every_real_audio_chunk() {
       VALUES($1,$2,$3,$4,'transcription',$5,$6,'queued',0,0,0,0,$7)").bind(&job).bind(&buyer.owner).bind(&budget.root_budget_id).bind(&invocation)
       .bind(&quote).bind(orange_protocol::request_digest("submit_job",&submitted).expect("digest")).bind(&buyer.user).execute(&mut *tx).await.expect("queued job fixture");
     tx.commit().await.expect("queue");
-    heartbeat(&sender, &mut stream, &d.node, &w)
-        .await
-        .expect("poll");
-    let assignment = execution_cases::assignment(&mut stream).await;
+    let record = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let poll = conn
+                .poll_execution("audio-input-test", &mut node, &mut journal)
+                .await
+                .expect("actual control poll");
+            if let Some(record) = poll.assignment {
+                break record;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("real assignment");
+    use prost::Message;
+    let assignment_bytes: Vec<u8> =
+        sqlx::query_scalar("SELECT assignment FROM worker_execution_attempts WHERE command_id=$1")
+            .bind(&record.command_id)
+            .fetch_one(db.pool())
+            .await
+            .expect("persisted assignment");
+    let assignment =
+        worker::Assignment::decode(assignment_bytes.as_slice()).expect("wire assignment");
     assert_eq!(assignment.lease.as_ref().expect("lease").job_id, job);
     let read = worker::TranscriptionInputRead {
         version: 1,
@@ -349,8 +408,58 @@ async fn consent_and_confirmed_lease_gate_every_real_audio_chunk() {
         raw.read_transcription_input(read.clone()).await.is_err(),
         "unstarted lease"
     );
-    execution_cases::send(&sender, &execution_cases::ack(&assignment)).await;
-    execution_cases::start(&mut stream).await;
+    let mut broker = Broker::open(
+        &private.path().join("broker.sqlite"),
+        BrokerConfig {
+            owner_identity: "audio-provider".into(),
+            devices: vec!["cpu".into()],
+            approved_profiles: vec![ApprovedProfile {
+                id: profile.clone(),
+                model_sha256: fact.profile.model_sha256.clone(),
+                execution_digest: fact.execution_profile_digest.clone(),
+            }],
+        },
+    )
+    .expect("local Broker");
+    broker
+        .bind_enrolled_node(&d.node)
+        .expect("fixture enrollment");
+    broker
+        .reconcile("cpu", &super::policy_cases::PolicyProbeFixture)
+        .await
+        .expect("device probe fixture");
+    broker.set_remote_allowed(true).expect("provider opt-in");
+    let supervisor = broker
+        .register_supervisor(
+            VerifiedPeer::from_verified_os_identity(
+                "audio-provider".into(),
+                format!("test-{}", Uuid::new_v4()),
+                Uuid::new_v4().to_string(),
+                "n".repeat(32),
+            )
+            .expect("OS peer fixture"),
+        )
+        .expect("supervisor");
+    conn.reserve_execution(
+        &mut journal,
+        &mut broker,
+        &supervisor,
+        "cpu",
+        &record.command_id,
+    )
+    .expect("real reservation");
+    let cloud = conn
+        .authorize_execution(
+            &mut journal,
+            &mut node,
+            "audio-input-test",
+            &record.command_id,
+        )
+        .await
+        .expect("real start grant");
+    let started = cloud
+        .confirm(&mut journal, &mut broker, &supervisor)
+        .expect("confirmed durable start");
     let mut stale = read.clone();
     stale.lease.as_mut().expect("lease").fencing_token += 1;
     assert!(
@@ -367,22 +476,45 @@ async fn consent_and_confirmed_lease_gate_every_real_audio_chunk() {
             .await
             .is_err()
     );
-    let mut received = vec![];
-    while received.len() < raw_audio.len() {
-        let mut page = read.clone();
-        page.offset = received.len() as u64;
-        let chunk = raw
-            .read_transcription_input(page)
-            .await
-            .expect("authorized audio range")
-            .into_inner();
-        assert_eq!(chunk.offset, received.len() as u64);
-        assert_eq!(chunk.chunk_sha256, hex::encode(Sha256::digest(&chunk.data)));
-        assert_eq!(chunk.version_id, available["version_id"]);
-        received.extend(chunk.data);
-        assert_eq!(chunk.eof, received.len() == raw_audio.len());
-    }
-    assert_eq!(received, raw_audio);
+    let mut transfer = TranscriptionDownload::for_record(&grant, &record).expect("transfer");
+    while !conn
+        .read_transcription_chunk(&journal, &started, &record.command_id, &mut transfer)
+        .await
+        .expect("verified mTLS range")
+    {}
+    let received = transfer.finish().expect("exact complete input");
+    assert_eq!(received.audio, raw_audio);
+    assert_eq!(received.language.as_deref(), Some("en"));
+    assert_eq!(received.accepted.measure.duration_ms, 11000);
+    let cfg: Value =
+        serde_json::from_slice(&std::fs::read(&config).expect("probe config")).expect("paths");
+    let path_of = |k: &str| std::path::Path::new(cfg[k].as_str().expect("path"));
+    let model = orange_model_runtime::transcription::Client::new(
+        path_of("python"),
+        path_of("model_cache"),
+        path_of("private_slot"),
+    )
+    .expect("local backend");
+    let (_cancel, watch) = tokio::sync::watch::channel(false);
+    let candidate = tokio::time::timeout_at(
+        tokio::time::Instant::from_std(started.stop_at()),
+        model.transcribe(
+            &received.audio,
+            &received.accepted,
+            received.language.as_deref(),
+            watch,
+        ),
+    )
+    .await
+    .expect("within local lease")
+    .expect("real provider-side inference");
+    assert_eq!(candidate.measure, received.accepted.measure);
+    let transcript = candidate.transcript.expect("complete candidate");
+    assert_eq!(transcript.language, "en");
+    assert_eq!(
+        hex::encode(Sha256::digest(transcript.text.as_bytes())),
+        fact.transcript_sha256
+    );
     let step = orange_protocol::pricing::AUDIO_INPUT_CHUNK_BYTES;
     let mut next = read.clone();
     next.offset = step as u64;
@@ -466,13 +598,16 @@ async fn consent_and_confirmed_lease_gate_every_real_audio_chunk() {
             .await,
         stopped
     );
-    let revokes: i64 = sqlx::query_scalar("SELECT count(*) FROM transcription_input_revocations")
-        .fetch_one(db.pool())
-        .await
-        .expect("one revocation");
+    let revokes: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM transcription_input_revocations WHERE grant_id IN ($1,$2)",
+    )
+    .bind(&grant)
+    .bind(&early)
+    .fetch_one(db.pool())
+    .await
+    .expect("one revocation");
     assert_eq!(revokes, 2);
-    drop(sender);
-    drop(stream);
+    drop(conn);
     drop(raw);
     drop(foreign);
     server.stop().await;

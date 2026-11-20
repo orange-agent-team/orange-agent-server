@@ -171,4 +171,6 @@ message TranscriptionInputChunk {
   uint32 version = 1; string grant_id = 2; string projection_digest = 3;
   string artifact_id = 4; string version_id = 5; string audio_sha256 = 6;
   uint64 size_bytes = 7; uint64 offset = 8; bytes data = 9; string chunk_sha256 = 10; bool eof = 11;
+  // These are present only on the first chunk. An empty language requests automatic detection.
+  bytes measurement_json = 12; string language = 13;
 }

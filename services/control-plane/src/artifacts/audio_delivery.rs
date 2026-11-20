@@ -5,6 +5,8 @@ use orange_protocol::{grpc::worker, pricing::AUDIO_INPUT_CHUNK_BYTES};
 
 #[derive(PartialEq, Eq)]
 struct AuthorizedChunk {
+    measurement: Vec<u8>,
+    language: String,
     key: String,
     artifact: String,
     version: String,
@@ -113,6 +115,19 @@ impl ArtifactReader {
         let key:String=sqlx::query_scalar("SELECT published_key FROM artifact_transfers WHERE transfer_id=$1 AND artifact_id=$2 AND state='attached' AND NOT published_deleted")
             .bind(transfer).bind(&source.artifact_id).fetch_optional(&mut **tx).await?.ok_or(ArtifactError::Forbidden)?;
         Ok(AuthorizedChunk {
+            measurement: if r.offset == 0 {
+                serde_json::to_vec(&grant.try_get::<serde_json::Value, _>("measurement")?)
+                    .map_err(|_| ArtifactError::Integrity)?
+            } else {
+                Vec::new()
+            },
+            language: if r.offset == 0 {
+                grant
+                    .try_get::<Option<String>, _>("language")?
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            },
             key,
             artifact: source.artifact_id,
             version: source.version_id,
@@ -184,6 +199,8 @@ impl ArtifactReader {
             eof: r.offset + data.len() as u64 == expected.size,
             data,
             chunk_sha256: expected.chunk_sha,
+            measurement_json: expected.measurement,
+            language: expected.language,
         })
     }
 }

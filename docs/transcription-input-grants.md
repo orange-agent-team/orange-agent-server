@@ -14,4 +14,4 @@
 
 Worker 每次读取需满足现有设备身份、epoch、节点策略版本、租约栅栏与期限、Job、报价执行计划，以及当前输入授权。读取实际对象后，交付前再次检查源 ACL、目标、预算、授权和租约。响应中的 eof、偏移、大小、版本和摘要用于校验分块与完整组装。撤回阻止之后的交付，已发出的字节受原接收方的数据使用约定约束。
 
-`python3 scripts/check-transcription-input-grants.py` 使用真实 PostgreSQL、私有对象存储、Whisper 录音、OIDC 发现、用户 HTTP 路由与 mTLS 网关。用户会话、已审核的开发 profile、排队 Job 及 Worker ACK 分别是测试夹具。正常 offer/start、分块 I/O、实际摘要检查和权限判定均由服务代码执行。测试专用暂停点位于一次真实范围读取之后，便于检查已读字节是否会在撤权后泄露。该配置尚待接入可计价的远程 Job 创建、转写交付和结算。[用户接口](../contracts/openapi/artifacts.v1.json) · [设备协议](../contracts/proto/worker.proto)
+`python3 scripts/check-transcription-input-grants.py` 使用真实 PostgreSQL、私有对象存储、Whisper 录音、OIDC 发现、用户 HTTP 路由与 mTLS 网关。用户会话、独立审核记录、已排队的零金额开发 Job 和本机设备探测是显式夹具。正常 offer、SQLite 执行日志、Broker reserve / ACK / confirm 与 mTLS 分块移交均走实际代码。Worker 可在分块之间交还控制，只有完整的原始输入摘要及预检计量通过才取得可用数据。验收在提供方用实际收到的音频运行固定的 Whisper small，核对文本摘要与完整时间段。测试专用暂停点位于一次真实范围读取之后，便于检查已读字节是否会在撤权后泄露。Chrome 验收在真实创建后丢弃第一次 HTTP 响应，通过保存的编号查回授权并撤回。该配置尚待接入能力协商与带输入引用的调度、可计价 Job 创建、最终转写产物及结算。[用户接口](../contracts/openapi/artifacts.v1.json) · [设备协议](../contracts/proto/worker.proto)
