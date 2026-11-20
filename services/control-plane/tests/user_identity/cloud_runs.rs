@@ -130,9 +130,15 @@ async fn platform_only_admission_fences_old_leases_and_holds_capacity_until_clea
     };
     let (stop, stopped) = tokio::sync::oneshot::channel();
     let db = f.pool.clone();
-    let service = tokio::spawn(cloud_host::serve(listener, db, creds, async {
-        let _ = stopped.await;
-    }));
+    let service = tokio::spawn(cloud_host::serve_with_storage(
+        listener,
+        db,
+        creds,
+        Some(store.reader()),
+        async {
+            let _ = stopped.await;
+        },
+    ));
     let offline = request(
         &f,
         "GET",
@@ -150,6 +156,7 @@ async fn platform_only_admission_fences_old_leases_and_holds_capacity_until_clea
         resource_profile_id: PROFILE.into(),
         attestation_digest: attestation.clone(),
         accept_reservations: true,
+        input_protocol_version: 1,
     };
     assert_eq!(
         host.poll(announce.clone())
@@ -328,6 +335,38 @@ async fn platform_only_admission_fences_old_leases_and_holds_capacity_until_clea
         request(&f, "GET", &endpoint, None, headers(&f)).await.1["workspace"]["status"],
         "preparing"
     );
+    assert_eq!(
+        other_host
+            .fetch_workspace_input(lease.clone())
+            .await
+            .expect_err("foreign access")
+            .code(),
+        tonic::Code::PermissionDenied
+    );
+    let probe = host::WorkspaceReady {
+        lease: Some(lease.clone()),
+        input_receipt_id: "unconfirmed".into(),
+        input_sha256: input.sha256.clone(),
+        sandbox_id: format!("oa-ws-{}", lease.allocation_id),
+        attestation_digest: attestation.clone(),
+        materialization_digest: hash_secret("fixture"),
+    };
+    assert!(host.confirm_ready(probe.clone()).await.is_err());
+    let delivery = host
+        .fetch_workspace_input(lease.clone())
+        .await
+        .expect("exact input")
+        .into_inner();
+    assert_eq!(delivery.artifact_id, input.artifact_id);
+    assert_eq!(delivery.version_id, input.version_id);
+    assert_eq!(delivery.content, b"Summarize this project.");
+    assert_eq!(
+        delivery,
+        host.fetch_workspace_input(lease.clone())
+            .await
+            .expect("same input receipt")
+            .into_inner()
+    );
     let mut stale = lease.clone();
     stale.epoch += 1;
     assert!(host.renew_workspace(stale).await.is_err());
@@ -392,6 +431,8 @@ async fn platform_only_admission_fences_old_leases_and_holds_capacity_until_clea
         .0,
         StatusCode::SERVICE_UNAVAILABLE
     );
+    assert!(host.fetch_workspace_input(lease.clone()).await.is_err());
+    assert!(host.confirm_ready(probe).await.is_err());
     let mut cleanup = host::WorkspaceCleanup {
         host_instance_id: host_id,
         run_id: run.into(),
@@ -556,7 +597,7 @@ async fn platform_only_admission_fences_old_leases_and_holds_capacity_until_clea
         .await
         .expect("Host stops accepting new work");
     assert_eq!(
-        request(&f, "POST", API, Some(body), keyed(&f, "offline"))
+        request(&f, "POST", API, Some(body.clone()), keyed(&f, "offline"))
             .await
             .0,
         StatusCode::SERVICE_UNAVAILABLE
@@ -583,13 +624,29 @@ async fn platform_only_admission_fences_old_leases_and_holds_capacity_until_clea
             &store,
             &mut host,
             host::HostPollRequest {
-                host_instance_id: lease.host_instance_id,
+                host_instance_id: lease.host_instance_id.clone(),
                 resource_profile_id: PROFILE.into(),
-                attestation_digest: attestation,
+                attestation_digest: attestation.clone(),
                 accept_reservations: true,
+                input_protocol_version: 1,
             },
             &driver,
             FsPath::new(&parents),
+        )
+        .await;
+    }
+    if let Ok(evidence) = std::env::var("ORANGE_MANAGED_HOST_EVIDENCE") {
+        managed::exercise(
+            &f,
+            &store,
+            &body,
+            managed::Setup {
+                tls,
+                port,
+                id: &lease.host_instance_id,
+                proof: &attestation,
+            },
+            FsPath::new(&evidence),
         )
         .await;
     }
@@ -752,3 +809,6 @@ async fn browser_lifecycle(
     )
     .expect("evidence");
 }
+
+#[path = "cloud_managed_node.rs"]
+mod managed;

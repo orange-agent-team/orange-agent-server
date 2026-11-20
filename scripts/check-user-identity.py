@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Real user OIDC/organization acceptance across explicitly selected Web and server checkouts."""
+from acceptance_origins import reserve_origins
 import argparse
 import os
 from pathlib import Path
@@ -15,6 +16,7 @@ import urllib.error
 ROOT=Path(__file__).resolve().parents[1]
 def main():
     parser=argparse.ArgumentParser();parser.add_argument('--web-repo',required=True,type=Path);parser.add_argument('--node',default=shutil.which('node'));args=parser.parse_args()
+    reserve_origins(43122)
     web=args.web_repo.resolve()
     if not (web/'apps/web/playwright.oidc.config.ts').is_file():raise SystemExit('Explicit user Web checkout required')
     if subprocess.check_output([args.node,'--version'],text=True).strip()!='v22.23.2':raise SystemExit('Node22.23.2 required')

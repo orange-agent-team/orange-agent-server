@@ -220,14 +220,14 @@ pub(super) async fn create(
                 "WORKSPACE_QUOTA_EXCEEDED",
             ));
         }
-        let host:String=sqlx::query_scalar("SELECT host_instance_id FROM cloud_pool_hosts h WHERE enabled AND accepting AND profile_id=$1
+        let host:String=sqlx::query_scalar("SELECT host_instance_id FROM cloud_pool_hosts h WHERE enabled AND input_protocol_version=1 AND accepting AND profile_id=$1
             AND live_until>clock_timestamp() AND credential_expires_at>clock_timestamp()
             AND (SELECT count(*) FROM cloud_workspaces w WHERE w.host_instance_id=h.host_instance_id AND w.status!='deleted')<max_workspaces
             ORDER BY host_instance_id LIMIT 1 FOR UPDATE SKIP LOCKED")
             .bind(PROFILE).fetch_optional(&mut **tx).await.map_err(db)?.ok_or_else(busy)?;
         // Re-read capacity after acquiring the host lock: the selector may have
         // used an earlier read-committed snapshot than a concurrent admission.
-        let available:bool=sqlx::query_scalar("SELECT enabled AND accepting AND live_until>clock_timestamp() AND credential_expires_at>clock_timestamp() AND
+        let available:bool=sqlx::query_scalar("SELECT enabled AND input_protocol_version=1 AND accepting AND live_until>clock_timestamp() AND credential_expires_at>clock_timestamp() AND
             (SELECT count(*) FROM cloud_workspaces w WHERE w.host_instance_id=h.host_instance_id AND w.status!='deleted')<max_workspaces
             FROM cloud_pool_hosts h WHERE host_instance_id=$1").bind(&host).fetch_one(&mut **tx).await.map_err(db)?;
         if !available {
@@ -241,7 +241,7 @@ pub(super) async fn create(
             VALUES($1,$2,$3,$4,$5,'requested',clock_timestamp()+make_interval(secs=>$6))")
             .bind(uuid::Uuid::new_v4().to_string()).bind(&id).bind(owner).bind(host).bind(PROFILE).bind(f64::from(c.workspace_ttl_seconds))
             .execute(&mut **tx).await.map_err(db)?;
-        let still_live:bool=sqlx::query_scalar("SELECT enabled AND accepting AND live_until>clock_timestamp() AND credential_expires_at>clock_timestamp()
+        let still_live:bool=sqlx::query_scalar("SELECT enabled AND input_protocol_version=1 AND accepting AND live_until>clock_timestamp() AND credential_expires_at>clock_timestamp()
             FROM cloud_pool_hosts h JOIN cloud_workspaces w USING(host_instance_id) WHERE w.run_id=$1")
             .bind(&id).fetch_one(&mut **tx).await.map_err(db)?;
         if !still_live {
@@ -354,7 +354,7 @@ pub(super) async fn capacity(
     let user = g.view().user_id.clone();
     let row=sqlx::query("SELECT coalesce((SELECT max_active FROM cloud_workspace_quotas WHERE owner_id=$1),2) AS quota,
         (SELECT count(*) FROM cloud_workspaces WHERE owner_id=$1 AND status!='deleted') AS occupied,
-        EXISTS(SELECT 1 FROM cloud_pool_hosts h WHERE h.enabled AND h.accepting AND h.profile_id=$2
+        EXISTS(SELECT 1 FROM cloud_pool_hosts h WHERE h.enabled AND h.input_protocol_version=1 AND h.accepting AND h.profile_id=$2
             AND h.live_until>clock_timestamp() AND h.credential_expires_at>clock_timestamp()
             AND (SELECT count(*) FROM cloud_workspaces w WHERE w.host_instance_id=h.host_instance_id AND w.status!='deleted')<h.max_workspaces) AS pool")
         .bind(&owner).bind(PROFILE).fetch_one(&mut **g.transaction()).await.map_err(db)?;

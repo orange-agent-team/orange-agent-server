@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Run the user consent and account tests against a newly created loopback PG database."""
+from acceptance_origins import reserve_origins
 import argparse
 import hashlib
 import json
@@ -20,6 +21,7 @@ parser.add_argument('--admin-repo',type=Path)
 parser.add_argument('--web-repo',type=Path)
 parser.add_argument('--node',type=Path,default=shutil.which('node'))
 args = parser.parse_args()
+reserve_origins(*([43112] if args.admin_repo else []),*([43122] if args.web_repo else []))
 config = json.loads(args.identity_config.read_text())
 if config.get('environment') != 'dev' or urlsplit(config['issuer']).hostname not in ('127.0.0.1', 'localhost', '::1'):
     raise SystemExit('Development identity on loopback is required')

@@ -25,10 +25,24 @@ async fn main() -> Result<(), Box<dyn Error>> {
     };
     let store = Store::connect(&env::var("DATABASE_URL")?).await?;
     store.migrate().await?;
+    let reader = if let Some(root) = env::var_os("ORANGE_CLOUD_HOST_ARTIFACT_ROOT") {
+        Some(
+            orange_control_plane::artifacts::ArtifactReader::open_local(
+                store.pool().clone(),
+                std::path::Path::new(&root),
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    cloud_host::serve(listener, store.pool().clone(), tls, async {
+    cloud_host::serve_with_storage(listener, store.pool().clone(), tls, reader.clone(), async {
         let _ = tokio::signal::ctrl_c().await;
     })
     .await?;
+    if let Some(reader) = reader {
+        reader.drain().await?;
+    }
     Ok(())
 }

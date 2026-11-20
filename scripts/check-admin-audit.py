@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Scoped audit migration/HTTP tests in an owned disposable actual local PG DB."""
+from acceptance_origins import reserve_origins
 import argparse,json,os,shutil,socket,subprocess,sys,urllib.parse,uuid,hashlib
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 parser=argparse.ArgumentParser();parser.add_argument('--database-url-file',type=Path,required=True);parser.add_argument('--identity-config',type=Path,required=True);parser.add_argument('--admin-repo',type=Path);parser.add_argument('--node',type=Path,default=shutil.which('node'));args=parser.parse_args()
+if args.admin_repo:reserve_origins(43112)
 source=urllib.parse.urlsplit(args.database_url_file.read_text().strip())
 if source.scheme not in ('postgres','postgresql') or source.hostname not in ('127.0.0.1','localhost','::1'):raise SystemExit('Explicit local PostgreSQL required')
 if not args.identity_config.is_file():raise SystemExit('Explicit private development identity configuration required')

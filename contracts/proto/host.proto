@@ -43,12 +43,16 @@ service PlatformHostPool {
   rpc ClaimWorkspace(ClaimWorkspaceRequest) returns (WorkspaceLease);
   rpc RenewWorkspace(WorkspaceLease) returns (WorkspaceLease);
   rpc ConfirmCleanup(WorkspaceCleanup) returns (CleanupReceipt);
+  rpc FetchWorkspaceInput(WorkspaceLease) returns (WorkspaceInput);
+  rpc ConfirmReady(WorkspaceReady) returns (WorkspaceReadyReceipt);
+  rpc StopWorkspace(WorkspaceStop) returns (WorkspaceReclaim);
 }
 message HostPollRequest {
   string host_instance_id = 1;
   string resource_profile_id = 2;
   string attestation_digest = 3;
   bool accept_reservations = 4;
+  uint32 input_protocol_version = 5;
 }
 message QueuedRun {
   string run_id = 1;
@@ -82,5 +86,26 @@ message CleanupReceipt { string receipt_id = 1; string workspace_id = 2; string 
 
 // Rediscover cleanup after a Host restart, including after its old lease timed out.
 message WorkspaceReclaim {
-  string run_id = 1; string workspace_id = 2; string allocation_id = 3; uint64 allocation_epoch = 4;
+  string run_id = 1; string workspace_id = 2; string allocation_id = 3; uint64 allocation_epoch = 4; string claim_command_id = 5;
+}
+
+message WorkspaceInput {
+  string receipt_id = 1; string allocation_id = 2; string artifact_id = 3; string version_id = 4;
+  string sha256 = 5; bytes content = 6;
+}
+message WorkspaceReady {
+  WorkspaceLease lease = 1; string input_receipt_id = 2; string input_sha256 = 3;
+  string sandbox_id = 4; string attestation_digest = 5; string materialization_digest = 6;
+}
+message WorkspaceReadyReceipt {
+  string receipt_id = 1; string workspace_id = 2; string allocation_id = 3; string sandbox_id = 4;
+}
+
+// Stops further use of an original allocation. The capacity remains charged
+// until the independently checked cleanup receipt arrives.
+message WorkspaceStop {
+  string host_instance_id = 1; string run_id = 2; string workspace_id = 3; string allocation_id = 4;
+  uint64 allocation_epoch = 5;
+  enum Reason { UNSPECIFIED = 0; PREPARATION_FAILED = 1; HOST_SHUTDOWN = 2; LEASE_LOST = 3; }
+  Reason reason = 6;
 }

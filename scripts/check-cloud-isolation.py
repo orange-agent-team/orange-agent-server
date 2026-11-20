@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """Qualify the pinned OCI profile in the dedicated, mount-free Colima guest."""
 import argparse
-import hashlib
+from cloud_tools import build_payload,digest
 import json
 import os
 from pathlib import Path
-import shutil
 import subprocess
 import tarfile
 import tempfile
@@ -17,13 +16,6 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--archive', type=Path, default=ROOT/'.local/gvisor-download'/policy['archive'])
 parser.add_argument('--download',action='store_true',help='Fetch a missing fixed archive from the official release URL')
 args = parser.parse_args()
-
-def digest(path):
-    h=hashlib.sha256()
-    with path.open('rb') as stream:
-        for block in iter(lambda: stream.read(1024*1024), b''):
-            h.update(block)
-    return h.hexdigest()
 
 archive=args.archive.resolve()
 if args.download and not archive.exists():
@@ -44,25 +36,12 @@ if args.download and not archive.exists():
 if not archive.is_file() or archive.stat().st_size!=policy['size_bytes'] or digest(archive)!=policy['sha256']:
     raise SystemExit('Supply the exact official archive listed in config/cloud-isolation.lock.json')
 subprocess.run(['python3',ROOT/'scripts/check-container.py'],check=True)
-rustup=shutil.which('rustup') or '/opt/homebrew/opt/rustup/bin/rustup'
-rustc=Path(subprocess.check_output([rustup,'which','--toolchain','stable','rustc'],text=True).strip())
-version=subprocess.check_output([rustc,'--version'],text=True).strip()
-if not version.startswith('rustc '+policy['rust_version']+' '):
-    raise SystemExit('The fixed Rust stable compiler is required')
-sysroot=Path(subprocess.check_output([rustc,'--print','sysroot'],text=True).strip())
-linkers=list(sysroot.glob('lib/rustlib/*/bin/rust-lld'))
-if len(linkers)!=1:
-    raise SystemExit('A single host rust-lld from the pinned compiler is required')
 result_dir=ROOT/'.local/cloud-isolation'
 result_dir.mkdir(mode=0o700,parents=True,exist_ok=True)
 with tempfile.TemporaryDirectory(dir=result_dir) as work:
     work=Path(work)
     probe=work/'probe'
-    subprocess.run([rustc,'--edition','2024','--target',policy['target'],'-C','opt-level=s','-C','strip=symbols',
-                    '-C',f'linker={linkers[0]}','-C','linker-flavor=ld.lld',ROOT/'scripts/cloud/isolation_probe.rs','-o',probe],check=True)
-    header=probe.read_bytes()[:20]
-    if header[:6]!=b'\x7fELF\x02\x01' or int.from_bytes(header[18:20],'little')!=183:
-        raise SystemExit('The qualification payload must be a Linux ARM64 ELF')
+    version=build_payload(policy,ROOT/'scripts/cloud/isolation_probe.rs',probe)
     # Only these three fixed files cross the VM boundary. No host mounts.
     with tempfile.TemporaryFile(dir=work) as payload:
         with tarfile.open(fileobj=payload,mode='w') as tar:

@@ -20,6 +20,8 @@ use tonic::{
     },
 };
 
+#[path = "cloud_host_inputs.rs"]
+mod inputs;
 #[path = "cloud_host_leases.rs"]
 mod leases;
 
@@ -31,6 +33,7 @@ pub struct HostTls {
 #[derive(Clone)]
 struct Pool {
     db: PgPool,
+    reader: Option<crate::artifacts::ArtifactReader>,
 }
 fn db_error(_: sqlx::Error) -> Status {
     Status::unavailable("host store unavailable")
@@ -63,20 +66,29 @@ impl PlatformHostPool for Pool {
         {
             return Err(Status::invalid_argument("invalid host announcement"));
         }
+        if r.input_protocol_version > 1 {
+            return Err(Status::invalid_argument("unsupported input protocol"));
+        }
+        if r.input_protocol_version == 1 && self.reader.is_none() {
+            return Err(Status::failed_precondition(
+                "workspace input storage unavailable",
+            ));
+        }
         let mut tx = self.db.begin().await.map_err(db_error)?;
         let deadline=sqlx::query_scalar::<_,i64>("UPDATE cloud_pool_hosts
-            SET live_until=LEAST(credential_expires_at,date_trunc('second',clock_timestamp())+interval '30 seconds'),accepting=$5
+            SET live_until=LEAST(credential_expires_at,date_trunc('second',clock_timestamp())+interval '30 seconds'),accepting=$5,input_protocol_version=$6
             WHERE host_instance_id=$1 AND certificate_sha256=$2 AND profile_id=$3 AND attestation_digest=$4 AND enabled
               AND credential_expires_at>clock_timestamp()+interval '1 second'
             RETURNING FLOOR(EXTRACT(EPOCH FROM live_until))::bigint")
-            .bind(&r.host_instance_id).bind(&fingerprint).bind(r.resource_profile_id).bind(r.attestation_digest).bind(r.accept_reservations)
+            .bind(&r.host_instance_id).bind(&fingerprint).bind(r.resource_profile_id).bind(r.attestation_digest).bind(r.accept_reservations&&r.input_protocol_version==1).bind(r.input_protocol_version as i32)
             .fetch_optional(&mut *tx).await.map_err(db_error)?.ok_or_else(||Status::permission_denied("host admission denied"))?;
-        let reclaim=sqlx::query("SELECT w.run_id,w.workspace_id,c.allocation_id,c.epoch FROM cloud_workspaces w
+        let reclaim=sqlx::query("SELECT w.run_id,w.workspace_id,c.allocation_id,c.epoch,c.command_id FROM cloud_workspaces w
             JOIN cloud_workspace_claims c USING(workspace_id,host_instance_id)
             WHERE w.host_instance_id=$1 AND w.status='draining' ORDER BY w.expires_at,w.workspace_id LIMIT 1")
             .bind(&r.host_instance_id).fetch_optional(&mut *tx).await.map_err(db_error)?;
         let reclaim = if let Some(row) = reclaim {
             Some(host::WorkspaceReclaim {
+                claim_command_id: row.try_get("command_id").map_err(db_error)?,
                 run_id: row.try_get("run_id").map_err(db_error)?,
                 workspace_id: row.try_get("workspace_id").map_err(db_error)?,
                 allocation_id: row.try_get("allocation_id").map_err(db_error)?,
@@ -116,9 +128,35 @@ impl PlatformHostPool for Pool {
         tx.commit().await.map_err(db_error)?;
         Ok(Response::new(host::HostPollResponse {
             heartbeat_expires_at: Some(stamp(deadline)),
-            assignment: if reclaim.is_none() { assignment } else { None },
+            assignment: if reclaim.is_none() && r.input_protocol_version == 1 {
+                assignment
+            } else {
+                None
+            },
             reclaim,
         }))
+    }
+    async fn fetch_workspace_input(
+        &self,
+        request: Request<host::WorkspaceLease>,
+    ) -> Result<Response<host::WorkspaceInput>, Status> {
+        let cert = leaf(&request)?;
+        let reader = self
+            .reader
+            .as_ref()
+            .ok_or_else(|| Status::failed_precondition("workspace input storage unavailable"))?;
+        Ok(Response::new(
+            inputs::fetch(&self.db, reader, &cert, request.into_inner()).await?,
+        ))
+    }
+    async fn confirm_ready(
+        &self,
+        request: Request<host::WorkspaceReady>,
+    ) -> Result<Response<host::WorkspaceReadyReceipt>, Status> {
+        let cert = leaf(&request)?;
+        Ok(Response::new(
+            inputs::ready(&self.db, &cert, request.into_inner()).await?,
+        ))
     }
     async fn claim_workspace(
         &self,
@@ -138,6 +176,15 @@ impl PlatformHostPool for Pool {
             leases::renew(&self.db, &cert, request.into_inner()).await?,
         ))
     }
+    async fn stop_workspace(
+        &self,
+        request: Request<host::WorkspaceStop>,
+    ) -> Result<Response<host::WorkspaceReclaim>, Status> {
+        let cert = leaf(&request)?;
+        Ok(Response::new(
+            leases::stop(&self.db, &cert, request.into_inner()).await?,
+        ))
+    }
     async fn confirm_cleanup(
         &self,
         request: Request<host::WorkspaceCleanup>,
@@ -154,6 +201,15 @@ pub async fn serve(
     tls: HostTls,
     stop: impl Future<Output = ()> + Send + 'static,
 ) -> Result<(), tonic::transport::Error> {
+    serve_with_storage(listener, db, tls, None, stop).await
+}
+pub async fn serve_with_storage(
+    listener: TcpListener,
+    db: PgPool,
+    tls: HostTls,
+    reader: Option<crate::artifacts::ArtifactReader>,
+    stop: impl Future<Output = ()> + Send + 'static,
+) -> Result<(), tonic::transport::Error> {
     let tls = ServerTlsConfig::new()
         .identity(Identity::from_pem(
             tls.server_certificate_pem,
@@ -166,9 +222,9 @@ pub async fn serve(
         .concurrency_limit_per_connection(8)
         .max_concurrent_streams(16)
         .add_service(
-            PlatformHostPoolServer::new(Pool { db })
+            PlatformHostPoolServer::new(Pool { db, reader })
                 .max_decoding_message_size(4096)
-                .max_encoding_message_size(8192),
+                .max_encoding_message_size(300 * 1024),
         )
         .serve_with_incoming_shutdown(TcpListenerStream::new(listener), stop)
         .await

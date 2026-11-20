@@ -4,16 +4,21 @@ type Tx<'a> = Transaction<'a, Postgres>;
 fn conflict() -> Status {
     Status::failed_precondition("workspace authority or state changed")
 }
-async fn peer(tx: &mut Tx<'_>, host: &str, cert: &str, require_live: bool) -> Result<(), Status> {
+pub(super) async fn peer(
+    tx: &mut Tx<'_>,
+    host: &str,
+    cert: &str,
+    require_live: bool,
+) -> Result<(), Status> {
     let row=sqlx::query("SELECT host_instance_id FROM cloud_pool_hosts WHERE host_instance_id=$1 AND certificate_sha256=$2
-        AND enabled AND credential_expires_at>clock_timestamp() AND (NOT $3 OR live_until>clock_timestamp()) FOR SHARE")
+        AND enabled AND credential_expires_at>clock_timestamp() AND (NOT $3 OR (live_until>clock_timestamp() AND input_protocol_version=1)) FOR SHARE")
         .bind(host).bind(cert).bind(require_live).fetch_optional(&mut **tx).await.map_err(db_error)?;
     if row.is_none() {
         return Err(Status::permission_denied("host admission denied"));
     }
     Ok(())
 }
-async fn allocation(
+pub(super) async fn allocation(
     tx: &mut Tx<'_>,
     host: &str,
     workspace: &str,
@@ -27,7 +32,7 @@ async fn allocation(
         WHERE w.workspace_id=$1 AND w.run_id=$2 AND w.host_instance_id=$3 FOR UPDATE OF r,w")
         .bind(workspace).bind(run).bind(host).fetch_optional(&mut **tx).await.map_err(db_error)?.ok_or_else(||Status::not_found("workspace not assigned"))
 }
-async fn input_live(tx: &mut Tx<'_>, row: &PgRow) -> Result<(), Status> {
+pub(super) async fn input_live(tx: &mut Tx<'_>, row: &PgRow) -> Result<(), Status> {
     let ok=sqlx::query("SELECT a.artifact_id FROM artifacts a JOIN users u ON u.user_id=a.creator_id AND u.personal_owner_id=a.owner_id
         JOIN owners o ON o.owner_id=a.owner_id JOIN budget_roots b ON b.owner_id=a.owner_id
         WHERE a.artifact_id=$1 AND a.version_id=$2 AND a.owner_id=$3 AND a.creator_id=$4 AND b.root_budget_id=$5
@@ -41,7 +46,7 @@ async fn input_live(tx: &mut Tx<'_>, row: &PgRow) -> Result<(), Status> {
     }
     Ok(())
 }
-async fn event(tx: &mut Tx<'_>, run: &str, kind: &str) -> Result<(), Status> {
+pub(super) async fn event(tx: &mut Tx<'_>, run: &str, kind: &str) -> Result<(), Status> {
     let version: i64 = sqlx::query_scalar(
         "UPDATE cloud_runs SET version=version+1 WHERE run_id=$1 RETURNING version",
     )
@@ -58,7 +63,7 @@ async fn event(tx: &mut Tx<'_>, run: &str, kind: &str) -> Result<(), Status> {
         .map_err(db_error)?;
     Ok(())
 }
-async fn confirm_live(tx: &mut Tx<'_>, workspace: &str) -> Result<(), Status> {
+pub(super) async fn confirm_live(tx: &mut Tx<'_>, workspace: &str) -> Result<(), Status> {
     let live:bool=sqlx::query_scalar("SELECT w.lease_until>clock_timestamp() AND w.expires_at>clock_timestamp()
         AND h.enabled AND h.live_until>clock_timestamp() AND h.credential_expires_at>clock_timestamp()
         FROM cloud_workspaces w JOIN cloud_pool_hosts h USING(host_instance_id) WHERE w.workspace_id=$1")
@@ -119,7 +124,12 @@ pub(super) async fn claim(
     let (allocation_id, epoch, until) = if let Some((id, old, epoch, until)) = prior {
         if old != hash
             || row.try_get::<i64, _>("epoch").map_err(db_error)? != epoch
-            || row.try_get::<String, _>("status").map_err(db_error)? != "preparing"
+            || !matches!(
+                row.try_get::<String, _>("status")
+                    .map_err(db_error)?
+                    .as_str(),
+                "preparing" | "ready" | "running"
+            )
             || row.try_get::<Option<i64>, _>("until").map_err(db_error)? != Some(until)
             || until <= at
         {
@@ -183,7 +193,12 @@ pub(super) async fn renew(
     let at: i64 = row.try_get("now").map_err(db_error)?;
     if !known
         || epoch != row.try_get::<i64, _>("epoch").map_err(db_error)?
-        || row.try_get::<String, _>("status").map_err(db_error)? != "preparing"
+        || !matches!(
+            row.try_get::<String, _>("status")
+                .map_err(db_error)?
+                .as_str(),
+            "preparing" | "ready" | "running"
+        )
         || current <= at
         || offered <= at
     {
@@ -262,5 +277,68 @@ pub(super) async fn cleanup(
         receipt_id,
         workspace_id: c.workspace_id,
         evidence_digest: c.evidence_digest,
+    })
+}
+
+pub(super) async fn stop(
+    db: &PgPool,
+    cert: &str,
+    s: host::WorkspaceStop,
+) -> Result<host::WorkspaceReclaim, Status> {
+    let kind = match host::workspace_stop::Reason::try_from(s.reason) {
+        Ok(host::workspace_stop::Reason::PreparationFailed) => "host_preparation_failed",
+        Ok(host::workspace_stop::Reason::HostShutdown) => "host_shutdown",
+        Ok(host::workspace_stop::Reason::LeaseLost) => "host_lease_lost",
+        _ => return Err(Status::invalid_argument("invalid stop reason")),
+    };
+    let mut tx = db.begin().await.map_err(db_error)?;
+    peer(&mut tx, &s.host_instance_id, cert, false).await?;
+    let row = allocation(&mut tx, &s.host_instance_id, &s.workspace_id, &s.run_id).await?;
+    let epoch = i64::try_from(s.allocation_epoch).map_err(|_| conflict())?;
+    let known: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM cloud_workspace_claims
+        WHERE allocation_id=$1 AND workspace_id=$2 AND epoch=$3)",
+    )
+    .bind(&s.allocation_id)
+    .bind(&s.workspace_id)
+    .bind(epoch)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(db_error)?;
+    if !known {
+        return Err(conflict());
+    }
+    let state: String = row.try_get("status").map_err(db_error)?;
+    if !matches!(state.as_str(), "draining" | "deleted") {
+        if row.try_get::<i64, _>("epoch").map_err(db_error)? != epoch
+            || !matches!(state.as_str(), "preparing" | "ready" | "running")
+        {
+            return Err(conflict());
+        }
+        sqlx::query("UPDATE cloud_workspaces SET status='draining',version=version+1,epoch=epoch+1,lease_until=NULL WHERE workspace_id=$1")
+            .bind(&s.workspace_id).execute(&mut *tx).await.map_err(db_error)?;
+        let version:i64=sqlx::query_scalar("UPDATE cloud_runs SET status='recovery_required',version=version+1 WHERE run_id=$1 RETURNING version")
+            .bind(&s.run_id).fetch_one(&mut *tx).await.map_err(db_error)?;
+        sqlx::query("INSERT INTO cloud_run_events(run_id,run_version,kind) VALUES($1,$2,$3)")
+            .bind(&s.run_id)
+            .bind(version)
+            .bind(kind)
+            .execute(&mut *tx)
+            .await
+            .map_err(db_error)?;
+    }
+    let command: String =
+        sqlx::query_scalar("SELECT command_id FROM cloud_workspace_claims WHERE allocation_id=$1")
+            .bind(&s.allocation_id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(db_error)?;
+    tx.commit().await.map_err(db_error)?;
+    Ok(host::WorkspaceReclaim {
+        claim_command_id: command,
+        run_id: s.run_id,
+        workspace_id: s.workspace_id,
+        allocation_id: s.allocation_id,
+        allocation_epoch: s.allocation_epoch,
     })
 }

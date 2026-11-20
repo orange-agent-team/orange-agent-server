@@ -253,3 +253,32 @@ impl ArtifactReader {
         .map_err(|_| ArtifactError::Integrity)?
     }
 }
+
+impl ArtifactReader {
+    /// Only a server-resolved immutable version can be delivered to a cloud
+    /// provisioning lease. Never accept an object key directly from a Host.
+    pub(crate) async fn cloud_text_input(
+        &self,
+        root: &str,
+        key: &str,
+        size: u64,
+        digest: &str,
+    ) -> Result<Vec<u8>, ArtifactError> {
+        if root != self.store.inner.objects.root_id || !(1..=262144).contains(&size) {
+            return Err(ArtifactError::Invalid);
+        }
+        let _slot = self
+            .store
+            .inner
+            .slots
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| ArtifactError::Busy)?;
+        let bytes = self.store.inner.objects.read(key, size).await?.to_bytes();
+        if hex::encode(Sha256::digest(&bytes)) != digest {
+            return Err(ArtifactError::Integrity);
+        }
+        std::str::from_utf8(&bytes).map_err(|_| ArtifactError::Invalid)?;
+        Ok(bytes.to_vec())
+    }
+}

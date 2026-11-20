@@ -2,6 +2,8 @@ pub mod admin;
 pub mod artifacts;
 pub mod auth;
 pub mod cloud_host;
+#[cfg(unix)]
+pub mod cloud_node;
 pub mod events;
 pub mod http;
 pub mod meter_bootstrap;

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Real cross-repository identity acceptance. Explicit Admin checkout; no build-time sibling dependency."""
+from acceptance_origins import reserve_origins
 import argparse
 import os
 from pathlib import Path
@@ -19,6 +20,7 @@ def main():
     parser.add_argument('--admin-repo', required=True, type=Path)
     parser.add_argument('--node', default=shutil.which('node'))
     args = parser.parse_args()
+    reserve_origins(43112)
     admin = args.admin_repo.resolve()
     if not (admin/'apps/admin/playwright.oidc.config.ts').is_file():
         raise SystemExit('Explicit Admin checkout with identity acceptance tests required')

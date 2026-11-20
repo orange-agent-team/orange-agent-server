@@ -1,4 +1,6 @@
 """Private guest entry point. Stdin carries the pinned runtime archive and static probe."""
+import contextlib
+import fcntl
 import hashlib
 import json
 import os
@@ -9,7 +11,9 @@ import shutil
 import socket
 import subprocess
 import sys
+import struct
 import tarfile
+import time
 import tempfile
 import uuid
 
@@ -28,14 +32,127 @@ def copy_member(tar,member,dest,mode):
         shutil.copyfileobj(source,output)
     dest.chmod(mode)
 
+def save_receipt(path, data):
+    with tempfile.NamedTemporaryFile(dir=path.parent,delete=False) as out:
+        out.write(json.dumps(data,sort_keys=True).encode())
+        out.flush();os.fsync(out.fileno())
+    os.replace(out.name,path)
+    fd=os.open(path.parent,os.O_RDONLY)
+    try:os.fsync(fd)
+    finally:os.close(fd)
+
+def remaining_mounts(directory):
+    prefix=str(directory)
+    return any(v.split()[4]==prefix or v.split()[4].startswith(prefix+'/')
+               for v in Path('/proc/self/mountinfo').read_text().splitlines())
+
+def finish_managed():
+    if remaining_mounts(root) or cgroup.exists():
+        raise RuntimeError('Workspace still mounted or charged')
+    journal['phase']='runtime_gone';save_receipt(receipt_path,journal)
+    if root.exists():shutil.rmtree(root)
+    if root.exists():raise RuntimeError('Workspace files remain')
+    journal['phase']='cleaned'
+    journal['sandbox_absent']=True;journal['cgroup_absent']=True;journal['files_absent']=True
+    save_receipt(receipt_path,journal)
+    print(json.dumps(journal),flush=True)
+
+def prepare_directory():
+    if not managed:return tempfile.TemporaryDirectory(prefix='orange-gvisor-')
+    target.mkdir(mode=0o711)
+    return contextlib.nullcontext(str(target))
+
+def bounded_packet(stream):
+    if not managed:return contextlib.nullcontext(stream)
+    length=struct.unpack('>Q',stream.read(8))[0]
+    if not 0<length<96*1024*1024:raise ValueError('Unexpected frame length')
+    staged=tempfile.TemporaryFile(dir=root)
+    while length:
+        chunk=stream.read(min(length,1024*1024))
+        if not chunk:raise EOFError('Incomplete workspace transfer')
+        staged.write(chunk);length-=len(chunk)
+    staged.seek(0);return staged
+
+def wait_for_release(stream, expires, maximum):
+    # Limit permissions locally even if the supervising process stalls.
+    with selectors.DefaultSelector() as watcher:
+        watcher.register(stream,selectors.EVENT_READ)
+        while expires>time.time():
+            if not watcher.select(timeout=max(0,expires-time.time())):return
+            message=stream.readline(128)
+            if not message or message==b'stop\n':return
+            if not message.startswith(b'renew ') or not message.endswith(b'\n'):raise ValueError('Unexpected Host command')
+            next_expiry=int(message[6:-1])
+            if next_expiry<=time.time() or next_expiry>min(maximum,time.time()+32):raise ValueError('Invalid lease renewal')
+            expires=next_expiry
+
 if os.geteuid()!=0 or platform.machine()!='aarch64' or platform.system()!='Linux':
     raise SystemExit('Dedicated root-owned ARM64 Linux qualification required')
-with tempfile.TemporaryDirectory(prefix='orange-gvisor-') as temp:
+managed=len(sys.argv)>1
+if managed:
+    if len(sys.argv)!=3 or sys.argv[1] not in ('reserve','open','recover'):
+        raise SystemExit('Expected managed allocation operation and UUID')
+    allocation=str(uuid.UUID(sys.argv[2]))
+    if allocation!=sys.argv[2]:raise ValueError('Noncanonical allocation id')
+    base=Path('/var/tmp/orange-cloud-workspaces-v1')
+    base.mkdir(mode=0o711,exist_ok=True)
+    if base.is_symlink() or base.stat().st_uid!=0 or base.stat().st_mode&0o022:raise ValueError('Unsafe allocation directory')
+    receipt_path=base/(allocation+'.json')
+    target=base/('work-'+allocation)
+    instance='oa-ws-'+allocation
+    cgroup=Path('/sys/fs/cgroup')/instance
+    lock=os.open(base/(allocation+'.lock'),os.O_CREAT|os.O_NOFOLLOW|os.O_RDWR,0o600)
+    try:
+        fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+    except BlockingIOError:
+        if sys.argv[1]=='recover':
+            print(json.dumps({'phase':'supervisor_still_owns_allocation','allocation_id':allocation}),flush=True)
+            sys.exit(0)
+        raise RuntimeError('Active supervisor already owns this allocation')
+    if sys.argv[1]=='recover':
+        if not receipt_path.is_file():raise RuntimeError('No trusted preparation record')
+        journal=json.loads(receipt_path.read_text())
+        if journal.get('allocation_id')!=allocation or journal.get('sandbox_id')!=instance:raise ValueError('Conflicting allocation journal')
+        root=target
+        if journal['phase'] in ('starting','ready'):
+            binary=root/'tools/runsc'
+            if not binary.is_file() or sha(binary)!=journal['runsc_sha256']:raise RuntimeError('Incomplete runtime evidence')
+            args=[str(binary),'--root='+str(root/'state'),'--gofer-network-namespace=new']
+            rows=json.loads(subprocess.check_output([*args,'list','--format=json'],timeout=10)) or []
+            if any(v['id']!=instance for v in rows):raise RuntimeError('Foreign sandbox in owned runtime root')
+            if rows:subprocess.run([*args,'delete','--force',instance],check=True,timeout=30)
+            if json.loads(subprocess.check_output([*args,'list','--format=json'],timeout=10)):raise RuntimeError('Sandbox cleanup incomplete')
+        elif journal['phase']=='cleaned':
+            if target.exists() or cgroup.exists():raise RuntimeError('Unexpected resources after confirmed cleanup')
+            print(json.dumps(journal),flush=True);sys.exit(0)
+        elif journal['phase'] not in ('registered','runtime_gone'):raise RuntimeError('Unrecognized allocation state')
+        finish_managed();sys.exit(0)
+    binding=json.loads(sys.stdin.buffer.readline(4097))
+    if binding['allocation_id']!=allocation or not all(isinstance(binding[k],str) and 0<len(binding[k])<=128 for k in ['run_id','workspace_id','host_instance_id']):
+        raise ValueError('Invalid allocation identity')
+    if not isinstance(binding['epoch'],int) or binding['epoch']<1 or not isinstance(binding['input_sha256'],str) or len(binding['input_sha256'])!=64:
+        raise ValueError('Invalid input binding')
+    if binding['lease_until']<=time.time() or binding['lease_until']>min(binding['workspace_until'],time.time()+32):
+        raise ValueError('Initial provisioning lease expired')
+    identity={k:binding[k] for k in ['run_id','workspace_id','allocation_id','host_instance_id','epoch','input_sha256']}
+    if receipt_path.exists():
+        journal=json.loads(receipt_path.read_text())
+        if any(journal.get(k)!=v for k,v in identity.items()) or journal.get('phase')!='registered':
+            raise RuntimeError('Allocation already used or binding changed')
+    else:
+        if target.exists():raise RuntimeError('Allocation directory lacks a trusted record')
+        journal=dict(identity,phase='registered',sandbox_id=instance)
+        save_receipt(receipt_path,journal)
+    if sys.argv[1]=='reserve':
+        print(json.dumps(journal),flush=True);sys.exit(0)
+    if target.exists():raise RuntimeError('Preparation path already exists; recover original evidence')
+with prepare_directory() as temp:
     root=Path(temp)
     root.chmod(0o711)  # unprivileged runtime helpers can traverse, but cannot list this directory
     bounds={'archive':77679372,'probe':16*1024*1024,'profile':8192}
+    if managed:bounds.update(input=262144,allocation=4096)
     seen=set()
-    with tarfile.open(fileobj=sys.stdin.buffer,mode='r|') as packet:
+    with bounded_packet(sys.stdin.buffer) as frame, tarfile.open(fileobj=frame,mode='r|') as packet:
         for m in packet:
             if m.name not in bounds or m.name in seen or not m.isfile() or not 0<m.size<=bounds[m.name]:
                 raise ValueError('Unexpected transfer member')
@@ -47,6 +164,12 @@ with tempfile.TemporaryDirectory(prefix='orange-gvisor-') as temp:
     archive=root/'archive'
     if sha(archive)!=profile['sha256'] or archive.stat().st_size!=profile['size_bytes']:
         raise ValueError('Runtime archive failed guest digest check')
+    if managed:
+        if binding!=json.loads((root/'allocation').read_text()) or binding['input_sha256']!=sha(root/'input'):
+            raise ValueError('Allocation input or identity mismatch')
+        if binding['lease_until']<=time.time() or binding['lease_until']>min(binding['workspace_until'],time.time()+32):
+            raise ValueError('Expired or unbounded initial provisioning lease')
+        journal['archive_sha256']=profile['sha256']
     tools=root/'tools'
     tools.mkdir(mode=0o755)
     total=0
@@ -80,7 +203,7 @@ with tempfile.TemporaryDirectory(prefix='orange-gvisor-') as temp:
     (rootfs/'probe').chmod(0o555)
     state=root/'state';state.mkdir(mode=0o700)
     marker=root/'guest-private-marker';marker.write_text('outside container')
-    instance='oa-qual-'+uuid.uuid4().hex
+    if not managed:instance='oa-qual-'+uuid.uuid4().hex
     cgroup=Path('/sys/fs/cgroup')/instance
     if cgroup.exists():
         raise ValueError('Test cgroup already exists')
@@ -102,8 +225,15 @@ with tempfile.TemporaryDirectory(prefix='orange-gvisor-') as temp:
         stderr=root/'workload.stderr'
         child=None
         try:
+            if managed:
+                journal.update(phase='starting',runsc_sha256=sha(binary));save_receipt(receipt_path,journal)
             with stderr.open('wb') as err:
                 child=subprocess.Popen([*args,'run','--bundle',str(bundle),instance],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=err)
+            if managed:
+                data=(root/'input').read_bytes()
+                child.stdin.write(struct.pack('>I',len(data))+data);child.stdin.flush()
+                del data
+                (root/'input').unlink()
             with selectors.DefaultSelector() as watcher:
                 watcher.register(child.stdout,selectors.EVENT_READ)
                 if not watcher.select(timeout=40) or child.stdout.readline()!=b'ORANGE_WORKSPACE_PROBE_READY\n':
@@ -119,6 +249,11 @@ with tempfile.TemporaryDirectory(prefix='orange-gvisor-') as temp:
             pid=record['pid']
             if not isinstance(pid,int) or pid<2 or ('0::/'+instance) not in Path(f'/proc/{pid}/cgroup').read_text().splitlines():
                 raise RuntimeError('Running sandbox does not belong to the observed cgroup')
+            if managed:
+                if binding['lease_until']<=time.time():raise RuntimeError('Lease expired before materialization')
+                journal.update(phase='ready',cgroup=limits,workload_uid=65534,input_staged=True)
+                save_receipt(receipt_path,journal);print(json.dumps(journal),flush=True)
+                wait_for_release(sys.stdin.buffer,binding['lease_until'],binding['workspace_until'])
             output,_=child.communicate(input=b'continue\n',timeout=40)
             if child.returncode!=0 or output.strip()!=b'ORANGE_WORKSPACE_PROBE_OK':
                 raise RuntimeError('Workload failed: '+str(child.returncode)+' '+stderr.read_text(errors='replace')[-1800:])
@@ -140,7 +275,9 @@ with tempfile.TemporaryDirectory(prefix='orange-gvisor-') as temp:
                 child.wait(timeout=30)
         if (state/instance).exists() or cgroup.exists() or json.loads(subprocess.check_output([*args,'list','--format=json'],timeout=10)):
             raise RuntimeError('Sandbox cleanup not confirmed')
-    print(json.dumps({'qualified':True,'profile':profile['profile'],'runsc':version,'archive_sha256':profile['sha256'],
+    if managed:
+        finish_managed()
+    else:print(json.dumps({'qualified':True,'profile':profile['profile'],'runsc':version,'archive_sha256':profile['sha256'],
                       'probe_sha256':sha(root/'probe'),'kernel':platform.release(),'platform':'systrap','network':'none',
                       'cgroup':limits,'workspace_bytes':profile['workspace_bytes'],'workload_uid':65534,'effective_capabilities':0,
                       'root_readonly':True,'sentinel_unreachable':True,'sandbox_and_cgroup_removed':True,
