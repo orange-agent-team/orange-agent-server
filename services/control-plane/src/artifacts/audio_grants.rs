@@ -46,7 +46,7 @@ pub(super) async fn observed_target(
         JOIN worker_sessions s ON s.node_id=o.node_id AND s.session_id=o.session_id AND s.connection_epoch=o.connection_epoch
         JOIN nodes n ON n.node_id=s.node_id WHERE o.observation_id=$1 AND n.environment='dev' AND n.state='online' AND s.certificate_sha256=$2
         AND p.enabled AND p.execution_profile_digest=o.execution_profile_digest AND p.model_sha256=o.model_sha256
-        AND p.model_version_id=o.model_version AND s.execution_control_version=2 AND s.input_artifacts_version=1
+        AND p.model_version_id=o.model_version AND s.execution_control_version=2 AND s.input_artifacts_version=1 AND s.transcription_input_version=1
         AND s.expires_at>clock_timestamp() FOR SHARE OF s,p")
         .bind(id).bind(cert).fetch_optional(&mut **tx).await?.ok_or(ArtifactError::NotReady)?;
     Ok(row)
@@ -88,6 +88,71 @@ async fn selected_target(
     }
     Ok(target)
 }
+async fn checked_source_row(
+    tx: &mut Tx<'_>,
+    user: &str,
+    owner: &str,
+    grant: &sqlx::postgres::PgRow,
+    row: &sqlx::postgres::PgRow,
+) -> Result<ArtifactView, ArtifactError> {
+    let role = authority::user_scope(tx, user, owner, true).await?;
+    authority::resource_role(tx, user, owner, row, role, false, false).await?;
+    authority::resource_role(tx, user, owner, row, role, true, false).await?;
+    let stamp = authority::stamp(tx, row).await?;
+    let source = view(row)?;
+    let measured: orange_protocol::pricing::AudioMeasurement =
+        serde_json::from_value(grant.try_get("measurement")?)
+            .map_err(|_| ArtifactError::Integrity)?;
+    if stamp.organization != grant.try_get("organization_policy")?
+        || stamp.acl != grant.try_get("acl_version")?
+        || source.state != "available"
+        || source.artifact_id != measured.artifact_id
+        || source.version_id != measured.version_id
+        || source.sha256 != measured.audio_sha256
+    {
+        return Err(ArtifactError::Forbidden);
+    }
+    Ok(source)
+}
+
+pub(crate) async fn job_binding(
+    tx: &mut Tx<'_>,
+    job: &str,
+    s: &crate::worker::DeviceSession,
+) -> Result<orange_protocol::grpc::worker::TranscriptionInputReference, ArtifactError> {
+    let binding=sqlx::query("SELECT j.owner_id,j.submitting_user_id,c.grant_id,c.observation_id FROM jobs j JOIN quotes q USING(quote_id)
+        JOIN quote_execution_plans p USING(quote_id) JOIN transcription_input_candidates c ON c.owner_id=j.owner_id AND c.invocation_id=j.invocation_id
+        AND c.author_id=j.submitting_user_id AND c.root_budget_id=j.root_budget_id AND c.projection_digest=q.projection_digest AND c.node_id=p.target_node_id
+        AND c.execution_profile_id=p.execution_profile_id WHERE j.job_id=$1 AND j.purpose='transcription' AND c.node_id=$2 AND c.session_id=$3 AND c.connection_epoch=$4")
+        .bind(job).bind(&s.node_id).bind(&s.session_id).bind(s.connection_epoch).fetch_optional(&mut **tx).await?.ok_or(ArtifactError::Forbidden)?;
+    let owner: &str = binding.try_get("owner_id")?;
+    let id: &str = binding.try_get("grant_id")?;
+    let observation: &str = binding.try_get("observation_id")?;
+    observed_target(tx, observation).await?;
+    sqlx::query("SELECT grant_id FROM transcription_input_grants WHERE owner_id=$1 AND grant_id=$2 FOR SHARE")
+        .bind(owner).bind(id).fetch_one(&mut **tx).await?;
+    let grant = lookup(tx, owner, id, None)
+        .await?
+        .ok_or(ArtifactError::Forbidden)?;
+    if grant.try_get::<String, _>("grant_state")? != "active" {
+        return Err(ArtifactError::Forbidden);
+    }
+    let row=sqlx::query("SELECT a.*,u.upload_id FROM artifact_uploads u JOIN artifacts a USING(artifact_id) WHERE u.owner_id=$1 AND u.upload_id=$2 FOR SHARE OF a")
+        .bind(owner).bind(grant.try_get::<&str,_>("upload_id")?).fetch_optional(&mut **tx).await?.ok_or(ArtifactError::Forbidden)?;
+    checked_source_row(
+        tx,
+        binding.try_get("submitting_user_id")?,
+        owner,
+        &grant,
+        &row,
+    )
+    .await?;
+    Ok(orange_protocol::grpc::worker::TranscriptionInputReference {
+        version: 1,
+        grant_id: id.to_owned(),
+        observation_id: observation.to_owned(),
+    })
+}
 impl ArtifactStore {
     pub(super) async fn audio_target(
         &self,
@@ -116,24 +181,8 @@ impl ArtifactStore {
         owner: &str,
         grant: &sqlx::postgres::PgRow,
     ) -> Result<(ArtifactView, Option<String>), ArtifactError> {
-        let role = authority::user_scope(tx, user, owner, true).await?;
         let row = self.row_in(tx, owner, grant.try_get("upload_id")?).await?;
-        authority::resource_role(tx, user, owner, &row, role, false, false).await?;
-        authority::resource_role(tx, user, owner, &row, role, true, false).await?;
-        let stamp = authority::stamp(tx, &row).await?;
-        let source = view(&row)?;
-        let measured: orange_protocol::pricing::AudioMeasurement =
-            serde_json::from_value(grant.try_get("measurement")?)
-                .map_err(|_| ArtifactError::Integrity)?;
-        if stamp.organization != grant.try_get("organization_policy")?
-            || stamp.acl != grant.try_get("acl_version")?
-            || source.state != "available"
-            || source.artifact_id != measured.artifact_id
-            || source.version_id != measured.version_id
-            || source.sha256 != measured.audio_sha256
-        {
-            return Err(ArtifactError::Forbidden);
-        }
+        let source = checked_source_row(tx, user, owner, grant, &row).await?;
         Ok((source, row.try_get("published_transfer_id")?))
     }
     pub(super) async fn audio_grant_status(

@@ -353,6 +353,7 @@ mod tests {
             request_projection_digest: "c".repeat(64),
             input_artifact_ids: vec![],
             input_artifacts: vec![],
+            transcription_input: None,
             lease: Some(worker::Lease {
                 lease_id: "lease".into(),
                 attempt_id: "attempt".into(),

@@ -37,16 +37,22 @@ impl WorkerSessionStore {
         if execution::job_authority(&mut tx, &lease.job_id).await? != "running" {
             return Err(SessionError::Stale);
         }
-        execution::eligible_plan(&mut tx, &lease.job_id, &s.node_id).await?;
-        if crate::artifacts::inputs::check_input_in(&mut tx, &lease.job_id)
-            .await
-            .map_err(|_| SessionError::Stale)?
-            .is_none()
-        {
+        let plan = execution::eligible_plan(&mut tx, &lease.job_id, &s.node_id).await?;
+        let (text, audio) = execution::checked_assignment_inputs(
+            &mut tx,
+            s,
+            &lease.job_id,
+            sqlx::Row::try_get(&plan, "purpose")?,
+        )
+        .await?;
+        if text.is_none() && audio.is_none() {
             return Err(SessionError::Stale);
         }
         let row = sqlx::query("SELECT *,lease_expires_at>clock_timestamp() AS live,extract(epoch FROM lease_expires_at)::double precision AS prior_expires FROM worker_execution_attempts WHERE command_id=$1 FOR UPDATE").bind(&ack.command_id).fetch_one(&mut *tx).await?;
         let a = execution::decode(&row)?;
+        if a.transcription_input != audio {
+            return Err(SessionError::Stale);
+        }
         let digest = renewal_digest(r, &a).ok_or(SessionError::Invalid)?;
         if a.node_policy_generation != generation as u64
             || !row.try_get::<bool, _>("live")?

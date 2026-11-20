@@ -161,6 +161,7 @@ fn welcome(s: &DeviceSession) -> worker::ServerFrame {
             execution_control_version: s.execution_control_version,
             rejection_receipts_version: s.rejection_receipts_version,
             input_artifacts_version: s.input_artifacts_version,
+            transcription_input_version: s.transcription_input_version,
             renewal_version: s.renewal_version,
             output_version: s.output_version,
             cpu_cleanup_version: s.cpu_cleanup_version,
@@ -492,6 +493,8 @@ impl WorkerGateway for Gateway {
             || hello.node_control_version > 2
             || hello.execution_control_version > 2
             || hello.rejection_receipts_version > 1
+            || hello.transcription_input_version > 1
+            || (hello.transcription_input_version == 1 && hello.input_artifacts_version != 1)
             || hello.input_artifacts_version > 1
             || hello.renewal_version > 1
             || hello.output_version > 1

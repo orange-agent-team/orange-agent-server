@@ -12,9 +12,9 @@ message Lease {
   uint64 fencing_token = 5;
   google.protobuf.Timestamp expires_at = 6;
 }
-message Hello { string node_id = 1; uint32 protocol_version = 2; string capabilities_digest = 3; uint32 node_control_version = 4; uint32 execution_control_version = 5; uint32 rejection_receipts_version = 6; uint32 input_artifacts_version = 7; uint32 renewal_version = 8; uint32 output_version = 9; uint32 cpu_cleanup_version = 10; }
+message Hello { string node_id = 1; uint32 protocol_version = 2; string capabilities_digest = 3; uint32 node_control_version = 4; uint32 execution_control_version = 5; uint32 rejection_receipts_version = 6; uint32 input_artifacts_version = 7; uint32 renewal_version = 8; uint32 output_version = 9; uint32 cpu_cleanup_version = 10; uint32 transcription_input_version = 11; }
 // Protocol v1 control-session TTL is 45 seconds; it is not an execution lease.
-message Welcome { string session_id = 1; uint64 connection_epoch = 2; uint32 protocol_version = 3; google.protobuf.Timestamp expires_at = 4; uint32 node_control_version = 5; uint64 node_policy_generation = 6; uint32 execution_control_version = 7; uint32 rejection_receipts_version = 8; uint32 input_artifacts_version = 9; uint32 renewal_version = 10; uint32 output_version = 11; uint32 cpu_cleanup_version = 12; }
+message Welcome { string session_id = 1; uint64 connection_epoch = 2; uint32 protocol_version = 3; google.protobuf.Timestamp expires_at = 4; uint32 node_control_version = 5; uint64 node_policy_generation = 6; uint32 execution_control_version = 7; uint32 rejection_receipts_version = 8; uint32 input_artifacts_version = 9; uint32 renewal_version = 10; uint32 output_version = 11; uint32 cpu_cleanup_version = 12; uint32 transcription_input_version = 13; }
 // Execution capability1 is independent of node-control capability. Zero/old
 // clients never receive assignments. Version1 grants are immutable, <=45s,
 // ACK within10s, and do not imply renew/resume/result/cleanup support.
@@ -28,6 +28,7 @@ message Assignment {
   string node_id = 9; string session_id = 10; uint64 node_policy_generation = 11;
   string model_sha256 = 12; string execution_profile_digest = 13;
   repeated InputArtifact input_artifacts = 14;
+  TranscriptionInputReference transcription_input = 15;
 }
 enum AckResult { ACK_UNSPECIFIED = 0; ACCEPTED = 1; RESOURCE_REJECTED = 2; PROTOCOL_REJECTED = 3; }
 message Acknowledge {
@@ -174,3 +175,5 @@ message TranscriptionInputChunk {
   // These are present only on the first chunk. An empty language requests automatic detection.
   bytes measurement_json = 12; string language = 13;
 }
+
+message TranscriptionInputReference { uint32 version=1; string grant_id=2; string observation_id=3; }

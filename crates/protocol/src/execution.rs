@@ -164,6 +164,16 @@ pub fn assignment_digest(a: &worker::Assignment) -> Option<String> {
     } else if !a.input_artifact_ids.is_empty() {
         return None;
     }
+    if a.transcription_input.as_ref().is_some_and(|audio| {
+        audio.version != 1
+            || !valid_id(&audio.grant_id)
+            || !valid_id(&audio.observation_id)
+            || a.model_version_id != "whisper-small-ct2-int8-cpu-v1"
+            || !a.input_artifact_ids.is_empty()
+            || !a.input_artifacts.is_empty()
+    }) {
+        return None;
+    }
     let mut body = json!({
         "command_id": a.command_id, "node_id": a.node_id, "session_id": a.session_id,
         "policy_generation": a.node_policy_generation.to_string(),
@@ -175,6 +185,9 @@ pub fn assignment_digest(a: &worker::Assignment) -> Option<String> {
         "request_projection_digest": a.request_projection_digest, "input_artifact_ids": a.input_artifact_ids
     });
     // Preserve the exact digest of historical empty-input assignments.
+    if let Some(audio) = &a.transcription_input {
+        body["transcription_input"] = json!({"version":audio.version,"grant_id":audio.grant_id,"observation_id":audio.observation_id});
+    }
     if !a.input_artifacts.is_empty() {
         body["input_versions"]=json!(a.input_artifacts.iter().map(|a|json!({"artifact_id":a.artifact_id,"version_id":a.version_id,"sha256":a.sha256,"size_bytes":a.size_bytes.to_string(),"media_type":a.media_type})).collect::<Vec<_>>());
     }
@@ -249,10 +262,34 @@ mod tests {
             request_projection_digest: "c".repeat(64),
             input_artifact_ids: vec![],
             input_artifacts: vec![],
+            transcription_input: None,
         };
         a.payload_digest = assignment_digest(&a).expect("valid");
         a
     }
+    #[test]
+    fn transcription_assignment_binds_grant_and_observation_without_widening_text_input() {
+        let mut a = assignment();
+        let original = assignment_digest(&a).expect("legacy");
+        a.transcription_input = Some(worker::TranscriptionInputReference {
+            version: 1,
+            grant_id: "grant".into(),
+            observation_id: "observation".into(),
+        });
+        assert!(assignment_digest(&a).is_none(), "other model profile");
+        a.model_version_id = "whisper-small-ct2-int8-cpu-v1".into();
+        let first = assignment_digest(&a).expect("audio projection");
+        a.transcription_input.as_mut().expect("ref").observation_id = "new".into();
+        assert_ne!(assignment_digest(&a), Some(first.clone()));
+        a.transcription_input.as_mut().expect("ref").grant_id = "other".into();
+        assert_ne!(assignment_digest(&a), Some(first));
+        a.transcription_input.as_mut().expect("ref").version = 2;
+        assert!(assignment_digest(&a).is_none(), "unknown input capability");
+        a.transcription_input = None;
+        a.model_version_id = assignment().model_version_id;
+        assert_eq!(assignment_digest(&a), Some(original));
+    }
+
     #[test]
     fn digest_preserves_large_fences_and_binds_model_and_session() {
         let a = assignment();

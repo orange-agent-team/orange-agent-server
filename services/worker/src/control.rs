@@ -67,6 +67,7 @@ struct ControlVersions {
     execution_control_version: u32,
     rejection_receipts_version: u32,
     input_artifacts_version: u32,
+    transcription_input_version: u32,
     renewal_version: u32,
     output_version: u32,
     cpu_cleanup_version: u32,
@@ -82,6 +83,7 @@ pub struct ControlConnection {
     execution_control_version: u32,
     rejection_receipts_version: u32,
     input_artifacts_version: u32,
+    transcription_input_version: u32,
     renewal_version: u32,
     output_version: u32,
     cpu_cleanup_version: u32,
@@ -219,6 +221,7 @@ impl ControlConnection {
             execution_control_version,
             rejection_receipts_version,
             input_artifacts_version,
+            transcription_input_version,
             renewal_version,
             output_version,
             cpu_cleanup_version,
@@ -238,6 +241,7 @@ impl ControlConnection {
                     execution_control_version,
                     rejection_receipts_version,
                     input_artifacts_version,
+                    transcription_input_version,
                     renewal_version,
                     output_version,
                     cpu_cleanup_version,
@@ -274,6 +278,7 @@ impl ControlConnection {
         if welcome.node_control_version != node_control_version
             || welcome.execution_control_version != execution_control_version
             || welcome.rejection_receipts_version != rejection_receipts_version
+            || welcome.transcription_input_version != transcription_input_version
             || welcome.input_artifacts_version != input_artifacts_version
             || welcome.renewal_version != renewal_version
             || welcome.output_version != output_version
@@ -305,6 +310,7 @@ impl ControlConnection {
             execution_control_version,
             rejection_receipts_version,
             input_artifacts_version,
+            transcription_input_version,
             renewal_version,
             output_version,
             cpu_cleanup_version,
@@ -321,6 +327,7 @@ impl ControlConnection {
                 .is_none_or(|l| l.connection_epoch != self.identity.connection_epoch)
             || orange_protocol::execution::assignment_digest(a).as_deref()
                 != Some(a.payload_digest.as_str())
+            || (a.transcription_input.is_some() && self.transcription_input_version != 1)
             || (!a.input_artifacts.is_empty() && self.input_artifacts_version != 1)
             || self.offered.as_ref().is_some_and(|prior| prior != a)
         {

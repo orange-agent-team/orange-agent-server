@@ -20,10 +20,14 @@ pub struct VerifiedTranscriptionInput {
 }
 impl TranscriptionDownload {
     pub fn for_record(
-        grant_id: &str,
         record: &crate::execution_journal::ExecutionRecord,
     ) -> Result<Self, ControlError> {
-        Self::new(grant_id, &record.assignment)
+        let input = record
+            .assignment
+            .transcription_input
+            .as_ref()
+            .ok_or(ControlError::Protocol)?;
+        Self::new(&input.grant_id, &record.assignment)
     }
     fn new(grant_id: &str, assignment: &worker::Assignment) -> Result<Self, ControlError> {
         if !orange_protocol::valid_id(grant_id)
@@ -141,6 +145,26 @@ impl TranscriptionDownload {
     }
 }
 impl ControlConnection {
+    /// Negotiates audio input references and independently checked execution renewals.
+    pub async fn connect_transcription_inputs(
+        config: ControlConfig,
+        node: &mut NodeJournal,
+        journal: &mut ExecutionJournal,
+    ) -> Result<Self, ControlError> {
+        Self::connect_execution_mode(
+            config,
+            node,
+            journal,
+            ControlVersions {
+                rejection_receipts_version: 1,
+                input_artifacts_version: 1,
+                renewal_version: 1,
+                transcription_input_version: 1,
+                ..ControlVersions::default()
+            },
+        )
+        .await
+    }
     pub async fn read_transcription_chunk(
         &mut self,
         journal: &ExecutionJournal,
@@ -148,7 +172,10 @@ impl ControlConnection {
         command: &str,
         download: &mut TranscriptionDownload,
     ) -> Result<bool, ControlError> {
-        if self.input_artifacts_version != 1 || !self.is_current_locally() {
+        if self.transcription_input_version != 1
+            || self.input_artifacts_version != 1
+            || !self.is_current_locally()
+        {
             return Err(ControlError::Stale);
         }
         let record = journal

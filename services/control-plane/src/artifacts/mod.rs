@@ -1,7 +1,7 @@
 //! Input object storage. Only available immutable versions can be read; Worker
 //! delivery and output publication require separate Job/lease authorization.
 mod audio_delivery;
-mod audio_grants;
+pub(crate) mod audio_grants;
 #[cfg(unix)]
 mod audio_meter;
 #[cfg(unix)]

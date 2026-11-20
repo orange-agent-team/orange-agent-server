@@ -134,7 +134,7 @@ async fn consent_and_confirmed_lease_gate_every_real_audio_chunk() {
     let mut journal =
         ExecutionJournal::open(&private.path().join("execution.sqlite"), d.node.clone())
             .expect("execution journal");
-    let mut conn = ControlConnection::connect_execution_with_inputs(
+    let mut conn = ControlConnection::connect_transcription_inputs(
         worker_config(&server, &d),
         &mut node,
         &mut journal,
@@ -368,8 +368,8 @@ async fn consent_and_confirmed_lease_gate_every_real_audio_chunk() {
       .bind(&quote).bind(&buyer.owner).bind(&budget.root_budget_id).bind(&invocation).bind(projection).execute(&mut *tx).await.expect("quote fixture");
     sqlx::query("INSERT INTO quote_execution_plans(quote_id,target_node_id,execution_profile_id,request_projection_digest,job_deadline)
       VALUES($1,$2,$3,$4,clock_timestamp()+interval '10 minutes')").bind(&quote).bind(&d.node).bind(&profile).bind(projection).execute(&mut *tx).await.expect("plan fixture");
-    sqlx::query("INSERT INTO jobs(job_id,owner_id,root_budget_id,invocation_id,purpose,quote_id,request_digest,execution_state,reserved,held_gift,held_earned,held_purchased,submitting_user_id)
-      VALUES($1,$2,$3,$4,'transcription',$5,$6,'queued',0,0,0,0,$7)").bind(&job).bind(&buyer.owner).bind(&budget.root_budget_id).bind(&invocation)
+    sqlx::query("INSERT INTO jobs(job_id,owner_id,root_budget_id,invocation_id,purpose,quote_id,request_digest,execution_state,reserved,held_gift,held_earned,held_purchased,submitting_user_id,input_required)
+      VALUES($1,$2,$3,$4,'transcription',$5,$6,'queued',0,0,0,0,$7,true)").bind(&job).bind(&buyer.owner).bind(&budget.root_budget_id).bind(&invocation)
       .bind(&quote).bind(orange_protocol::request_digest("submit_job",&submitted).expect("digest")).bind(&buyer.user).execute(&mut *tx).await.expect("queued job fixture");
     tx.commit().await.expect("queue");
     let record = tokio::time::timeout(Duration::from_secs(5), async {
@@ -460,6 +460,29 @@ async fn consent_and_confirmed_lease_gate_every_real_audio_chunk() {
     let started = cloud
         .confirm(&mut journal, &mut broker, &supervisor)
         .expect("confirmed durable start");
+    let reference = assignment
+        .transcription_input
+        .as_ref()
+        .expect("negotiated audio reference");
+    assert_eq!(
+        (&reference.grant_id, &reference.observation_id),
+        (&grant, &observation.observation_id)
+    );
+    let text_read = worker::InputReadRequest {
+        session_id: w.session_id.clone(),
+        lease: assignment.lease.clone(),
+        artifact_id: measurement["artifact_id"]
+            .as_str()
+            .expect("artifact")
+            .into(),
+        version_id: measurement["version_id"].as_str().expect("version").into(),
+        offset: 0,
+        max_bytes: 1,
+    };
+    assert!(
+        raw.read_input(text_read).await.is_err(),
+        "legacy text RPC cannot deliver audio"
+    );
     let mut stale = read.clone();
     stale.lease.as_mut().expect("lease").fencing_token += 1;
     assert!(
@@ -476,7 +499,7 @@ async fn consent_and_confirmed_lease_gate_every_real_audio_chunk() {
             .await
             .is_err()
     );
-    let mut transfer = TranscriptionDownload::for_record(&grant, &record).expect("transfer");
+    let mut transfer = TranscriptionDownload::for_record(&record).expect("transfer");
     while !conn
         .read_transcription_chunk(&journal, &started, &record.command_id, &mut transfer)
         .await
@@ -610,6 +633,119 @@ async fn consent_and_confirmed_lease_gate_every_real_audio_chunk() {
     drop(conn);
     drop(raw);
     drop(foreign);
+    server.stop().await;
+    store.drain().await.expect("close");
+}
+
+#[tokio::test]
+async fn live_legacy_input_session_survives_upgrade_and_audio_negotiation_cannot_be_inherited() {
+    use orange_worker::{
+        control::ControlConnection, execution_journal::ExecutionJournal, node_journal::NodeJournal,
+    };
+    let url = std::env::var("ORANGE_AUDIO_OLD_DATABASE_URL").expect("disposable historic database");
+    assert!(
+        url.rsplit('/')
+            .next()
+            .is_some_and(|s| s.starts_with("orange_audio_old_"))
+    );
+    let db = Store::connect(&url).await.expect("actual database");
+    let history = sqlx::migrate!();
+    sqlx::migrate::Migrator::with_migrations(
+        history
+            .iter()
+            .filter(|m| m.version <= 51)
+            .cloned()
+            .collect(),
+    )
+    .run(db.pool())
+    .await
+    .expect("historical schema");
+    let d = device_in(db.clone(), "client-u").await;
+    let root = tempfile::tempdir().expect("artifact root");
+    std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).expect("private");
+    let store = ArtifactStore::open_local(db.pool().clone(), root.path(), 1048576, 100)
+        .await
+        .expect("writer");
+    let server = Running::start_with_input(&db, Some(store.reader())).await;
+    let tmp = tempfile::tempdir().expect("journals");
+    std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o700))
+        .expect("private state");
+    let mut node =
+        NodeJournal::open(&tmp.path().join("node.sqlite"), d.node.clone()).expect("node");
+    let mut journal =
+        ExecutionJournal::open(&tmp.path().join("exec.sqlite"), d.node.clone()).expect("execution");
+    let mut old = ControlConnection::connect_execution_with_inputs(
+        worker_config(&server, &d),
+        &mut node,
+        &mut journal,
+    )
+    .await
+    .expect("old input protocol on schema 51");
+    assert!(
+        old.poll_execution("old-capabilities", &mut node, &mut journal)
+            .await
+            .expect("old dispatch")
+            .assignment
+            .is_none()
+    );
+    db.migrate().await.expect("upgrade while connected");
+    db.migrate().await.expect("repeat safely");
+    assert!(
+        old.poll_execution("old-capabilities", &mut node, &mut journal)
+            .await
+            .expect("old stream remains live")
+            .assignment
+            .is_none()
+    );
+    let version = || async {
+        sqlx::query_scalar::<_, i32>(
+            "SELECT transcription_input_version FROM worker_sessions WHERE node_id=$1",
+        )
+        .bind(&d.node)
+        .fetch_one(db.pool())
+        .await
+        .expect("capability")
+    };
+    assert_eq!(version().await, 0);
+    let mut audio = ControlConnection::connect_transcription_inputs(
+        worker_config(&server, &d),
+        &mut node,
+        &mut journal,
+    )
+    .await
+    .expect("real capability opt in");
+    assert!(audio.identity().connection_epoch > old.identity().connection_epoch);
+    assert_eq!(version().await, 1);
+    let mut legacy = ControlConnection::connect_execution_with_inputs(
+        worker_config(&server, &d),
+        &mut node,
+        &mut journal,
+    )
+    .await
+    .expect("legacy reconnect");
+    assert_eq!(
+        version().await,
+        0,
+        "old peer must not inherit previous input version"
+    );
+    assert!(
+        legacy
+            .poll_execution("legacy", &mut node, &mut journal)
+            .await
+            .expect("normal legacy poll")
+            .assignment
+            .is_none()
+    );
+    assert!(
+        audio
+            .poll_execution("old-audio", &mut node, &mut journal)
+            .await
+            .is_err(),
+        "superseded connection denied"
+    );
+    drop(old);
+    drop(audio);
+    drop(legacy);
     server.stop().await;
     store.drain().await.expect("close");
 }

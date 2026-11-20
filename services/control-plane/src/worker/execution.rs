@@ -161,6 +161,52 @@ pub(crate) async fn eligible_plan(
     }
     Ok(row)
 }
+// Keep the legacy SQL independent of the new modality view during a rolling upgrade.
+macro_rules! next_input_candidate_sql {
+    ($inputs:literal) => {concat!(
+        "SELECT j.job_id FROM jobs j JOIN quote_execution_plans p USING(quote_id)
+         JOIN reviewed_execution_profiles r USING(execution_profile_id) JOIN quotes q USING(quote_id)
+         JOIN owners o ON o.owner_id=j.owner_id JOIN budget_roots b ON b.root_budget_id=j.root_budget_id
+         WHERE p.target_node_id=$1 AND j.execution_state='queued' AND j.settlement_state='pending' AND ",
+        $inputs,
+        " AND r.enabled AND NOT EXISTS(SELECT 1 FROM quote_metering qm JOIN text_prices tp ON tp.price_version=qm.price_version
+           JOIN trusted_meter_profiles mp ON mp.profile_digest=qm.meter_profile_digest WHERE qm.quote_id=j.quote_id
+           AND (NOT tp.enabled OR NOT mp.enabled OR qm.price_version<>q.price_version OR tp.execution_profile_id<>p.execution_profile_id
+                OR tp.node_id<>p.target_node_id OR qm.provider_owner_id<>(SELECT owner_id FROM nodes WHERE node_id=p.target_node_id)
+                OR mp.descriptor->>'execution_digest'<>r.execution_profile_digest))
+          AND o.state='active' AND b.state='active' AND p.request_projection_digest=q.projection_digest
+          AND p.job_deadline>clock_timestamp()+interval '11 seconds'
+          AND NOT EXISTS(SELECT 1 FROM worker_execution_attempts a WHERE a.job_id=j.job_id)
+          ORDER BY j.job_id LIMIT 1"
+    )};
+}
+pub(super) async fn checked_assignment_inputs(
+    tx: &mut Tx<'_>,
+    s: &DeviceSession,
+    job: &str,
+    purpose: &str,
+) -> Result<
+    (
+        Option<worker::InputArtifact>,
+        Option<worker::TranscriptionInputReference>,
+    ),
+    SessionError,
+> {
+    if purpose == "transcription" {
+        if s.transcription_input_version != 1 {
+            return Err(SessionError::Stale);
+        }
+        let reference = crate::artifacts::audio_grants::job_binding(tx, job, s)
+            .await
+            .map_err(|_| SessionError::Stale)?;
+        Ok((None, Some(reference)))
+    } else {
+        let input = crate::artifacts::inputs::check_input_in(tx, job)
+            .await
+            .map_err(|_| SessionError::Stale)?;
+        Ok((input, None))
+    }
+}
 impl WorkerSessionStore {
     pub(crate) async fn next_execution(
         &self,
@@ -207,10 +253,12 @@ impl WorkerSessionStore {
                 if job_authority(&mut tx, &job).await? != "queued" {
                     return Err(SessionError::Stale);
                 }
-                eligible_plan(&mut tx, &job, &s.node_id).await?;
-                crate::artifacts::inputs::check_input_in(&mut tx, &job)
-                    .await
-                    .map_err(|_| SessionError::Stale)?;
+                let plan = eligible_plan(&mut tx, &job, &s.node_id).await?;
+                let (_, audio) =
+                    checked_assignment_inputs(&mut tx, s, &job, plan.try_get("purpose")?).await?;
+                if a.transcription_input != audio {
+                    return Err(SessionError::Stale);
+                }
                 sqlx::query("UPDATE worker_execution_attempts SET last_sent_at=clock_timestamp() WHERE attempt_id=$1").bind(row.try_get::<String,_>("attempt_id")?).execute(&mut *tx).await?;
                 finish(tx, s).await?;
                 return Ok(Some(a));
@@ -222,8 +270,13 @@ impl WorkerSessionStore {
             finish(tx, s).await?;
             return Ok(None);
         }
-        let job: Option<String> = sqlx::query_scalar("SELECT j.job_id FROM jobs j JOIN quote_execution_plans p USING(quote_id) JOIN reviewed_execution_profiles r USING(execution_profile_id) JOIN quotes q USING(quote_id) JOIN owners o ON o.owner_id=j.owner_id JOIN budget_roots b ON b.root_budget_id=j.root_budget_id WHERE p.target_node_id=$1 AND j.execution_state='queued' AND j.settlement_state='pending' AND (NOT j.input_required OR ($2=1 AND EXISTS(SELECT 1 FROM job_inputs i WHERE i.job_id=j.job_id))) AND r.enabled AND NOT EXISTS(SELECT 1 FROM quote_metering qm JOIN text_prices tp ON tp.price_version=qm.price_version JOIN trusted_meter_profiles mp ON mp.profile_digest=qm.meter_profile_digest WHERE qm.quote_id=j.quote_id AND (NOT tp.enabled OR NOT mp.enabled OR qm.price_version<>q.price_version OR tp.execution_profile_id<>p.execution_profile_id OR tp.node_id<>p.target_node_id OR qm.provider_owner_id<>(SELECT owner_id FROM nodes WHERE node_id=p.target_node_id) OR mp.descriptor->>'execution_digest'<>r.execution_profile_digest)) AND o.state='active' AND b.state='active' AND p.request_projection_digest=q.projection_digest AND p.job_deadline>clock_timestamp()+interval '11 seconds' AND NOT EXISTS(SELECT 1 FROM worker_execution_attempts a WHERE a.job_id=j.job_id) ORDER BY j.job_id LIMIT 1")
-            .bind(&s.node_id).bind(s.input_artifacts_version as i32).fetch_optional(&mut *tx).await?;
+        let candidates = if s.transcription_input_version == 1 {
+            sqlx::query_scalar(next_input_candidate_sql!("((j.purpose<>'transcription' AND (NOT j.input_required OR ($2=1 AND EXISTS(SELECT 1 FROM job_inputs i WHERE i.job_id=j.job_id)))) OR
+             (j.purpose='transcription' AND j.input_required AND $3=1 AND EXISTS(SELECT 1 FROM transcription_input_candidates c WHERE c.owner_id=j.owner_id AND c.invocation_id=j.invocation_id AND c.root_budget_id=j.root_budget_id AND c.author_id=j.submitting_user_id AND c.node_id=p.target_node_id AND c.execution_profile_id=p.execution_profile_id AND c.projection_digest=q.projection_digest AND c.session_id=$4 AND c.connection_epoch=$5)))")).bind(&s.node_id).bind(s.input_artifacts_version as i32).bind(s.transcription_input_version as i32).bind(&s.session_id).bind(s.connection_epoch)
+        } else {
+            sqlx::query_scalar(next_input_candidate_sql!("(j.purpose<>'transcription' AND (NOT j.input_required OR ($2=1 AND EXISTS(SELECT 1 FROM job_inputs i WHERE i.job_id=j.job_id))))")).bind(&s.node_id).bind(s.input_artifacts_version as i32)
+        };
+        let job: Option<String> = candidates.fetch_optional(&mut *tx).await?;
         let Some(job) = job else {
             finish(tx, s).await?;
             return Ok(None);
@@ -232,9 +285,8 @@ impl WorkerSessionStore {
             return Err(SessionError::Stale);
         }
         let plan = eligible_plan(&mut tx, &job, &s.node_id).await?;
-        let input = crate::artifacts::inputs::check_input_in(&mut tx, &job)
-            .await
-            .map_err(|_| SessionError::Stale)?;
+        let (input, audio) =
+            checked_assignment_inputs(&mut tx, s, &job, plan.try_get("purpose")?).await?;
         if input.is_some() && s.input_artifacts_version != 1 {
             return Err(SessionError::Invalid);
         }
@@ -260,6 +312,7 @@ impl WorkerSessionStore {
             request_projection_digest: plan.try_get("request_projection_digest")?,
             input_artifact_ids: input.iter().map(|i| i.artifact_id.clone()).collect(),
             input_artifacts: input.into_iter().collect(),
+            transcription_input: audio,
             job_deadline: timestamp(plan.try_get("deadline")?),
             node_id: s.node_id.clone(),
             session_id: s.session_id.clone(),
@@ -300,13 +353,15 @@ impl WorkerSessionStore {
             return Err(SessionError::Invalid);
         }
         let job_state = job_authority(&mut tx, &job).await?;
-        eligible_plan(&mut tx, &job, &s.node_id).await?;
-        crate::artifacts::inputs::check_input_in(&mut tx, &job)
-            .await
-            .map_err(|_| SessionError::Stale)?;
+        let plan = eligible_plan(&mut tx, &job, &s.node_id).await?;
+        let (_, audio) =
+            checked_assignment_inputs(&mut tx, s, &job, plan.try_get("purpose")?).await?;
         let row = sqlx::query("SELECT *,lease_expires_at>clock_timestamp() AS live,ack_deadline>clock_timestamp() AS ack_live FROM worker_execution_attempts WHERE command_id=$1 FOR UPDATE").bind(&ack.command_id).fetch_one(&mut *tx).await?;
         let a = decode(&row)?;
         if a.node_policy_generation != generation as u64 || !row.try_get::<bool, _>("live")? {
+            return Err(SessionError::Stale);
+        }
+        if a.transcription_input != audio {
             return Err(SessionError::Stale);
         }
         let digest = acknowledge_digest(ack, &a).ok_or(SessionError::Invalid)?;

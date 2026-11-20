@@ -52,7 +52,14 @@ impl ArtifactReader {
         let assignment = self
             .started_assignment(tx, sessions, s, &r.session_id, lease)
             .await?;
-        if assignment.request_projection_digest != r.projection_digest
+        let consent = assignment
+            .transcription_input
+            .as_ref()
+            .ok_or(ArtifactError::Forbidden)?;
+        if s.transcription_input_version != 1
+            || consent.version != 1
+            || consent.grant_id != r.grant_id
+            || assignment.request_projection_digest != r.projection_digest
             || !assignment.input_artifacts.is_empty()
             || !assignment.input_artifact_ids.is_empty()
         {
@@ -75,7 +82,8 @@ impl ArtifactReader {
         )
         .await?
         .ok_or(ArtifactError::Forbidden)?;
-        if grant.try_get::<String, _>("grant_state")? != "active"
+        if grant.try_get::<String, _>("observation_id")? != consent.observation_id
+            || grant.try_get::<String, _>("grant_state")? != "active"
             || grant.try_get::<String, _>("author_id")? != user
             || grant.try_get::<String, _>("invocation_id")?
                 != job.try_get::<String, _>("invocation_id")?
