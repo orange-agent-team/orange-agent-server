@@ -36,3 +36,45 @@ message ResultRequest {
   RunAuthority authority = 1; string operation_id = 2; uint64 expected_version = 3;
   OperationRecord.State result_state = 4; string result_artifact_id = 5; string result_digest = 6;
 }
+
+// Dedicated platform Host control plane. Never mounted on the public Worker gateway.
+service PlatformHostPool {
+  rpc Poll(HostPollRequest) returns (HostPollResponse);
+  rpc ClaimWorkspace(ClaimWorkspaceRequest) returns (WorkspaceLease);
+  rpc RenewWorkspace(WorkspaceLease) returns (WorkspaceLease);
+  rpc ConfirmCleanup(WorkspaceCleanup) returns (CleanupReceipt);
+}
+message HostPollRequest {
+  string host_instance_id = 1;
+  string resource_profile_id = 2;
+  string attestation_digest = 3;
+  bool accept_reservations = 4;
+}
+message QueuedRun {
+  string run_id = 1;
+  string workspace_id = 2;
+  uint64 expected_run_version = 3;
+  google.protobuf.Timestamp workspace_expires_at = 4;
+  uint64 workspace_version = 5;
+}
+message HostPollResponse {
+  google.protobuf.Timestamp heartbeat_expires_at = 1;
+  QueuedRun assignment = 2;
+}
+
+// A provisioning lease only authorizes lifecycle operations on one allocation.
+// It does not authorize model calls, tool dispatch, budget mutation or file access.
+message ClaimWorkspaceRequest {
+  string host_instance_id = 1; string run_id = 2; string workspace_id = 3;
+  uint64 expected_workspace_version = 4; string command_id = 5;
+}
+message WorkspaceLease {
+  string host_instance_id = 1; string run_id = 2; string workspace_id = 3;
+  string allocation_id = 4; uint64 epoch = 5; google.protobuf.Timestamp lease_until = 6;
+}
+message WorkspaceCleanup {
+  string host_instance_id = 1; string run_id = 2; string workspace_id = 3;
+  string allocation_id = 4; uint64 allocation_epoch = 5; string evidence_digest = 6;
+  bool sandbox_absent = 7; bool cgroup_absent = 8;
+}
+message CleanupReceipt { string receipt_id = 1; string workspace_id = 2; string evidence_digest = 3; }
