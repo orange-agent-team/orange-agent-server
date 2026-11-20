@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Orange hosted Agent development control plane",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "description": "Reservations require a current platform Host, active owner budget and an available personal text input. A queued Run has not executed a model or tool. Workspace lease, Run execution and accounting are distinct."
   },
   "paths": {
@@ -313,6 +313,74 @@
             }
           }
         }
+      },
+      "delete": {
+        "operationId": "withdrawOriginalCloudRunRequest",
+        "security": [
+          {
+            "UserSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_.:-]+$"
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current persisted projection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CloudRunWithdrawal"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Typed authorization, validation, capacity or service error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Persist a withdrawal for this exact owner and request key. Any existing nonterminal Run is cancelled; delayed creates with this key are rejected. Input artifacts retain their own lifecycle."
       }
     }
   },
@@ -586,6 +654,45 @@
           "can_reserve",
           "pool_available"
         ]
+      },
+      "CloudRunWithdrawal": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "owner_id",
+          "user_id",
+          "request_key",
+          "receipt_id"
+        ],
+        "properties": {
+          "owner_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9_.:-]+$"
+          },
+          "user_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9_.:-]+$"
+          },
+          "request_key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9_.:-]+$"
+          },
+          "receipt_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9_.:-]+$"
+          },
+          "run": {
+            "$ref": "#/components/schemas/CloudRun"
+          }
+        }
       }
     }
   }

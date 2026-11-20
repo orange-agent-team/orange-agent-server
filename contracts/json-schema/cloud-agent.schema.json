@@ -263,6 +263,45 @@
         "can_reserve",
         "pool_available"
       ]
+    },
+    "CloudRunWithdrawal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "owner_id",
+        "user_id",
+        "request_key",
+        "receipt_id"
+      ],
+      "properties": {
+        "owner_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
+        },
+        "user_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
+        },
+        "request_key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
+        },
+        "receipt_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_.:-]+$"
+        },
+        "run": {
+          "$ref": "#/$defs/CloudRun"
+        }
+      }
     }
   }
 }
