@@ -26,6 +26,8 @@ pub enum Error {
     Limit,
     #[error("decoded input differs from the accepted measurement")]
     Changed,
+    #[error("no speech detected")]
+    NoSpeech,
     #[error("CPU transcription slot occupied")]
     Busy,
     #[error("transcription cancelled")]
@@ -113,6 +115,7 @@ impl Transcript {
             || !language_ok(&self.language)
             || language.is_some_and(|s| s != self.language)
             || !(0.0..=1.0).contains(&self.language_probability)
+            || self.text.trim().is_empty()
             || self.segments.len() > 10000
         {
             return Err(Error::Protocol);
@@ -305,6 +308,7 @@ fn backend_error(v: &Value) -> Error {
     match v["error"].as_str() {
         Some("limit") => Error::Limit,
         Some("invalid_audio_request") => Error::Invalid,
+        Some("no_speech") => Error::NoSpeech,
         Some("slot_busy") => Error::Busy,
         Some("measurement_changed") => Error::Changed,
         Some("transcription_backend_unavailable") => Error::Unavailable,

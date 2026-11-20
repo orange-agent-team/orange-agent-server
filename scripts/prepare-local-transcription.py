@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 from pathlib import Path
 import tempfile
 from urllib.request import HTTPRedirectHandler, Request, build_opener
@@ -22,33 +23,33 @@ class PinnedSampleEndpoint(HTTPRedirectHandler):
         raise ValueError("Sample endpoint redirected away from the pinned API request")
 
 
-def read_sample_document(url):
-    request = Request(url, headers={
-        "Accept": "application/vnd.github+json",
-        "User-Agent": "Orange-Agent-validation",
-    })
+def read_response(url, accept, bound):
+    request = Request(url, headers={"Accept": accept, "User-Agent": "Orange-Agent-validation"})
     with build_opener(PinnedSampleEndpoint()).open(request, timeout=20) as response:
-        return response.read(1024 * 1024 + 1)
+        data = response.read(bound + 1)
+        if len(data) > bound:
+            raise ValueError("Oversized sample response")
+        return data
 
 
-def ensure_sample(cache, sample):
-    dest = cache / "jfk.wav"
-    if not dest.exists():
-        url = f"https://api.github.com/repos/{sample['repository']}/contents/{sample['path']}?ref={sample['revision']}"
-        doc = retry_download(read_sample_document, url)
-        if len(doc) > 1024 * 1024:
-            raise ValueError("Unexpected sample response")
-        obj = json.loads(doc)
-        audio = base64.b64decode(obj["content"].replace("\n", ""), validate=True)
-        if (
-            len(audio) != sample["bytes"]
-            or obj["sha"] != sample["git_blob"]
-            or hashlib.sha1(f"blob {len(audio)}\0".encode() + audio).hexdigest()
-            != sample["git_blob"]
-            or hashlib.sha256(audio).hexdigest() != sample["sha256"]
-        ):
+def download_audio(sample):
+    if "git_blob" not in sample:
+        return read_response(sample["url"], "audio/wav", sample["bytes"])
+    url = f"https://api.github.com/repos/{sample['repository']}/contents/{sample['path']}?ref={sample['revision']}"
+    obj = json.loads(read_response(url, "application/vnd.github+json", 1024 * 1024))
+    audio = base64.b64decode(obj["content"].replace("\n", ""), validate=True)
+    if (obj["sha"] != sample["git_blob"]
+        or hashlib.sha1(f"blob {len(audio)}\0".encode() + audio).hexdigest() != sample["git_blob"]):
+        raise ValueError("Sample Git blob mismatch")
+    return audio
+
+
+def ensure_sample(dest, sample):
+    if not dest.exists() and not dest.is_symlink():
+        audio = retry_download(download_audio, sample)
+        if len(audio) != sample["bytes"] or hashlib.sha256(audio).hexdigest() != sample["sha256"]:
             raise ValueError("Sample identity mismatch")
-        with tempfile.NamedTemporaryFile(dir=cache, delete=False) as f:
+        with tempfile.NamedTemporaryFile(dir=dest.parent, delete=False) as f:
             staging = Path(f.name)
             try:
                 f.write(audio)
@@ -57,12 +58,13 @@ def ensure_sample(cache, sample):
                 os.replace(staging, dest)
             finally:
                 staging.unlink(missing_ok=True)
-    if (
-        dest.is_symlink()
-        or dest.stat().st_size != sample["bytes"]
-        or hashlib.sha256(dest.read_bytes()).hexdigest() != sample["sha256"]
-    ):
-        raise ValueError("Sample digest mismatch")
+    fd = os.open(dest, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+    with os.fdopen(fd, "rb") as source:
+        info = os.fstat(fd)
+        if (not stat.S_ISREG(info.st_mode) or info.st_size != sample["bytes"]
+            or hashlib.sha256(source.read(sample["bytes"] + 1)).hexdigest() != sample["sha256"]):
+            raise ValueError("Sample digest mismatch")
+    print("Verified fixed audio sample", dest.name, sample["sha256"])
 
 
 if __name__ == "__main__":
@@ -81,5 +83,6 @@ if __name__ == "__main__":
     sample = pin["qualification_sample"]
     with (cache / "sample.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        ensure_sample(cache, sample)
-    print("Verified fixed audio sample", sample["sha256"])
+        ensure_sample(cache / "jfk.wav", sample)
+        zh = json.loads((root / "config/transcription-qualification.json").read_text())["zh"]
+        ensure_sample(cache / zh["filename"], zh)

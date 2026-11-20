@@ -1,0 +1,17 @@
+{
+  "zh": {
+    "url": "https://isv-data.oss-cn-hangzhou.aliyuncs.com/ics/MaaS/ASR/test_audio/asr_example_zh.wav",
+    "source": "https://github.com/modelscope/FunASR/wiki/%E5%BF%AB%E9%80%9F%E6%8E%A8%E7%90%86",
+    "filename": "funasr-zh.wav",
+    "sha256": "a1bd32dc78493c123f9625a66deee562aed2895f53fbc39f2cca3be7e6f4f20f",
+    "bytes": 177572,
+    "samples": 88747,
+    "reference": "欢迎大家来体验达摩院推出的语音识别模型"
+  },
+  "en": {
+    "reference": "and so my fellow americans ask not what your country can do for you ask what you can do for your country"
+  },
+  "duration_samples": 960000,
+  "sample_rate": 16000,
+  "silence_between_samples": 16000
+}

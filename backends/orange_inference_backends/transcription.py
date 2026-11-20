@@ -26,6 +26,10 @@ class InputError(Exception):
     pass
 
 
+class NoSpeech(Exception):
+    pass
+
+
 class MediaLimit(Exception):
     pass
 
@@ -339,9 +343,13 @@ def execute():
     if frame["action"] == "transcribe":
         if measured != frame["expected_measure"]:
             return {"error": "measurement_changed"}
+        if not audio.any():
+            raise NoSpeech
         result["transcript"] = infer(
             Path(sys.argv[1]), frame["files"], audio, measured, language, attempt
         )
+        if not result["transcript"]["text"]:
+            raise NoSpeech
     phase(attempt, "candidate_ready")
     return result
 
@@ -381,6 +389,8 @@ if __name__ == "__main__":
         result = execute()
     except BlockingIOError:
         result = {"error": "slot_busy"}
+    except NoSpeech:
+        result = {"error": "no_speech"}
     except MediaLimit:
         result = {"error": "limit"}
     except (InputError, UnicodeError, json.JSONDecodeError):
