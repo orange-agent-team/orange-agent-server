@@ -60,6 +60,7 @@ message QueuedRun {
 message HostPollResponse {
   google.protobuf.Timestamp heartbeat_expires_at = 1;
   QueuedRun assignment = 2;
+  WorkspaceReclaim reclaim = 3;
 }
 
 // A provisioning lease only authorizes lifecycle operations on one allocation.
@@ -78,3 +79,8 @@ message WorkspaceCleanup {
   bool sandbox_absent = 7; bool cgroup_absent = 8;
 }
 message CleanupReceipt { string receipt_id = 1; string workspace_id = 2; string evidence_digest = 3; }
+
+// Rediscover cleanup after a Host restart, including after its old lease timed out.
+message WorkspaceReclaim {
+  string run_id = 1; string workspace_id = 2; string allocation_id = 3; uint64 allocation_epoch = 4;
+}
