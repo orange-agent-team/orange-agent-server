@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Orange Admin API",
-    "version": "0.1.8",
+    "version": "0.1.9",
     "description": "Candidate contract for the independent Admin origin. Development implementation includes OIDC sessions, scoped reads, selected node and reconciliation case actions, and development text price governance. Availability of each other action depends on its backend implementation."
   },
   "servers": [
@@ -4282,6 +4282,12 @@
               }
             },
             "unknown_variant": "reject"
+          },
+          {
+            "action_type": "support_access.revoke",
+            "permission": "support.revoke",
+            "approval": "single_operator",
+            "approval_permission": null
           }
         ],
         "x-implementation-status": "partial-development-candidate"
@@ -5034,7 +5040,8 @@
             }
           }
         },
-        "x-implementation-status": "planned"
+        "x-implementation-status": "partial-development-candidate",
+        "description": "Development grants for the exact tenant. Each grant references one independently approved personal authorization. Expiry, revocation and file unavailability can end access before the next refresh."
       }
     },
     "/admin/v1/support-content": {
@@ -5168,7 +5175,8 @@
             }
           }
         },
-        "x-implementation-status": "planned"
+        "x-implementation-status": "partial-development-candidate",
+        "description": "Only the beneficiary of a live two-person grant can read the exact personal plain-text version designated by the user. Development accepts file_content only. Offset and limit count UTF-8 bytes. Both authorities and source version are checked again after object I/O. A read-only matching storage root must be configured."
       }
     },
     "/admin/v1/refunds": {
@@ -6388,6 +6396,306 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/TextPriceDraft"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "x-implementation-status": "development-candidate"
+      }
+    },
+    "/admin/v1/support-authorizations/{id}": {
+      "get": {
+        "operationId": "reviewUserSupportAuthorization",
+        "summary": "reviewUserSupportAuthorization",
+        "x-permission": "support.read",
+        "security": [
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RequestId"
+          },
+          {
+            "name": "environment",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "const": "dev"
+            }
+          },
+          {
+            "name": "scope_kind",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "const": "tenant"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/ScopeId"
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "State/projection, not a promise that external effects or resource cleanup have completed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SupportConsentReview"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "x-implementation-status": "development-candidate"
+      }
+    },
+    "/admin/v1/support-grants/{id}": {
+      "get": {
+        "operationId": "getSupportGrant",
+        "summary": "getSupportGrant",
+        "x-permission": "support.read",
+        "security": [
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RequestId"
+          },
+          {
+            "name": "environment",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "const": "dev"
+            }
+          },
+          {
+            "name": "scope_kind",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "const": "tenant"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/ScopeId"
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "State/projection, not a promise that external effects or resource cleanup have completed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SupportGrant"
                 }
               }
             }
@@ -7957,6 +8265,55 @@
               "payload"
             ],
             "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "scope": {
+                "$ref": "#/components/schemas/Scope"
+              },
+              "target_version": {
+                "const": "v1"
+              },
+              "ticket_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 5,
+                "maxLength": 1000
+              },
+              "action_type": {
+                "const": "support_access.revoke"
+              },
+              "payload": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "grant_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                  }
+                },
+                "required": [
+                  "grant_id"
+                ]
+              }
+            },
+            "required": [
+              "scope",
+              "target_version",
+              "ticket_id",
+              "reason",
+              "action_type",
+              "payload"
+            ],
+            "additionalProperties": false
           }
         ]
       },
@@ -9150,7 +9507,8 @@
             "enum": [
               "active",
               "revoked",
-              "expired"
+              "expired",
+              "unavailable"
             ]
           },
           "version": {
@@ -9787,6 +10145,94 @@
           "data"
         ],
         "additionalProperties": false
+      },
+      "SupportConsentReview": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "subject_user_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+          },
+          "owner_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+          },
+          "ticket_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+          },
+          "user_authorization_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+          },
+          "purpose": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "resources": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 20,
+            "uniqueItems": true,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "artifact_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                },
+                "version_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                }
+              },
+              "required": [
+                "artifact_id",
+                "version_id"
+              ]
+            }
+          },
+          "content_fields": {
+            "const": [
+              "file_content"
+            ]
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "Z$"
+          },
+          "target_version": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        "required": [
+          "subject_user_id",
+          "owner_id",
+          "ticket_id",
+          "user_authorization_id",
+          "purpose",
+          "resources",
+          "content_fields",
+          "expires_at",
+          "target_version"
+        ]
       }
     }
   },
@@ -9823,7 +10269,8 @@
       "actions.execute",
       "actions.cancel",
       "runs.cancel",
-      "support.grant"
+      "support.grant",
+      "support.revoke"
     ],
     "compute_operator": [
       "session.read",
@@ -9889,7 +10336,8 @@
       "credentials.revoke",
       "actions.approve",
       "support.grant.approve",
-      "admins.grant.approve"
+      "admins.grant.approve",
+      "support.revoke"
     ],
     "release_operator": [
       "session.read",
