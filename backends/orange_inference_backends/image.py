@@ -109,6 +109,10 @@ def run(frame, pin, cache, attempt_dir):
         raise Unsupported("unapproved runtime environment")
     import torch
     from diffusers import StableDiffusionXLPipeline, EulerDiscreteScheduler
+    from diffusers.utils import logging as dl
+    from transformers.utils import logging as tl
+    dl.disable_progress_bar()
+    tl.disable_progress_bar()
     from PIL import Image
     from transformers import CLIPTokenizer
     if not torch.backends.mps.is_available():
@@ -138,7 +142,7 @@ def run(frame, pin, cache, attempt_dir):
                 raise ValueError("pipeline tokenization differs from preflight")
         pipe.set_progress_bar_config(disable=True)
         pipe.enable_attention_slicing()
-        pipe.enable_vae_tiling()
+        pipe.vae.enable_tiling()
         pipe.to("mps")
         device = torch.device("mps")
         if any(next(part.parameters()).device.type != device.type for part in (pipe.unet,pipe.vae,pipe.text_encoder,pipe.text_encoder_2)):
@@ -229,5 +233,7 @@ if __name__ == "__main__":
         emit({"error":"image_slot_busy"});sys.exit(4)
     except Exception as exc:
         # Diagnostics go only to the owning supervisor. Never include prompts in error frames.
-        print(type(exc).__name__, file=sys.stderr, flush=True)
+        import traceback
+        locations = [f"{Path(item.filename).name}:{item.lineno}:{item.name}" for item in traceback.extract_tb(exc.__traceback__)[-4:]]
+        print(type(exc).__name__, *locations, file=sys.stderr, flush=True)
         emit({"error":"image_backend_unavailable"});sys.exit(5)

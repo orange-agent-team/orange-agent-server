@@ -97,6 +97,8 @@ mod local {
             }
             let value: Value = serde_json::from_slice(&line)?;
             if let Some(code) = value.get("error").and_then(Value::as_str) {
+                // Give the interpreter time to close framework-owned semaphores on its normal error exit.
+                let _ = tokio::time::timeout(Duration::from_secs(8), child.wait()).await;
                 return Err(match code {
                     "invalid_image_request" => "Invalid image input or encoded prompt length",
                     "device_unavailable" => "Qualified MPS device unavailable",
