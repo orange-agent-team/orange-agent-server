@@ -83,6 +83,43 @@ impl Buyer {
     }
 }
 
+async fn browser_flow(app: &Router, driver: &str, mut fixture: Value) {
+    use tokio::io::AsyncWriteExt;
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("owned API");
+    let addr = listener.local_addr().expect("port");
+    let (shutdown, done) = oneshot::channel();
+    let router = app.clone();
+    let task = tokio::spawn(async move {
+        axum::serve(listener, router)
+            .with_graceful_shutdown(async {
+                let _ = done.await;
+            })
+            .await
+            .expect("API");
+    });
+    fixture["api"] = json!(format!("http://{addr}"));
+    let mut browser =
+        tokio::process::Command::new(std::env::var("ORANGE_AUDIO_CONSENT_NODE").expect("Node"))
+            .arg(driver)
+            .stdin(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("real Chrome driver");
+    let mut stdin = browser.stdin.take().expect("private fixture pipe");
+    stdin
+        .write_all(&serde_json::to_vec(&fixture).expect("fixture"))
+        .await
+        .expect("deliver session");
+    drop(stdin);
+    let status = tokio::time::timeout(Duration::from_secs(85), browser.wait())
+        .await
+        .expect("browser deadline")
+        .expect("driver exit");
+    let _ = shutdown.send(());
+    task.await.expect("API stopped");
+    assert!(status.success(), "real browser flow");
+}
+
 #[derive(PartialEq, Eq, Clone, Copy)]
 enum Scenario {
     Input,
@@ -353,43 +390,15 @@ async fn run_case(mode: Scenario) {
     if mode == Scenario::Input
         && let Ok(driver) = std::env::var("ORANGE_AUDIO_CONSENT_BROWSER")
     {
-        use tokio::io::AsyncWriteExt;
-        let listener = TcpListener::bind("127.0.0.1:0").await.expect("owned API");
-        let addr = listener.local_addr().expect("port");
-        let (shutdown, done) = oneshot::channel();
-        let router = app.clone();
-        let api = tokio::spawn(async move {
-            axum::serve(listener, router)
-                .with_graceful_shutdown(async {
-                    let _ = done.await;
-                })
-                .await
-                .expect("API");
-        });
-        let fixture = json!({"origin":buyer.origin,"api":format!("http://{addr}"),"token":buyer.token,"upload":upload,"node":d.node,
-            "observation":observation.observation_id,"budget":budget.root_budget_id,"region":"local-test",
-            "screenshot":std::env::var("ORANGE_AUDIO_CONSENT_SCREENSHOT").expect("output")});
-        let mut browser =
-            tokio::process::Command::new(std::env::var("ORANGE_AUDIO_CONSENT_NODE").expect("Node"))
-                .arg(driver)
-                .stdin(std::process::Stdio::piped())
-                .kill_on_drop(true)
-                .spawn()
-                .expect("actual Chrome driver");
-        let mut stdin = browser.stdin.take().expect("private fixture pipe");
-        stdin
-            .write_all(&serde_json::to_vec(&fixture).expect("fixture"))
-            .await
-            .expect("send fixture");
-        drop(stdin);
-        let status=tokio::time::timeout(Duration::from_secs(90),async{
-            loop{tokio::select!{r=browser.wait()=>break r.expect("driver exit"),_=tokio::time::sleep(Duration::from_secs(3))=>{
-                conn.poll_execution("audio-input-test",&mut node,&mut journal).await.expect("maintain observed peer during UI selection");
-            }}}
-        }).await.expect("browser deadline");
-        let _ = shutdown.send(());
-        api.await.expect("API stopped");
-        assert!(status.success(), "browser flow");
+        let fixture = json!({"origin":buyer.origin,"token":buyer.token,"upload":upload,"node":d.node,"observation":observation.observation_id,
+            "budget":budget.root_budget_id,"region":"local-test","screenshot":std::env::var("ORANGE_AUDIO_CONSENT_SCREENSHOT").expect("consent screenshot")});
+        let ui = browser_flow(&app, &driver, fixture);
+        tokio::pin!(ui);
+        loop {
+            tokio::select! {_= &mut ui=>break,_=tokio::time::sleep(Duration::from_secs(3))=>{
+                conn.poll_execution("audio-input-test",&mut node,&mut journal).await.expect("maintain source session");
+            }}
+        }
     }
     let no_jobs: i64 = sqlx::query_scalar("SELECT count(*) FROM jobs WHERE owner_id=$1")
         .bind(&buyer.owner)
@@ -688,6 +697,14 @@ async fn run_case(mode: Scenario) {
                 fact_row.get::<String, _>("source_sha256"),
                 fact.sample_sha256
             );
+            if let Ok(driver) = std::env::var("ORANGE_AUDIO_CONSENT_BROWSER") {
+                let path = PathBuf::from(
+                    std::env::var("ORANGE_AUDIO_CONSENT_SCREENSHOT").expect("evidence"),
+                )
+                .with_file_name("transcript-result.png");
+                browser_flow(&app,&driver,json!({"origin":buyer.origin,"token":buyer.token,"csrf":buyer.csrf,"owner":buyer.owner,"upload":upload,
+                    "job":job,"transcript_sha":fact.transcript_sha256,"segments":result.segments.len(),"screenshot":path})).await;
+            }
             buyer
                 .call(&app, "DELETE", &endpoint, upload, vec![], 200)
                 .await;
