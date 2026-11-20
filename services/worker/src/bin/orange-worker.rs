@@ -14,6 +14,27 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let path = args
         .next()
         .ok_or("usage: orange-worker <private-development-config.json>")?;
+    if path == "probe-transcription" {
+        let config = args
+            .next()
+            .ok_or("private ASR probe configuration required")?;
+        if args.next().is_some() {
+            return Err("one private ASR probe configuration required".into());
+        }
+        let (sender, stop) = tokio::sync::watch::channel(false);
+        let mut interrupt = signal(SignalKind::interrupt())?;
+        let mut terminate = signal(SignalKind::terminate())?;
+        let handle = tokio::spawn(async move {
+            tokio::select! {_=interrupt.recv()=>{},_=terminate.recv()=>{}}
+            let _ = sender.send(true);
+        });
+        let receipt =
+            orange_worker::host::probe_transcription(std::path::Path::new(&config), stop).await;
+        handle.abort();
+        serde_json::to_writer(std::io::stdout().lock(), &receipt?)?;
+        println!();
+        return Ok(());
+    }
     if args.next().is_some() {
         return Err("one private configuration path required".into());
     }

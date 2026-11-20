@@ -1,6 +1,8 @@
 //! Development-only persistent Unix CPU owner. No enrollment, output commit,
 //! automatic orphan recovery, arbitrary peer authentication or GPU certificate.
 mod config;
+mod transcription_profile;
+pub use transcription_profile::probe as probe_transcription;
 #[cfg(test)]
 mod tests;
 use crate::{

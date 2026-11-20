@@ -1,4 +1,6 @@
 //! Fixed MC-05 CPU profile. Decoded usage and complete segments are candidates for host-side publication.
+mod qualification;
+pub use qualification::{ExecutionProfile, ObservedRuntime, Qualification};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
