@@ -12,4 +12,15 @@ UV_PROJECT_ENVIRONMENT="$PWD/.local/transcription-venv" uv sync --project backen
 python3 scripts/check-local-transcription.py
 ```
 
+从仓库根目录运行以下命令，可对同一文件先预检，再使用已接受的回执转写。每次调用都校验输入摘要，省略最后的语言代码时由模型检测语言。
+
+```sh
+cargo build --locked --offline -p orange-model-runtime --bin orange-transcribe
+install -d -m 700 .local/asr-slot
+asr=.local/transcription-model
+venv="$PWD/.local/transcription-venv/bin/python"
+target/debug/orange-transcribe measure "$venv" "$PWD/$asr" "$PWD/.local/asr-slot" "$asr/jfk.wav" > .local/asr-receipt.json
+target/debug/orange-transcribe confirm "$venv" "$PWD/$asr" "$PWD/.local/asr-slot" "$asr/jfk.wav" .local/asr-receipt.json en
+```
+
 验收使用 whisper.cpp 的固定十一秒录音，检查已记录的参考词序、语言检测、时间段、五种编码路径、600 秒边界、100,000,000 字节边界、损坏输入、篡改模型、预检不匹配和推理中取消。语言代码目录取自固定模型的 lang_ids 与 tokenizer，本次真实识别样本为英语。GPU、其他系统、真实多语种准确率和生产收费尚需独立验证。

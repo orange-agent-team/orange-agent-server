@@ -74,21 +74,24 @@ def fetch(opener, cache, pin, name, spec):
             staging.unlink(missing_ok=True)
 
 
+def retry_download(operation, *args):
+    for attempt in range(3):
+        try:
+            return operation(*args)
+        except HTTPError as error:
+            if error.code not in (408, 429, 500, 502, 503, 504) or attempt == 2:
+                raise
+        except (TimeoutError, URLError, EOFError, IncompleteRead):
+            if attempt == 2:
+                raise
+        time.sleep(2**attempt)
+
+
 def prepare(cache, pin):
     os.umask(0o077)
     cache.mkdir(parents=True, exist_ok=True, mode=0o700)
     with (cache / "fetch.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         for name, spec in pin["files"].items():
-            for attempt in range(3):
-                try:
-                    fetch(build_opener(PublisherRedirect()), cache, pin, name, spec)
-                    break
-                except HTTPError as error:
-                    if error.code not in (408, 429, 500, 502, 503, 504) or attempt == 2:
-                        raise
-                except (TimeoutError, URLError, EOFError, IncompleteRead):
-                    if attempt == 2:
-                        raise
-                time.sleep(2**attempt)
+            retry_download(fetch, build_opener(PublisherRedirect()), cache, pin, name, spec)
             print("Verified", name, spec["sha256"], flush=True)
