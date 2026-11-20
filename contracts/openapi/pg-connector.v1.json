@@ -479,11 +479,15 @@
               "$ref": "#/components/schemas/Grant"
             },
             "maxItems": 100
+          },
+          "run_readable": {
+            "type": "boolean"
           }
         },
         "required": [
           "sources",
-          "recent_grants"
+          "recent_grants",
+          "run_readable"
         ],
         "additionalProperties": false
       },

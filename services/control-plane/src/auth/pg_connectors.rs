@@ -32,7 +32,7 @@ async fn guard(
     run: &str,
     write: bool,
     active: bool,
-) -> Result<UserSessionGuard, UserApiError> {
+) -> Result<(UserSessionGuard, bool), UserApiError> {
     let mut g = identity.authenticate(headers).await?;
     if write {
         check_write(headers, &identity.config.user_origin, &g.view().csrf_token)?;
@@ -44,7 +44,7 @@ async fn guard(
     if active && !live {
         return Err(denied());
     }
-    Ok(g)
+    Ok((g, live))
 }
 fn source(identity: &UserIdentity, owner: &str, id: &str) -> Result<Arc<Source>, UserApiError> {
     identity
@@ -60,11 +60,13 @@ pub(super) async fn list(
     Path(run): Path<String>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, UserApiError> {
-    let mut g = guard(&identity, &headers, &run, false, false).await?;
+    let (mut g, run_readable) = guard(&identity, &headers, &run, false, false).await?;
     let sources:Vec<_>=identity.pg_sources.0.iter().filter(|(_,s)|s.owner_id==g.view().personal_owner_id).map(|(id,s)|json!({"source_id":id,"source_digest":s.digest,"view_ids":s.registration.views.keys().collect::<Vec<_>>()})).collect();
     let grants:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_object('grant_id',g.grant_id,'source_id',g.source_id,'source_digest',g.source_digest,'view_ids',g.view_ids,'expires_at',g.expires_at,'revoked',v.grant_id IS NOT NULL) FROM pg_view_grants g LEFT JOIN pg_view_revocations v USING(grant_id) WHERE g.run_id=$1 ORDER BY expires_at DESC,grant_id LIMIT 100").bind(run).fetch_all(&mut **g.transaction()).await.map_err(db)?;
     g.finish().await?;
-    Ok(Json(json!({"sources":sources,"recent_grants":grants})))
+    Ok(Json(
+        json!({"sources":sources,"recent_grants":grants,"run_readable":run_readable}),
+    ))
 }
 
 #[derive(Deserialize, Serialize)]
@@ -82,7 +84,7 @@ pub(super) async fn grant(
     body: Result<Json<Consent>, JsonRejection>,
 ) -> Result<Json<Value>, UserApiError> {
     let Json(mut c) = body.map_err(|_| AuthError::Invalid)?;
-    let mut g = guard(&identity, &headers, &run, true, true).await?;
+    let (mut g, _) = guard(&identity, &headers, &run, true, true).await?;
     let s = source(&identity, &g.view().personal_owner_id, &c.source_id)?;
     c.view_ids.sort();
     if s.digest != c.source_digest
@@ -125,7 +127,7 @@ pub(super) async fn revoke(
     Path((run, id)): Path<(String, String)>,
     headers: HeaderMap,
 ) -> Result<StatusCode, UserApiError> {
-    let mut g = guard(&identity, &headers, &run, true, false).await?;
+    let (mut g, _) = guard(&identity, &headers, &run, true, false).await?;
     let found: Option<String> =
         sqlx::query_scalar("SELECT grant_id FROM pg_view_grants WHERE run_id=$1 AND grant_id=$2")
             .bind(run)
@@ -166,7 +168,7 @@ pub(super) async fn perform(
     body: Result<Json<Action>, JsonRejection>,
 ) -> Result<Json<Value>, UserApiError> {
     let Json(action) = body.map_err(|_| AuthError::Invalid)?;
-    let mut g = guard(&identity, &headers, &run, true, true).await?;
+    let (mut g, _) = guard(&identity, &headers, &run, true, true).await?;
     let (s, views) = authority(&identity, &mut g, &run, &id).await?;
     let request = key(&headers)?;
     let tx = g.transaction();
@@ -186,7 +188,7 @@ pub(super) async fn perform(
     }
     g.finish().await?;
     let result = s.registration.execute(&s.pool, &views, action).await;
-    let mut g = guard(&identity, &headers, &run, true, true).await?;
+    let (mut g, _) = guard(&identity, &headers, &run, true, true).await?;
     authority(&identity, &mut g, &run, &id).await?;
     let current=sqlx::query("UPDATE pg_view_calls SET finished_at=clock_timestamp() WHERE run_id=$1 AND request_key=$2 AND finished_at IS NULL AND until_at>clock_timestamp()").bind(&run).bind(request).execute(&mut **g.transaction()).await.map_err(db)?;
     if current.rows_affected() != 1 {
