@@ -209,3 +209,121 @@ async fn job_metadata_lists_only_current_submitter_without_restoring_deleted_con
     f.objects.drain().await.expect("drain");
     other.objects.drain().await.expect("drain");
 }
+
+#[tokio::test]
+async fn membership_changes_and_owner_restriction_preserve_original_job_and_ledger_identity() {
+    use orange_control_plane::team::TeamStore;
+    use orange_protocol::team::{ChangeMembership, TeamRole};
+    let f = setup_model_scope(
+        "client-eg",
+        &"c".repeat(64),
+        &"d".repeat(64),
+        "owner lifecycle".into(),
+        32,
+        true,
+    )
+    .await;
+    let coowner = setup("client-eh").await;
+    let pool = f.d.store.pool();
+    let team = TeamStore::new(pool.clone());
+    let version: i64 =
+        sqlx::query_scalar("SELECT policy_version FROM organizations WHERE organization_id=$1")
+            .bind(&f.owner)
+            .fetch_one(pool)
+            .await
+            .expect("current org");
+    let v = team
+        .set_membership(
+            &f.user,
+            &f.owner,
+            "add-second-owner",
+            &ChangeMembership {
+                user_id: coowner.user.clone(),
+                role: Some(TeamRole::Owner),
+                expected_policy_version: version,
+            },
+        )
+        .await
+        .expect("second owner");
+    let history = || {
+        sqlx::query_as::<_,(String,String,String,String,String,i64)>("SELECT j.owner_id,q.owner_id,b.owner_id,l.owner_id,l.transaction_id,j.reserved FROM jobs j JOIN quotes q USING(quote_id) JOIN budget_roots b ON b.root_budget_id=j.root_budget_id JOIN ledger_transactions l ON l.business_key='reserve:'||j.job_id WHERE j.job_id=$1").bind(&f.job).fetch_one(pool)
+    };
+    let original = history().await.expect("actual accepted reservation");
+    assert_eq!(
+        (&original.0, &original.1, &original.2, &original.3),
+        (&f.owner, &f.owner, &f.owner, &f.owner)
+    );
+    assert_eq!(
+        lookup(&f, f.headers.clone(), &f.request.invocation_id)
+            .await
+            .0,
+        200
+    );
+    assert!(
+        f.objects
+            .read(&f.actor, &f.owner, &f.upload.upload_id, &f.version)
+            .await
+            .is_ok()
+    );
+    let downgraded = team
+        .set_membership(
+            &coowner.user,
+            &f.owner,
+            "downgrade-original",
+            &ChangeMembership {
+                user_id: f.user.clone(),
+                role: Some(TeamRole::Billing),
+                expected_policy_version: v.policy_version,
+            },
+        )
+        .await
+        .expect("current owner downgraded");
+    assert!(
+        f.objects
+            .read(&f.actor, &f.owner, &f.upload.upload_id, &f.version)
+            .await
+            .is_err()
+    );
+    let removed = team
+        .set_membership(
+            &coowner.user,
+            &f.owner,
+            "remove-original",
+            &ChangeMembership {
+                user_id: f.user.clone(),
+                role: None,
+                expected_policy_version: downgraded.policy_version,
+            },
+        )
+        .await
+        .expect("remove member");
+    assert!(removed.role.is_none());
+    assert_eq!(
+        lookup(&f, f.headers.clone(), &f.request.invocation_id)
+            .await
+            .0,
+        403
+    );
+    assert_eq!(
+        lookup(&f, coowner.headers.clone(), &f.request.invocation_id)
+            .await
+            .0,
+        404,
+        "team owner cannot take over the former submitter's job"
+    );
+    assert_eq!(history().await.expect("retained history"), original);
+    sqlx::query("UPDATE owners SET state='restricted' WHERE owner_id=$1")
+        .bind(&f.owner)
+        .execute(pool)
+        .await
+        .expect("explicit organization restriction fixture");
+    assert_eq!(list(&f, coowner.headers.clone(), "").await.0, 403);
+    assert_eq!(
+        history()
+            .await
+            .expect("restriction preserves ownership and reservation"),
+        original
+    );
+    f.objects.drain().await.expect("objects");
+    coowner.objects.drain().await.expect("objects");
+}

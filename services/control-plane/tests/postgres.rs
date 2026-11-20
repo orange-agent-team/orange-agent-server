@@ -387,3 +387,123 @@ async fn http_rejects_unauthenticated_cross_owner_and_unknown_fields() {
         StatusCode::BAD_REQUEST
     );
 }
+
+#[tokio::test]
+async fn resource_catalogue_resolves_each_business_owner_on_the_migrated_database() {
+    use serde::Deserialize;
+    use std::collections::BTreeSet;
+    #[derive(Deserialize)]
+    struct Edge {
+        column: String,
+        target: String,
+        target_key: String,
+    }
+    #[derive(Deserialize)]
+    struct Subject {
+        kind: String,
+        identity_table: String,
+        credential: String,
+        owner_path: Vec<Edge>,
+    }
+    #[derive(Deserialize)]
+    struct Resource {
+        resource: String,
+        table: String,
+        authority: String,
+        owner_path: Vec<Edge>,
+    }
+    #[derive(Deserialize)]
+    struct Catalogue {
+        version: u8,
+        subjects: Vec<Subject>,
+        resources: Vec<Resource>,
+    }
+    async fn resolve(db: &Store, start: &str, path: &[Edge]) {
+        let mut table = start;
+        for e in path {
+            let linked:bool=sqlx::query_scalar("SELECT EXISTS(
+                SELECT 1 FROM pg_constraint fk
+                  JOIN pg_attribute c ON c.attrelid=fk.conrelid AND c.attnum=fk.conkey[1]
+                  JOIN pg_attribute t ON t.attrelid=fk.confrelid AND t.attnum=fk.confkey[1]
+                WHERE fk.contype='f' AND fk.convalidated AND array_length(fk.conkey,1)=1 AND array_length(fk.confkey,1)=1
+                  AND fk.conrelid=to_regclass($1) AND fk.confrelid=to_regclass($2) AND c.attname=$3 AND t.attname=$4 AND c.attnotnull AND t.attnotnull)")
+                .bind(table).bind(&e.target).bind(&e.column).bind(&e.target_key).fetch_one(db.pool()).await.expect("PostgreSQL catalog");
+            assert!(
+                linked,
+                "{table}.{} must reference {}.{} through a required foreign key",
+                e.column, e.target, e.target_key
+            );
+            table = &e.target;
+        }
+        assert_eq!(
+            table, "owners",
+            "owner path must end at one business account"
+        );
+    }
+    let db = Store::connect(&std::env::var("ORANGE_TEST_DATABASE_URL").expect("real PostgreSQL"))
+        .await
+        .expect("store");
+    db.migrate().await.expect("migrated schema");
+    let c: Catalogue = serde_json::from_slice(include_bytes!(
+        "../../../docs/ownership/subjects-and-resources.json"
+    ))
+    .expect("published catalogue");
+    assert_eq!(c.version, 1);
+    assert_eq!(
+        c.subjects
+            .iter()
+            .map(|a| a.kind.as_str())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            "personal_user",
+            "organization",
+            "provider_device",
+            "platform_operator"
+        ])
+    );
+    for subject in &c.subjects {
+        assert!(!subject.credential.is_empty());
+        if subject.kind == "platform_operator" {
+            assert_eq!(subject.identity_table, "admin_principals");
+            assert!(subject.owner_path.is_empty());
+        } else {
+            resolve(&db, &subject.identity_table, &subject.owner_path).await;
+        }
+    }
+    let names = c
+        .resources
+        .iter()
+        .map(|r| r.resource.as_str())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(names.len(), c.resources.len());
+    for required in [
+        "job",
+        "artifact",
+        "wallet",
+        "budget",
+        "quote",
+        "node",
+        "job_result",
+        "model_execution_profile",
+        "organization_resource",
+        "input_credential",
+        "cloud_workspace",
+        "cloud_run",
+        "ledger_transaction",
+        "reconciliation_case",
+    ] {
+        assert!(names.contains(required), "missing {required}");
+    }
+    for r in &c.resources {
+        if r.authority == "account" {
+            assert!(!r.owner_path.is_empty());
+            resolve(&db, &r.table, &r.owner_path).await;
+        } else {
+            assert_eq!(r.authority, "platform");
+            assert_eq!(r.table, "reviewed_execution_profiles");
+            assert!(r.owner_path.is_empty());
+            let identity:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_constraint k JOIN pg_attribute a ON a.attrelid=k.conrelid AND a.attnum=k.conkey[1] WHERE k.contype='p' AND k.conrelid=to_regclass($1) AND cardinality(k.conkey)=1 AND a.attname='execution_profile_id') AND 3=(SELECT count(*) FROM pg_attribute WHERE attrelid=to_regclass($1) AND attname IN ('model_sha256','execution_profile_digest','enabled') AND attnotnull)").bind(&r.table).fetch_one(db.pool()).await.expect("review identity");
+            assert!(identity);
+        }
+    }
+}

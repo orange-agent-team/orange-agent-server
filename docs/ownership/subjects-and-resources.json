@@ -1,0 +1,231 @@
+{
+  "version": 1,
+  "subjects": [
+    {
+      "kind": "personal_user",
+      "identity_table": "users",
+      "credential": "user_session",
+      "owner_path": [
+        {
+          "column": "personal_owner_id",
+          "target": "owners",
+          "target_key": "owner_id"
+        }
+      ]
+    },
+    {
+      "kind": "organization",
+      "identity_table": "organizations",
+      "credential": "active_membership_and_user_session",
+      "owner_path": [
+        {
+          "column": "organization_id",
+          "target": "owners",
+          "target_key": "owner_id"
+        }
+      ]
+    },
+    {
+      "kind": "provider_device",
+      "identity_table": "worker_credentials",
+      "credential": "current_enrolled_mtls_certificate",
+      "owner_path": [
+        {
+          "column": "node_id",
+          "target": "nodes",
+          "target_key": "node_id"
+        },
+        {
+          "column": "owner_id",
+          "target": "owners",
+          "target_key": "owner_id"
+        }
+      ]
+    },
+    {
+      "kind": "platform_operator",
+      "identity_table": "admin_principals",
+      "credential": "scoped_admin_session_and_mfa",
+      "owner_path": []
+    }
+  ],
+  "resources": [
+    {
+      "resource": "job",
+      "table": "jobs",
+      "authority": "account",
+      "owner_path": [
+        {
+          "column": "owner_id",
+          "target": "owners",
+          "target_key": "owner_id"
+        }
+      ]
+    },
+    {
+      "resource": "artifact",
+      "table": "artifacts",
+      "authority": "account",
+      "owner_path": [
+        {
+          "column": "owner_id",
+          "target": "owners",
+          "target_key": "owner_id"
+        }
+      ]
+    },
+    {
+      "resource": "wallet",
+      "table": "wallets",
+      "authority": "account",
+      "owner_path": [
+        {
+          "column": "owner_id",
+          "target": "owners",
+          "target_key": "owner_id"
+        }
+      ]
+    },
+    {
+      "resource": "budget",
+      "table": "budget_roots",
+      "authority": "account",
+      "owner_path": [
+        {
+          "column": "owner_id",
+          "target": "owners",
+          "target_key": "owner_id"
+        }
+      ]
+    },
+    {
+      "resource": "quote",
+      "table": "quotes",
+      "authority": "account",
+      "owner_path": [
+        {
+          "column": "owner_id",
+          "target": "owners",
+          "target_key": "owner_id"
+        }
+      ]
+    },
+    {
+      "resource": "node",
+      "table": "nodes",
+      "authority": "account",
+      "owner_path": [
+        {
+          "column": "owner_id",
+          "target": "owners",
+          "target_key": "owner_id"
+        }
+      ]
+    },
+    {
+      "resource": "cloud_run",
+      "table": "cloud_runs",
+      "authority": "account",
+      "owner_path": [
+        {
+          "column": "owner_id",
+          "target": "owners",
+          "target_key": "owner_id"
+        }
+      ]
+    },
+    {
+      "resource": "cloud_workspace",
+      "table": "cloud_workspaces",
+      "authority": "account",
+      "owner_path": [
+        {
+          "column": "owner_id",
+          "target": "owners",
+          "target_key": "owner_id"
+        }
+      ]
+    },
+    {
+      "resource": "ledger_transaction",
+      "table": "ledger_transactions",
+      "authority": "account",
+      "owner_path": [
+        {
+          "column": "owner_id",
+          "target": "owners",
+          "target_key": "owner_id"
+        }
+      ]
+    },
+    {
+      "resource": "reconciliation_case",
+      "table": "reconciliation_cases",
+      "authority": "account",
+      "owner_path": [
+        {
+          "column": "owner_id",
+          "target": "owners",
+          "target_key": "owner_id"
+        }
+      ]
+    },
+    {
+      "resource": "input_credential",
+      "table": "worker_credentials",
+      "authority": "account",
+      "owner_path": [
+        {
+          "column": "node_id",
+          "target": "nodes",
+          "target_key": "node_id"
+        },
+        {
+          "column": "owner_id",
+          "target": "owners",
+          "target_key": "owner_id"
+        }
+      ]
+    },
+    {
+      "resource": "job_result",
+      "table": "job_response_commits",
+      "authority": "account",
+      "owner_path": [
+        {
+          "column": "job_id",
+          "target": "jobs",
+          "target_key": "job_id"
+        },
+        {
+          "column": "owner_id",
+          "target": "owners",
+          "target_key": "owner_id"
+        }
+      ]
+    },
+    {
+      "resource": "model_execution_profile",
+      "table": "reviewed_execution_profiles",
+      "authority": "platform",
+      "owner_path": []
+    },
+    {
+      "resource": "organization_resource",
+      "table": "team_resources",
+      "authority": "account",
+      "owner_path": [
+        {
+          "column": "organization_id",
+          "target": "organizations",
+          "target_key": "organization_id"
+        },
+        {
+          "column": "organization_id",
+          "target": "owners",
+          "target_key": "owner_id"
+        }
+      ]
+    }
+  ]
+}
