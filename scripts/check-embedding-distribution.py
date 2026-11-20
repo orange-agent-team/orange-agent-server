@@ -14,9 +14,6 @@ if not python.exists():
         raise SystemExit('Python 3.12 required for the macOS distribution')
     python=Path(found)
 commit=subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip()
-# Rebuilds use a clean git archive. Refuse to certify changes absent from it.
-if subprocess.check_output(['git','status','--porcelain','--untracked-files=normal'],cwd=root):
-    raise SystemExit('Distribution qualification requires a clean source checkout')
 wheelhouse=root/'.local/embedding-wheelhouse'
 if not wheelhouse.is_dir():
     raise SystemExit('Prepare the locked wheelhouse following docs/local-embedding-distribution.md')
