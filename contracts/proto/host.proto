@@ -9,6 +9,7 @@ service RunStore {
   rpc AppendIntent(IntentRequest) returns (OperationRecord);
   rpc AcquireDispatch(DispatchRequest) returns (DispatchPermit);
   rpc CommitResult(ResultRequest) returns (OperationRecord);
+  rpc PendingOperations(RunAuthority) returns (PendingWork);
 }
 message ClaimRequest { string run_id = 1; string host_instance_id = 2; string command_id = 3; uint64 expected_run_version = 4; }
 message RunAuthority {
@@ -27,14 +28,16 @@ message OperationRecord {
   string operation_id = 1; string run_id = 2; uint64 version = 3;
   enum State { STATE_UNSPECIFIED = 0; INTENDED = 1; DISPATCHING = 2; SUCCEEDED = 3; FAILED = 4; UNKNOWN = 5; }
   State state = 4; string argument_digest = 5; string result_artifact_id = 6;
+  string approval_id = 7; string approval_state = 8;
 }
 message DispatchRequest { RunAuthority authority = 1; string operation_id = 2; uint64 expected_version = 3; string argument_digest = 4; }
 // The service must commit the dispatch fact before returning. Missing/invalid
 // lease, response_commit, live permission or approval means no permit.
-message DispatchPermit { RunAuthority authority = 1; OperationRecord operation = 2; google.protobuf.Timestamp expires_at = 3; }
+message DispatchPermit { RunAuthority authority = 1; OperationRecord operation = 2; google.protobuf.Timestamp expires_at = 3; string permit_id = 4; }
 message ResultRequest {
   RunAuthority authority = 1; string operation_id = 2; uint64 expected_version = 3;
   OperationRecord.State result_state = 4; string result_artifact_id = 5; string result_digest = 6;
+  bytes result_json = 7; string permit_id = 8;
 }
 
 // Dedicated platform Host control plane. Never mounted on the public Worker gateway.
@@ -53,6 +56,7 @@ message HostPollRequest {
   string attestation_digest = 3;
   bool accept_reservations = 4;
   uint32 input_protocol_version = 5;
+  uint32 runstore_version = 6;
 }
 message QueuedRun {
   string run_id = 1;
@@ -99,6 +103,7 @@ message WorkspaceReady {
 }
 message WorkspaceReadyReceipt {
   string receipt_id = 1; string workspace_id = 2; string allocation_id = 3; string sandbox_id = 4;
+  bool requires_run_authority = 5; uint64 run_version = 6;
 }
 
 // Stops further use of an original allocation. The capacity remains charged
@@ -109,3 +114,6 @@ message WorkspaceStop {
   enum Reason { UNSPECIFIED = 0; PREPARATION_FAILED = 1; HOST_SHUTDOWN = 2; LEASE_LOST = 3; }
   Reason reason = 6;
 }
+
+message ProposedTool { IntentRequest intent = 1; bytes arguments_json = 2; OperationRecord record = 3; }
+message PendingWork { repeated ProposedTool tools = 1; }
