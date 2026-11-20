@@ -157,7 +157,9 @@ async fn setup_input_case(
         .execute(pool)
         .await
         .expect("customer owner");
-    let fixture_budget = if std::env::var_os("ORANGE_CLOUD_DIRECTORY_TOOLS").is_some() {
+    let fixture_budget = if std::env::var_os("ORANGE_CLOUD_DIRECTORY_TOOLS").is_some()
+        || std::env::var_os("ORANGE_MODEL_CONNECTOR_FIXTURE").is_some()
+    {
         5000_i64
     } else {
         1000

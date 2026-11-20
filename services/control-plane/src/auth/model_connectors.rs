@@ -91,27 +91,12 @@ async fn proposal(api: &Api, headers: &HeaderMap, run: &str) -> Result<Proposal,
     g.finish().await?;
     let actor = api.identity.artifact_actor(headers, false).await?;
     let job: String = row.get("job_id");
-    let view = api
+    let commit: String = row.get("commit_id");
+    let response: ResponseCandidate = api
         .artifacts
-        .job_result(&actor, &owner, &job)
+        .committed_connector_response(&actor, &owner, run, &job, &commit)
         .await
         .map_err(|_| denied())?;
-    if view.artifact_id != row.get::<String, _>("artifact_id")
-        || view.version_id != row.get::<String, _>("version_id")
-    {
-        return Err(conflict());
-    }
-    let (_, bytes, _) = api
-        .artifacts
-        .read(&actor, &owner, &view.upload_id, &view.version_id)
-        .await
-        .map_err(|_| denied())?;
-    let bytes = bytes.to_bytes();
-    let doc = orange_protocol::canonical::parse_tool_arguments(
-        std::str::from_utf8(&bytes).map_err(|_| conflict())?,
-    )
-    .map_err(|_| conflict())?;
-    let response: ResponseCandidate = serde_json::from_value(doc).map_err(|_| conflict())?;
     let [call] = response.tool_calls.as_slice() else {
         return Err(conflict());
     };
@@ -122,7 +107,6 @@ async fn proposal(api: &Api, headers: &HeaderMap, run: &str) -> Result<Proposal,
         return Err(conflict());
     }
     let args = tools::action(call, &name, &pin).map_err(|_| conflict())?;
-    let commit: String = row.get("commit_id");
     let arg_digest = orange_protocol::request_digest("connector.call.arguments.v1", &args)
         .map_err(|_| conflict())?;
     let operation = orange_protocol::request_digest(
@@ -168,10 +152,10 @@ async fn decision_status(
     run: &str,
     p: &Proposal,
 ) -> Result<Value, UserApiError> {
-    let (mut g, _) = guard(&api.identity, h, run, false, false).await?;
+    let (mut g, readable) = guard(&api.identity, h, run, false, false).await?;
     // A lost post-approval task has no authority to dispatch a second time.
     sqlx::query("INSERT INTO cloud_connector_effect_receipts(run_id,state) SELECT run_id,'unknown' FROM cloud_connector_decisions WHERE run_id=$1 AND decision='approve' AND expires_at<=clock_timestamp() ON CONFLICT DO NOTHING").bind(run).execute(&mut **g.transaction()).await.map_err(db)?;
-    let row=sqlx::query("SELECT d.decision,d.grant_id,d.operation_id,r.state,r.result,r.result_digest FROM cloud_connector_decisions d LEFT JOIN cloud_connector_effect_receipts r USING(run_id) WHERE d.run_id=$1").bind(run).fetch_optional(&mut **g.transaction()).await.map_err(db)?;
+    let row=sqlx::query("SELECT d.decision,d.grant_id,d.operation_id,r.state,body.result,r.result_digest FROM cloud_connector_decisions d LEFT JOIN cloud_connector_effect_receipts r USING(run_id) LEFT JOIN cloud_connector_result_content body ON body.run_id=d.run_id AND body.retain_until>clock_timestamp() WHERE d.run_id=$1").bind(run).fetch_optional(&mut **g.transaction()).await.map_err(db)?;
     let mut value = json!({"run_id":run,"job_id":p.job,"commit_id":p.commit,"tool":p.name,"connector":p.family,"execution_digest":p.pin,"operation_id":p.operation,"call_id":p.call_id,"argument_digest":p.arg_digest,"arguments":p.args,"state":"waiting_approval"});
     if let Some(row) = row {
         if row.get::<String, _>("operation_id") != p.operation {
@@ -182,7 +166,12 @@ async fn decision_status(
                 .as_deref()
                 .unwrap_or("dispatching")
         );
-        if let Some(grant) = row.get::<Option<String>, _>("grant_id") {
+        if !readable {
+            value
+                .as_object_mut()
+                .ok_or_else(conflict)?
+                .remove("arguments");
+        } else if let Some(grant) = row.get::<Option<String>, _>("grant_id") {
             match grant_authority(&api.identity, &mut g, run, p, &grant).await {
                 Ok(()) => {
                     value["grant_id"] = json!(grant);
@@ -247,14 +236,14 @@ impl ReadPermit<'_> {
         let p = self.proposal;
         sqlx::query("SELECT d.run_id FROM cloud_connector_decisions d JOIN cloud_connector_plans plan USING(run_id)
             JOIN cloud_connector_model_commits m USING(run_id) JOIN cloud_runs r USING(run_id) JOIN cloud_workspaces w USING(run_id)
-            JOIN cloud_pool_hosts h USING(host_instance_id)
+            JOIN cloud_pool_hosts h USING(host_instance_id) JOIN budget_roots b ON b.root_budget_id=r.root_budget_id AND b.owner_id=r.owner_id
             JOIN artifacts model_response ON model_response.artifact_id=m.artifact_id AND model_response.version_id=m.version_id
             JOIN artifacts src ON src.artifact_id=r.input_artifact_id AND src.version_id=r.input_version_id
             WHERE d.run_id=$1 AND d.grant_id=$2 AND d.operation_id=$3 AND d.argument_digest=$4 AND d.decision='approve' AND d.expires_at>clock_timestamp()
               AND m.commit_id=$5 AND plan.execution_digest=$6 AND r.status='waiting_approval' AND w.status='ready' AND w.expires_at>clock_timestamp()
               AND w.lease_until>clock_timestamp() AND h.enabled AND h.live_until>clock_timestamp() AND h.credential_expires_at>clock_timestamp()
-              AND src.state='available' AND model_response.state='available' AND NOT EXISTS(SELECT FROM cloud_connector_effect_receipts out WHERE out.run_id=d.run_id)
-            FOR SHARE OF h,w,model_response,src")
+              AND b.state='active' AND src.state='available' AND model_response.state='available' AND NOT EXISTS(SELECT FROM cloud_connector_effect_receipts out WHERE out.run_id=d.run_id)
+            FOR SHARE OF h,w,model_response,src,b")
             .bind(run).bind(grant).bind(&p.operation).bind(&p.arg_digest).bind(&p.commit).bind(&p.pin)
             .fetch_optional(&mut **g.transaction()).await.map_err(db)?.ok_or_else(conflict)?;
         Ok(())
@@ -311,7 +300,7 @@ async fn decide(
     if !(approved || review.decision == "reject") || approved != review.grant_id.is_some() {
         return Err(AuthError::Invalid.into());
     }
-    let (mut g, _) = guard(&api.identity, &h, &run, true, true).await?;
+    let (mut g, readable) = guard(&api.identity, &h, &run, true, false).await?;
     if let Some(prior) = sqlx::query(
         "SELECT request_key,decision,grant_id FROM cloud_connector_decisions WHERE run_id=$1",
     )
@@ -328,6 +317,9 @@ async fn decide(
         }
         g.finish().await?;
         return Ok(Json(decision_status(&api, &h, &run, &p).await?));
+    }
+    if !readable {
+        return Err(denied());
     }
     if let Some(id) = &review.grant_id {
         grant_authority(&api.identity, &mut g, &run, &p, id).await?;
@@ -364,8 +356,15 @@ async fn decide(
             )) => ("unknown", None, None),
             Err(_) => ("failed", None, None),
         };
-        sqlx::query("INSERT INTO cloud_connector_effect_receipts(run_id,state,result,result_digest) SELECT run_id,$2,$3,$4 FROM cloud_connector_decisions WHERE run_id=$1 AND expires_at>clock_timestamp() ON CONFLICT DO NOTHING")
-            .bind(&run).bind(state).bind(body).bind(digest).execute(&mut **g.transaction()).await.map_err(db)?;
+        let inserted=sqlx::query("INSERT INTO cloud_connector_effect_receipts(run_id,state,result_digest) SELECT run_id,$2,$3 FROM cloud_connector_decisions WHERE run_id=$1 AND expires_at>clock_timestamp() ON CONFLICT DO NOTHING")
+            .bind(&run).bind(state).bind(&digest).execute(&mut **g.transaction()).await.map_err(db)?;
+        if let (1, Some(body), Some(digest)) = (inserted.rows_affected(), body, digest) {
+            let kept=sqlx::query("INSERT INTO cloud_connector_result_content(run_id,digest,result,retain_until) SELECT run_id,$2,$3,retain_until FROM cloud_connector_retention WHERE run_id=$1")
+                .bind(&run).bind(digest).bind(body).execute(&mut **g.transaction()).await.map_err(db)?;
+            if kept.rows_affected() != 1 {
+                return Err(denied());
+            }
+        }
         g.finish().await?;
     }
     Ok(Json(decision_status(&api, &h, &run, &p).await?))

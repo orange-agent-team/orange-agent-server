@@ -309,18 +309,18 @@ impl ArtifactStore {
             }
             if let Some(job) = row.try_get::<Option<String>, _>("job_id")? {
                 let state: String = row.try_get("settlement_state")?;
-                let charge: i64 = row.try_get("charge")?;
+                let charge: Option<i64> = row.try_get("charge")?;
                 let maximum: i64 = row.try_get("max_amount")?;
-                if charge < 0 || maximum < charge {
+                if maximum < 0 || charge.is_some_and(|n| n < 0 || n > maximum) {
                     return Err(ArtifactError::Integrity);
                 }
                 if state == "settled" {
-                    settled += i128::from(charge);
+                    settled += i128::from(charge.ok_or(ArtifactError::Integrity)?);
                 } else if state == "pending" {
                     pending += i128::from(maximum);
                 }
                 v["job"] = serde_json::json!({"job_id":job,"quote_id":row.try_get::<String,_>("quote_id")?,"max_microcredits":maximum.to_string(),
-                    "charge_microcredits":charge.to_string(),"execution_state":row.try_get::<String,_>("execution_state")?,"settlement_state":state});
+                    "charge_microcredits":charge.map(|value|value.to_string()),"execution_state":row.try_get::<String,_>("execution_state")?,"settlement_state":state});
             }
             turns.push(v);
         }

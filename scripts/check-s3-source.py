@@ -11,6 +11,7 @@ import shutil
 import socket
 import subprocess
 import tempfile
+import sys
 import time
 from urllib.parse import quote
 from owned_postgres import database
@@ -21,7 +22,11 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--database-url-file", type=Path)
 parser.add_argument("--identity-config", type=Path)
 parser.add_argument("--web-repo", type=Path)
+parser.add_argument("--model-run", action="store_true")
+parser.add_argument("--model-runtime-root", type=Path)
 args = parser.parse_args()
+if args.model_run and not (args.database_url_file and args.web_repo and args.model_runtime_root):
+    raise SystemExit("Model workflow requires database, identity, Web and verified model runtime")
 if args.web_repo and not args.database_url_file:
     raise SystemExit("Browser acceptance requires database and identity fixtures")
 if bool(args.database_url_file) != bool(args.identity_config):
@@ -216,7 +221,14 @@ with tempfile.TemporaryDirectory(prefix="oa-s3-", dir="/tmp") as tmp:
             (folder / "object-replaced").touch()
             if case.wait(timeout=45):
                 raise RuntimeError("Source checks failed")
-            if args.database_url_file:
+            if args.model_run:
+                config={"source_id":"documents","registration":{"address":"127.0.0.1","port":port,"region":"us-east-1","bucket":bucket,"prefix":"team/approved"},"access_key":creds["accessKey"],"secret_key":creds["secretKey"]}
+                private=folder/"model-source.json"
+                private.write_text(json.dumps(config))
+                private.chmod(0o600)
+                subprocess.run([sys.executable,root/"scripts/check-cloud-model-turn.py","--database-url-file",args.database_url_file.resolve(),"--identity-config",args.identity_config.resolve(),"--web-repo",args.web_repo.resolve(),"--model-runtime-root",args.model_runtime_root.resolve()],
+                   cwd=root,env=dict(os.environ,ORANGE_MODEL_CONNECTOR_FIXTURE=str(private)),check=True)
+            elif args.database_url_file:
                 with data.open("wb") as f:
                     f.truncate(3 * 1024 * 1024)
                 if (

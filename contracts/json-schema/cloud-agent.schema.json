@@ -1307,8 +1307,15 @@
               "pattern": "^(0|[1-9][0-9]*)$"
             },
             "charge_microcredits": {
-              "type": "string",
-              "pattern": "^(0|[1-9][0-9]*)$"
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^(0|[1-9][0-9]*)$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "execution_state": {
               "type": "string"
@@ -1324,6 +1331,25 @@
             "charge_microcredits",
             "execution_state",
             "settlement_state"
+          ],
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "settlement_state": {
+                    "const": "settled"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "charge_microcredits": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9][0-9]*)$"
+                  }
+                }
+              }
+            }
           ]
         }
       },

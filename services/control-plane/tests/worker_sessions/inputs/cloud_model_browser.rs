@@ -116,6 +116,7 @@ pub(super) async fn exercise(c: Setup<'_>, driver: &str) {
     let gate_release = private.path().join("queue-release");
     let expiry_op = private.path().join("expiry-operation");
     let expiry_locked = private.path().join("expiry-locked");
+    let connector_case = std::env::var_os("ORANGE_MODEL_CONNECTOR_FIXTURE").is_some();
     let continuing = std::env::var_os("ORANGE_CLOUD_CONTINUATION").is_some();
     let tool_cases = std::env::var_os("ORANGE_CLOUD_DIRECTORY_TOOLS").is_some();
     let web_origin = format!(
@@ -123,7 +124,7 @@ pub(super) async fn exercise(c: Setup<'_>, driver: &str) {
         std::env::var("ORANGE_WEB_COMPUTE_QA_PORT").unwrap_or_else(|_| "43127".into())
     );
     let packet = json!({"api":format!("http://{}/",c.api),"origin":web_origin,"cookie":c.cookie,"user":c.user,"owner":c.owner,"budget":c.budget,"price":c.price,"model":profile().model_version,
-        "expiry_operation":expiry_op,"expiry_locked":expiry_locked,"continuation_case":continuing,"continuation_screenshot":evidence.join("actual-tool-continuation.png"),"directory_cases":tool_cases,"tool_screenshot":evidence.join("actual-approved-directory.png"),"gate_quote":gate_quote,"gate_locked":gate_locked,"gate_release":gate_release,"oracle_input":input_file,"oracle_output":output_file,"screenshot":evidence.join("actual-hosted-model.png")});
+        "expiry_operation":expiry_op,"expiry_locked":expiry_locked,"connector_case":connector_case,"connector_screenshot":evidence.join("actual-model-connector.png"),"continuation_case":continuing,"continuation_screenshot":evidence.join("actual-tool-continuation.png"),"directory_cases":tool_cases,"tool_screenshot":evidence.join("actual-approved-directory.png"),"gate_quote":gate_quote,"gate_locked":gate_locked,"gate_release":gate_release,"oracle_input":input_file,"oracle_output":output_file,"screenshot":evidence.join("actual-hosted-model.png")});
     let mut fd = browser.stdin.take().expect("private stdin");
     fd.write_all(&serde_json::to_vec(&packet).expect("packet"))
         .await
@@ -133,7 +134,7 @@ pub(super) async fn exercise(c: Setup<'_>, driver: &str) {
     let (finish_expiry, expiry_done) = tokio::sync::oneshot::channel();
     let wait_browser = async {
         let result = tokio::time::timeout(
-            Duration::from_secs(if continuing {
+            Duration::from_secs(if continuing || connector_case {
                 540
             } else if tool_cases {
                 440
@@ -469,7 +470,62 @@ pub(super) async fn exercise(c: Setup<'_>, driver: &str) {
             case["dispatch_count"] = json!(permits);
         }
     }
+    let mut connector_receipts = Vec::new();
+    if connector_case {
+        let cases = browser["connector_runs"]
+            .as_array()
+            .expect("observed model connector cases");
+        assert_eq!(cases.len(), 2);
+        for cse in cases {
+            let run = cse["run_id"].as_str().expect("Run");
+            let row=sqlx::query("SELECT p.tool_name,c.job_id,c.commit_id,d.call_id,d.operation_id,d.decision,e.state,e.result_digest,
+                (SELECT count(*) FROM s3_source_calls reads WHERE reads.run_id=p.run_id AND reads.request_key='connector-effect/'||d.operation_id) AS dispatches,
+                (SELECT count(*) FROM job_settlements settled WHERE settled.job_id=c.job_id) AS settlements
+                FROM cloud_connector_plans p JOIN cloud_connector_model_commits c USING(run_id) JOIN cloud_connector_decisions d USING(run_id) JOIN cloud_connector_effect_receipts e USING(run_id) WHERE p.run_id=$1")
+                .bind(run).fetch_one(c.pool).await.expect("actual committed model connector");
+            assert_eq!(row.get::<String, _>("tool_name"), "list_objects");
+            assert_eq!(
+                row.get::<String, _>("job_id"),
+                cse["job_id"].as_str().expect("Job")
+            );
+            assert_eq!(
+                row.get::<String, _>("commit_id"),
+                cse["commit_id"].as_str().expect("commit")
+            );
+            assert_eq!(
+                row.get::<String, _>("operation_id"),
+                cse["operation_id"].as_str().expect("operation")
+            );
+            assert_eq!(row.get::<i64, _>("settlements"), 1);
+            let bodies: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM cloud_connector_result_content WHERE run_id=$1",
+            )
+            .bind(run)
+            .fetch_one(c.pool)
+            .await
+            .expect("payload purge check");
+            assert_eq!(bodies, 0, "revocation erases the durable source body");
+            let mut receipt = cse.clone();
+            receipt["source_calls"] = json!(row.get::<i64, _>("dispatches"));
+            receipt["settlements"] = json!(row.get::<i64, _>("settlements"));
+            receipt["retained_bodies_after_revoke"] = json!(bodies);
+            connector_receipts.push(receipt);
+            let approved = cse["approved"] == true;
+            assert_eq!(row.get::<i64, _>("dispatches"), i64::from(approved));
+            assert_eq!(
+                row.get::<String, _>("state"),
+                if approved { "succeeded" } else { "rejected" }
+            );
+            assert_eq!(
+                row.get::<Option<String>, _>("result_digest").is_some(),
+                approved
+            );
+        }
+    }
     let mut result = browser;
+    if connector_case {
+        result["connector_runs"] = json!(connector_receipts);
+    }
     result["directory_runs"] = json!(directory);
     result["settlement_count"] = json!(count);
     result["charge_microcredits"] = json!(charge.to_string());

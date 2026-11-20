@@ -202,7 +202,11 @@ pub(crate) async fn reconcile(pool: &sqlx::PgPool) -> Result<bool, sqlx::Error> 
         LEFT JOIN cloud_connector_effect_receipts receipt USING(run_id)
         WHERE r.status='waiting_approval' AND (receipt.run_id IS NOT NULL OR d.expires_at<=clock_timestamp())
         ORDER BY d.expires_at LIMIT 1 FOR UPDATE OF r SKIP LOCKED").fetch_optional(&mut *tx).await?;
-    let Some(row) = row else { return Ok(false) };
+    let Some(row) = row else {
+        let purged=sqlx::query("DELETE FROM cloud_connector_result_content WHERE run_id IN (SELECT run_id FROM cloud_connector_result_content WHERE retain_until<=clock_timestamp() ORDER BY retain_until LIMIT 64 FOR UPDATE SKIP LOCKED)").execute(&mut *tx).await?;
+        tx.commit().await?;
+        return Ok(purged.rows_affected() > 0);
+    };
     let run: String = row.try_get("run_id")?;
     let state = row.try_get::<Option<String>, _>("state")?;
     if state.is_none() {
@@ -269,5 +273,52 @@ mod tests {
             &json!({"kind":"external_untrusted_data","data":{"view_ids":["one"]}}),
         )
         .expect("result");
+    }
+    #[test]
+    fn model_input_and_user_result_must_match_one_selected_operation() {
+        use crate::{cloud_model::Selection, cloud_tools::Choice};
+        use orange_protocol::model::{GenerateRequest, Message, Role};
+        for (_, name, _) in TOOLS {
+            let mut selected = Selection {
+                model_version: "model-a".into(),
+                price_version: "price-a".into(),
+                invocation_id: "inv-a".into(),
+                output_limit: 64,
+                tool: Some(Choice {
+                    name: name.into(),
+                    execution_digest: digest(name).expect("pin"),
+                }),
+                continue_after_tool: false,
+            };
+            assert!(selected.valid());
+            let mut req = GenerateRequest {
+                model_version: selected.model_version.clone(),
+                invocation_id: selected.invocation_id.clone(),
+                max_output_tokens: 64,
+                messages: vec![Message::plain(
+                    Role::User,
+                    "request a source operation".into(),
+                )],
+                tools: vec![definition(name).expect("definition")],
+            };
+            assert!(
+                selected
+                    .projection(&serde_json::to_vec(&req).expect("body"))
+                    .is_ok()
+            );
+            req.tools[0].description = "changed provider prompt".into();
+            assert!(
+                selected
+                    .projection(&serde_json::to_vec(&req).expect("body"))
+                    .is_err()
+            );
+            selected.continue_after_tool = true;
+            assert!(!selected.valid());
+        }
+        let listing =
+            json!({"kind":"external_untrusted_data","data":{"keys":["a.txt"],"next_after":null}});
+        assert!(check_result("list_objects", &listing).is_ok());
+        assert!(check_result("list_views", &listing).is_err());
+        assert!(check_result("read_object", &listing).is_err());
     }
 }

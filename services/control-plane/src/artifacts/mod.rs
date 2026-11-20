@@ -3,6 +3,7 @@
 pub(crate) mod authority;
 mod cloud_followup;
 mod cloud_turn;
+mod connector_proposal;
 mod delivery;
 pub mod http;
 pub(crate) mod inputs;

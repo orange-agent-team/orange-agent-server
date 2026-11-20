@@ -62,8 +62,21 @@ async fn actual_browser_quote_model_settlement_cleanup_and_deleted_content() {
     c.f.objects.drain().await.expect("old writer drain");
     drop(c.f.objects);
     c.meter.shutdown().await.expect("old counter stopped");
+    let mut connector_env = std::collections::BTreeMap::new();
+    if let Some(path) = std::env::var_os("ORANGE_MODEL_CONNECTOR_FIXTURE") {
+        let mut source: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path).expect("private connector config"))
+                .expect("connector fixture");
+        source["owner_id"] = serde_json::json!(c.f.owner);
+        let file = config_root.path().join("s3-registration.json");
+        std::fs::write(&file, serde_json::to_vec(&[source]).expect("source"))
+            .expect("private source config");
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).expect("private");
+        connector_env.insert("ORANGE_S3_SOURCES", file);
+    }
     let mut api = Command::new(std::env::var("ORANGE_USER_API_BINARY").expect("actual API"))
         .env_clear()
+        .envs(connector_env)
         .env("ORANGE_ENV", "development")
         .env(
             "DATABASE_URL",
