@@ -21,6 +21,7 @@ from urllib.request import Request, urlopen
 import uuid
 
 from owned_postgres import database
+from acceptance_origins import reserve_origins
 
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser()
@@ -28,7 +29,14 @@ parser.add_argument("--database-url-file", type=Path, default=ROOT / ".local/dat
 parser.add_argument("--identity-config", type=Path, default=ROOT / ".local/identity/user-config.json")
 parser.add_argument("--model-cache", type=Path, default=ROOT / ".local/transcription-model")
 parser.add_argument("--python", type=Path, default=ROOT / ".local/transcription-venv/bin/python")
+parser.add_argument("--web-repo", type=Path)
 args = parser.parse_args()
+if args.web_repo:
+    reserve_origins(43122)
+    web = args.web_repo.resolve()
+    node = Path.home()/".nvm/versions/node/v22.23.2/bin/node"
+    subprocess.run([node, web/"scripts/check.mjs"],cwd=web,check=True)
+    subprocess.run([sys.executable,web/"scripts/local-tls.py"],cwd=web,check=True)
 if not __debug__:
     raise SystemExit("Verification requires enabled assertions")
 rustup = shutil.which("rustup") or "/opt/homebrew/opt/rustup/bin/rustup"
@@ -96,6 +104,14 @@ def exercise(base, sql, folder):
     for media, content in [("audio/flac",raw),("audio/wav",raw[:-2]),("text/plain",b"private text")]:
         route, version, hdr = publish(media,content)
         request(base,route,version,hdr,422)
+    if args.web_repo:
+        screenshot = ROOT/".local/audio-preflight-evidence/measurement.png"
+        screenshot.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
+        browser = {"api":base,"origin":origin,"owner":owner,"token":auth["Cookie"].split("=",1)[1],
+                   "csrf":auth["X-CSRF-Token"],"sample":str((args.model_cache/"jfk.wav").resolve()),
+                   "sha":pin["sha256"],"screenshot":str(screenshot)}
+        subprocess.run([node,web/"apps/web/scripts/real-audio-preflight.mjs"],
+                       input=json.dumps(browser),text=True,cwd=web,check=True,timeout=180)
     (folder/"arm").touch()
     with ThreadPoolExecutor(max_workers=1) as executor:
         future = executor.submit(request,base,endpoint,body,headers,403)
