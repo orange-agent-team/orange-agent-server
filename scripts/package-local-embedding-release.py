@@ -21,6 +21,7 @@ p=argparse.ArgumentParser()
 p.add_argument('--native',type=Path,required=True)
 p.add_argument('--wheelhouse',type=Path,required=True)
 p.add_argument('--backend-wheel',type=Path,required=True)
+p.add_argument('--uv-cache',type=Path,required=True,help='Offline cache containing the pinned Python build backend')
 p.add_argument('--model-cache',type=Path,required=True)
 p.add_argument('--output-dir',type=Path,required=True)
 args=p.parse_args()
@@ -68,6 +69,20 @@ wheel=args.backend_wheel
 if wheel.name!=f"orange_inference_backends-{project['version']}-py3-none-any.whl":
     raise ValueError('Wrong E09 wheel version')
 backend=wheel.read_bytes()
+# Reproduce the entire first-party wheel, including installer metadata and entry points.
+with tempfile.TemporaryDirectory(prefix='oe-backend-') as temp:
+    tree=Path(temp)/'backends'
+    tree.mkdir()
+    sources=subprocess.check_output(['git','ls-tree','-r','--name-only',commit,'--','backends'],cwd=root,text=True).splitlines()
+    for path in sources:
+        dst=Path(temp)/path
+        dst.parent.mkdir(parents=True,exist_ok=True)
+        dst.write_bytes(tracked(commit,path))
+    out=Path(temp)/'dist'
+    build_env=dict(os.environ,SOURCE_DATE_EPOCH='946684800',UV_CACHE_DIR=str(args.uv_cache.resolve()))
+    subprocess.run(['uv','build','--offline','--wheel','--python',sys.executable,'--out-dir',str(out)],cwd=tree,env=build_env,check=True)
+    if (out/wheel.name).read_bytes()!=backend:
+        raise ValueError('Supplied backend wheel differs from the complete pinned-source build')
 with ZipFile(io.BytesIO(backend)) as z:
     for file in ('embedding.py','__init__.py'):
         name='orange_inference_backends/'+file
@@ -113,7 +128,7 @@ with tempfile.TemporaryDirectory(dir=dest,prefix='.verify-') as temp:
     else:
         os.link(first,published)
     report=dict(archive=published.name,sha256=digest,bytes=published.stat().st_size,source=commit,packaging_source=packaging,
-                identical_archives=2,verified_native_builds=2,offline_wheels=len(requirements),smoke=answer)
+                identical_archives=2,verified_native_builds=2,backend_rebuilt_from_commit=True,offline_wheels=len(requirements),smoke=answer)
     receipt=published.with_suffix('.json')
     receipt.write_text(json.dumps(report,indent=2)+'\n')
     print(json.dumps(report))
