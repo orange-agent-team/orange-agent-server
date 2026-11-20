@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build MP-03 release executables from two independent pinned source trees."""
+"""Build the selected CPU release executables from two independent pinned source trees."""
 import argparse
 import hashlib
 import json
@@ -15,18 +15,21 @@ import tempfile
 root = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser()
 parser.add_argument("--commit", required=True)
+parser.add_argument("--profile", choices=("embedding", "transcription"), default="embedding")
 args = parser.parse_args()
+programs = ("orange-embedding-host", "examples/local-embeddings") if args.profile == "embedding" else ("orange-transcribe",)
+target_args = ["--features", "embedding-host", "--bin", programs[0], "--example", "local-embeddings"] if args.profile == "embedding" else ["--bin", programs[0]]
 if len(args.commit)!=40 or any(c not in "0123456789abcdef" for c in args.commit):
     raise SystemExit("Supply a complete immutable local commit")
 if platform.system()!="Darwin" or platform.machine()!="arm64":
     raise SystemExit("Only the macOS arm64 development distribution is qualified here")
-dest = root / ".local/embedding-release" / args.commit
+dest = root / ".local" / (args.profile + "-release") / args.commit
 dest.mkdir(parents=True,exist_ok=True)
 target = "aarch64-apple-darwin"
 rustup = shutil.which("rustup") or "/opt/homebrew/opt/rustup/bin/rustup"
 cargo = Path(subprocess.check_output([rustup,"which","--toolchain","1.97.1","cargo"],text=True).strip())
 epoch = subprocess.check_output(["git","show","-s","--format=%ct",args.commit],cwd=root,text=True).strip()
-report = {"source_commit":args.commit,"target":target,"macos":platform.mac_ver()[0],"rustc":subprocess.check_output([cargo.parent/"rustc","--version"],text=True).strip()}
+report = {"profile":args.profile,"source_commit":args.commit,"target":target,"macos":platform.mac_ver()[0],"rustc":subprocess.check_output([cargo.parent/"rustc","--version"],text=True).strip()}
 builds=[]
 with tempfile.TemporaryDirectory(prefix="oe-build-") as tmp:
     tmp=Path(tmp)
@@ -45,9 +48,9 @@ with tempfile.TemporaryDirectory(prefix="oe-build-") as tmp:
                  CARGO_TARGET_DIR=str(tree/'target'),CARGO_PROFILE_RELEASE_STRIP="symbols",SOURCE_DATE_EPOCH=epoch,
                  RUSTFLAGS="--remap-path-prefix="+str(tree)+"=/orange-agent",CFLAGS="-ffile-prefix-map="+str(tree)+"=/orange-agent")
         subprocess.run([cargo,"build","--locked","--offline","--target",target,"--release","-p","orange-model-runtime",
-                        "--features","embedding-host","--bin","orange-embedding-host","--example","local-embeddings"],cwd=tree,env=env,check=True)
+                        *target_args],cwd=tree,env=env,check=True)
         files={}
-        for name in ("orange-embedding-host","examples/local-embeddings"):
+        for name in programs:
             artifact=tree/"target"/target/"release"/name
             linkage=subprocess.check_output(["otool","-L",artifact],text=True).splitlines()[1:]
             if any(not line.strip().startswith(("/usr/lib/","/System/Library/")) for line in linkage):

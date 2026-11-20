@@ -23,4 +23,15 @@ target/debug/orange-transcribe measure "$venv" "$PWD/$asr" "$PWD/.local/asr-slot
 target/debug/orange-transcribe confirm "$venv" "$PWD/$asr" "$PWD/.local/asr-slot" "$asr/jfk.wav" .local/asr-receipt.json en
 ```
 
-验收使用 whisper.cpp 的固定十一秒录音，检查已记录的参考词序、语言检测、时间段、五种编码路径、600 秒边界、100,000,000 字节边界、损坏输入、篡改模型、预检不匹配和推理中取消。语言代码目录取自固定模型的 lang_ids 与 tokenizer，本次真实识别样本为英语。GPU、其他系统、真实多语种准确率和生产收费尚需独立验证。
+验收使用 whisper.cpp 的固定十一秒录音，检查已记录的参考词序、语言检测、时间段、五种编码路径、600 秒边界、100,000,000 字节边界、损坏输入、篡改模型、预检不匹配和推理中取消。语言代码目录取自固定模型的 lang_ids 与 tokenizer，该十一秒回归使用英语。下面的语料验收另含普通话。GPU、其他系统、常规语料识别准确率和生产收费尚需独立验证。
+
+macOS arm64 开发包使用相同的锁文件和后端源码。在已配置 Python 3.12 的构建机上，以下命令准备转写专用 wheelhouse，再从当前提交做两次原生构建、两次归档和一次全新离线安装。下载目录中的文件只在摘要与 uv.lock 匹配时进入发行包。
+
+```sh
+mkdir -p .local/transcription-wheelhouse
+uv export --project backends --locked --no-dev --extra transcription --no-emit-project --no-header --format requirements-txt --output-file .local/transcription-wheelhouse/dependencies.txt
+python3.12 -m pip --isolated download --index-url https://pypi.org/simple --only-binary=:all: --no-deps --require-hashes --dest .local/transcription-wheelhouse -r .local/transcription-wheelhouse/dependencies.txt
+python3 scripts/check-embedding-distribution.py --profile transcription
+```
+
+另可运行 `python3 scripts/check-transcription-corpus.py` 检查 60 秒中英文输入。每种语言由一段已固定摘要的真人录音完整重复、句间留白，再补零至恰好 60 秒。每种输入实跑两遍，记录时长、样本数、时间段、英文词错误或中文字符错误，并采样宿主与本次子进程的 RSS。完整静音应返回 NoSpeech 且不交付候选文本。两种短录音的重复结果只用于这些固定样本的回归。[中文录音来源与参考文本](https://github.com/modelscope/FunASR/wiki/%E5%BF%AB%E9%80%9F%E6%8E%A8%E7%90%86)
