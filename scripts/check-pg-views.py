@@ -10,7 +10,7 @@ import subprocess
 from urllib.parse import urlsplit, urlunsplit, unquote
 import uuid
 from owned_postgres import database
-from acceptance_origins import reserve_origins
+from connector_browser_fixture import prepare_browser
 
 root = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser()
@@ -18,18 +18,7 @@ parser.add_argument("--database-url-file", type=Path, required=True)
 parser.add_argument("--identity-config", required=True, type=Path)
 parser.add_argument("--web-repo", type=Path)
 args = parser.parse_args()
-browser_env = {}
-if args.web_repo:
-    reserve_origins(43122)
-    web = args.web_repo.resolve()
-    node = Path.home()/".nvm/versions/node/v22.23.2/bin/node"
-    if subprocess.check_output([node,"--version"],text=True).strip()!="v22.23.2":
-        raise SystemExit("Pinned Node required")
-    subprocess.run([node,web/"scripts/check.mjs"],cwd=web,check=True)
-    subprocess.run(["python3",web/"scripts/local-tls.py"],cwd=web,check=True)
-    evidence=root/".local/pg-view-evidence"
-    evidence.mkdir(mode=0o700,parents=True,exist_ok=True)
-    browser_env={"ORANGE_CN05_BROWSER":str(web/"apps/web/scripts/real-pg-connector.mjs"),"ORANGE_CN05_NODE":str(node),"ORANGE_CN05_EVIDENCE":str(evidence)}
+browser_env=prepare_browser(args.web_repo,root,"CN05")
 role = "cn05_" + uuid.uuid4().hex
 password = secrets.token_hex(32)
 psql = shutil.which("psql") or "/opt/homebrew/opt/postgresql@17/bin/psql"

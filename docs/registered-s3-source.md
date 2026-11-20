@@ -11,3 +11,5 @@ list 使用 ListObjectsV2 的 start-after 键，每页 1 至 100 个文件。hea
 read_object 对固定对象执行条件 GET，生成与 grant、Run、大小、版本和内容 SHA-256 绑定的源端产物回执。重试相同幂等键可取回原回执。附件字节仍由源数据桶持有。授权下载端点重新核对源版本和 SHA-256，再核对当前会话及授权，最后以 attachment 和 no-store 返回二进制内容。源对象替换或删除、授权过期、撤销、Run 结束均阻断旧引用，重新授权产生独立引用范围。[接口契约](../contracts/openapi/s3-connector.v1.json)
 
 联合验收在两个临时回环端口运行真实 S3 源和受控延迟代理。代理只在源已返回完整的 3 MiB 后延迟交付，以验证在途撤权。平台状态存储在一次性 PostgreSQL 数据库。用户会话和运行中的 Run 是测试记录。
+
+在 macOS arm64 上执行 `python3 scripts/prepare-s3-source.py` 可自动获得上述固定测试发行物。随后在 `check-s3-source.py` 命令中传入 `--database-url-file .local/database-url --identity-config .local/identity/user-config.json --web-repo ../orange-agent-web`，可一并验证平台授权和已构建的浏览器客户端。浏览器从源端产物回执下载 3 MiB 附件，实际核对文件名、完整内容摘要及撤权后刷新。

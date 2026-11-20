@@ -45,6 +45,13 @@ async fn s3_receipts_and_delivery_require_the_original_live_authority() {
             .expect("registered S3 source");
     f.router = auth::routes::router(f.identity.clone());
     let (run, _root) = active_run(&f).await;
+    if let Ok(driver) = std::env::var("ORANGE_CN06_BROWSER") {
+        let receipt = super::connector_run::browser(&f, &run, driver).await;
+        assert_eq!(
+            receipt,
+            json!({"listed":true,"inspected":true,"downloaded_bytes":3145728,"sha256":hex::encode(Sha256::digest(vec![0u8;3145728])),"revoked_after_reload":true})
+        );
+    }
     let path = format!("/api/v1/agent/runs/{run}/connectors/s3");
     assert_eq!(
         request(&other, "GET", &path, None, headers(&other)).await.0,

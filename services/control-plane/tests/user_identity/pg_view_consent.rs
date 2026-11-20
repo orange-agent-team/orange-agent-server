@@ -36,52 +36,11 @@ async fn scoped_source_reads_require_live_run_and_grant_at_delivery() {
     f.router = auth::routes::router(f.identity.clone());
     let (run, _root) = super::connector_run::active_run(&f).await;
     if let Ok(driver) = std::env::var("ORANGE_CN05_BROWSER") {
-        use tokio::io::AsyncWriteExt;
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("test listener");
-        let addr = listener.local_addr().expect("address");
-        let app = f.router.clone();
-        let serving =
-            tokio::spawn(async move { axum::serve(listener, app).await.expect("serve test API") });
-        let dir =
-            std::path::PathBuf::from(std::env::var("ORANGE_CN05_EVIDENCE").expect("evidence"));
-        let mut child =
-            tokio::process::Command::new(std::env::var("ORANGE_CN05_NODE").expect("node"))
-                .arg(driver)
-                .env_clear()
-                .stdin(std::process::Stdio::piped())
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .kill_on_drop(true)
-                .spawn()
-                .expect("Chrome driver");
-        let packet = json!({"api":format!("http://{addr}"),"origin":f.identity.config.user_origin,"token":f.token,"run":run,"screenshot":dir.join("rows.png")});
-        let mut input = child.stdin.take().expect("private pipe");
-        input
-            .write_all(&serde_json::to_vec(&packet).expect("JSON"))
-            .await
-            .expect("send private fixture");
-        drop(input);
-        let out = tokio::time::timeout(
-            std::time::Duration::from_secs(120),
-            child.wait_with_output(),
-        )
-        .await
-        .expect("driver deadline")
-        .expect("browser");
-        serving.abort();
-        assert!(
-            out.status.success(),
-            "{}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        let receipt: Value = serde_json::from_slice(&out.stdout).expect("browser receipt");
+        let receipt = super::connector_run::browser(&f, &run, driver).await;
         assert_eq!(
             receipt,
             json!({"approved":true,"listed":true,"described":true,"queried":true,"revoked_after_reload":true})
         );
-        std::fs::write(dir.join("browser.json"), out.stdout).expect("save receipt");
     }
     let base = format!("/api/v1/agent/runs/{run}/connectors/postgres");
     assert_eq!(

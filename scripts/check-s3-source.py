@@ -15,15 +15,20 @@ import time
 from urllib.parse import quote
 from owned_postgres import database
 from s3_delivery_fixture import delayed_source
+from connector_browser_fixture import prepare_browser
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--database-url-file", type=Path)
 parser.add_argument("--identity-config", type=Path)
+parser.add_argument("--web-repo", type=Path)
 args = parser.parse_args()
+if args.web_repo and not args.database_url_file:
+    raise SystemExit("Browser acceptance requires database and identity fixtures")
 if bool(args.database_url_file) != bool(args.identity_config):
     raise SystemExit("Specify both database and identity fixtures")
 os.umask(0o077)
 root = Path(__file__).resolve().parents[1]
+browser_env=prepare_browser(args.web_repo,root,"CN06")
 pin = json.loads((root / "config/s3-fixture.lock.json").read_text())
 weed = root / ".local/seaweedfs/weed"
 if (
@@ -252,6 +257,7 @@ with tempfile.TemporaryDirectory(prefix="oa-s3-", dir="/tmp") as tmp:
                         env=dict(
                             env,
                             ORANGE_CN06_FENCE=tmp,
+                            **browser_env,
                             ORANGE_S3_SOURCE_FIXTURE=json.dumps(config),
                             ORANGE_TEST_DATABASE_URL=url,
                             ORANGE_TEST_USER_CONFIG_FILE=str(
