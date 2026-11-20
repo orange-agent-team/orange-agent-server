@@ -338,7 +338,7 @@ impl Store {
                 .bind(&req.quote_id)
                 .execute(&mut *tx)
                 .await?;
-            let version:i64=sqlx::query_scalar("UPDATE cloud_runs SET status='running',version=version+1 WHERE run_id=$1 AND status='queued' RETURNING version")
+            let version:i64=sqlx::query_scalar("UPDATE cloud_runs SET status='running',version=version+1 WHERE run_id=$1 AND status IN ('queued','waiting_approval') RETURNING version")
                 .bind(run).fetch_optional(&mut *tx).await?.ok_or(StoreError::Conflict)?;
             sqlx::query("INSERT INTO cloud_run_events(run_id,run_version,kind) VALUES($1,$2,'model_job_submitted')").bind(run).bind(version).execute(&mut *tx).await?;
             crate::cloud_model::live(

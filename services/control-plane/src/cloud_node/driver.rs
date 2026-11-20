@@ -170,6 +170,21 @@ impl Session {
         }
         serde_json::from_str(&line).map_err(|_| Error::Driver)
     }
+    pub async fn directory(&mut self, payload: &Value) -> Result<(), Error> {
+        let line = format!(
+            "tool {}\n",
+            serde_json::to_string(payload).map_err(|_| Error::Local)?
+        );
+        if line.len() > 2048 {
+            return Err(Error::Local);
+        }
+        self.stdin
+            .as_mut()
+            .ok_or(Error::Driver)?
+            .write_all(line.as_bytes())
+            .await
+            .map_err(|_| Error::Driver)
+    }
     pub async fn renew(&mut self, expiry: i64) -> Result<(), Error> {
         self.stdin
             .as_mut()

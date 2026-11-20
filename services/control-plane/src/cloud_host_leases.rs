@@ -318,6 +318,9 @@ pub(super) async fn stop(
         }
         sqlx::query("UPDATE cloud_workspaces SET status='draining',version=version+1,epoch=epoch+1,lease_until=NULL WHERE workspace_id=$1")
             .bind(&s.workspace_id).execute(&mut *tx).await.map_err(db_error)?;
+        crate::cloud_tools::fence(&mut tx, &s.run_id, "host_stop")
+            .await
+            .map_err(db_error)?;
         crate::store::stop_cloud_job(&mut tx, &s.run_id)
             .await
             .map_err(|_| Status::unavailable("cloud job stop unresolved"))?;

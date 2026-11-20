@@ -11,6 +11,7 @@ use tokio::sync::watch;
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Identity};
 mod driver;
 mod journal;
+mod operations;
 use driver::{Driver, Session};
 use journal::{Entry, Journal, Phase};
 const PROFILE: &str = "dev-gvisor-linux-arm64-v1";
@@ -35,8 +36,12 @@ pub enum Error {
     Local,
     #[error("OCI backend could not be launched")]
     NeverLaunched,
+    #[error("original tool operation is terminal with an unknown outcome")]
+    UnknownEffect,
     #[error("OCI backend or evidence unavailable")]
     Driver,
+    #[error("invalid bounded tool result")]
+    ToolEvidence,
     #[error("original allocation remains unresolved")]
     Recovery,
     #[error("platform Host transport unavailable")]
@@ -73,6 +78,7 @@ fn key_bytes(path: &std::path::Path) -> Result<Vec<u8>, Error> {
 }
 pub struct Node {
     client: PlatformHostPoolClient<Channel>,
+    execution: host::run_store_client::RunStoreClient<Channel>,
     host: String,
     attestation: String,
     journal: Journal,
@@ -110,6 +116,7 @@ impl Node {
             .await
             .map_err(|_| Error::Transport)?;
         Ok(Self {
+            execution: host::run_store_client::RunStoreClient::new(channel.clone()),
             client: PlatformHostPoolClient::new(channel),
             host: c.host_instance_id,
             attestation: c.attestation_digest,
@@ -126,6 +133,7 @@ impl Node {
                 attestation_digest: self.attestation.clone(),
                 accept_reservations: accept,
                 input_protocol_version: 1,
+                runstore_version: 1,
             })
             .await?
             .into_inner())
@@ -158,7 +166,11 @@ impl Node {
             match result {
                 Ok(()) => backoff = 1,
                 Err(
-                    Error::Rpc(tonic::Code::Unavailable | tonic::Code::DeadlineExceeded)
+                    Error::Rpc(
+                        tonic::Code::Unavailable
+                        | tonic::Code::Cancelled
+                        | tonic::Code::DeadlineExceeded,
+                    )
                     | Error::Transport,
                 ) => backoff = (backoff * 2).min(30),
                 Err(e) => {
@@ -202,6 +214,8 @@ impl Node {
                     phase: Phase::ClaimIntent,
                     cleanup_digest: None,
                     readiness_digest: None,
+                    execution_epoch: None,
+                    dispatched_operation: None,
                 };
                 self.journal.save(&e)?;
                 e
@@ -267,7 +281,9 @@ impl Node {
         self.recover(reclaim).await?;
         match result {
             Err(Error::Rpc(tonic::Code::FailedPrecondition | tonic::Code::NotFound))
-            | Err(Error::NeverLaunched | Error::Driver) => {
+            | Err(
+                Error::NeverLaunched | Error::Driver | Error::ToolEvidence | Error::UnknownEffect,
+            ) => {
                 eprintln!(
                     "Allocation closed after preparation failed; original cleanup acknowledged"
                 );
@@ -329,6 +345,8 @@ impl Node {
         session: &mut Session,
         shutdown: &mut watch::Receiver<bool>,
     ) -> Result<(), Error> {
+        let mut execution: Option<host::RunAuthority> = None;
+        let mut pending: Option<operations::Dispatch> = None;
         let mut tick = tokio::time::interval(Duration::from_secs(4));
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
@@ -336,6 +354,12 @@ impl Node {
                 _=shutdown.changed()=>return Ok(()),
                 line=session.next()=>{
                     let record=line?;
+                    if matches!(record["phase"].as_str(),Some("directory_result"|"operation_unknown")){
+                        let authority=execution.as_ref().ok_or(Error::Recovery)?;
+                        let dispatch=pending.take().ok_or(Error::Recovery)?;
+                        operations::commit(&mut self.execution,authority,&dispatch,&record).await?;
+                        continue;
+                    }
                     Self::identity(e,&record)?;
                     if record["phase"]=="cleaned"{return Ok(());}
                     if record["phase"]!="ready"||e.phase!=Phase::Starting||record["input_staged"]!=true||record["workload_uid"]!=65534||
@@ -346,6 +370,12 @@ impl Node {
                         materialization_digest:readiness.clone()}).await?.into_inner();
                     if response.allocation_id!=lease.allocation_id || response.workspace_id!=e.workspace || response.sandbox_id!=record["sandbox_id"]{
                         return Err(Error::Recovery);
+                    }
+                    if response.requires_run_authority{
+                        let auth=self.execution.claim(host::ClaimRequest{run_id:e.run.clone(),host_instance_id:self.host.clone(),
+                            command_id:format!("run-{}",e.command),expected_run_version:response.run_version}).await?.into_inner();
+                        if auth.run_id!=e.run||auth.host_instance_id!=self.host||auth.run_epoch==0||!valid_id(&auth.root_budget_id)||!valid_id(&auth.owner_scope_id){return Err(Error::Recovery);}
+                        e.execution_epoch=Some(auth.run_epoch);execution=Some(auth);
                     }
                     e.readiness_digest=Some(readiness);e.phase=Phase::Ready;self.journal.save(e)?;
                 }
@@ -359,6 +389,16 @@ impl Node {
                     if fresh.host_instance_id!=e.host||fresh.allocation_id!=lease.allocation_id||fresh.epoch!=lease.epoch||
                         fresh.run_id!=e.run||fresh.workspace_id!=e.workspace{return Err(Error::Recovery);}
                     session.renew(fresh.lease_until.ok_or(Error::Local)?.seconds).await?;lease=fresh;
+                    if let Some(ref mut auth)=execution {
+                        let renewed=self.execution.renew(auth.clone()).await?.into_inner();
+                        if renewed.run_epoch!=auth.run_epoch||renewed.run_id!=auth.run_id||renewed.owner_scope_id!=auth.owner_scope_id||
+                            renewed.root_budget_id!=auth.root_budget_id||renewed.host_instance_id!=auth.host_instance_id{return Err(Error::Recovery);}
+                        *auth=renewed;
+                        if pending.is_none(){
+                            pending=operations::next(&mut self.execution,auth,&self.journal,e,&lease,session).await?;
+                        }
+                    }
+
                 }
             }
         }

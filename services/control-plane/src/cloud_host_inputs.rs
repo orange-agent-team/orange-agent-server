@@ -175,8 +175,12 @@ pub(super) async fn ready(
         leases::event(&mut tx,&lease.run_id,"workspace_materialized").await?;id
     };
     leases::confirm_live(&mut tx, &lease.workspace_id).await?;
+    let (v,required):(i64,bool)=sqlx::query_as("SELECT r.version,coalesce(p.execution_protocol=1,false) FROM cloud_runs r LEFT JOIN cloud_model_plans p USING(run_id) WHERE r.run_id=$1")
+        .bind(&lease.run_id).fetch_one(&mut *tx).await.map_err(db_error)?;
     tx.commit().await.map_err(db_error)?;
     Ok(host::WorkspaceReadyReceipt {
+        run_version: u64::try_from(v).map_err(|_| changed())?,
+        requires_run_authority: required,
         receipt_id: receipt,
         workspace_id: lease.workspace_id,
         allocation_id: lease.allocation_id,

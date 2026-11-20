@@ -16,6 +16,10 @@ pub(super) struct Entry {
     pub phase: Phase,
     #[serde(default)]
     pub readiness_digest: Option<String>,
+    #[serde(default)]
+    pub execution_epoch: Option<u64>,
+    #[serde(default)]
+    pub dispatched_operation: Option<String>,
     pub cleanup_digest: Option<String>,
 }
 #[derive(Copy, Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]

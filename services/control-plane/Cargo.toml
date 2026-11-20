@@ -49,6 +49,7 @@ name = "worker_sessions"
 required-features = ["integration-tests"]
 
 [dependencies]
+orange-agent-runtime = { path = "../../crates/agent-runtime", version = "=0.1.0" }
 orange-model-runtime.workspace = true
 orange-domain.workspace = true
 orange-protocol = { workspace = true, features = ["grpc"] }

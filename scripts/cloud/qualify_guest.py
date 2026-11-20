@@ -73,14 +73,53 @@ def bounded_packet(stream):
         staged.write(chunk);length-=len(chunk)
     staged.seek(0);return staged
 
-def wait_for_release(stream, expires, maximum):
+def execute_directory(command, expires, child):
+    required={'operation_id','permit_id','argument_digest','allocation_id','workspace_epoch','run_epoch','expires_at','limit'}
+    if set(command)!=required or command['allocation_id']!=allocation or command['workspace_epoch']!=journal['epoch']:
+        raise ValueError('Tool permit binding differs')
+    op=command['operation_id'];permit=command['permit_id']
+    if not isinstance(op,str) or len(op)!=64 or any(v not in '0123456789abcdef' for v in op) or str(uuid.UUID(permit))!=permit:
+        raise ValueError('Invalid one-shot operation identity')
+    until=command['expires_at'];limit=command['limit']
+    if not isinstance(limit,int) or not 1<=limit<=16 or not 0<until-time.time()<=11 or until>expires or command['run_epoch']<1:
+        raise ValueError('Expired or invalid tool permit')
+    facts={'allocation_id':allocation,'operation_id':op,'permit_id':permit,'argument_digest':command['argument_digest'],'run_epoch':command['run_epoch']}
+    if 'tool_dispatch' in journal:
+        print(json.dumps(dict(facts,phase='operation_unknown')),flush=True);return
+    journal['tool_dispatch']=facts
+    save_receipt(receipt_path,journal)
+    if time.time()>=until:
+        print(json.dumps(dict(facts,phase='operation_unknown')),flush=True);return
+    child.stdin.write(('list '+str(limit)+'\n').encode());child.stdin.flush()
+    with selectors.DefaultSelector() as watcher:
+        watcher.register(child.stdout,selectors.EVENT_READ)
+        if not watcher.select(timeout=min(3,max(0,until-time.time()))):raise RuntimeError('directory operation unresolved')
+    header=child.stdout.readline(100).decode().strip().split()
+    if len(header)!=3 or header[0]!='DIRECTORY' or not 0<=int(header[1])<=limit or header[2] not in ('0','1'):
+        raise RuntimeError('Invalid bounded directory output')
+    entries=[]
+    for _ in range(int(header[1])):
+        kind,name,amount=child.stdout.readline(512).decode().strip().split()
+        filename=bytes.fromhex(name).decode('utf-8')
+        if kind!='FILE' or not amount.isdigit() or len(filename)>128:raise RuntimeError('Invalid file metadata')
+        entries.append({'name':filename,'kind':'file','bytes':amount})
+    if child.stdout.readline(100)!=b'END_DIRECTORY\n':raise RuntimeError('Directory result not complete')
+    if time.time()>=until:print(json.dumps(dict(facts,phase='operation_unknown')),flush=True)
+    else:
+        journal['tool_observation_sha256']=hashlib.sha256(json.dumps(entries,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+        save_receipt(receipt_path,journal)
+        print(json.dumps(dict(facts,phase='directory_result',entries=entries,omitted=header[2]=='1')),flush=True)
+
+def wait_for_release(stream, expires, maximum, child):
     # Limit permissions locally even if the supervising process stalls.
     with selectors.DefaultSelector() as watcher:
         watcher.register(stream,selectors.EVENT_READ)
         while expires>time.time():
             if not watcher.select(timeout=max(0,expires-time.time())):return
-            message=stream.readline(128)
+            message=stream.readline(2048)
             if not message or message==b'stop\n':return
+            if message.startswith(b'tool ') and message.endswith(b'\n'):
+                execute_directory(json.loads(message[5:]),expires,child);continue
             if not message.startswith(b'renew ') or not message.endswith(b'\n'):raise ValueError('Unexpected Host command')
             next_expiry=int(message[6:-1])
             if next_expiry<=time.time() or next_expiry>min(maximum,time.time()+32):raise ValueError('Invalid lease renewal')
@@ -253,7 +292,7 @@ with prepare_directory() as temp:
                 if binding['lease_until']<=time.time():raise RuntimeError('Lease expired before materialization')
                 journal.update(phase='ready',cgroup=limits,workload_uid=65534,input_staged=True)
                 save_receipt(receipt_path,journal);print(json.dumps(journal),flush=True)
-                wait_for_release(sys.stdin.buffer,binding['lease_until'],binding['workspace_until'])
+                wait_for_release(sys.stdin.buffer,binding['lease_until'],binding['workspace_until'],child)
             output,_=child.communicate(input=b'continue\n',timeout=40)
             if child.returncode!=0 or output.strip()!=b'ORANGE_WORKSPACE_PROBE_OK':
                 raise RuntimeError('Workload failed: '+str(child.returncode)+' '+stderr.read_text(errors='replace')[-1800:])

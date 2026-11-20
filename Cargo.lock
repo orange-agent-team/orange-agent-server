@@ -1968,6 +1968,7 @@ dependencies = [
  "libc",
  "opendal",
  "openidconnect",
+ "orange-agent-runtime",
  "orange-domain",
  "orange-model-runtime",
  "orange-protocol",

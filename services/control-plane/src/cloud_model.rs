@@ -17,10 +17,25 @@ pub(crate) struct Selection {
     pub model_version: String,
     pub invocation_id: String,
     pub output_limit: u32,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "tool_choice"
+    )]
+    pub tool: Option<crate::cloud_tools::Choice>,
+}
+fn tool_choice<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Option<crate::cloud_tools::Choice>, D::Error> {
+    crate::cloud_tools::Choice::deserialize(d).map(Some)
 }
 impl Selection {
     pub(crate) fn valid(&self) -> bool {
-        valid_id(&self.price_version)
+        self.tool.as_ref().is_none_or(|t| {
+            t.name == crate::cloud_tools::NAME
+                && crate::cloud_tools::stamp()
+                    .is_ok_and(|(_, digest, _)| digest == t.execution_digest)
+        }) && valid_id(&self.price_version)
             && valid_id(&self.model_version)
             && valid_id(&self.invocation_id)
             && (1..=4096).contains(&self.output_limit)
@@ -41,7 +56,16 @@ impl Selection {
             || req.messages[0].content.trim().is_empty()
             || !req.messages[0].tool_calls.is_empty()
             || req.messages[0].tool_call_id.is_some()
-            || !req.tools.is_empty()
+            || !match &self.tool {
+                None => req.tools.is_empty(),
+                Some(_) => {
+                    req.tools.len() == 1
+                        && serde_json::to_value(&req.tools[0]).ok()
+                            == crate::cloud_tools::definition()
+                                .ok()
+                                .and_then(|v| serde_json::to_value(v).ok())
+                }
+            }
         {
             return Err(ArtifactError::Invalid);
         }
@@ -81,25 +105,41 @@ pub(crate) async fn register(
     if inserted.rows_affected() != 1 {
         return Err(StoreError::Conflict);
     }
+    if let Some(choice) = &s.tool {
+        let (version, digest, policy) =
+            crate::cloud_tools::stamp().map_err(|_| StoreError::Invalid)?;
+        if choice.execution_digest != digest {
+            return Err(StoreError::Conflict);
+        }
+        sqlx::query("INSERT INTO cloud_directory_capabilities(run_id,capability_id,workspace_id,tool_version,execution_digest,policy_version,created_by)
+            SELECT r.run_id,$2,w.workspace_id,$3,$4,$5,r.user_id FROM cloud_runs r JOIN cloud_workspaces w USING(run_id) WHERE r.run_id=$1")
+            .bind(run).bind(uuid::Uuid::new_v4().to_string()).bind(version).bind(digest).bind(policy).execute(&mut **tx).await?;
+    }
     Ok(())
 }
 pub(crate) async fn selection(
     tx: &mut Tx<'_>,
     run: &str,
 ) -> Result<Option<Selection>, sqlx::Error> {
-    let row=sqlx::query("SELECT price_version,model_version,invocation_id,output_limit FROM cloud_model_plans WHERE run_id=$1")
+    let row=sqlx::query("SELECT p.price_version,p.model_version,p.invocation_id,p.output_limit,c.execution_digest FROM cloud_model_plans p LEFT JOIN cloud_directory_capabilities c USING(run_id) WHERE p.run_id=$1")
         .bind(run).fetch_optional(&mut **tx).await?;
     row.map(|r| {
         Ok(Selection {
             price_version: r.try_get("price_version")?,
             model_version: r.try_get("model_version")?,
             invocation_id: r.try_get("invocation_id")?,
+            tool: r
+                .try_get::<Option<String>, _>("execution_digest")?
+                .map(|execution_digest| crate::cloud_tools::Choice {
+                    name: crate::cloud_tools::NAME.into(),
+                    execution_digest,
+                }),
             output_limit: r.try_get::<i32, _>("output_limit")? as u32,
         })
     })
     .transpose()
 }
-pub(crate) async fn live(
+pub(crate) async fn workspace_context(
     tx: &mut Tx<'_>,
     run: &str,
     owner: &str,
@@ -113,12 +153,34 @@ pub(crate) async fn live(
         JOIN owners o ON o.owner_id=r.owner_id JOIN budget_roots b ON b.root_budget_id=r.root_budget_id AND b.owner_id=r.owner_id
         JOIN artifacts a ON a.artifact_id=r.input_artifact_id AND a.version_id=p.input_version_id AND a.owner_id=r.owner_id
         JOIN artifact_uploads upl ON upl.artifact_id=a.artifact_id AND upl.owner_id=r.owner_id
-        WHERE r.run_id=$1 AND r.owner_id=$2 AND r.user_id=$3 AND r.status IN ('queued','running') AND w.status='ready'
+        WHERE r.run_id=$1 AND r.owner_id=$2 AND r.user_id=$3 AND r.status IN ('queued','running','waiting_approval') AND w.status='ready'
         AND w.lease_until>clock_timestamp() AND w.expires_at>clock_timestamp() AND h.enabled AND h.live_until>clock_timestamp()
         AND h.credential_expires_at>clock_timestamp() AND h.input_protocol_version=1 AND u.active AND u.personal_owner_id=r.owner_id
         AND o.state='active' AND b.state='active' AND a.state='available' AND a.creator_id=r.user_id AND a.resource_id IS NULL
         AND a.media_type='application/json' FOR SHARE OF r,w,h,u,o,b,a").bind(run).bind(owner).bind(user)
         .fetch_optional(&mut **tx).await?.ok_or(ArtifactError::NotReady)
+}
+pub(crate) async fn live(
+    tx: &mut Tx<'_>,
+    run: &str,
+    owner: &str,
+    user: &str,
+) -> Result<PgRow, ArtifactError> {
+    let row = workspace_context(tx, run, owner, user).await?;
+    if row.try_get::<i32, _>("execution_protocol")? > 0 {
+        let valid = sqlx::query(
+            "SELECT epoch FROM cloud_run_leases WHERE run_id=$1 AND allocation_id=$2
+            AND lease_until>FLOOR(EXTRACT(EPOCH FROM clock_timestamp()))::bigint FOR SHARE",
+        )
+        .bind(run)
+        .bind(row.try_get::<String, _>("allocation_id")?)
+        .fetch_optional(&mut **tx)
+        .await?;
+        if valid.is_none() {
+            return Err(ArtifactError::NotReady);
+        }
+    }
+    Ok(row)
 }
 pub(crate) async fn quote_request(
     tx: &mut Tx<'_>,
@@ -255,9 +317,9 @@ pub(crate) async fn reconcile_one(pool: &sqlx::PgPool) -> Result<bool, sqlx::Err
     if row.try_get::<String, _>("execution_state")? == "succeeded" {
         // Device output, meter facts, published version and originating input are
         // all checked before a model response becomes the public Run result.
-        let proof=sqlx::query("SELECT c.commit_id,c.artifact_id,c.version_id,c.response_digest
+        let proof=sqlx::query("SELECT c.commit_id,c.artifact_id,c.version_id,c.response_digest,u.has_tools
             FROM cloud_runs r JOIN cloud_workspaces w USING(run_id) JOIN cloud_pool_hosts h USING(host_instance_id)
-            JOIN cloud_model_proposals p USING(run_id) JOIN cloud_model_jobs m USING(run_id)
+            JOIN cloud_model_plans plan USING(run_id) JOIN cloud_model_proposals p USING(run_id) JOIN cloud_model_jobs m USING(run_id)
             JOIN jobs j ON j.job_id=m.job_id AND j.submitting_user_id=r.user_id AND j.quote_id=m.quote_id
             JOIN quote_metering q ON q.quote_id=j.quote_id AND q.input_artifact_id=r.input_artifact_id AND q.input_version_id=r.input_version_id
             JOIN job_response_commits c ON c.job_id=j.job_id JOIN job_usage_facts u ON u.job_id=j.job_id
@@ -265,17 +327,36 @@ pub(crate) async fn reconcile_one(pool: &sqlx::PgPool) -> Result<bool, sqlx::Err
             JOIN artifacts dst ON dst.artifact_id=c.artifact_id AND dst.version_id=c.version_id
             JOIN owners o ON o.owner_id=r.owner_id JOIN users person ON person.user_id=r.user_id AND person.personal_owner_id=r.owner_id
             WHERE r.run_id=$1 AND m.job_id=$2 AND src.owner_id=r.owner_id AND src.state='available' AND dst.owner_id=r.owner_id AND dst.state='available'
-              AND u.response_digest=c.response_digest AND u.request_projection_digest=p.request_projection_digest AND NOT u.has_tools
+              AND u.response_digest=c.response_digest AND u.request_projection_digest=p.request_projection_digest
+              AND (plan.execution_protocol=0 OR EXISTS(SELECT 1 FROM cloud_run_leases lease WHERE lease.run_id=r.run_id AND lease.allocation_id=p.allocation_id
+                  AND lease.lease_until>FLOOR(EXTRACT(EPOCH FROM clock_timestamp()))::bigint))
               AND h.enabled AND h.credential_expires_at>clock_timestamp() AND h.live_until>clock_timestamp()
               AND w.lease_until>clock_timestamp() AND w.expires_at>clock_timestamp() AND o.state='active' AND person.active
             FOR SHARE OF h,src,dst,o,person")
             .bind(&run).bind(&job).fetch_optional(&mut *tx).await?;
         if let Some(proof) = proof {
-            sqlx::query("INSERT INTO cloud_model_results(run_id,job_id,commit_id,artifact_id,version_id,response_digest) VALUES($1,$2,$3,$4,$5,$6)")
+            if proof.try_get::<bool, _>("has_tools")? {
+                let count=sqlx::query("INSERT INTO cloud_tool_responses(run_id,job_id,commit_id,artifact_id,version_id,response_digest)
+                    SELECT $1,$2,$3,$4,$5,$6 FROM cloud_directory_capabilities c WHERE run_id=$1 AND NOT EXISTS
+                    (SELECT 1 FROM cloud_directory_revocations v WHERE v.run_id=c.run_id)")
+                    .bind(&run).bind(&job).bind(proof.try_get::<String,_>("commit_id")?).bind(proof.try_get::<String,_>("artifact_id")?)
+                    .bind(proof.try_get::<String,_>("version_id")?).bind(proof.try_get::<String,_>("response_digest")?).execute(&mut *tx).await?.rows_affected();
+                if count == 1 {
+                    let rev:i64=sqlx::query_scalar("UPDATE cloud_runs SET status='waiting_approval',version=version+1 WHERE run_id=$1 RETURNING version")
+                        .bind(&run).fetch_one(&mut *tx).await?;
+                    sqlx::query("INSERT INTO cloud_run_events(run_id,run_version,kind) VALUES($1,$2,'model_tool_response_committed')").bind(run).bind(rev).execute(&mut *tx).await?;
+                    tx.commit().await?;
+                    return Ok(true);
+                }
+                state = "recovery_required";
+                event = "unsupported_tool_response";
+            } else {
+                sqlx::query("INSERT INTO cloud_model_results(run_id,job_id,commit_id,artifact_id,version_id,response_digest) VALUES($1,$2,$3,$4,$5,$6)")
                 .bind(&run).bind(&job).bind(proof.try_get::<String,_>("commit_id")?).bind(proof.try_get::<String,_>("artifact_id")?)
                 .bind(proof.try_get::<String,_>("version_id")?).bind(proof.try_get::<String,_>("response_digest")?).execute(&mut *tx).await?;
-            state = "completed";
-            event = "model_response_committed";
+                state = "completed";
+                event = "model_response_committed";
+            }
         } else {
             state = "recovery_required";
             event = "model_response_unavailable";

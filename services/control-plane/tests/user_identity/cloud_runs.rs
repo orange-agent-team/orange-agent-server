@@ -157,6 +157,7 @@ async fn platform_only_admission_fences_old_leases_and_holds_capacity_until_clea
         attestation_digest: attestation.clone(),
         accept_reservations: true,
         input_protocol_version: 1,
+        runstore_version: 1,
     };
     assert_eq!(
         host.poll(announce.clone())
@@ -629,6 +630,7 @@ async fn platform_only_admission_fences_old_leases_and_holds_capacity_until_clea
                 attestation_digest: attestation.clone(),
                 accept_reservations: true,
                 input_protocol_version: 1,
+                runstore_version: 1,
             },
             &driver,
             FsPath::new(&parents),

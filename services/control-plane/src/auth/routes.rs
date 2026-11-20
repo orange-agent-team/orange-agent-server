@@ -1,5 +1,7 @@
 #[path = "accounts.rs"]
 mod accounts;
+#[path = "cloud_approvals.rs"]
+mod cloud_approvals;
 #[path = "cloud_runs.rs"]
 mod cloud_runs;
 pub async fn reconcile_cloud_models(pool: &sqlx::PgPool) -> Result<usize, sqlx::Error> {
@@ -59,6 +61,19 @@ pub fn router(identity: UserIdentity) -> Router {
         .route(
             "/api/v1/agent/runs/{id}",
             get(cloud_runs::get_one).delete(cloud_runs::cancel),
+        )
+        .route("/api/v1/agent/workspace-tools", get(cloud_runs::tools))
+        .route(
+            "/api/v1/agent/runs/{run}/operations",
+            get(cloud_approvals::list),
+        )
+        .route(
+            "/api/v1/agent/runs/{run}/operations/{operation}/decision",
+            axum::routing::post(cloud_approvals::decide),
+        )
+        .route(
+            "/api/v1/agent/runs/{run}/capabilities/list-directory",
+            axum::routing::delete(cloud_approvals::revoke),
         )
         .route("/api/v1/auth/start", get(start))
         .route("/api/v1/auth/callback", get(callback))

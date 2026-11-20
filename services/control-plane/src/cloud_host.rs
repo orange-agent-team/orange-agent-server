@@ -24,6 +24,8 @@ use tonic::{
 mod inputs;
 #[path = "cloud_host_leases.rs"]
 mod leases;
+#[path = "cloud_runstore.rs"]
+mod runstore;
 
 pub struct HostTls {
     pub server_certificate_pem: Vec<u8>,
@@ -66,7 +68,10 @@ impl PlatformHostPool for Pool {
         {
             return Err(Status::invalid_argument("invalid host announcement"));
         }
-        if r.input_protocol_version > 1 {
+        if r.input_protocol_version > 1
+            || r.runstore_version > 1
+            || (r.runstore_version == 1 && r.input_protocol_version != 1)
+        {
             return Err(Status::invalid_argument("unsupported input protocol"));
         }
         if r.input_protocol_version == 1 && self.reader.is_none() {
@@ -76,11 +81,11 @@ impl PlatformHostPool for Pool {
         }
         let mut tx = self.db.begin().await.map_err(db_error)?;
         let deadline=sqlx::query_scalar::<_,i64>("UPDATE cloud_pool_hosts
-            SET live_until=LEAST(credential_expires_at,date_trunc('second',clock_timestamp())+interval '30 seconds'),accepting=$5,input_protocol_version=$6
+            SET live_until=LEAST(credential_expires_at,date_trunc('second',clock_timestamp())+interval '30 seconds'),accepting=$5,input_protocol_version=$6,runstore_version=$7
             WHERE host_instance_id=$1 AND certificate_sha256=$2 AND profile_id=$3 AND attestation_digest=$4 AND enabled
               AND credential_expires_at>clock_timestamp()+interval '1 second'
             RETURNING FLOOR(EXTRACT(EPOCH FROM live_until))::bigint")
-            .bind(&r.host_instance_id).bind(&fingerprint).bind(r.resource_profile_id).bind(r.attestation_digest).bind(r.accept_reservations&&r.input_protocol_version==1).bind(r.input_protocol_version as i32)
+            .bind(&r.host_instance_id).bind(&fingerprint).bind(r.resource_profile_id).bind(r.attestation_digest).bind(r.accept_reservations&&r.input_protocol_version==1).bind(r.input_protocol_version as i32).bind(r.runstore_version as i32)
             .fetch_optional(&mut *tx).await.map_err(db_error)?.ok_or_else(||Status::permission_denied("host admission denied"))?;
         let reclaim=sqlx::query("SELECT w.run_id,w.workspace_id,c.allocation_id,c.epoch,c.command_id FROM cloud_workspaces w
             JOIN cloud_workspace_claims c USING(workspace_id,host_instance_id)
@@ -216,15 +221,21 @@ pub async fn serve_with_storage(
             tls.server_private_key_pem,
         ))
         .client_ca_root(Certificate::from_pem(tls.platform_host_ca_pem));
+    let pool = Pool { db, reader };
     Server::builder()
         .tls_config(tls)?
         .timeout(Duration::from_secs(7))
         .concurrency_limit_per_connection(8)
         .max_concurrent_streams(16)
         .add_service(
-            PlatformHostPoolServer::new(Pool { db, reader })
+            PlatformHostPoolServer::new(pool.clone())
                 .max_decoding_message_size(4096)
                 .max_encoding_message_size(300 * 1024),
+        )
+        .add_service(
+            host::run_store_server::RunStoreServer::new(pool)
+                .max_decoding_message_size(65536)
+                .max_encoding_message_size(65536),
         )
         .serve_with_incoming_shutdown(TcpListenerStream::new(listener), stop)
         .await

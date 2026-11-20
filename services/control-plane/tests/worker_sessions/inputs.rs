@@ -157,8 +157,14 @@ async fn setup_input_case(
         .execute(pool)
         .await
         .expect("customer owner");
-    sqlx::query("INSERT INTO wallets(owner_id,gift) VALUES($1,1000)")
+    let fixture_budget = if std::env::var_os("ORANGE_CLOUD_DIRECTORY_TOOLS").is_some() {
+        5000_i64
+    } else {
+        1000
+    };
+    sqlx::query("INSERT INTO wallets(owner_id,gift) VALUES($1,$2)")
         .bind(&owner)
+        .bind(fixture_budget)
         .execute(pool)
         .await
         .expect("development credits");
@@ -256,7 +262,7 @@ async fn setup_input_case(
             "root",
             &CreateBudget {
                 scope_id: Uuid::new_v4().to_string(),
-                limit: "1000".to_owned().try_into().expect("money"),
+                limit: fixture_budget.to_string().try_into().expect("money"),
             },
         )
         .await

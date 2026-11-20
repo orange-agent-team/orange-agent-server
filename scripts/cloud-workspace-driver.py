@@ -65,9 +65,9 @@ with tempfile.TemporaryDirectory(prefix='orange-host-driver-') as directory:
                         with selectors.DefaultSelector() as watch:
                             watch.register(sys.stdin,selectors.EVENT_READ)
                             if not watch.select(timeout=0.25):continue
-                        line=sys.stdin.buffer.readline(128)
+                        line=sys.stdin.buffer.readline(2048)
                         if not line:break
-                        if line!=b'stop\n' and not (line.startswith(b'renew ') and line[6:-1].isdigit() and line.endswith(b'\n')):
+                        if line!=b'stop\n' and not (line.startswith(b'renew ') and line[6:-1].isdigit() and line.endswith(b'\n')) and not (line.startswith(b'tool {') and line.endswith(b'}\n')):
                             break
                         proc.stdin.write(line);proc.stdin.flush()
                         if line==b'stop\n':break

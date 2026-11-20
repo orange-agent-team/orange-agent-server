@@ -114,18 +114,26 @@ pub(super) async fn exercise(c: Setup<'_>, driver: &str) {
     let gate_quote = private.path().join("queue-quote");
     let gate_locked = private.path().join("queue-locked");
     let gate_release = private.path().join("queue-release");
+    let expiry_op = private.path().join("expiry-operation");
+    let expiry_locked = private.path().join("expiry-locked");
+    let tool_cases = std::env::var_os("ORANGE_CLOUD_DIRECTORY_TOOLS").is_some();
     let packet = json!({"api":format!("http://{}/",c.api),"cookie":c.cookie,"user":c.user,"owner":c.owner,"budget":c.budget,"price":c.price,"model":profile().model_version,
-        "gate_quote":gate_quote,"gate_locked":gate_locked,"gate_release":gate_release,"oracle_input":input_file,"oracle_output":output_file,"screenshot":evidence.join("actual-hosted-model.png")});
+        "expiry_operation":expiry_op,"expiry_locked":expiry_locked,"directory_cases":tool_cases,"tool_screenshot":evidence.join("actual-approved-directory.png"),"gate_quote":gate_quote,"gate_locked":gate_locked,"gate_release":gate_release,"oracle_input":input_file,"oracle_output":output_file,"screenshot":evidence.join("actual-hosted-model.png")});
     let mut fd = browser.stdin.take().expect("private stdin");
     fd.write_all(&serde_json::to_vec(&packet).expect("packet"))
         .await
         .expect("supply fixture");
     drop(fd);
     let (finish, mut finished) = tokio::sync::oneshot::channel();
+    let (finish_expiry, expiry_done) = tokio::sync::oneshot::channel();
     let wait_browser = async {
-        let result =
-            tokio::time::timeout(Duration::from_secs(230), browser.wait_with_output()).await;
+        let result = tokio::time::timeout(
+            Duration::from_secs(if tool_cases { 440 } else { 230 }),
+            browser.wait_with_output(),
+        )
+        .await;
         let _ = finish.send(());
+        let _ = finish_expiry.send(());
         result
     };
     let gate = async {
@@ -165,7 +173,13 @@ pub(super) async fn exercise(c: Setup<'_>, driver: &str) {
         tx.rollback().await.expect("release test provider");
         observed
     };
-    let (output, gate_observed) = tokio::join!(wait_browser, gate);
+    let expiry = async {
+        if !tool_cases {
+            return true;
+        }
+        expire_result_after_dispatch(c.pool, c.owner, &expiry_op, &expiry_locked, expiry_done).await
+    };
+    let (output, gate_observed, expiry_observed) = tokio::join!(wait_browser, gate, expiry);
     let output = output
         .expect("bounded model browser")
         .expect("browser exit");
@@ -182,12 +196,24 @@ pub(super) async fn exercise(c: Setup<'_>, driver: &str) {
         )
         .expect("failure diagnosis");
     }
+    if output.status.success() {
+        let snapshot: Value = serde_json::from_slice(&output.stdout).expect("browser observation");
+        std::fs::write(
+            evidence.join("browser-observations.json"),
+            serde_json::to_vec_pretty(&snapshot).expect("observation"),
+        )
+        .expect("partial gate evidence");
+    }
     let pid = node.id().expect("owned Host").to_string();
     let _ = Command::new("/bin/kill")
         .args(["-INT", &pid])
         .status()
         .await;
     let closed = tokio::time::timeout(Duration::from_secs(60), node.wait()).await;
+    if tool_cases && output.status.success() {
+        let observed: Value = serde_json::from_slice(&output.stdout).expect("tool report");
+        verify_original_dispatch_receipts(c.pool, &tls, port, &host_id, &observed).await;
+    }
     stop.send(()).expect("stop cloud gateway");
     gateway
         .await
@@ -203,6 +229,7 @@ pub(super) async fn exercise(c: Setup<'_>, driver: &str) {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(closed.expect("node shutdown").expect("exit").success());
+    assert!(expiry_observed, "uncertain result barrier not reached");
     assert!(
         gate_observed,
         "second queued Job was not cancelled under the owned barrier"
@@ -263,7 +290,7 @@ pub(super) async fn exercise(c: Setup<'_>, driver: &str) {
         .await
         .expect("exactly once");
     assert_eq!(count, 1);
-    let guest = Command::new(python)
+    let guest = Command::new(&python)
         .arg(repo.join("scripts/cloud-workspace-driver.py"))
         .arg("recover")
         .arg(row.get::<String, _>("allocation_id"))
@@ -304,19 +331,266 @@ pub(super) async fn exercise(c: Setup<'_>, driver: &str) {
     );
     assert!(sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM job_inputs i JOIN cloud_model_jobs m USING(job_id) WHERE i.job_id=$1 AND m.run_id=$2)")
         .bind(cancelled).bind(browser["cancelled_run_id"].as_str().expect("Run")).fetch_one(c.pool).await.expect("atomic immutable input binding"));
+    let mut directory = browser["directory_runs"]
+        .as_array()
+        .expect("directory cases")
+        .clone();
+    if tool_cases {
+        assert_eq!(directory.len(), 3);
+        for case in &mut directory {
+            let run = case["run_id"].as_str().expect("tool Run");
+            let op = case["operation_id"].as_str().expect("tool op");
+            let facts=sqlx::query("SELECT r.status,w.status AS workspace,l.epoch,m.job_id,t.commit_id,i.argument_digest,s.state,d.decision,
+                cap.execution_digest,p.permit_id,f.artifact_id,cleanup.allocation_id,cleanup.evidence_digest
+                FROM cloud_runs r JOIN cloud_workspaces w USING(run_id) JOIN cloud_model_jobs m USING(run_id)
+                JOIN cloud_tool_responses t ON t.run_id=r.run_id AND t.job_id=m.job_id JOIN cloud_operation_intents i ON i.commit_id=t.commit_id
+                JOIN cloud_operation_state s USING(operation_id) JOIN cloud_operation_decisions d USING(operation_id)
+                JOIN cloud_directory_capabilities cap ON cap.capability_id=i.capability_id JOIN cloud_directory_revocations v ON v.run_id=r.run_id
+                JOIN cloud_run_leases l ON l.run_id=r.run_id LEFT JOIN cloud_dispatch_permits p USING(operation_id)
+                LEFT JOIN cloud_operation_results f USING(operation_id) JOIN cloud_workspace_cleanup_receipts cleanup ON cleanup.workspace_id=w.workspace_id
+                JOIN job_usage_facts u ON u.job_id=m.job_id AND u.has_tools WHERE r.owner_id=$1 AND r.run_id=$2 AND i.operation_id=$3")
+                .bind(c.owner).bind(run).bind(op).fetch_one(c.pool).await.expect("actual committed tool lineage");
+            assert_eq!(facts.get::<String, _>("workspace"), "deleted");
+            assert_eq!(facts.get::<String, _>("commit_id"), case["commit_id"]);
+            assert_eq!(facts.get::<String, _>("decision"), case["decision"]);
+            let allocation: String = facts.get("allocation_id");
+            let proof = Command::new(&python)
+                .arg(repo.join("scripts/cloud-workspace-driver.py"))
+                .args(["recover", &allocation])
+                .output()
+                .await
+                .expect("original tool workspace receipt");
+            assert!(proof.status.success());
+            let guest: Value = serde_json::from_slice(&proof.stdout).expect("kernel evidence");
+            assert_eq!(guest["phase"], "cleaned");
+            assert_eq!(
+                facts.get::<String, _>("evidence_digest"),
+                hex::encode(Sha256::digest(serde_json::to_vec(&guest).expect("digest")))
+            );
+            let permits: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM cloud_dispatch_permits WHERE operation_id=$1",
+            )
+            .bind(op)
+            .fetch_one(c.pool)
+            .await
+            .expect("permit count");
+            if case["decision"] == "approve" {
+                assert_eq!(permits, 1);
+                assert_eq!(guest["tool_dispatch"]["operation_id"], op);
+                assert_eq!(
+                    guest["tool_dispatch"]["permit_id"],
+                    facts.get::<String, _>("permit_id")
+                );
+                assert_eq!(
+                    guest["tool_dispatch"]["run_epoch"],
+                    facts.get::<i64, _>("epoch")
+                );
+                assert!(
+                    guest["tool_observation_sha256"]
+                        .as_str()
+                        .is_some_and(orange_protocol::valid_digest)
+                );
+                if case["scenario"] == "expired_after_dispatch" {
+                    assert_eq!(facts.get::<String, _>("state"), "unknown");
+                    assert!(facts.get::<Option<String>, _>("artifact_id").is_none());
+                    assert_eq!(facts.get::<String, _>("status"), "recovery_required");
+                } else {
+                    assert_eq!(facts.get::<String, _>("state"), "succeeded");
+                    assert!(facts.get::<Option<String>, _>("artifact_id").is_some());
+                    assert_eq!(facts.get::<String, _>("status"), "paused");
+                }
+            } else {
+                assert_eq!(permits, 0);
+                assert!(guest.get("tool_dispatch").is_none());
+                assert_eq!(facts.get::<String, _>("state"), "failed");
+                assert_eq!(facts.get::<String, _>("status"), "paused");
+            }
+            case["dispatch_count"] = json!(permits);
+        }
+    }
     let mut result = browser;
+    result["directory_runs"] = json!(directory);
     result["settlement_count"] = json!(count);
     result["charge_microcredits"] = json!(charge.to_string());
     result["input_units"] = json!(input_units);
     result["output_units"] = json!(output_units);
     result["cloud_workspace"] = json!("deleted");
     result["platform_host_cleanup"] = receipt;
-    result["scope"] = json!(
+    result["scope"] = json!(if tool_cases {
+        "Actual CPU/gVisor first text turn and three model-requested directory operations: approved, rejected and expired result recording. Original-permit metadata recovery and stale-dispatch refusal verified. No external payment or multi-turn certification."
+    } else {
         "One text-only hosted turn, actual local CPU provider, real model, development credits and fixture identities; no tool dispatch or external payment"
-    );
+    });
+    if tool_cases {
+        result["original_operation_receipts_verified"] = json!(true);
+    }
     std::fs::write(
         evidence.join("cloud-model-result.json"),
         serde_json::to_vec_pretty(&result).expect("report"),
     )
     .expect("evidence");
+}
+
+/// In this newly created test database only, delay *recording* a result until
+/// the committed permit has expired. The actual syscall and user approval
+/// remain unmodified; the service must preserve unknown without replay.
+async fn expire_result_after_dispatch(
+    pool: &PgPool,
+    owner: &str,
+    marker: &Path,
+    locked: &Path,
+    mut finished: tokio::sync::oneshot::Receiver<()>,
+) -> bool {
+    while !marker.is_file() {
+        if !matches!(
+            finished.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        ) {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(75)).await;
+    }
+    let op = std::fs::read_to_string(marker).expect("selected test operation");
+    let db: String = sqlx::query_scalar("SELECT current_database()")
+        .fetch_one(pool)
+        .await
+        .expect("database identity");
+    assert!(db.starts_with("orange_cloud_model_") && db.len() == "orange_cloud_model_".len() + 32);
+    let pending:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM cloud_operation_intents i JOIN cloud_operation_state s USING(operation_id)
+        JOIN cloud_runs r USING(run_id) WHERE i.operation_id=$1 AND r.owner_id=$2 AND s.state='intended')")
+        .bind(&op).bind(owner).fetch_one(pool).await.expect("owned pending intent");
+    assert!(pending);
+    let mut tx = pool.begin().await.expect("fault gate");
+    sqlx::query("SET LOCAL lock_timeout='5s'")
+        .execute(&mut *tx)
+        .await
+        .expect("bounded lock");
+    sqlx::query("LOCK TABLE cloud_operation_results IN SHARE MODE")
+        .execute(&mut *tx)
+        .await
+        .expect("hold only test result writes");
+    std::fs::write(locked, b"held").expect("ready for decision");
+    let expires = tokio::time::timeout(Duration::from_secs(25), async {
+        loop {
+            let deadline: Option<i64> = sqlx::query_scalar(
+                "SELECT expires_at FROM cloud_dispatch_permits WHERE operation_id=$1",
+            )
+            .bind(&op)
+            .fetch_optional(pool)
+            .await
+            .expect("observe real dispatch");
+            if let Some(deadline) = deadline {
+                return Some(deadline);
+            }
+            if !matches!(
+                finished.try_recv(),
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+            ) {
+                return None;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .ok()
+    .flatten();
+    if let Some(at) = expires {
+        sqlx::query("SELECT pg_sleep(LEAST(12,GREATEST(0,$1::bigint+1-EXTRACT(EPOCH FROM clock_timestamp()))))")
+            .bind(at).execute(&mut *tx).await.expect("wait past actual permit");
+    }
+    tx.rollback().await.expect("release result writes");
+    expires.is_some()
+}
+
+async fn verify_original_dispatch_receipts(
+    db: &PgPool,
+    tls: &Path,
+    port: u16,
+    host_id: &str,
+    observed: &Value,
+) {
+    use orange_protocol::grpc::host as run;
+    use tonic::transport::{Certificate, ClientTlsConfig, Endpoint, Identity};
+    let config = ClientTlsConfig::new()
+        .domain_name("localhost")
+        .ca_certificate(Certificate::from_pem(
+            std::fs::read(tls.join("host-ca.pem")).expect("CA"),
+        ))
+        .identity(Identity::from_pem(
+            std::fs::read(tls.join("host.pem")).expect("leaf"),
+            std::fs::read(tls.join("host.key")).expect("key"),
+        ));
+    let channel = Endpoint::from_shared(format!("https://127.0.0.1:{port}"))
+        .expect("dedicated URI")
+        .tls_config(config)
+        .expect("mTLS")
+        .connect()
+        .await
+        .expect("original Host");
+    let mut client = run::run_store_client::RunStoreClient::new(channel);
+    for case in observed["directory_runs"].as_array().expect("operations") {
+        if case["decision"] != "approve" {
+            continue;
+        }
+        let op = case["operation_id"].as_str().expect("op");
+        let id = case["run_id"].as_str().expect("run");
+        let row=sqlx::query("SELECT r.owner_id,r.root_budget_id,l.epoch,l.issued_version,l.lease_until,w.workspace_id,p.permit_id,p.allocation_id,f.result_digest
+            FROM cloud_run_leases l JOIN cloud_runs r USING(run_id) JOIN cloud_workspaces w ON w.run_id=r.run_id
+            JOIN cloud_dispatch_permits p ON p.execution_epoch=l.epoch JOIN cloud_operation_results f ON f.operation_id=p.operation_id
+            WHERE l.run_id=$1 AND p.operation_id=$2").bind(id).bind(op).fetch_one(db).await.expect("original durable permit");
+        let lookup = run::OperationLookup {
+            host_instance_id: host_id.into(),
+            run_id: id.into(),
+            operation_id: op.into(),
+            workspace_id: row.get("workspace_id"),
+            permit_id: row.get("permit_id"),
+            allocation_id: row.get("allocation_id"),
+            run_epoch: row.get::<i64, _>("epoch") as u64,
+        };
+        let original = client
+            .get_operation_receipt(lookup.clone())
+            .await
+            .expect("original fact without new authority")
+            .into_inner();
+        assert_eq!(
+            original.result_digest,
+            row.get::<String, _>("result_digest")
+        );
+        assert_eq!(
+            original.state,
+            if case["terminal"] == "unknown" {
+                run::operation_record::State::Unknown
+            } else {
+                run::operation_record::State::Succeeded
+            } as i32
+        );
+        let mut wrong = lookup.clone();
+        wrong.permit_id = Uuid::new_v4().to_string();
+        assert!(client.get_operation_receipt(wrong).await.is_err());
+        let stale = run::RunAuthority {
+            run_id: id.into(),
+            host_instance_id: host_id.into(),
+            run_epoch: lookup.run_epoch,
+            run_version: row.get::<i64, _>("issued_version") as u64,
+            owner_scope_id: row.get("owner_id"),
+            root_budget_id: row.get("root_budget_id"),
+            expires_at: Some(prost_types::Timestamp {
+                seconds: row.get("lease_until"),
+                nanos: 0,
+            }),
+        };
+        assert_eq!(
+            client
+                .acquire_dispatch(run::DispatchRequest {
+                    authority: Some(stale),
+                    operation_id: op.into(),
+                    expected_version: original.version,
+                    argument_digest: original.argument_digest
+                })
+                .await
+                .expect_err("old lease cannot dispatch")
+                .code(),
+            tonic::Code::FailedPrecondition
+        );
+    }
 }

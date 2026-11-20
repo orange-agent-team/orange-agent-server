@@ -10,6 +10,7 @@ service RunStore {
   rpc AcquireDispatch(DispatchRequest) returns (DispatchPermit);
   rpc CommitResult(ResultRequest) returns (OperationRecord);
   rpc PendingOperations(RunAuthority) returns (PendingWork);
+  rpc GetOperationReceipt(OperationLookup) returns (OperationRecord);
 }
 message ClaimRequest { string run_id = 1; string host_instance_id = 2; string command_id = 3; uint64 expected_run_version = 4; }
 message RunAuthority {
@@ -28,7 +29,7 @@ message OperationRecord {
   string operation_id = 1; string run_id = 2; uint64 version = 3;
   enum State { STATE_UNSPECIFIED = 0; INTENDED = 1; DISPATCHING = 2; SUCCEEDED = 3; FAILED = 4; UNKNOWN = 5; }
   State state = 4; string argument_digest = 5; string result_artifact_id = 6;
-  string approval_id = 7; string approval_state = 8;
+  string approval_id = 7; string approval_state = 8; string result_digest = 9;
 }
 message DispatchRequest { RunAuthority authority = 1; string operation_id = 2; uint64 expected_version = 3; string argument_digest = 4; }
 // The service must commit the dispatch fact before returning. Missing/invalid
@@ -117,3 +118,5 @@ message WorkspaceStop {
 
 message ProposedTool { IntentRequest intent = 1; bytes arguments_json = 2; OperationRecord record = 3; }
 message PendingWork { repeated ProposedTool tools = 1; }
+
+message OperationLookup { string host_instance_id=1; string run_id=2; string workspace_id=3; string allocation_id=4; uint64 run_epoch=5; string operation_id=6; string permit_id=7; }

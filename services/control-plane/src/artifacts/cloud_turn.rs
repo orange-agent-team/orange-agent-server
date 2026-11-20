@@ -27,11 +27,12 @@ impl ArtifactStore {
                 .await?
                 .ok_or(ArtifactError::Forbidden)?;
         authority::scope(&mut tx, actor, &owner, false).await?;
-        let row=sqlx::query("SELECT r.status,r.root_budget_id,r.input_version_id,p.model_version,p.price_version,p.invocation_id,p.output_limit,
-            m.request_projection_digest,j.job_id,f.commit_id,a.state AS result_state,src.state AS source_state
+        let row=sqlx::query("SELECT r.status,r.root_budget_id,r.input_version_id,p.model_version,p.price_version,p.invocation_id,p.output_limit,cap.execution_digest AS tool_digest,revoked.receipt_id AS revoked_directory,
+            m.request_projection_digest,j.job_id,f.commit_id,tool.run_id AS tool_response,op.state AS tool_state,a.state AS result_state,src.state AS source_state
             FROM cloud_runs r JOIN cloud_model_plans p USING(run_id,owner_id) JOIN artifacts src ON src.artifact_id=r.input_artifact_id
-            LEFT JOIN cloud_model_proposals m USING(run_id) LEFT JOIN cloud_model_jobs j USING(run_id)
-            LEFT JOIN cloud_model_results f ON f.run_id=r.run_id LEFT JOIN artifacts a ON a.artifact_id=f.artifact_id AND a.version_id=f.version_id
+            LEFT JOIN cloud_directory_capabilities cap USING(run_id) LEFT JOIN cloud_directory_revocations revoked USING(run_id) LEFT JOIN cloud_model_proposals m USING(run_id) LEFT JOIN cloud_model_jobs j USING(run_id)
+            LEFT JOIN cloud_tool_responses tool ON tool.run_id=r.run_id LEFT JOIN cloud_operation_intents intent ON intent.run_id=r.run_id
+            LEFT JOIN cloud_operation_state op ON op.operation_id=intent.operation_id LEFT JOIN cloud_model_results f ON f.run_id=r.run_id LEFT JOIN artifacts a ON a.artifact_id=f.artifact_id AND a.version_id=f.version_id
             WHERE r.run_id=$1 AND r.owner_id=$2 AND r.user_id=$3")
             .bind(run).bind(&owner).bind(&actor.user).fetch_optional(&mut *tx).await?.ok_or(ArtifactError::NotFound)?;
         let job: Option<String> = row.try_get("job_id")?;
@@ -46,7 +47,21 @@ impl ArtifactStore {
                 {
                     "result_available"
                 }
-                "cancelled" | "failed" | "recovery_required" | "completed" => "stopped",
+                "waiting_approval"
+                    if row.try_get::<Option<String>, _>("tool_response")?.is_some() =>
+                {
+                    "waiting_tool"
+                }
+                "paused"
+                    if row.try_get::<Option<String>, _>("tool_state")?.as_deref()
+                        == Some("succeeded")
+                        && row
+                            .try_get::<Option<String>, _>("revoked_directory")?
+                            .is_none() =>
+                {
+                    "tool_result_available"
+                }
+                "cancelled" | "failed" | "recovery_required" | "completed" | "paused" => "stopped",
                 _ if job.is_some() => "submitted",
                 _ if proposal.is_some() => "ready_to_quote",
                 _ => "awaiting_workspace",
@@ -56,6 +71,9 @@ impl ArtifactStore {
             "input_version_id":row.try_get::<String,_>("input_version_id")?,"model_version":row.try_get::<String,_>("model_version")?,
             "price_version":row.try_get::<String,_>("price_version")?,"invocation_id":row.try_get::<String,_>("invocation_id")?,
             "output_limit":row.try_get::<i32,_>("output_limit")?,"stage":stage});
+        if let Some(digest) = row.try_get::<Option<String>, _>("tool_digest")? {
+            result["tool"] = json!({"name":crate::cloud_tools::NAME,"execution_digest":digest});
+        }
         if let Some(job) = job {
             result["job_id"] = json!(job);
         }

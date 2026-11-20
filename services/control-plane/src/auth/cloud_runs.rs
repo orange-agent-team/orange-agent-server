@@ -235,11 +235,11 @@ pub(super) async fn create(
                 "WORKSPACE_QUOTA_EXCEEDED",
             ));
         }
-        let host:String=sqlx::query_scalar("SELECT host_instance_id FROM cloud_pool_hosts h WHERE enabled AND input_protocol_version=1 AND accepting AND profile_id=$1
+        let host:String=sqlx::query_scalar("SELECT host_instance_id FROM cloud_pool_hosts h WHERE enabled AND input_protocol_version=1 AND accepting AND profile_id=$1 AND (NOT $2 OR runstore_version=1)
             AND live_until>clock_timestamp() AND credential_expires_at>clock_timestamp()
             AND (SELECT count(*) FROM cloud_workspaces w WHERE w.host_instance_id=h.host_instance_id AND w.status!='deleted')<max_workspaces
             ORDER BY host_instance_id LIMIT 1 FOR UPDATE SKIP LOCKED")
-            .bind(PROFILE).fetch_optional(&mut **tx).await.map_err(db)?.ok_or_else(busy)?;
+            .bind(PROFILE).bind(c.model.is_some()).fetch_optional(&mut **tx).await.map_err(db)?.ok_or_else(busy)?;
         // Re-read capacity after acquiring the host lock: the selector may have
         // used an earlier read-committed snapshot than a concurrent admission.
         let available:bool=sqlx::query_scalar("SELECT enabled AND input_protocol_version=1 AND accepting AND live_until>clock_timestamp() AND credential_expires_at>clock_timestamp() AND
@@ -304,6 +304,9 @@ async fn cancel_locked(g: &mut UserSessionGuard, id: &str) -> Result<(), UserApi
         }
         let state: String = row.try_get("workspace_state").map_err(db)?;
         let unclaimed = state == "requested" && row.try_get::<i64, _>("epoch").map_err(db)? == 0;
+        crate::cloud_tools::fence(tx, id, "user_cancel")
+            .await
+            .map_err(db)?;
         crate::store::stop_cloud_job(tx, id).await?;
         let next:i64=sqlx::query_scalar("UPDATE cloud_runs SET status='cancelled',version=version+1 WHERE run_id=$1 RETURNING version")
             .bind(id).fetch_one(&mut **tx).await.map_err(db)?;
@@ -327,7 +330,9 @@ async fn cancel_locked(g: &mut UserSessionGuard, id: &str) -> Result<(), UserApi
 pub(crate) async fn expire_one(pool: &PgPool) -> Result<bool, sqlx::Error> {
     let mut tx = pool.begin().await?;
     let row=sqlx::query("SELECT r.run_id,w.epoch,w.status FROM cloud_runs r JOIN cloud_workspaces w USING(run_id) JOIN cloud_pool_hosts h USING(host_instance_id)
-        WHERE (NOT h.enabled OR h.credential_expires_at<=clock_timestamp() OR w.expires_at<=clock_timestamp() OR w.lease_until<=clock_timestamp()) AND w.status IN ('requested','preparing','ready','running')
+        WHERE (NOT h.enabled OR h.credential_expires_at<=clock_timestamp() OR w.expires_at<=clock_timestamp() OR w.lease_until<=clock_timestamp() OR EXISTS(SELECT 1 FROM cloud_run_leases l WHERE l.run_id=r.run_id AND l.lease_until<=FLOOR(EXTRACT(EPOCH FROM clock_timestamp()))::bigint)
+          OR EXISTS(SELECT 1 FROM cloud_operation_intents i JOIN cloud_operation_state s USING(operation_id) JOIN cloud_operation_decisions d USING(operation_id)
+            WHERE i.run_id=r.run_id AND s.state='intended' AND d.decision='approve' AND d.expires_at<=FLOOR(EXTRACT(EPOCH FROM clock_timestamp()))::bigint)) AND w.status IN ('requested','preparing','ready','running')
         ORDER BY w.expires_at,r.run_id LIMIT 1 FOR UPDATE OF r,w SKIP LOCKED").fetch_optional(&mut *tx).await?;
     let Some(row) = row else {
         tx.commit().await?;
@@ -336,6 +341,7 @@ pub(crate) async fn expire_one(pool: &PgPool) -> Result<bool, sqlx::Error> {
     let run: String = row.try_get("run_id")?;
     let unclaimed =
         row.try_get::<i64, _>("epoch")? == 0 && row.try_get::<String, _>("status")? == "requested";
+    crate::cloud_tools::fence(&mut tx, &run, "workspace_expiry").await?;
     crate::store::stop_cloud_job(&mut tx, &run)
         .await
         .map_err(|_| sqlx::Error::Protocol("linked cloud job stop unresolved".into()))?;
@@ -453,4 +459,18 @@ pub(super) async fn withdraw(
     }
     g.finish().await?;
     Ok(Json(result))
+}
+
+pub(super) async fn tools(
+    State(identity): State<Arc<UserIdentity>>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, UserApiError> {
+    let guard = identity.authenticate(&headers).await?;
+    let owner = guard.view().personal_owner_id.clone();
+    let user = guard.view().user_id.clone();
+    let tool = crate::cloud_tools::public().map_err(|_| AuthError::Unavailable)?;
+    guard.finish().await?;
+    Ok(Json(
+        json!({"user_id":user,"owner_id":owner,"tools":[tool]}),
+    ))
 }
