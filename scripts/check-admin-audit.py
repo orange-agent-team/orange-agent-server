@@ -24,22 +24,8 @@ expected={
 variants={name:(rule['permission'],rule['approval'],rule['approval_permission']) for name,rule in cases['variants'].items()}
 if cases.get('approval')!='conditional' or cases.get('unknown_variant')!='reject' or cases.get('discriminator')!='payload.change' or variants!=expected:
     raise SystemExit('Case approval policy is inconsistent with the verified operations')
-def normalize(value):
-    if isinstance(value,list):return [normalize(v) for v in value]
-    if isinstance(value,dict):return {k:(v.replace('#/components/schemas/','#/$defs/',1) if k=='$ref' and isinstance(v,str) and v.startswith('#/components/schemas/') else normalize(v)) for k,v in value.items()}
-    return value
-if normalize(api['components']['schemas'])!=schema['$defs']:raise SystemExit('Admin OpenAPI and JSON Schema differ')
-def references(value):
-    if isinstance(value,list):
-        for child in value:references(child)
-    elif isinstance(value,dict):
-        if '$ref' in value:
-            ref=value['$ref']
-            if not ref.startswith('#/'):raise SystemExit('Unexpected external contract reference')
-            target=api
-            for part in ref[2:].split('/'):target=target[part.replace('~1','/').replace('~0','~')]
-        for child in value.values():references(child)
-references(api)
+from admin_contract_consistency import check_contract
+check_contract(api,schema)
 print('PASS consistent Admin schemas and resolvable local OpenAPI references',flush=True)
 if args.admin_repo:
     args.admin_repo=args.admin_repo.resolve()

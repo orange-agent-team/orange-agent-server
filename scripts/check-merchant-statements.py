@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
+from admin_contract_consistency import check_contract
 from owned_postgres import database
 from acceptance_origins import reserve_origins
 import sys
@@ -17,6 +18,8 @@ p.add_argument('--database-url-file',type=Path,default=root/'.local/database-url
 p.add_argument('--identity-dir',type=Path,default=root/'.local/identity')
 p.add_argument('--admin-repo',type=Path)
 args = p.parse_args()
+check_contract(json.loads((root/'contracts/openapi/admin.v1.json').read_bytes()),
+               json.loads((root/'contracts/json-schema/admin.schema.json').read_bytes()))
 browser={}
 if args.admin_repo:
     reserve_origins(43112)
