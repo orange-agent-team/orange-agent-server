@@ -28,8 +28,6 @@ impl Buyer {
     async fn create(db: &Store, origin: &str, gift: i64) -> Self {
         let owner = Uuid::new_v4().to_string();
         let user = Uuid::new_v4().to_string();
-        let token = Uuid::new_v4().simple().to_string();
-        let csrf = Uuid::new_v4().simple().to_string();
         sqlx::query("INSERT INTO owners(owner_id) VALUES($1)")
             .bind(&owner)
             .execute(db.pool())
@@ -42,6 +40,19 @@ impl Buyer {
             .await
             .expect("fixture wallet");
         sqlx::query("INSERT INTO users(user_id,issuer,subject,personal_owner_id) VALUES($1,'input-consent',$1,$2)").bind(&user).bind(&owner).execute(db.pool()).await.expect("buyer identity");
+        Self::signed_in(db, origin, owner, user).await
+    }
+    async fn from_device(d: &Device, origin: &str) -> Self {
+        sqlx::query("INSERT INTO wallets(owner_id) VALUES($1) ON CONFLICT DO NOTHING")
+            .bind(&d.owner)
+            .execute(d.store.pool())
+            .await
+            .expect("device owner's personal wallet");
+        Self::signed_in(&d.store, origin, d.owner.clone(), d.user.clone()).await
+    }
+    async fn signed_in(db: &Store, origin: &str, owner: String, user: String) -> Self {
+        let token = Uuid::new_v4().simple().to_string();
+        let csrf = Uuid::new_v4().simple().to_string();
         sqlx::query("INSERT INTO user_sessions(token_hash,session_id,user_id,csrf_token,auth_time,idle_expires_at,absolute_expires_at) VALUES($1,$2,$3,$4,0,
             floor(extract(epoch FROM clock_timestamp()))::bigint+600,floor(extract(epoch FROM clock_timestamp()))::bigint+600)")
             .bind(hex::encode(Sha256::digest(token.as_bytes()))).bind(Uuid::new_v4().to_string()).bind(&user).bind(&csrf).execute(db.pool()).await.expect("fixture session");
@@ -135,6 +146,7 @@ enum Scenario {
     CancelPriced,
     Resident,
     ResidentRevoked,
+    DualRole,
 }
 #[tokio::test]
 async fn consent_and_confirmed_lease_gate_every_real_audio_chunk() {
@@ -264,22 +276,35 @@ async fn balances(db: &Store, owner: &str) -> (i64, i64) {
     .expect("actual wallet")
 }
 async fn run_case(mode: Scenario) {
+    run_for(mode, None).await;
+}
+async fn run_for(mode: Scenario, participants: Option<(Device, Buyer)>) {
     let config = PathBuf::from(std::env::var("ORANGE_ASR_PROBE_FILE").expect("probe config"));
     let (_send, stop) = tokio::sync::watch::channel(false);
     let fact = orange_worker::host::probe_transcription(&config, stop)
         .await
         .expect("actual approved CPU profile");
-    let d = device(match mode {
-        Scenario::Input => "client-s",
-        Scenario::Publish => "client-v",
-        Scenario::WithdrawOutput => "client-w",
-        Scenario::InvalidOutput => "client-x",
-        Scenario::Priced => "client-ec",
-        Scenario::CancelPriced => "client-ed",
-        Scenario::Resident => "client-ee",
-        Scenario::ResidentRevoked => "client-ef",
-    })
-    .await;
+    let (d, existing_buyer) = if let Some((provider, buyer)) = participants {
+        (provider, Some(buyer))
+    } else {
+        (
+            device(match mode {
+                Scenario::Input => "client-s",
+                Scenario::Publish => "client-v",
+                Scenario::WithdrawOutput => "client-w",
+                Scenario::InvalidOutput => "client-x",
+                Scenario::Priced => "client-ec",
+                Scenario::CancelPriced => "client-ed",
+                Scenario::Resident => "client-ee",
+                Scenario::ResidentRevoked => "client-ef",
+                Scenario::DualRole => {
+                    unreachable!("dual role case supplies both existing accounts")
+                }
+            })
+            .await,
+            None,
+        )
+    };
     let db = &d.store;
     let root = tempfile::tempdir().expect("private root");
     std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).expect("private");
@@ -291,8 +316,14 @@ async fn run_case(mode: Scenario) {
             .expect("OIDC"),
     )
     .expect("config");
-    let resident_funds = matches!(mode, Scenario::Resident | Scenario::ResidentRevoked);
-    let buyer = Buyer::create(db, &cfg.user_origin, if resident_funds { 0 } else { 10000 }).await;
+    let resident_funds = matches!(
+        mode,
+        Scenario::Resident | Scenario::ResidentRevoked | Scenario::DualRole
+    );
+    let buyer = match existing_buyer {
+        Some(buyer) => buyer,
+        None => Buyer::create(db, &cfg.user_origin, if resident_funds { 0 } else { 10000 }).await,
+    };
     let purchased_order = if resident_funds {
         Some(
             purchase_lot::credited(
@@ -353,7 +384,11 @@ async fn run_case(mode: Scenario) {
         .await
     } else if matches!(
         mode,
-        Scenario::Priced | Scenario::CancelPriced | Scenario::Resident | Scenario::ResidentRevoked
+        Scenario::Priced
+            | Scenario::CancelPriced
+            | Scenario::Resident
+            | Scenario::ResidentRevoked
+            | Scenario::DualRole
     ) {
         ControlConnection::connect_managed_transcription(
             worker_config(&server, &d),
@@ -378,7 +413,10 @@ async fn run_case(mode: Scenario) {
         .report_transcription_profile(&profile, &fact)
         .await
         .expect("actual observation");
-    let resident = if matches!(mode, Scenario::Resident | Scenario::ResidentRevoked) {
+    let resident = if matches!(
+        mode,
+        Scenario::Resident | Scenario::ResidentRevoked | Scenario::DualRole
+    ) {
         let proc = start_resident(&server, &d, &profile, &config, private.path()).await;
         observation.observation_id=sqlx::query_scalar("SELECT o.observation_id FROM worker_transcription_profile_observations o JOIN worker_sessions s USING(node_id,session_id,connection_epoch) WHERE o.node_id=$1 AND o.execution_profile_id=$2 ORDER BY o.connection_epoch DESC LIMIT 1")
             .bind(&d.node).bind(&profile).fetch_one(db.pool()).await.expect("actual foreground observation");
@@ -566,7 +604,11 @@ async fn run_case(mode: Scenario) {
     assert_eq!(no_jobs, 0);
     let priced = matches!(
         mode,
-        Scenario::Priced | Scenario::CancelPriced | Scenario::Resident | Scenario::ResidentRevoked
+        Scenario::Priced
+            | Scenario::CancelPriced
+            | Scenario::Resident
+            | Scenario::ResidentRevoked
+            | Scenario::DualRole
     );
     let price_version = Uuid::new_v4().to_string();
     let publish_gate = if mode == Scenario::ResidentRevoked {
@@ -580,7 +622,7 @@ async fn run_case(mode: Scenario) {
             buyer.call(&app, "GET", &prices, "", vec![], 200).await,
             json!([])
         );
-        sqlx::query("INSERT INTO wallets(owner_id) VALUES($1)")
+        sqlx::query("INSERT INTO wallets(owner_id) VALUES($1) ON CONFLICT DO NOTHING")
             .bind(&d.owner)
             .execute(db.pool())
             .await
@@ -863,7 +905,7 @@ async fn run_case(mode: Scenario) {
         .expect("actual purchased bucket attribution");
         assert_eq!(
             lot,
-            if mode == Scenario::Resident {
+            if mode != Scenario::ResidentRevoked {
                 (7800, 0, 2200)
             } else {
                 (10000, 0, 0)
@@ -1522,4 +1564,96 @@ async fn live_legacy_input_session_survives_upgrade_and_audio_negotiation_cannot
     drop(legacy);
     server.stop().await;
     store.drain().await.expect("close");
+}
+
+#[tokio::test]
+async fn two_accounts_alternate_provider_and_buyer_without_spending_pending_income_or_team_funds() {
+    let alice = device("client-ei").await;
+    let bob = device("client-ej").await;
+    let db = alice.store.clone();
+    let cfg: UserOidcConfig = serde_json::from_slice(
+        &std::fs::read(std::env::var("ORANGE_TEST_USER_CONFIG_FILE").expect("identity config"))
+            .expect("config"),
+    )
+    .expect("OIDC");
+    let consumer_a = Buyer::from_device(&alice, &cfg.user_origin).await;
+    let consumer_b = Buyer::from_device(&bob, &cfg.user_origin).await;
+    let a = alice.owner.clone();
+    let b = bob.owner.clone();
+    let team = orange_control_plane::team::TeamStore::new(db.pool().clone())
+        .create_organization(
+            &alice.user,
+            "dual-team",
+            &orange_protocol::team::CreateOrganization {
+                name: "Dual-role development team".into(),
+                member_limit: 3,
+            },
+        )
+        .await
+        .expect("real team creation")
+        .organization_id;
+    sqlx::query("UPDATE wallets SET gift=137 WHERE owner_id=$1")
+        .bind(&team)
+        .execute(db.pool())
+        .await
+        .expect("separate team fixture balance");
+    run_for(Scenario::DualRole, Some((alice, consumer_b))).await;
+    let funding: (i64, i64, i64, i64) = sqlx::query_as(
+        "SELECT purchased,gift,earned,pending_earned FROM wallets WHERE owner_id=$1",
+    )
+    .bind(&a)
+    .fetch_one(db.pool())
+    .await
+    .expect("provider earnings");
+    assert_eq!(funding, (0, 0, 0, 1760));
+    let root = db
+        .create_budget(
+            &a,
+            "no-pending-spend",
+            &CreateBudget {
+                scope_id: "dual-role-spend".into(),
+                limit: "1000".to_owned().try_into().expect("limit"),
+            },
+        )
+        .await
+        .expect("budget");
+    let invoke = Uuid::new_v4().to_string();
+    let quote = Uuid::new_v4().to_string();
+    let projection = "d".repeat(64);
+    sqlx::query("INSERT INTO quotes(quote_id,owner_id,root_budget_id,invocation_id,projection_digest,price_version,max_amount,expires_at) VALUES($1,$2,$3,$4,$5,'dual-role-test',100,clock_timestamp()+interval '5 minutes')")
+        .bind(&quote).bind(&a).bind(&root.root_budget_id).bind(&invoke).bind(&projection).execute(db.pool()).await.expect("trusted eligibility fixture");
+    let result = db
+        .submit(
+            &a,
+            "attempt-pending-income",
+            &SubmitJob {
+                root_budget_id: root.root_budget_id,
+                invocation_id: invoke,
+                quote_id: quote,
+                request_projection_digest: projection,
+                purpose: InvocationPurpose::Primary,
+            },
+        )
+        .await;
+    assert!(matches!(
+        result,
+        Err(orange_control_plane::store::StoreError::Balance)
+    ));
+    run_for(Scenario::DualRole, Some((bob, consumer_a))).await;
+    for (consumer, provider) in [(&a, &b), (&b, &a)] {
+        let actual:(i64,i64,i64)=sqlx::query_as("SELECT s.charge,s.platform_fee,s.provider_pending FROM job_settlements s JOIN jobs j USING(job_id) WHERE j.owner_id=$1 AND s.provider_owner_id=$2")
+           .bind(consumer).bind(provider).fetch_one(db.pool()).await.expect("cross-account delivery");
+        assert_eq!(actual, (2200, 440, 1760));
+        let balances:(i64,i64,i64,i64)=sqlx::query_as("SELECT purchased,reserved_purchased,earned,pending_earned FROM wallets WHERE owner_id=$1")
+            .bind(consumer).fetch_one(db.pool()).await.expect("independent spending and income");
+        assert_eq!(balances, (7800, 0, 0, 1760));
+    }
+    let untouched: (i64, i64, i64, i64) = sqlx::query_as(
+        "SELECT gift,purchased,reserved_gift,pending_earned FROM wallets WHERE owner_id=$1",
+    )
+    .bind(&team)
+    .fetch_one(db.pool())
+    .await
+    .expect("team wallet");
+    assert_eq!(untouched, (137, 0, 0, 0));
 }
