@@ -17,6 +17,7 @@ use serde_json::{Value, json};
 use std::os::unix::fs::PermissionsExt;
 use tower::ServiceExt;
 
+#[derive(Clone)]
 struct Buyer {
     owner: String,
     user: String,
@@ -278,14 +279,30 @@ async fn balances(db: &Store, owner: &str) -> (i64, i64) {
 async fn run_case(mode: Scenario) {
     run_for(mode, None).await;
 }
-async fn run_for(mode: Scenario, participants: Option<(Device, Buyer)>) {
+struct Participants {
+    node: Device,
+    buyer: Buyer,
+    paid_order: Option<String>,
+    team_budget: Option<String>,
+}
+impl Participants {
+    fn native(node: Device, buyer: Buyer) -> Self {
+        Self {
+            node,
+            buyer,
+            paid_order: None,
+            team_budget: None,
+        }
+    }
+}
+async fn run_for(mode: Scenario, participants: Option<Participants>) {
     let config = PathBuf::from(std::env::var("ORANGE_ASR_PROBE_FILE").expect("probe config"));
     let (_send, stop) = tokio::sync::watch::channel(false);
     let fact = orange_worker::host::probe_transcription(&config, stop)
         .await
         .expect("actual approved CPU profile");
-    let (d, existing_buyer) = if let Some((provider, buyer)) = participants {
-        (provider, Some(buyer))
+    let (d, existing_buyer, known_purchase, chosen_budget) = if let Some(p) = participants {
+        (p.node, Some(p.buyer), p.paid_order, p.team_budget)
     } else {
         (
             device(match mode {
@@ -302,6 +319,8 @@ async fn run_for(mode: Scenario, participants: Option<(Device, Buyer)>) {
                 }
             })
             .await,
+            None,
+            None,
             None,
         )
     };
@@ -324,7 +343,9 @@ async fn run_for(mode: Scenario, participants: Option<(Device, Buyer)>) {
         Some(buyer) => buyer,
         None => Buyer::create(db, &cfg.user_origin, if resident_funds { 0 } else { 10000 }).await,
     };
-    let purchased_order = if resident_funds {
+    let purchased_order = if known_purchase.is_some() {
+        known_purchase
+    } else if resident_funds {
         Some(
             purchase_lot::credited(
                 db.pool(),
@@ -450,8 +471,13 @@ async fn run_for(mode: Scenario, participants: Option<(Device, Buyer)>) {
             200,
         )
         .await;
-    let budget = db
-        .create_budget(
+    let team_order = chosen_budget.is_some();
+    let budget = if let Some(root) = chosen_budget {
+        db.budget(&buyer.owner, &root)
+            .await
+            .expect("actual allocated organizational budget")
+    } else {
+        db.create_budget(
             &buyer.owner,
             &Uuid::new_v4().to_string(),
             &CreateBudget {
@@ -460,7 +486,8 @@ async fn run_for(mode: Scenario, participants: Option<(Device, Buyer)>) {
             },
         )
         .await
-        .expect("budget");
+        .expect("budget")
+    };
     let grant = Uuid::new_v4().to_string();
     let invocation = Uuid::new_v4().to_string();
     let path = format!("{base}/transcription-input-grants");
@@ -732,7 +759,32 @@ async fn run_for(mode: Scenario, participants: Option<(Device, Buyer)>) {
             .execute(db.pool())
             .await
             .expect("restore same reviewed terms");
-        let a = if mode == Scenario::CancelPriced
+        let team_browser = team_order && std::env::var_os("ORANGE_AUDIO_CONSENT_BROWSER").is_some();
+        let a = if team_browser {
+            buyer
+                .call(&app, "DELETE", &status_path, &grant, vec![], 200)
+                .await;
+            let driver =
+                PathBuf::from(std::env::var("ORANGE_AUDIO_CONSENT_BROWSER").expect("browser"))
+                    .with_file_name("real-team-compute.mjs");
+            let screenshot =
+                PathBuf::from(std::env::var("ORANGE_AUDIO_CONSENT_SCREENSHOT").expect("evidence"))
+                    .with_file_name("team-compute-result.png");
+            browser_flow(&app,driver.to_str().expect("driver"),json!({"origin":buyer.origin,"token":buyer.token,"org":buyer.owner,"budget":budget.root_budget_id,"upload":upload,"node":d.node,
+                "observation":observation.observation_id,"transcript_sha":fact.transcript_sha256,"screenshot":screenshot})).await;
+            let jobs:Vec<String>=sqlx::query_scalar("SELECT job_id FROM jobs WHERE owner_id=$1 AND root_budget_id=$2 AND submitting_user_id=$3").bind(&buyer.owner).bind(&budget.root_budget_id).bind(&buyer.user).fetch_all(db.pool()).await.expect("original team job");
+            assert_eq!(jobs.len(), 1);
+            buyer
+                .call(
+                    &app,
+                    "GET",
+                    &format!("{base}/jobs/{}", jobs[0]),
+                    "",
+                    vec![],
+                    200,
+                )
+                .await
+        } else if mode == Scenario::CancelPriced
             && let Ok(driver) = std::env::var("ORANGE_AUDIO_CONSENT_BROWSER")
         {
             let screenshot =
@@ -784,7 +836,13 @@ async fn run_for(mode: Scenario, participants: Option<(Device, Buyer)>) {
             a
         };
         assert_eq!(a["reserved"], "2200");
-        assert_eq!(balances(db, &buyer.owner).await, (7800, 2200));
+        if team_browser {
+            assert_eq!(a["charge"], "2200");
+            assert_eq!(a["execution_state"], "succeeded");
+            assert_eq!(balances(db, &buyer.owner).await, (7800, 0));
+        } else {
+            assert_eq!(balances(db, &buyer.owner).await, (7800, 2200));
+        }
         a["job_id"].as_str().expect("actual job id").to_owned()
     } else {
         // Separate trusted scheduler/admission fixture. The transport test exercises the real offer/ACK barrier.
@@ -920,6 +978,21 @@ async fn run_for(mode: Scenario, participants: Option<(Device, Buyer)>) {
                 &job,
             )
             .await;
+        }
+        if team_order {
+            buyer
+                .call(&app, "DELETE", &endpoint, upload, vec![], 200)
+                .await;
+            buyer
+                .call(
+                    &app,
+                    "GET",
+                    &format!("{base}/jobs/{job}/result"),
+                    "",
+                    vec![],
+                    403,
+                )
+                .await;
         }
         process.stop().await;
         drop(conn);
@@ -1597,7 +1670,11 @@ async fn two_accounts_alternate_provider_and_buyer_without_spending_pending_inco
         .execute(db.pool())
         .await
         .expect("separate team fixture balance");
-    run_for(Scenario::DualRole, Some((alice, consumer_b))).await;
+    run_for(
+        Scenario::DualRole,
+        Some(Participants::native(alice, consumer_b)),
+    )
+    .await;
     let funding: (i64, i64, i64, i64) = sqlx::query_as(
         "SELECT purchased,gift,earned,pending_earned FROM wallets WHERE owner_id=$1",
     )
@@ -1639,7 +1716,11 @@ async fn two_accounts_alternate_provider_and_buyer_without_spending_pending_inco
         result,
         Err(orange_control_plane::store::StoreError::Balance)
     ));
-    run_for(Scenario::DualRole, Some((bob, consumer_a))).await;
+    run_for(
+        Scenario::DualRole,
+        Some(Participants::native(bob, consumer_a)),
+    )
+    .await;
     for (consumer, provider) in [(&a, &b), (&b, &a)] {
         let actual:(i64,i64,i64)=sqlx::query_as("SELECT s.charge,s.platform_fee,s.provider_pending FROM job_settlements s JOIN jobs j USING(job_id) WHERE j.owner_id=$1 AND s.provider_owner_id=$2")
            .bind(consumer).bind(provider).fetch_one(db.pool()).await.expect("cross-account delivery");
@@ -1656,4 +1737,216 @@ async fn two_accounts_alternate_provider_and_buyer_without_spending_pending_inco
     .await
     .expect("team wallet");
     assert_eq!(untouched, (137, 0, 0, 0));
+}
+
+#[path = "../support/refund_admin.rs"]
+mod journey_admin;
+#[path = "../support/stripe_merchant.rs"]
+mod journey_merchant;
+
+async fn purchase_with_original_user(b: &Buyer, app: &Router) -> String {
+    let id = Uuid::new_v4().to_string();
+    let base = format!("/api/v1/owners/{}/checkout-orders", b.owner);
+    b.call(
+        app,
+        "POST",
+        &base,
+        &id,
+        json!({"order_id":id,"offer_id":"journey-pack"})
+            .to_string()
+            .into_bytes(),
+        201,
+    )
+    .await;
+    let session = b
+        .call(
+            app,
+            "POST",
+            &format!("{base}/{id}/session"),
+            &id,
+            b"{}".to_vec(),
+            200,
+        )
+        .await;
+    assert_eq!(session["state"], "open");
+    let credited = b
+        .call(
+            app,
+            "POST",
+            &format!("{base}/{id}/reconcile"),
+            &id,
+            b"{}".to_vec(),
+            200,
+        )
+        .await;
+    assert_eq!(credited["state"], "credited");
+    assert_eq!(credited["offer"]["microcredits"], "10000");
+    id
+}
+#[tokio::test]
+async fn one_no_gpu_account_traverses_consumption_supply_team_privacy_purchase_and_refund() {
+    use orange_control_plane::payments::{Payments, Sandbox};
+    let node_a = device("client-ek").await;
+    let node_b = device("client-el").await;
+    let db = node_a.store.clone();
+    let cfg: UserOidcConfig = serde_json::from_slice(
+        &std::fs::read(std::env::var("ORANGE_TEST_USER_CONFIG_FILE").expect("identity config"))
+            .expect("file"),
+    )
+    .expect("OIDC");
+    let a = Buyer::from_device(&node_a, &cfg.user_origin).await;
+    let b = Buyer::from_device(&node_b, &cfg.user_origin).await;
+    let identity = UserIdentity::discover(db.pool().clone(), cfg)
+        .await
+        .expect("real discovery");
+    let (merchant, addr, stop, server) = journey_merchant::start().await;
+    let payments = Payments::new(
+        identity.clone(),
+        Sandbox::loopback_fixture(journey_merchant::config(), addr).expect("local merchant"),
+    );
+    let app = orange_control_plane::auth::routes::router(identity).merge(payments.router());
+    sqlx::query("INSERT INTO test_credit_offers VALUES($1,'journey-pack','price_devUnits','usd',500,10000,true)").bind(journey_merchant::MERCHANT).execute(db.pool()).await.expect("catalogue fixture");
+    let team = a
+        .call(
+            &app,
+            "POST",
+            "/api/v1/organizations",
+            "six-journey-org",
+            json!({"name":"Six journeys","member_limit":3})
+                .to_string()
+                .into_bytes(),
+            200,
+        )
+        .await;
+    let org = team["organization_id"].as_str().expect("team").to_owned();
+    let invite = Uuid::new_v4().to_string();
+    let manage = format!("/api/v1/organizations/{org}");
+    a.call(&app,"POST",&format!("{manage}/invitations"),&invite,json!({"invitation_id":invite,"recipient_id":b.user,"role":"member","ttl_seconds":600,"expected_policy_version":team["policy_version"]}).to_string().into_bytes(),200).await;
+    b.call(
+        &app,
+        "POST",
+        &format!("/api/v1/team-invitations/{invite}/accept"),
+        &invite,
+        br#"{"accept":true}"#.to_vec(),
+        200,
+    )
+    .await;
+    let policy = a
+        .call(
+            &app,
+            "POST",
+            &format!("{manage}/budget-policy"),
+            "journey-policy",
+            br#"{"expected_version":"0","owner_ceiling":"10000","hard_limit":"3000"}"#.to_vec(),
+            200,
+        )
+        .await;
+    let root = Uuid::new_v4().to_string();
+    a.call(&app,"POST",&format!("{manage}/budgets"),&root,json!({"budget_id":root,"member_id":b.user,"limit":"3000","expected_policy_version":policy["version"]}).to_string().into_bytes(),200).await;
+    // Only the route scope changes. The original user cookies always authenticate Alice or Bob.
+    let mut finance_a = a.clone();
+    finance_a.owner = org.clone();
+    let mut team_b = b.clone();
+    team_b.owner = org.clone();
+    let team_purchase = purchase_with_original_user(&finance_a, &app).await;
+    run_for(
+        Scenario::DualRole,
+        Some(Participants {
+            node: node_a,
+            buyer: team_b,
+            paid_order: Some(team_purchase),
+            team_budget: Some(root.clone()),
+        }),
+    )
+    .await;
+    let used = b
+        .call(
+            &app,
+            "GET",
+            &format!("{manage}/budgets/{root}"),
+            "",
+            vec![],
+            200,
+        )
+        .await;
+    assert_eq!(used["spent"], "2200");
+    assert_eq!(used["reserved"], "0");
+    assert_eq!(balances(&db, &b.owner).await, (0, 0));
+    let personal = purchase_with_original_user(&a, &app).await;
+    run_for(
+        Scenario::DualRole,
+        Some(Participants {
+            node: node_b,
+            buyer: a.clone(),
+            paid_order: Some(personal.clone()),
+            team_budget: None,
+        }),
+    )
+    .await;
+    let refund = Uuid::new_v4().to_string();
+    let base = format!("/api/v1/owners/{}", a.owner);
+    let r = a
+        .call(
+            &app,
+            "POST",
+            &format!("{base}/checkout-orders/{personal}/refunds"),
+            &refund,
+            json!({"refund_id":refund,"currency":"usd","amount_minor":"100"})
+                .to_string()
+                .into_bytes(),
+            201,
+        )
+        .await;
+    assert_eq!(r["held_microcredits"], "2000");
+    journey_admin::Admin::new(&db, &a.owner)
+        .await
+        .approve(&a.owner, &r)
+        .await;
+    assert!(
+        payments
+            .process_refund()
+            .await
+            .expect("approved remote request")
+    );
+    let remote = format!("re_{}", refund.replace('-', ""));
+    merchant
+        .refunds
+        .records
+        .lock()
+        .expect("merchant")
+        .get_mut(&remote)
+        .expect("issued refund")["status"] = json!("succeeded");
+    assert!(
+        payments
+            .process_refund()
+            .await
+            .expect("independent read of exact refund")
+    );
+    let final_state = a
+        .call(
+            &app,
+            "GET",
+            &format!("{base}/refunds/{refund}"),
+            "",
+            vec![],
+            200,
+        )
+        .await;
+    assert_eq!(final_state["state"], "succeeded");
+    assert_eq!(balances(&db, &a.owner).await, (5800, 0));
+    assert_eq!(balances(&db, &org).await, (7800, 0));
+    assert_eq!(balances(&db, &b.owner).await, (0, 0));
+    for owner in [&a.owner, &b.owner] {
+        let buckets: (i64, i64) =
+            sqlx::query_as("SELECT earned,pending_earned FROM wallets WHERE owner_id=$1")
+                .bind(owner)
+                .fetch_one(db.pool())
+                .await
+                .expect("provider income");
+        assert_eq!(buckets, (0, 1760));
+    }
+    let recorded:i64=sqlx::query_scalar("SELECT count(*) FROM job_settlements s JOIN jobs j USING(job_id) WHERE (j.owner_id=$1 AND s.provider_owner_id=$2) OR (j.owner_id=$2 AND s.provider_owner_id=$3)").bind(org).bind(&a.owner).bind(&b.owner).fetch_one(db.pool()).await.expect("reciprocal accounting");
+    assert_eq!(recorded, 2);
+    let _ = stop.send(());
+    server.await.expect("merchant stopped");
 }

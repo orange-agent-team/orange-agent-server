@@ -1,0 +1,546 @@
+[
+  {
+    "id": "consume",
+    "title": "租用算力",
+    "actor": "当前购买账户的原始提交人",
+    "preconditions": "拥有可用预算与余额，已取得所选源、节点和配置的授权。",
+    "entry": [
+      "artifacts",
+      "POST",
+      "/api/v1/owners/{owner}/transcription-quotes"
+    ],
+    "terminal": [
+      "artifacts",
+      "GET",
+      "/api/v1/owners/{owner}/jobs/{job}"
+    ],
+    "terminal_fields": [
+      "execution_state",
+      "settlement_state",
+      "charge"
+    ],
+    "steps": [
+      {
+        "label": "核对版本、节点和处理地区",
+        "interface": [
+          "artifacts",
+          "GET",
+          "/api/v1/transcription-targets/{id}"
+        ]
+      },
+      {
+        "label": "取得服务端的时长和价格上限",
+        "interface": [
+          "artifacts",
+          "POST",
+          "/api/v1/owners/{owner}/transcription-quotes"
+        ]
+      },
+      {
+        "label": "本人确认后提交并冻结预算",
+        "interface": [
+          "artifacts",
+          "POST",
+          "/api/v1/owners/{owner}/jobs"
+        ]
+      },
+      {
+        "label": "Worker 只提交完整结果",
+        "interface": [
+          "worker",
+          "RPC",
+          "CommitOutput"
+        ]
+      },
+      {
+        "label": "查询原始任务与结算",
+        "interface": [
+          "artifacts",
+          "GET",
+          "/api/v1/owners/{owner}/jobs/{job}"
+        ]
+      }
+    ],
+    "exits": {
+      "取消": {
+        "state": "排队时取消；运行中等待清理。",
+        "money": "排队预留全退；已交付按原事实结算。",
+        "recovery": "按 Job 编号查询状态及原分桶。"
+      },
+      "无权限": {
+        "state": "原用户授权、组织或预算权限不成立。",
+        "money": "被拒绝的新请求不产生预留。",
+        "recovery": "恢复合法授权后读取原调用编号。"
+      },
+      "不可用": {
+        "state": "没有可用价格、预算不足或源不可读。",
+        "money": "报价不扣款；被拒绝的提交不冻结。",
+        "recovery": "重新读取来源、额度与报价。"
+      },
+      "结果未知": {
+        "state": "提交响应丢失。",
+        "money": "原请求可能已冻结。",
+        "recovery": "按原 invocation 查询，恢复原 Job。"
+      }
+    }
+  },
+  {
+    "id": "supply",
+    "title": "提供空闲算力",
+    "actor": "已登记设备与其提供方账户",
+    "preconditions": "设备启用本地贡献，审核模型、证书、当前策略和本地 Broker 均有效。",
+    "entry": [
+      "worker",
+      "RPC",
+      "Control"
+    ],
+    "terminal": [
+      "account",
+      "GET",
+      "/api/v1/account/wallet"
+    ],
+    "terminal_fields": [
+      "owner_id",
+      "pending_earned"
+    ],
+    "steps": [
+      {
+        "label": "协商设备会话和能力",
+        "interface": [
+          "worker",
+          "RPC",
+          "Control"
+        ]
+      },
+      {
+        "label": "上报本机实测模型配置",
+        "interface": [
+          "worker",
+          "RPC",
+          "ReportTranscriptionObservation"
+        ]
+      },
+      {
+        "label": "领取分配并确认启动",
+        "interface": [
+          "worker",
+          "RPC",
+          "Control"
+        ]
+      },
+      {
+        "label": "按有效租约读取授权输入",
+        "interface": [
+          "worker",
+          "RPC",
+          "ReadTranscriptionInput"
+        ]
+      },
+      {
+        "label": "提交结果并确认回收",
+        "interface": [
+          "worker",
+          "RPC",
+          "ConfirmCpuCleanup"
+        ]
+      },
+      {
+        "label": "检查提供方待入账所得",
+        "interface": [
+          "account",
+          "GET",
+          "/api/v1/account/wallet"
+        ]
+      }
+    ],
+    "exits": {
+      "取消": {
+        "state": "进入停止或排空，等待进程退出证明。",
+        "money": "未交付不会增加提供方收益。",
+        "recovery": "按原租约和清理回执核对槽位。"
+      },
+      "无权限": {
+        "state": "证书失效、旧会话或租约不匹配。",
+        "money": "拒绝读取或发布，无新收益。",
+        "recovery": "重新登记或重新协商受信会话。"
+      },
+      "不可用": {
+        "state": "设备忙或模型资格未通过。",
+        "money": "没有实际分配时无收费。",
+        "recovery": "恢复设备后重新报告实际能力。"
+      },
+      "结果未知": {
+        "state": "结果发送后回执丢失。",
+        "money": "服务端可能已经记录收益。",
+        "recovery": "按原输出摘要查询回执，不再运行推理。"
+      }
+    }
+  },
+  {
+    "id": "team",
+    "title": "使用团队额度",
+    "actor": "组织 Owner、获授权的 Admin 与真正接受邀请的成员",
+    "preconditions": "用户已注册；Owner 有当前组织权限，组织账户已独立获得资金。",
+    "entry": [
+      "user",
+      "POST",
+      "/api/v1/organizations"
+    ],
+    "terminal": [
+      "team-governance",
+      "GET",
+      "/api/v1/organizations/{id}/budgets/{budget}"
+    ],
+    "terminal_fields": [
+      "organization_id",
+      "member_id",
+      "spent",
+      "reserved"
+    ],
+    "steps": [
+      {
+        "label": "创建组织与独立空钱包",
+        "interface": [
+          "user",
+          "POST",
+          "/api/v1/organizations"
+        ]
+      },
+      {
+        "label": "发给确定的收件人",
+        "interface": [
+          "team-governance",
+          "POST",
+          "/api/v1/organizations/{id}/invitations"
+        ]
+      },
+      {
+        "label": "成员本人接受",
+        "interface": [
+          "team-governance",
+          "POST",
+          "/api/v1/team-invitations/{invitation}/accept"
+        ]
+      },
+      {
+        "label": "设置硬上限并分配成员额度",
+        "interface": [
+          "team-governance",
+          "POST",
+          "/api/v1/organizations/{id}/budgets"
+        ]
+      },
+      {
+        "label": "成员以组织路径确认任务",
+        "interface": [
+          "artifacts",
+          "POST",
+          "/api/v1/owners/{owner}/jobs"
+        ]
+      },
+      {
+        "label": "核对组织预算的消费与冻结",
+        "interface": [
+          "team-governance",
+          "GET",
+          "/api/v1/organizations/{id}/budgets/{budget}"
+        ]
+      }
+    ],
+    "exits": {
+      "取消": {
+        "state": "邀请可撤回或拒绝；已提交任务使用原 Job 取消。",
+        "money": "邀请与分配额度均不创造余额。",
+        "recovery": "读取组织邀请、成员清单及预算。"
+      },
+      "无权限": {
+        "state": "成员移除或降为 Billing 时旧提交授权撤销。",
+        "money": "已记账费用和原组织归属保留。",
+        "recovery": "由有权经理重新明确分配。"
+      },
+      "不可用": {
+        "state": "成员数达到上限或额度总和超过硬上限。",
+        "money": "失败的分配不占额度，也不影响个人钱包。",
+        "recovery": "刷新成员数、已分配额度和策略版本。"
+      },
+      "结果未知": {
+        "state": "发出邀请或配置额度后连接中断。",
+        "money": "治理请求本身不扣积分。",
+        "recovery": "用原编号复核，确认只存在一份邀请或预算。"
+      }
+    }
+  },
+  {
+    "id": "privacy",
+    "title": "授权和撤回远程输入",
+    "actor": "拥有源版本读取、写入及预算提交权限的当前用户",
+    "preconditions": "已上传并测量准确版本，可向用户展示接收节点、地区、模型、语言和时限。",
+    "entry": [
+      "artifacts",
+      "POST",
+      "/api/v1/owners/{owner}/transcription-input-grants"
+    ],
+    "terminal": [
+      "artifacts",
+      "GET",
+      "/api/v1/owners/{owner}/transcription-input-grants/{id}"
+    ],
+    "terminal_fields": [
+      "state",
+      "expires_at_unix",
+      "projection_digest"
+    ],
+    "steps": [
+      {
+        "label": "核对已上传的具体版本",
+        "interface": [
+          "artifacts",
+          "POST",
+          "/api/v1/owners/{owner}/uploads/{upload}/transcription-measurements"
+        ]
+      },
+      {
+        "label": "用户对指定节点显式同意",
+        "interface": [
+          "artifacts",
+          "POST",
+          "/api/v1/owners/{owner}/transcription-input-grants"
+        ]
+      },
+      {
+        "label": "每个数据块复核当前授权",
+        "interface": [
+          "worker",
+          "RPC",
+          "ReadTranscriptionInput"
+        ]
+      },
+      {
+        "label": "撤回该次读取许可",
+        "interface": [
+          "artifacts",
+          "DELETE",
+          "/api/v1/owners/{owner}/transcription-input-grants/{id}"
+        ]
+      },
+      {
+        "label": "按授权编号确认撤回",
+        "interface": [
+          "artifacts",
+          "GET",
+          "/api/v1/owners/{owner}/transcription-input-grants/{id}"
+        ]
+      }
+    ],
+    "exits": {
+      "取消": {
+        "state": "提交前撤回可抢先建立撤回记录。",
+        "money": "单独签发授权不扣款。",
+        "recovery": "按原授权编号确认状态。"
+      },
+      "无权限": {
+        "state": "源被删除、共享撤销或设备不匹配。",
+        "money": "没有已提交结果时不计算交付收入。",
+        "recovery": "查询源状态与原任务的冻结及清理状态。"
+      },
+      "不可用": {
+        "state": "源字节损坏或解码证据不一致。",
+        "money": "拒绝输出；已冻结的任务按回收证据结算。",
+        "recovery": "重新验证原版本，不能用同名文件替换证据。"
+      },
+      "结果未知": {
+        "state": "授权或撤回响应丢失。",
+        "money": "授权恢复不自动创建收费任务。",
+        "recovery": "读取原 grant；按原编号重试撤回。"
+      }
+    }
+  },
+  {
+    "id": "purchase",
+    "title": "充值购买积分",
+    "actor": "个人用户或具有组织 Owner、Billing 权限的用户",
+    "preconditions": "测试商户和固定档位已启用；当前页面清楚列示现金最小单位和将入账的购买微积分。",
+    "entry": [
+      "test-checkout",
+      "POST",
+      "/api/v1/owners/{owner}/checkout-orders"
+    ],
+    "terminal": [
+      "test-checkout",
+      "GET",
+      "/api/v1/owners/{owner}/checkout-orders/{order}"
+    ],
+    "terminal_fields": [
+      "order_id",
+      "owner_id",
+      "offer",
+      "state"
+    ],
+    "steps": [
+      {
+        "label": "选择当前商户档位",
+        "interface": [
+          "test-checkout",
+          "GET",
+          "/api/v1/owners/{owner}/credit-offers"
+        ]
+      },
+      {
+        "label": "建立原始订单",
+        "interface": [
+          "test-checkout",
+          "POST",
+          "/api/v1/owners/{owner}/checkout-orders"
+        ]
+      },
+      {
+        "label": "确认派发测试收银台",
+        "interface": [
+          "test-checkout",
+          "POST",
+          "/api/v1/owners/{owner}/checkout-orders/{order}/session"
+        ]
+      },
+      {
+        "label": "签名事件先持久接收",
+        "interface": [
+          "test-checkout",
+          "POST",
+          "/api/v1/payment-events/stripe-test"
+        ]
+      },
+      {
+        "label": "复核原会话、付款意图与捕获金额",
+        "interface": [
+          "test-checkout",
+          "POST",
+          "/api/v1/owners/{owner}/checkout-orders/{order}/reconcile"
+        ]
+      },
+      {
+        "label": "查询已入账原单",
+        "interface": [
+          "test-checkout",
+          "GET",
+          "/api/v1/owners/{owner}/checkout-orders/{order}"
+        ]
+      }
+    ],
+    "exits": {
+      "取消": {
+        "state": "尚未向商户派发的订单可取消。",
+        "money": "未派发无现金或积分变动。",
+        "recovery": "已派发则查询原单，不把浏览器返回当取消。"
+      },
+      "无权限": {
+        "state": "财务角色撤销或回调签名不符。",
+        "money": "拒绝派发或入账。",
+        "recovery": "由原账户合法主体重新读取。"
+      },
+      "不可用": {
+        "state": "商户不可达，或现金金额、币种、档位不匹配。",
+        "money": "未核实的支付不能增加购买余额。",
+        "recovery": "查原会话和独立财务凭证。"
+      },
+      "结果未知": {
+        "state": "会话创建请求发出后失去回应。",
+        "money": "可能有商户会话，平台不重复创建。",
+        "recovery": "原订单与可信事件可恢复会话，再查询原付款事实。"
+      }
+    }
+  },
+  {
+    "id": "refund",
+    "title": "原路部分退款",
+    "actor": "原购买账户的获权财务主体、制单人和独立审批人",
+    "preconditions": "原购买已确认入账，尚有来自该单的可退积分和现金额度。",
+    "entry": [
+      "test-checkout",
+      "GET",
+      "/api/v1/owners/{owner}/checkout-orders/{order}/refundable"
+    ],
+    "terminal": [
+      "test-checkout",
+      "GET",
+      "/api/v1/owners/{owner}/refunds/{refund}"
+    ],
+    "terminal_fields": [
+      "refund_id",
+      "order_id",
+      "state",
+      "held_microcredits"
+    ],
+    "steps": [
+      {
+        "label": "查询原单的可退现金范围",
+        "interface": [
+          "test-checkout",
+          "GET",
+          "/api/v1/owners/{owner}/checkout-orders/{order}/refundable"
+        ]
+      },
+      {
+        "label": "确认金额并冻结该单未用积分",
+        "interface": [
+          "test-checkout",
+          "POST",
+          "/api/v1/owners/{owner}/checkout-orders/{order}/refunds"
+        ]
+      },
+      {
+        "label": "独立核对原支付和冻结条款",
+        "interface": [
+          "admin",
+          "GET",
+          "/admin/v1/test-refunds/{case_id}"
+        ]
+      },
+      {
+        "label": "审批后授权一次商户请求",
+        "interface": [
+          "admin",
+          "POST",
+          "/admin/v1/actions/{action_id}/execute"
+        ]
+      },
+      {
+        "label": "取得权威退款状态后追加冲正或释放",
+        "interface": [
+          "test-checkout",
+          "POST",
+          "/api/v1/payment-events/stripe-test"
+        ]
+      },
+      {
+        "label": "读取本地终态与关联事项",
+        "interface": [
+          "test-checkout",
+          "GET",
+          "/api/v1/owners/{owner}/refunds/{refund}"
+        ]
+      }
+    ],
+    "exits": {
+      "取消": {
+        "state": "未派发的申请可取消。",
+        "money": "沿原单释放冻结，已发出的外部退款继续核对。",
+        "recovery": "按原 refund_id 读取。"
+      },
+      "无权限": {
+        "state": "申请人自批、审批角色撤销或范围不符。",
+        "money": "不能据此派发商户退款。",
+        "recovery": "核对审批记录，未派发时可取消原申请。"
+      },
+      "不可用": {
+        "state": "原单余额已消费、被任务占用，或商户证据不一致。",
+        "money": "不能挪用赠送、贡献或另一单的余额。",
+        "recovery": "核对原购买分桶与商户现金凭证。"
+      },
+      "结果未知": {
+        "state": "商户接收退款后响应丢失。",
+        "money": "保留原冻结，不发起第二次退款。",
+        "recovery": "依据原 Charge 和派发标记定位同一 Refund，终态只记一次。"
+      }
+    }
+  }
+]
