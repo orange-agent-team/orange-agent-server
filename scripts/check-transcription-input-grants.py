@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Exercise authenticated consent and real mTLS/PG ranged input on a disposable database."""
+from locked_transcription_env import interpreter
 import argparse
 import json
 import os
@@ -14,11 +15,14 @@ from acceptance_origins import reserve_origins
 ROOT=Path(__file__).resolve().parents[1]
 parser=argparse.ArgumentParser()
 for name, default in (("database-url-file",".local/database-url"),("identity-config",".local/identity/user-config.json"),
-                      ("python",".local/transcription-venv/bin/python"),("model-cache",".local/transcription-model")):
+                      ("model-cache",".local/transcription-model")):
     parser.add_argument("--"+name,type=Path,default=ROOT/default)
+parser.add_argument("--python",type=Path)
 parser.add_argument("--text-runtime",type=Path,default=ROOT/".local/model-runtime")
 parser.add_argument("--web-repo",type=Path)
+parser.add_argument("--uv-cache",type=Path,default=ROOT/".local/uv-cache")
 args=parser.parse_args()
+args.python = args.python or interpreter(ROOT,args.uv_cache)
 browser={}
 if args.web_repo:
     reserve_origins(43122)

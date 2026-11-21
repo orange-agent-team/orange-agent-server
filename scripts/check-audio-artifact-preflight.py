@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Measure an uploaded real recording at the user HTTP API, including live revocation."""
+from locked_transcription_env import interpreter
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
@@ -28,9 +29,11 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--database-url-file", type=Path, default=ROOT / ".local/database-url")
 parser.add_argument("--identity-config", type=Path, default=ROOT / ".local/identity/user-config.json")
 parser.add_argument("--model-cache", type=Path, default=ROOT / ".local/transcription-model")
-parser.add_argument("--python", type=Path, default=ROOT / ".local/transcription-venv/bin/python")
+parser.add_argument("--python", type=Path)
 parser.add_argument("--web-repo", type=Path)
+parser.add_argument("--uv-cache",type=Path,default=ROOT/".local/uv-cache")
 args = parser.parse_args()
+args.python = args.python or interpreter(ROOT,args.uv_cache)
 if args.web_repo:
     reserve_origins(43122)
     web = args.web_repo.resolve()

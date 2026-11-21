@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Qualify a fixed CPU ASR execution profile at the actual local Worker entry point."""
+from locked_transcription_env import interpreter
 import argparse
 import hashlib
 import json
@@ -11,10 +12,11 @@ import tempfile
 
 ROOT=Path(__file__).resolve().parents[1]
 parser=argparse.ArgumentParser()
-parser.add_argument("--python",type=Path,default=ROOT/".local/transcription-venv/bin/python")
+parser.add_argument("--python",type=Path)
 parser.add_argument("--model-cache",type=Path,default=ROOT/".local/transcription-model")
 parser.add_argument("--uv-cache",type=Path,default=ROOT/".local/uv-cache")
 args=parser.parse_args()
+args.python = args.python or interpreter(ROOT,args.uv_cache)
 if not __debug__:raise SystemExit("Assertions required")
 cargo=Path(subprocess.check_output([shutil.which("rustup") or "/opt/homebrew/opt/rustup/bin/rustup",
                                     "which","--toolchain","1.97.1","cargo"],text=True).strip())

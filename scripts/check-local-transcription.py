@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Qualify the normal Rust MC-05 entry and its supervised, real local CPU backend."""
 
+from locked_transcription_env import interpreter
 import argparse
 import fcntl
 import hashlib
@@ -21,9 +22,11 @@ PIN = json.loads((ROOT / "config/local-transcription.lock.json").read_text())
 parser = argparse.ArgumentParser()
 parser.add_argument("--models", type=Path, default=ROOT / ".local/transcription-model")
 parser.add_argument(
-    "--python", type=Path, default=ROOT / ".local/transcription-venv/bin/python"
+    "--python", type=Path
 )
+parser.add_argument("--uv-cache",type=Path,default=ROOT/".local/uv-cache")
 args = parser.parse_args()
+args.python = args.python or interpreter(ROOT,args.uv_cache)
 # Preserve the venv symlink, whose containing directory identifies the environment.
 python = args.python.absolute()
 models = args.models.resolve()
