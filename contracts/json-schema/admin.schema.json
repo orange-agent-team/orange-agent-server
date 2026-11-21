@@ -3792,6 +3792,820 @@
         "target_version",
         "state"
       ]
+    },
+    "StatementRun": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "merchant_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 180,
+          "pattern": "^[A-Za-z0-9_]+$"
+        },
+        "scan_from_unix": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$"
+        },
+        "until_unix": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$"
+        },
+        "sealed": {
+          "type": "boolean"
+        },
+        "last_error": {
+          "anyOf": [
+            {
+              "enum": [
+                "evidence_mismatch",
+                "scan_unavailable"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "run_id",
+        "merchant_id",
+        "scan_from_unix",
+        "until_unix",
+        "sealed",
+        "last_error"
+      ]
+    },
+    "StatementRunList": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "data": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/StatementRun"
+          }
+        },
+        "next_cursor": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "data",
+        "next_cursor"
+      ]
+    },
+    "StatementCash": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "currency": {
+          "type": "string",
+          "pattern": "^[a-z]{3}$"
+        },
+        "category": {
+          "type": "string"
+        },
+        "provider_status": {
+          "enum": [
+            "pending",
+            "available"
+          ]
+        },
+        "lines": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$"
+        },
+        "gross_minor": {
+          "type": "string",
+          "pattern": "^(0|-?[1-9][0-9]*)$"
+        },
+        "fee_minor": {
+          "type": "string",
+          "pattern": "^(0|-?[1-9][0-9]*)$"
+        },
+        "net_minor": {
+          "type": "string",
+          "pattern": "^(0|-?[1-9][0-9]*)$"
+        }
+      },
+      "required": [
+        "currency",
+        "category",
+        "provider_status",
+        "lines",
+        "gross_minor",
+        "fee_minor",
+        "net_minor"
+      ]
+    },
+    "StatementLocalCash": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "currency": {
+          "type": "string",
+          "pattern": "^[a-z]{3}$"
+        },
+        "flow": {
+          "enum": [
+            "purchase",
+            "refund"
+          ]
+        },
+        "entries": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$"
+        },
+        "original_minor": {
+          "type": "string",
+          "pattern": "^(0|-?[1-9][0-9]*)$"
+        },
+        "purchased_bucket_change": {
+          "type": "string",
+          "pattern": "^(0|-?[1-9][0-9]*)$"
+        }
+      },
+      "required": [
+        "currency",
+        "flow",
+        "entries",
+        "original_minor",
+        "purchased_bucket_change"
+      ]
+    },
+    "StatementJobCredits": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "settled_jobs": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$"
+        },
+        "charged_microcredits": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$"
+        },
+        "provider_pending_microcredits": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$"
+        },
+        "platform_fee_microcredits": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$"
+        },
+        "promotional_microcredits_used": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$"
+        }
+      },
+      "required": [
+        "settled_jobs",
+        "charged_microcredits",
+        "provider_pending_microcredits",
+        "platform_fee_microcredits",
+        "promotional_microcredits_used"
+      ]
+    },
+    "StatementDailyTotals": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "scan_from_unix": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$"
+        },
+        "from_unix": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$"
+        },
+        "until_unix": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$"
+        },
+        "merchant_statement_by_settlement_currency": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/StatementCash"
+          }
+        },
+        "local_business_by_original_currency": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/StatementLocalCash"
+          }
+        },
+        "platform_wide_job_credits": {
+          "$ref": "#/$defs/StatementJobCredits"
+        },
+        "metered_storage_cash_cost": {
+          "type": "null"
+        },
+        "metered_bandwidth_cash_cost": {
+          "type": "null"
+        },
+        "observed_scan_issues": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$"
+        }
+      },
+      "required": [
+        "scan_from_unix",
+        "from_unix",
+        "until_unix",
+        "merchant_statement_by_settlement_currency",
+        "local_business_by_original_currency",
+        "platform_wide_job_credits",
+        "metered_storage_cash_cost",
+        "metered_bandwidth_cash_cost",
+        "observed_scan_issues"
+      ]
+    },
+    "StatementIssue": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "issue_key": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "kind": {
+          "enum": [
+            "missing_external",
+            "amount_mismatch",
+            "multiple_external",
+            "cross_currency_review",
+            "credit_posting_mismatch",
+            "changed_external_line",
+            "external_refund_without_posting",
+            "unattributed_external",
+            "stale_checkout",
+            "stale_refund_hold",
+            "stale_job_hold"
+          ]
+        },
+        "business_ref": {
+          "type": "string",
+          "maxLength": 180
+        },
+        "case_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "owner_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "issue_key",
+        "kind",
+        "business_ref",
+        "case_id",
+        "owner_id"
+      ]
+    },
+    "StatementReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "merchant_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 180,
+          "pattern": "^[A-Za-z0-9_]+$"
+        },
+        "report": {
+          "$ref": "#/$defs/StatementDailyTotals"
+        },
+        "issues": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/StatementIssue"
+          }
+        },
+        "next_cursor": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "run_id",
+        "merchant_id",
+        "report",
+        "issues",
+        "next_cursor"
+      ]
+    },
+    "StatementObservedDifference": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "business_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "source": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 180,
+              "pattern": "^[A-Za-z0-9_]+$"
+            },
+            "original_currency": {
+              "type": "string",
+              "pattern": "^[a-z]{3}$"
+            },
+            "expected_minor": {
+              "type": "string",
+              "pattern": "^(0|-?[1-9][0-9]*)$"
+            },
+            "flow": {
+              "enum": [
+                "purchase",
+                "refund"
+              ]
+            }
+          },
+          "required": [
+            "business_id",
+            "source",
+            "original_currency",
+            "expected_minor",
+            "flow"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "expected": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "business_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                },
+                "source": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 180,
+                  "pattern": "^[A-Za-z0-9_]+$"
+                },
+                "original_currency": {
+                  "type": "string",
+                  "pattern": "^[a-z]{3}$"
+                },
+                "expected_minor": {
+                  "type": "string",
+                  "pattern": "^(0|-?[1-9][0-9]*)$"
+                },
+                "flow": {
+                  "enum": [
+                    "purchase",
+                    "refund"
+                  ]
+                }
+              },
+              "required": [
+                "business_id",
+                "source",
+                "original_currency",
+                "expected_minor",
+                "flow"
+              ]
+            },
+            "observed_minor": {
+              "type": "string",
+              "pattern": "^(0|-?[1-9][0-9]*)$"
+            },
+            "settlement_currency": {
+              "type": "string",
+              "pattern": "^[a-z]{3}$"
+            },
+            "line_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 180,
+              "pattern": "^[A-Za-z0-9_]+$"
+            }
+          },
+          "required": [
+            "expected",
+            "observed_minor",
+            "settlement_currency",
+            "line_id"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "expected": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "business_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                },
+                "source": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 180,
+                  "pattern": "^[A-Za-z0-9_]+$"
+                },
+                "original_currency": {
+                  "type": "string",
+                  "pattern": "^[a-z]{3}$"
+                },
+                "expected_minor": {
+                  "type": "string",
+                  "pattern": "^(0|-?[1-9][0-9]*)$"
+                },
+                "flow": {
+                  "enum": [
+                    "purchase",
+                    "refund"
+                  ]
+                }
+              },
+              "required": [
+                "business_id",
+                "source",
+                "original_currency",
+                "expected_minor",
+                "flow"
+              ]
+            },
+            "first_two_lines": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 2,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 180,
+                "pattern": "^[A-Za-z0-9_]+$"
+              }
+            }
+          },
+          "required": [
+            "expected",
+            "first_two_lines"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "transaction_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "source": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 180,
+              "pattern": "^[A-Za-z0-9_]+$"
+            },
+            "expected_microcredits": {
+              "type": "string",
+              "pattern": "^(0|-?[1-9][0-9]*)$"
+            }
+          },
+          "required": [
+            "transaction_id",
+            "source",
+            "expected_microcredits"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "source": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 180,
+              "pattern": "^[A-Za-z0-9_]+$"
+            },
+            "line_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 180,
+              "pattern": "^[A-Za-z0-9_]+$"
+            },
+            "local_state": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "source",
+            "line_id",
+            "local_state"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "source": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 180,
+                  "pattern": "^[A-Za-z0-9_]+$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "line_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 180,
+              "pattern": "^[A-Za-z0-9_]+$"
+            },
+            "currency": {
+              "type": "string",
+              "pattern": "^[a-z]{3}$"
+            },
+            "gross_minor": {
+              "type": "string",
+              "pattern": "^(0|-?[1-9][0-9]*)$"
+            }
+          },
+          "required": [
+            "source",
+            "line_id",
+            "currency",
+            "gross_minor"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "state": {
+              "type": "string"
+            },
+            "held_microcredits": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^(0|[1-9][0-9]*)$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "review_age_seconds": {
+              "const": "86400"
+            }
+          },
+          "required": [
+            "state",
+            "held_microcredits",
+            "review_age_seconds"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 180,
+              "pattern": "^[A-Za-z0-9_]+$"
+            },
+            "object": {
+              "const": "balance_transaction"
+            },
+            "source": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 180,
+                  "pattern": "^[A-Za-z0-9_]+$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "created": {
+              "type": "integer"
+            },
+            "currency": {
+              "type": "string",
+              "pattern": "^[a-z]{3}$"
+            },
+            "amount": {
+              "type": "integer"
+            },
+            "fee": {
+              "type": "integer"
+            },
+            "net": {
+              "type": "integer"
+            },
+            "type": {
+              "type": "string"
+            },
+            "reporting_category": {
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "pending",
+                "available"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "object",
+            "source",
+            "created",
+            "currency",
+            "amount",
+            "fee",
+            "net",
+            "type",
+            "reporting_category",
+            "status"
+          ]
+        }
+      ]
+    },
+    "StatementEvidenceEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "detail": {
+          "$ref": "#/$defs/StatementObservedDifference"
+        }
+      },
+      "required": [
+        "digest",
+        "detail"
+      ]
+    },
+    "StatementIssueEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "issue_key": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "kind": {
+          "enum": [
+            "missing_external",
+            "amount_mismatch",
+            "multiple_external",
+            "cross_currency_review",
+            "credit_posting_mismatch",
+            "changed_external_line",
+            "external_refund_without_posting",
+            "unattributed_external",
+            "stale_checkout",
+            "stale_refund_hold",
+            "stale_job_hold"
+          ]
+        },
+        "business_ref": {
+          "type": "string",
+          "maxLength": 180
+        },
+        "case_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "owner_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "run_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "data": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/StatementEvidenceEntry"
+          }
+        },
+        "next_cursor": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "issue_key",
+        "kind",
+        "business_ref",
+        "case_id",
+        "owner_id",
+        "run_id",
+        "data",
+        "next_cursor"
+      ]
     }
   },
   "$ref": "#/$defs/AdminActionCreate"
