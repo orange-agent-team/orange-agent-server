@@ -512,13 +512,39 @@ async fn team_hard_limit_applies_to_actual_member_jobs_and_never_copies_the_orga
 }
 #[tokio::test]
 async fn existing_team_budget_capacity_is_reconstructed_on_upgrade_without_minting_credit() {
-    let url = std::env::var("ORANGE_TEAM_OLD_DATABASE").expect("owned historical db");
+    use sqlx::migrate::MigrateDatabase;
+    let supplied = std::env::var("ORANGE_TEAM_OLD_DATABASE").ok();
+    let source = supplied.clone().unwrap_or_else(|| {
+        std::env::var("ORANGE_TEST_DATABASE_URL").expect("explicit local development PostgreSQL")
+    });
+    let mut url = reqwest::Url::parse(&source).expect("test PostgreSQL URL");
     assert!(
-        url.rsplit('/')
-            .next()
-            .is_some_and(|v| v.starts_with("orange_team_old_"))
+        matches!(url.scheme(), "postgres" | "postgresql")
+            && matches!(
+                url.host_str(),
+                Some("localhost" | "127.0.0.1" | "[::1]" | "::1")
+            )
     );
-    let db = Store::connect(&url).await.expect("historic pool");
+    assert!(
+        url.query_pairs()
+            .all(|(k, _)| matches!(k.as_ref(), "sslmode" | "connect_timeout")),
+        "only local transport parameters allowed"
+    );
+    let owned = supplied.is_none();
+    if owned {
+        let name = format!("orange_team_old_{}", Uuid::new_v4().simple());
+        url.set_path(&format!("/{name}"));
+        sqlx::Postgres::create_database(url.as_str())
+            .await
+            .expect("fresh isolated team migration database");
+    }
+    let name = url.path().trim_start_matches('/');
+    assert!(
+        name.strip_prefix("orange_team_old_")
+            .is_some_and(|id| id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit())),
+        "uniquely owned team database required"
+    );
+    let db = Store::connect(url.as_str()).await.expect("historical pool");
     sqlx::migrate::Migrator::with_migrations(
         sqlx::migrate!()
             .iter()
@@ -577,6 +603,13 @@ async fn existing_team_budget_capacity_is_reconstructed_on_upgrade_without_minti
             .await
             .expect("old balance");
     assert_eq!(balance, 0);
+    if owned {
+        db.pool().close().await;
+        // The normal drop fails if another connection still owns the test database.
+        sqlx::Postgres::drop_database(url.as_str())
+            .await
+            .expect("retire only this test's database");
+    }
 }
 
 #[tokio::test]
