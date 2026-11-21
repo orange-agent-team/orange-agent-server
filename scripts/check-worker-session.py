@@ -42,6 +42,8 @@ with tempfile.TemporaryDirectory(prefix='orange-worker-mtls-') as directory:
     for file in private.iterdir():file.chmod(0o600)
     environment['ORANGE_WORKER_TLS_DIR']=str(private)
     environment.setdefault('ORANGE_TEST_USER_CONFIG_FILE',str(ROOT/'.local/identity/user-config.json'))
+    # Financial recovery uses a second, independently configured Admin identity in the same development deployment.
+    environment.setdefault('ORANGE_TEST_OIDC_CONFIG_FILE',str(Path(environment['ORANGE_TEST_USER_CONFIG_FILE']).with_name('admin-config.json')))
     if environment.get('ORANGE_REAL_WORKER_PROFILE'):
         subprocess.run([str(cargo),'build','-p','orange-worker','--bin','orange-worker','--locked'],cwd=ROOT,env=environment,check=True)
         if environment.get('CARGO_BUILD_TARGET'):raise SystemExit('Actual Worker process tests require a native host build')

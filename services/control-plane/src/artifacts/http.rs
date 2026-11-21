@@ -34,6 +34,10 @@ pub fn build_router(
 ) -> Router {
     let connectors = crate::auth::routes::hosted_connector_router(identity.clone(), store.clone());
     Router::new()
+        .route(
+            "/api/v1/owners/{owner}/quotes/{quote}/funding",
+            get(quote_funding),
+        )
         .route("/api/v1/agent/runs/{run}/model", get(cloud_status))
         .route(
             "/api/v1/agent/runs/{run}/model/quotes",
@@ -237,6 +241,20 @@ async fn audio_measurement(
     }
 }
 struct Error(StatusCode, &'static str);
+async fn quote_funding(
+    State(api): State<Api>,
+    Path((owner, quote)): Path<(String, String)>,
+    headers: HeaderMap,
+    axum::extract::RawQuery(query): axum::extract::RawQuery,
+) -> Result<Response, Error> {
+    if query.as_deref().is_some_and(|q| !q.is_empty()) {
+        return Err(ArtifactError::Invalid.into());
+    }
+    let actor = api.identity.artifact_actor(&headers, false).await?;
+    let view = api.store.funding(&actor, &owner, &quote).await?;
+    Ok(private(Json(view).into_response()))
+}
+
 async fn prices(State(api): State<Api>, headers: HeaderMap) -> Result<Response, Error> {
     let actor = api.identity.artifact_actor(&headers, false).await?;
     Ok(private(

@@ -1148,3 +1148,93 @@ async fn actual_worker_counter_user_api_quote_delivery_and_settlement() {
     .expect("JSON");
     assert_eq!(state["phase"], "stopped");
 }
+
+#[tokio::test]
+async fn original_quote_funding_tracks_other_reservations_without_spending() {
+    let c = setup_priced("client-ed").await;
+    let server = Running::start_with_output(&c.f.d.store, c.f.objects.clone()).await;
+    let (connection, _node, _journal) = idle(&c, &server).await;
+    let q = quote_http(&c, &quote_request(&c, 32)).await;
+    let db = &c.f.d.store;
+    let owner = &c.f.owner;
+    let app =
+        orange_control_plane::artifacts::http::router(c.f.identity.clone(), c.f.objects.clone());
+    let read = || async {
+        let mut http = axum::http::Request::builder()
+            .uri(format!(
+                "/api/v1/owners/{owner}/quotes/{}/funding",
+                q.quote_id
+            ))
+            .body(axum::body::Body::empty())
+            .expect("request");
+        *http.headers_mut() = c.f.headers.clone();
+        let response = app.clone().oneshot(http).await.expect("real router");
+        assert_eq!(response.status(), 200);
+        serde_json::from_slice::<serde_json::Value>(
+            &axum::body::to_bytes(response.into_body(), 65536)
+                .await
+                .expect("body"),
+        )
+        .expect("funding")
+    };
+    let initial = read().await;
+    assert_eq!(initial["status"], "sufficient");
+    let amount = initial["wallet_available"].as_str().expect("own funds");
+    let separate = db
+        .create_budget(
+            owner,
+            "funding-other-root",
+            &orange_protocol::CreateBudget {
+                scope_id: "separate-funding-scope".into(),
+                limit: amount.to_owned().try_into().expect("limit"),
+            },
+        )
+        .await
+        .expect("separate budget");
+    for (root, expected) in [
+        (&separate.root_budget_id, "insufficient_funds"),
+        (&q.root_budget_id, "insufficient_budget"),
+    ] {
+        let reservation = orange_protocol::SubmitJob {
+            root_budget_id: root.clone(),
+            invocation_id: Uuid::new_v4().to_string(),
+            quote_id: Uuid::new_v4().to_string(),
+            purpose: orange_protocol::InvocationPurpose::Primary,
+            request_projection_digest: "1".repeat(64),
+        };
+        sqlx::query("INSERT INTO quotes(quote_id,owner_id,root_budget_id,invocation_id,projection_digest,price_version,max_amount,expires_at)
+          VALUES($1,$2,$3,$4,$5,'funding-reservation-fixture',$6,clock_timestamp()+interval '1 minute')")
+          .bind(&reservation.quote_id).bind(owner).bind(root).bind(&reservation.invocation_id).bind(&reservation.request_projection_digest)
+          .bind(amount.parse::<i64>().expect("balance")).execute(db.pool()).await.expect("fixed competing quote");
+        let job = db
+            .submit(owner, &reservation.invocation_id, &reservation)
+            .await
+            .expect("real competing hold");
+        let before: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM ledger_transactions WHERE owner_id=$1")
+                .bind(owner)
+                .fetch_one(db.pool())
+                .await
+                .expect("entries");
+        let updated = read().await;
+        assert_eq!(updated["status"], expected);
+        assert_eq!(updated["wallet_available"], "0");
+        let after: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM ledger_transactions WHERE owner_id=$1")
+                .bind(owner)
+                .fetch_one(db.pool())
+                .await
+                .expect("entries");
+        assert_eq!(before, after);
+        db.cancel_queued(owner, &job.job_id, &format!("cancel-{}", job.job_id))
+            .await
+            .expect("release competitor");
+        let restored = read().await;
+        assert_eq!(restored["status"], "sufficient");
+        assert_eq!(restored["wallet_available"], amount);
+    }
+    connection.close();
+    server.stop().await;
+    c.f.objects.drain().await.expect("closed objects");
+    c.meter.shutdown().await.expect("closed counter");
+}

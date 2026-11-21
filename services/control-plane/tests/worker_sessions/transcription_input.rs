@@ -709,6 +709,85 @@ async fn run_for(mode: Scenario, participants: Option<Participants>) {
                 )
                 .await
         );
+        if matches!(mode, Scenario::DualRole) {
+            let quote_id = quote["quote_id"].as_str().expect("original quote");
+            let preview = format!("{base}/quotes/{quote_id}/funding");
+            let owner_ledger = "SELECT count(*) FROM ledger_transactions WHERE owner_id=$1";
+            let before: i64 = sqlx::query_scalar(owner_ledger)
+                .bind(&buyer.owner)
+                .fetch_one(db.pool())
+                .await
+                .expect("original postings");
+            let money = buyer.call(&app, "GET", &preview, "", vec![], 200).await;
+            assert_eq!(money["quote_id"], quote_id);
+            assert_eq!(money["max_microcredits"], quote["max_amount"]);
+            assert_eq!(money["root_budget_id"], budget.root_budget_id);
+            assert_eq!(money["requester_id"], buyer.user);
+            assert_eq!(money["owner_id"], buyer.owner);
+            assert_eq!(money["status"], "sufficient");
+            if team_order {
+                assert_eq!(money["wallet_available"], Value::Null);
+                assert_eq!(money["account_kind"], "team");
+                assert_eq!(money["budget_limit"], "3000");
+            } else {
+                assert_eq!(money["account_kind"], "personal");
+                assert!(
+                    money["wallet_available"]
+                        .as_str()
+                        .expect("own wallet")
+                        .parse::<i64>()
+                        .expect("integer")
+                        >= 2200
+                );
+            }
+            buyer
+                .call(
+                    &app,
+                    "GET",
+                    &format!("{preview}?owner_id=another-account"),
+                    "",
+                    vec![],
+                    422,
+                )
+                .await;
+            if team_order {
+                let team_owner = Buyer::from_device(&d, &buyer.origin).await;
+                assert_ne!(team_owner.user, buyer.user);
+                team_owner
+                    .call(&app, "GET", &preview, "", vec![], 404)
+                    .await;
+            }
+            let unrelated = Buyer::create(db, &buyer.origin, 0).await;
+            unrelated
+                .call(
+                    &app,
+                    "GET",
+                    &format!(
+                        "/api/v1/owners/{}/quotes/{quote_id}/funding",
+                        unrelated.owner
+                    ),
+                    "",
+                    vec![],
+                    404,
+                )
+                .await;
+            buyer
+                .call(
+                    &app,
+                    "GET",
+                    &format!("{base}/quotes/unknown-fixture/funding"),
+                    "",
+                    vec![],
+                    404,
+                )
+                .await;
+            let after: i64 = sqlx::query_scalar(owner_ledger)
+                .bind(&buyer.owner)
+                .fetch_one(db.pool())
+                .await
+                .expect("read-only postings");
+            assert_eq!(before, after);
+        }
         assert_eq!(quote["duration_ms"], "11000");
         assert_eq!(quote["max_amount"], "2200");
         let submit_url = format!("{base}/jobs");

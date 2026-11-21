@@ -147,3 +147,40 @@ pub struct TranscriptionQuoteView {
     pub fee_bps: u16,
     pub expires_at_unix: String,
 }
+
+/// Point-in-time funding information for the original quote and its authenticated requester.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QuoteFundingView {
+    pub quote_id: String,
+    pub requester_id: String,
+    pub owner_id: String,
+    pub root_budget_id: String,
+    pub account_kind: FundingAccount,
+    pub price_version: String,
+    pub max_microcredits: String,
+    pub budget_limit: String,
+    pub budget_spent: String,
+    pub budget_reserved: String,
+    pub budget_remaining: String,
+    pub wallet_available: Option<String>,
+    pub status: FundingStatus,
+    pub observed_unix: String,
+    pub expires_unix: String,
+}
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FundingAccount {
+    Personal,
+    Team,
+}
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FundingStatus {
+    Sufficient,
+    Expired,
+    BudgetClosed,
+    SpendingPaused,
+    InsufficientBudget,
+    InsufficientFunds,
+}

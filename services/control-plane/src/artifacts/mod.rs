@@ -17,6 +17,7 @@ mod maintenance;
 mod outputs;
 mod pricing;
 mod quarantine;
+mod quote_funding;
 pub(crate) use quarantine::QuarantineRequest;
 mod metering_retry;
 mod settlement;
