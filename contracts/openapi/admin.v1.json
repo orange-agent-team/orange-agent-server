@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Orange Admin API",
-    "version": "0.1.14",
+    "version": "0.1.15",
     "description": "Candidate contract for the independent Admin origin. Development implementation includes OIDC sessions, scoped reads, selected node and reconciliation case actions, and development text and transcription price governance. Availability of each other action depends on its backend implementation."
   },
   "servers": [
@@ -4279,6 +4279,11 @@
                 "permission": "cases.close",
                 "approval": "maker_checker",
                 "approval_permission": "cases.close.approve"
+              },
+              "retry_metering": {
+                "permission": "metering.retry",
+                "approval": "maker_checker",
+                "approval_permission": "metering.retry.approve"
               }
             },
             "unknown_variant": "reject"
@@ -11204,6 +11209,32 @@
               "resolution_ref"
             ],
             "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "change": {
+                "const": "retry_metering"
+              },
+              "case_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+              },
+              "event_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+              }
+            },
+            "required": [
+              "change",
+              "case_id",
+              "event_id"
+            ],
+            "additionalProperties": false
           }
         ]
       },
@@ -11290,6 +11321,67 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 2048
+          },
+          "metering": {
+            "type": "object",
+            "properties": {
+              "event_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+              },
+              "state": {
+                "enum": [
+                  "received",
+                  "validated",
+                  "dead",
+                  "posted"
+                ]
+              },
+              "generation": {
+                "type": "string",
+                "pattern": "^(0|[1-9][0-9]*)$"
+              },
+              "attempts": {
+                "type": "string",
+                "pattern": "^(0|[1-9][0-9]*)$"
+              },
+              "policy_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+              },
+              "retry_deadline_unix": {
+                "type": "string",
+                "pattern": "^(0|[1-9][0-9]*)$"
+              },
+              "last_failure": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "enum": [
+                      "retry_deadline",
+                      "invalid_metering_evidence",
+                      "settlement_unavailable"
+                    ]
+                  }
+                ]
+              }
+            },
+            "required": [
+              "event_id",
+              "state",
+              "generation",
+              "attempts",
+              "policy_id",
+              "retry_deadline_unix",
+              "last_failure"
+            ],
+            "additionalProperties": false
           }
         },
         "required": [
@@ -12977,7 +13069,9 @@
       "cases.close",
       "cases.close.approve",
       "pricing.read",
-      "pricing.draft"
+      "pricing.draft",
+      "metering.retry",
+      "metering.retry.approve"
     ],
     "security_operator": [
       "session.read",
