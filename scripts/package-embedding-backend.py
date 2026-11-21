@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Build the E09 development wheel twice and verify its reproducibility and source content."""
 
+import argparse
 import hashlib
 import json
 import os
@@ -11,12 +12,16 @@ from zipfile import ZipFile
 
 root = Path(__file__).resolve().parents[1]
 source = root / "backends"
-dest = root / ".local/python-dist/reproducible"
+parser=argparse.ArgumentParser()
+parser.add_argument("--output-dir",type=Path,default=root/".local/python-dist/reproducible")
+parser.add_argument("--uv-cache",type=Path,default=root/".local/uv-cache")
+args=parser.parse_args()
+dest=args.output_dir.resolve()
 dest.mkdir(parents=True, exist_ok=True)
 env = dict(
     os.environ,
     SOURCE_DATE_EPOCH="946684800",
-    UV_CACHE_DIR=str(root / ".local/uv-cache"),
+    UV_CACHE_DIR=str(args.uv_cache.resolve()),
 )
 with tempfile.TemporaryDirectory(prefix="orange-wheel-") as scratch:
     outputs = []
@@ -48,7 +53,12 @@ with tempfile.TemporaryDirectory(prefix="orange-wheel-") as scratch:
     artifact = dest / wheel.name
     if artifact.exists() and artifact.read_bytes() != outputs[0]:
         raise ValueError("existing release artifact differs")
-    artifact.write_bytes(outputs[0])
+    if not artifact.exists():
+        with tempfile.NamedTemporaryFile(dir=dest) as staged:
+            staged.write(outputs[0]);staged.flush();os.fchmod(staged.fileno(),0o644);os.fsync(staged.fileno())
+            try:os.link(staged.name,artifact)
+            except FileExistsError:
+                if artifact.read_bytes()!=outputs[0]:raise ValueError("concurrent release artifact differs")
     report = {
         "wheel": artifact.name,
         "sha256": hashlib.sha256(outputs[0]).hexdigest(),
