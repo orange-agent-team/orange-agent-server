@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Orange Admin API",
-    "version": "0.1.15",
+    "version": "0.1.16",
     "description": "Candidate contract for the independent Admin origin. Development implementation includes OIDC sessions, scoped reads, selected node and reconciliation case actions, and development text and transcription price governance. Availability of each other action depends on its backend implementation."
   },
   "servers": [
@@ -4284,6 +4284,11 @@
                 "permission": "metering.retry",
                 "approval": "maker_checker",
                 "approval_permission": "metering.retry.approve"
+              },
+              "release_earning": {
+                "permission": "earnings.release",
+                "approval": "maker_checker",
+                "approval_permission": "earnings.release.approve"
               }
             },
             "unknown_variant": "reject"
@@ -11235,6 +11240,32 @@
               "event_id"
             ],
             "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "change": {
+                "const": "release_earning"
+              },
+              "case_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+              },
+              "job_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+              }
+            },
+            "required": [
+              "change",
+              "case_id",
+              "job_id"
+            ],
+            "additionalProperties": false
           }
         ]
       },
@@ -11380,6 +11411,67 @@
               "policy_id",
               "retry_deadline_unix",
               "last_failure"
+            ],
+            "additionalProperties": false
+          },
+          "earning": {
+            "type": "object",
+            "properties": {
+              "job_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+              },
+              "source_transaction": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+              },
+              "units": {
+                "type": "string",
+                "pattern": "^(0|[1-9][0-9]*)$"
+              },
+              "eligible_unix": {
+                "type": "string",
+                "pattern": "^(0|[1-9][0-9]*)$"
+              },
+              "disposition": {
+                "enum": [
+                  "holding_period",
+                  "historical_affiliation_unknown",
+                  "related_trade",
+                  "restricted_account",
+                  "disputed_purchase",
+                  "statement_issue",
+                  "provider_restricted",
+                  "unverified_posting",
+                  "ready_for_review",
+                  "released"
+                ]
+              },
+              "release_transaction": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "job_id",
+              "source_transaction",
+              "units",
+              "eligible_unix",
+              "disposition",
+              "release_transaction"
             ],
             "additionalProperties": false
           }
@@ -13071,7 +13163,9 @@
       "pricing.read",
       "pricing.draft",
       "metering.retry",
-      "metering.retry.approve"
+      "metering.retry.approve",
+      "earnings.release",
+      "earnings.release.approve"
     ],
     "security_operator": [
       "session.read",
