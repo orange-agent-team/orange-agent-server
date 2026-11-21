@@ -205,6 +205,18 @@ pub(super) async fn activity(
         last = Some(rev);
     }
     let mut result = json!({"case_id":id,"owner_id":identifier(row.try_get("owner_id")?)?,"version":version.to_string(),"data":data});
+    if scope.environment == "dev" {
+        let receipt:Option<serde_json::Value>=sqlx::query_scalar("SELECT jsonb_build_object('event_id',r.event_id,'state',r.state,
+            'generation',r.generation::text,'attempts',r.attempts::text,'policy_id',r.policy_id,
+            'retry_deadline_unix',floor(extract(epoch FROM r.deadline))::bigint::text,
+            'last_failure',(SELECT h.reason FROM metering_receipt_history h WHERE h.event_id=r.event_id AND h.generation=r.generation
+               AND h.stage IN('retry','dead') ORDER BY h.sequence_id DESC LIMIT 1))
+            FROM metering_receipts r WHERE r.case_id=$1 AND r.owner_id=$2")
+            .bind(&id).bind(row.try_get::<&str,_>("owner_id")?).fetch_optional(&mut *tx).await?;
+        if let Some(receipt) = receipt {
+            result["metering"] = receipt;
+        }
+    }
     for field in ["assigned_to", "resolution_ref"] {
         if let Some(value) = row.try_get::<Option<String>, _>(field)? {
             result[field] = json!(identifier(value)?);

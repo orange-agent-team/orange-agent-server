@@ -11,6 +11,10 @@ pub enum Edit {
         case_id: String,
         note: String,
     },
+    RetryMetering {
+        case_id: String,
+        event_id: String,
+    },
     Close {
         case_id: String,
         resolution_ref: String,
@@ -21,11 +25,14 @@ impl Edit {
         match self {
             Self::Assign { case_id, .. }
             | Self::Note { case_id, .. }
+            | Self::RetryMetering { case_id, .. }
             | Self::Close { case_id, .. } => case_id,
         }
     }
     pub(super) fn permission(&self) -> &'static str {
-        if matches!(self, Self::Close { .. }) {
+        if matches!(self, Self::RetryMetering { .. }) {
+            "metering.retry"
+        } else if matches!(self, Self::Close { .. }) {
             "cases.close"
         } else {
             "cases.edit"
@@ -38,6 +45,9 @@ impl Edit {
                 reason(note, 1) && !note.chars().any(|c| c.is_control() && c != '\n')
             }
             Self::Close { resolution_ref, .. } => id(resolution_ref),
+            Self::RetryMetering { event_id, .. } => {
+                request.scope.environment == "dev" && id(event_id)
+            }
         };
         if !valid
             || !id(self.case_id())
@@ -61,6 +71,25 @@ pub(super) async fn target(
     }
     if state == "resolved" {
         return Err(AdminError::Conflict);
+    }
+    if let Edit::RetryMetering { case_id, event_id } = edit {
+        let allowed:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM metering_receipts r JOIN reconciliation_cases c USING(case_id,owner_id)
+          WHERE r.event_id=$1 AND r.case_id=$2 AND r.state='dead' AND c.business_ref='metering:'||r.event_id AND c.environment='dev')")
+          .bind(event_id).bind(case_id).fetch_one(&mut **tx).await?;
+        if !allowed {
+            return Err(AdminError::Conflict);
+        }
+    }
+    if matches!(edit, Edit::Close { .. }) {
+        let pending: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM metering_receipts WHERE case_id=$1 AND state<>'posted')",
+        )
+        .bind(edit.case_id())
+        .fetch_one(&mut **tx)
+        .await?;
+        if pending {
+            return Err(AdminError::Conflict);
+        }
     }
     Ok((version, state))
 }
@@ -123,6 +152,17 @@ pub(super) async fn apply(
         }
         Edit::Note { case_id,.. } => sqlx::query("UPDATE reconciliation_cases SET version=$1 WHERE case_id=$2 AND version=$3")
             .bind(next).bind(case_id).bind(version).execute(&mut **tx).await?,
+        Edit::RetryMetering {case_id,event_id}=>{
+            let reopened=sqlx::query("WITH reopened AS (UPDATE metering_receipts r SET state='received',generation=r.generation+1,
+                attempts=0,next_attempt=clock_timestamp(),deadline=clock_timestamp()+make_interval(secs=>p.retry_seconds)
+                FROM metering_retry_policies p WHERE r.event_id=$1 AND r.case_id=$2 AND r.state='dead' AND r.policy_id=p.policy_id
+                RETURNING r.event_id,r.generation)
+                INSERT INTO metering_receipt_history(event_id,generation,attempt,stage,reason) SELECT event_id,generation,0,'reopened',$3 FROM reopened")
+                .bind(event_id).bind(case_id).bind(action).execute(&mut **tx).await?;
+            if reopened.rows_affected()!=1{return Err(AdminError::Conflict);}
+            sqlx::query("UPDATE reconciliation_cases SET state='investigating',version=$2 WHERE case_id=$1 AND version=$3")
+                .bind(case_id).bind(next).bind(version).execute(&mut **tx).await?
+        }
         Edit::Close {case_id,resolution_ref}=>sqlx::query("UPDATE reconciliation_cases SET state='resolved', resolution_ref=$1, version=$2 WHERE case_id=$3 AND version=$4")
             .bind(resolution_ref).bind(next).bind(case_id).bind(version).execute(&mut **tx).await?,
     };

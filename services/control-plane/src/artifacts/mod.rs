@@ -18,6 +18,7 @@ mod outputs;
 mod pricing;
 mod quarantine;
 pub(crate) use quarantine::QuarantineRequest;
+mod metering_retry;
 mod settlement;
 mod storage;
 mod transcription_output;

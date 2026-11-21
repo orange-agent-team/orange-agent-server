@@ -1964,7 +1964,7 @@ async fn one_no_gpu_account_traverses_consumption_supply_team_privacy_purchase_a
     let before: i64 = sqlx::query_scalar(postings)
         .fetch_one(db.pool())
         .await
-        .unwrap();
+        .expect("count pre-scan postings");
     for _ in 0..4 {
         assert!(
             payments
@@ -1973,7 +1973,7 @@ async fn one_no_gpu_account_traverses_consumption_supply_team_privacy_purchase_a
                 .expect("scan actual job receipts")
         );
     }
-    let verified:Vec<(String,String,i64,bool)>=sqlx::query_as("SELECT owner_id,expected_provider,charge,verified FROM test_statement_job_checks WHERE run_id=$1").bind(&run).fetch_all(db.pool()).await.unwrap();
+    let verified:Vec<(String,String,i64,bool)>=sqlx::query_as("SELECT owner_id,expected_provider,charge,verified FROM test_statement_job_checks WHERE run_id=$1").bind(&run).fetch_all(db.pool()).await.expect("read checked real jobs");
     assert_eq!(verified.len(), 2);
     assert!(
         verified.contains(&(org.clone(), a.owner.clone(), 2200, true)),
@@ -1988,7 +1988,7 @@ async fn one_no_gpu_account_traverses_consumption_supply_team_privacy_purchase_a
             .bind(&run)
             .fetch_one(db.pool())
             .await
-            .unwrap();
+            .expect("read sealed daily report");
     assert_eq!(report["observed_scan_issues"], "0", "{report}");
     assert_eq!(
         report["local_business_by_original_currency"],
@@ -2004,7 +2004,7 @@ async fn one_no_gpu_account_traverses_consumption_supply_team_privacy_purchase_a
     let after: i64 = sqlx::query_scalar(postings)
         .fetch_one(db.pool())
         .await
-        .unwrap();
+        .expect("count post-scan postings");
     assert_eq!(before, after);
 
     let _ = stop.send(());

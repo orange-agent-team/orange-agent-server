@@ -1,5 +1,8 @@
 #[path = "worker_sessions/execution_cases.rs"]
 mod execution_cases;
+#[cfg(any(feature = "transcription-input-tests", feature = "real-worker-tests"))]
+#[path = "support/finance_sessions.rs"]
+mod finance_sessions;
 #[path = "worker_sessions/inputs.rs"]
 mod input_cases;
 #[path = "worker_sessions/policy_cases.rs"]

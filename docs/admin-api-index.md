@@ -98,3 +98,5 @@ OIDC登录/回调的完整协议、用户API和云Host等另按整体接口计�
 ### 测试商户日报
 
 开发环境通过 `GET /admin/v1/test-statements` 分页列出扫描，`GET /admin/v1/test-statements/{run_id}` 返回封存报告和对应差异。二者仅对平台范围开放。使用 `GET /admin/v1/test-statement-issues/{issue_key}` 查看差异的带摘要观测，选填 run_id，省略时取该范围最近一次封存记录。读取需当前会话同时拥有 payments.read、ledger.read、cases.read。租户只能读归属于其账户的差异；每次读取写入独立的 Admin 审计。金额与微积分分别采用十进制整数字符串。[范围及复验](test-checkout.md)
+
+Admin 0.1.15 在 case.update 中增加明确的 retry_metering 变体。请求只接受事项编号和原计量事件编号。制单与独立批准分别要求 metering.retry、metering.retry.approve，并校验相应的 actions 权限。GET 对账事项活动可返回 metering，其中列出服务端事件身份、处理轮次、尝试次数、政策、到期时间和最近失败类别。查看范围始终绑定事项所属账户。

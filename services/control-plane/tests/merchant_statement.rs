@@ -509,41 +509,15 @@ async fn bounded_merchant_scan_survives_lost_claim_partial_failure_and_overlappi
     server.await.expect("merchant joined");
 }
 
-async fn browser(app: Router, driver: &str, mut fixture: Value) {
-    use tokio::io::AsyncWriteExt;
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("Admin API");
-    fixture["api"] = json!(format!(
-        "http://{}",
-        listener.local_addr().expect("Admin port")
-    ));
-    let (stop, done) = tokio::sync::oneshot::channel::<()>();
-    let task = tokio::spawn(async move {
-        axum::serve(listener, app)
-            .with_graceful_shutdown(async {
-                let _ = done.await;
-            })
-            .await
-            .expect("Admin served");
-    });
-    let mut child =
-        tokio::process::Command::new(std::env::var("ORANGE_STATEMENT_NODE").expect("pinned Node"))
-            .arg(driver)
-            .stdin(std::process::Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .expect("browser process");
-    let mut pipe = child.stdin.take().expect("fixture pipe");
-    pipe.write_all(&serde_json::to_vec(&fixture).expect("fixture"))
-        .await
-        .expect("private fixture delivery");
-    drop(pipe);
-    let status = tokio::time::timeout(std::time::Duration::from_secs(90), child.wait())
-        .await
-        .expect("browser deadline")
-        .expect("browser exit");
-    let _ = stop.send(());
-    task.await.expect("Admin joined");
-    assert!(status.success(), "real statement browser");
+#[path = "support/admin_browser.rs"]
+mod browser_support;
+
+async fn browser(app: Router, driver: &str, fixture: Value) {
+    browser_support::run(
+        app,
+        &std::env::var("ORANGE_STATEMENT_NODE").expect("pinned Node"),
+        driver,
+        fixture,
+    )
+    .await;
 }

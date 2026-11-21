@@ -436,7 +436,28 @@ async fn concurrent_quote_is_one_snapshot_and_equal_bytes_cannot_replace_quoted_
 }
 #[tokio::test]
 async fn wrong_tool_arguments_cannot_mint_usage_or_a_charge() {
-    let mut c = setup_priced("client-cq").await;
+    rejected_candidate(RejectedInput::ToolArguments).await;
+}
+#[tokio::test]
+async fn malformed_candidate_is_recorded_once_without_financial_effects() {
+    rejected_candidate(RejectedInput::Malformed).await;
+}
+#[tokio::test]
+async fn claimed_unknown_owner_cannot_assign_credit_or_redirect_review() {
+    rejected_candidate(RejectedInput::UnknownOwner).await;
+}
+enum RejectedInput {
+    ToolArguments,
+    Malformed,
+    UnknownOwner,
+}
+async fn rejected_candidate(kind: RejectedInput) {
+    let mut c = setup_priced(match kind {
+        RejectedInput::ToolArguments => "client-cq",
+        RejectedInput::Malformed => "client-el",
+        RejectedInput::UnknownOwner => "client-ej",
+    })
+    .await;
     c.f.request.tools = vec![orange_protocol::model::ToolDefinition {
         name: "read_file".into(),
         description: "Read a consented file".into(),
@@ -455,19 +476,73 @@ async fn wrong_tool_arguments_cannot_mint_usage_or_a_charge() {
         name: "read_file".into(),
         arguments: serde_json::json!({"path":7}),
     }];
-    let h = execute_header(&c, &mut connection, &mut node, &mut journal, &response).await;
+    let mut h = execute_header(&c, &mut connection, &mut node, &mut journal, &response).await;
     let mut raw = server.client(Some(&c.f.d.certificate)).await.expect("TLS");
-    assert!(
-        raw.commit_output(tokio_stream::iter(output_frames(&h, &response)))
-            .await
-            .is_err()
-    );
+    let bytes = match kind {
+        RejectedInput::Malformed => Some(b"{".to_vec()),
+        RejectedInput::UnknownOwner => {
+            let mut input = serde_json::to_value(candidate()).expect("valid response");
+            input["owner_id"] = serde_json::json!("missing-fixture-owner");
+            Some(serde_json::to_vec(&input).expect("caller-proposed owner"))
+        }
+        RejectedInput::ToolArguments => None,
+    };
+    let frames = if let Some(bytes) = bytes {
+        h.size_bytes = bytes.len() as u64;
+        h.sha256 = hex::encode(Sha256::digest(&bytes));
+        vec![
+            worker::OutputFrame {
+                body: Some(worker::output_frame::Body::Header(h.clone())),
+            },
+            worker::OutputFrame {
+                body: Some(worker::output_frame::Body::Data(worker::OutputData {
+                    offset: 0,
+                    data: bytes,
+                })),
+            },
+        ]
+    } else {
+        output_frames(&h, &response)
+    };
+    for _ in 0..2 {
+        assert!(
+            raw.commit_output(tokio_stream::iter(frames.clone()))
+                .await
+                .is_err()
+        );
+    }
     let facts: i64 = sqlx::query_scalar("SELECT count(*) FROM job_usage_facts WHERE job_id=$1")
         .bind(&c.f.job)
         .fetch_one(c.f.d.store.pool())
         .await
         .expect("facts");
     assert_eq!(facts, 0);
+    let case:(String,String,String)=sqlx::query_as("SELECT r.upload_id,r.owner_id,c.business_ref FROM metering_input_rejections r JOIN reconciliation_cases c USING(case_id) WHERE r.job_id=$1")
+        .bind(&c.f.job).fetch_one(c.f.d.store.pool()).await.expect("auditable pre-publication rejection");
+    if matches!(kind, RejectedInput::UnknownOwner) {
+        let reason: String =
+            sqlx::query_scalar("SELECT reason FROM metering_input_rejections WHERE upload_id=$1")
+                .bind(&h.upload_id)
+                .fetch_one(c.f.d.store.pool())
+                .await
+                .expect("classified unknown owner claim");
+        assert_eq!(reason, "untrusted_owner");
+        let foreign: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM ledger_transactions WHERE owner_id='missing-fixture-owner'",
+        )
+        .fetch_one(c.f.d.store.pool())
+        .await
+        .expect("foreign accounting");
+        assert_eq!(foreign, 0);
+    }
+    assert_eq!(
+        case,
+        (
+            h.upload_id.clone(),
+            c.f.owner.clone(),
+            format!("metering-input:{}", h.upload_id)
+        )
+    );
     assert!(
         c.f.d
             .store
@@ -594,7 +669,20 @@ async fn canonical_limit_is_checked_before_response_publication_and_charge() {
 
 #[tokio::test]
 async fn settlement_failure_is_atomic_and_competing_recovery_cannot_double_charge() {
-    let mut c = setup_priced("client-cn").await;
+    failed_settlement("client-cn", false).await;
+}
+
+#[tokio::test]
+async fn metering_deadline_preserves_hold_and_requires_independent_replay() {
+    failed_settlement("client-ek", true).await;
+}
+
+#[path = "../../support/admin_browser.rs"]
+mod admin_browser;
+use crate::finance_sessions;
+
+async fn failed_settlement(cert: &str, expire: bool) {
+    let mut c = setup_priced(cert).await;
     let server = Running::start_with_output(&c.f.d.store, c.f.objects.clone()).await;
     let (mut connection, mut node, mut journal) = idle(&c, &server).await;
     let q = quote_http(&c, &quote_request(&c, 32)).await;
@@ -644,6 +732,135 @@ async fn settlement_failure_is_atomic_and_competing_recovery_cannot_double_charg
             .await
             .expect("no half ledger");
     assert_eq!(count, 0);
+    let phases = "SELECT h.stage FROM metering_receipt_history h JOIN metering_receipts r USING(event_id) WHERE r.job_id=$1 ORDER BY h.sequence_id";
+    let before_retry: Vec<String> = sqlx::query_scalar(phases)
+        .bind(&c.f.job)
+        .fetch_all(c.f.d.store.pool())
+        .await
+        .expect("read failed attempt history");
+    assert_eq!(before_retry, ["received", "validated", "retry"]);
+    if expire {
+        // Only the retry clock moves; the immutable receipt, original quote and held funds remain intact.
+        sqlx::query("UPDATE metering_receipts SET deadline=clock_timestamp() WHERE job_id=$1")
+            .bind(&c.f.job)
+            .execute(c.f.d.store.pool())
+            .await
+            .expect("advance isolated retry clock");
+        assert_eq!(
+            c.f.objects
+                .settle_ready(100)
+                .await
+                .expect("expire the outstanding receipt")
+                .1,
+            1
+        );
+        assert_eq!(
+            c.f.objects
+                .settle_ready(100)
+                .await
+                .expect("skip already dead receipt")
+                .1,
+            0
+        );
+        let (case_id,event_id):(String,String)=sqlx::query_as("SELECT case_id,event_id FROM metering_receipts WHERE job_id=$1 AND state='dead' AND transaction_id IS NULL")
+             .bind(&c.f.job).fetch_one(c.f.d.store.pool()).await.expect("read original event and scoped case");
+        let after: (i64, i64) =
+            sqlx::query_as("SELECT gift,reserved_gift FROM wallets WHERE owner_id=$1")
+                .bind(&c.f.owner)
+                .fetch_one(c.f.d.store.pool())
+                .await
+                .expect("read preserved wallet");
+        assert_eq!(after, before, "no release of unknown charge");
+        let staff = finance_sessions::Admin::new(&c.f.d.store, &c.f.owner).await;
+        assert_ne!(staff.maker.id, staff.checker.id);
+        let query = format!(
+            "/admin/v1/reconciliation-cases/{case_id}/activity?environment=dev&scope_kind=tenant&scope_id={}",
+            c.f.owner
+        );
+        let (view, _) = staff
+            .call(
+                &staff.maker,
+                "GET",
+                &query,
+                "",
+                serde_json::Value::Null,
+                200,
+            )
+            .await;
+        assert_eq!(view["metering"]["event_id"], event_id);
+        assert_eq!(view["metering"]["state"], "dead");
+        assert_eq!(view["metering"]["last_failure"], "retry_deadline");
+        let request = serde_json::json!({"scope":{"environment":"dev","kind":"tenant","scope_id":c.f.owner},"target_version":view["version"],"ticket_id":"metering-review","reason":"Independently reviewed original server metering receipt","action_type":"case.update","payload":{"change":"retry_metering","case_id":case_id,"event_id":event_id}});
+        let mut wrong = request.clone();
+        wrong["payload"]["event_id"] = serde_json::json!("different-original-event");
+        staff
+            .call(&staff.maker, "POST", "/admin/v1/actions", "", wrong, 409)
+            .await;
+        let mut close = request.clone();
+        close["payload"] = serde_json::json!({"change":"close","case_id":case_id,"resolution_ref":"premature-close"});
+        staff
+            .call(&staff.maker, "POST", "/admin/v1/actions", "", close, 409)
+            .await;
+        if let Ok(driver) = std::env::var("ORANGE_METERING_ADMIN_BROWSER") {
+            admin_browser::run(staff.app.clone(),&std::env::var("ORANGE_METERING_ADMIN_NODE").expect("pinned Admin browser Node"),&driver,serde_json::json!({
+                "origin":staff.origin,"maker":staff.maker.token,"checker":staff.checker.token,
+                "case":case_id,"event":event_id,"screenshot":std::env::var("ORANGE_METERING_SCREENSHOT").expect("metering screenshot destination")
+            })).await;
+        } else {
+            let (action, tag) = staff
+                .call(&staff.maker, "POST", "/admin/v1/actions", "", request, 201)
+                .await;
+            let path = format!(
+                "/admin/v1/actions/{}",
+                action["action_id"].as_str().expect("created action ID")
+            );
+            let approve = serde_json::json!({"decision":"approve","payload_digest":action["payload_digest"],"policy_version":action["policy_version"],"reason":"Checked original event and budget ownership"});
+            staff
+                .call(
+                    &staff.maker,
+                    "POST",
+                    &format!("{path}/approvals"),
+                    &tag,
+                    approve.clone(),
+                    403,
+                )
+                .await;
+            let (_, tag) = staff
+                .call(
+                    &staff.checker,
+                    "POST",
+                    &format!("{path}/approvals"),
+                    &tag,
+                    approve,
+                    200,
+                )
+                .await;
+            let execute = serde_json::json!({"payload_digest":action["payload_digest"],"policy_version":action["policy_version"]});
+            staff
+                .call(
+                    &staff.maker,
+                    "POST",
+                    &format!("{path}/execute"),
+                    &tag,
+                    execute,
+                    202,
+                )
+                .await;
+        }
+        let (view, _) = staff
+            .call(
+                &staff.maker,
+                "GET",
+                &query,
+                "",
+                serde_json::Value::Null,
+                200,
+            )
+            .await;
+        assert_eq!(view["metering"]["state"], "received");
+        assert_eq!(view["metering"]["generation"], "2");
+        assert_eq!(view["metering"]["attempts"], "0");
+    }
     let (a, b) = tokio::join!(c.f.objects.settle_ready(100), c.f.objects.settle_ready(100));
     assert_eq!(a.expect("recovery").1, 0);
     assert_eq!(b.expect("competing recovery").1, 0);
@@ -663,6 +880,34 @@ async fn settlement_failure_is_atomic_and_competing_recovery_cannot_double_charg
             .await
             .expect("once");
     assert_eq!(count, 1);
+    let history: Vec<String> = sqlx::query_scalar(phases)
+        .bind(&c.f.job)
+        .fetch_all(c.f.d.store.pool())
+        .await
+        .expect("read terminal event history");
+    if expire {
+        assert_eq!(
+            history,
+            [
+                "received",
+                "validated",
+                "retry",
+                "dead",
+                "reopened",
+                "validated",
+                "posted"
+            ]
+        );
+    } else {
+        assert_eq!(history, ["received", "validated", "retry", "posted"]);
+    }
+    let registered:bool=sqlx::query_scalar("SELECT r.event_id=c.commit_id AND r.transaction_id=s.transaction_id AND r.response_digest=c.response_digest AND r.attempts=$2
+        FROM metering_receipts r JOIN job_response_commits c USING(job_id) JOIN job_settlements s USING(job_id) WHERE r.job_id=$1").bind(&c.f.job).bind(if expire{1i32}else{2}).fetch_one(c.f.d.store.pool()).await.expect("match original posting");
+    assert!(
+        registered,
+        "retry retained the original event and actual posting"
+    );
+
     let balance:i64=sqlx::query_scalar("SELECT sum(e.amount)::bigint FROM ledger_entries e JOIN ledger_transactions t USING(transaction_id) WHERE t.business_key=$1").bind(&key).fetch_one(c.f.d.store.pool()).await.expect("balanced");
     assert_eq!(balance, 0);
     raw.query_output(worker::OutputQuery {

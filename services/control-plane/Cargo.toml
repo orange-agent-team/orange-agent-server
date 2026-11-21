@@ -7,6 +7,7 @@ publish.workspace = true
 
 [features]
 integration-tests = []
+metering-upgrade-tests = ["integration-tests"]
 cloud-host-tests = ["integration-tests"]
 pg-view-tests = []
 repository-live-tests = []
@@ -126,3 +127,8 @@ workspace = true
 name = "cloud_turn_upgrade"
 path = "tests/cloud_turn_upgrade.rs"
 required-features = ["cloud-upgrade-tests"]
+
+[[test]]
+name = "metering_upgrade"
+path = "tests/metering_upgrade.rs"
+required-features = ["metering-upgrade-tests"]

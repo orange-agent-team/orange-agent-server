@@ -381,7 +381,31 @@ impl ArtifactStore {
             {
                 return Err(ArtifactError::Integrity);
             }
-            let usage = self.validate_response(sessions, s, h, &bytes).await?;
+            let usage = match self.validate_response(sessions, s, h, &bytes).await {
+                Ok(usage) => usage,
+                Err(error @ (ArtifactError::Invalid | ArtifactError::Integrity)) => {
+                    // Only the server's job can supply an owner. Inspect field presence without retaining
+                    // caller-provided identities or allocating another copy of the candidate content.
+                    #[derive(serde::Deserialize)]
+                    struct DeclaredOwner {
+                        owner_id: Option<serde::de::IgnoredAny>,
+                        owner: Option<serde::de::IgnoredAny>,
+                    }
+                    let reason = if matches!(error, ArtifactError::Integrity) {
+                        "evidence_integrity"
+                    } else if serde_json::from_slice::<DeclaredOwner>(&bytes)
+                        .is_ok_and(|v| v.owner_id.is_some() || v.owner.is_some())
+                    {
+                        "untrusted_owner"
+                    } else {
+                        "invalid_candidate"
+                    };
+                    self.record_metering_rejection(sessions, s, h, reason)
+                        .await?;
+                    return Err(error);
+                }
+                Err(error) => return Err(error),
+            };
             if let Some(mut writer) = stage.take() {
                 writer.close().await?;
                 self.inner.objects.finish_write(&t.stage)?;
@@ -449,6 +473,38 @@ impl ArtifactStore {
             return Err(e);
         }
         result
+    }
+    async fn record_metering_rejection(
+        &self,
+        sessions: &WorkerSessionStore,
+        s: &DeviceSession,
+        h: &worker::OutputHeader,
+        reason: &str,
+    ) -> Result<(), ArtifactError> {
+        let mut tx = self.inner.pool.begin().await?;
+        let scope = self.output_scope(&mut tx, sessions, s, h, false).await?;
+        let needed:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM worker_output_uploads u JOIN jobs j USING(job_id)
+            WHERE u.upload_id=$1 AND j.job_id=$2 AND j.owner_id=$3 AND u.response_digest=$4 AND
+            (EXISTS(SELECT 1 FROM quote_metering t WHERE t.quote_id=j.quote_id) OR EXISTS(SELECT 1 FROM transcription_quote_terms t WHERE t.quote_id=j.quote_id))
+            AND NOT EXISTS(SELECT 1 FROM metering_input_rejections r WHERE r.upload_id=u.upload_id) FOR UPDATE OF u)")
+            .bind(&h.upload_id).bind(&scope.job).bind(&scope.owner).bind(&h.response_digest).fetch_one(&mut *tx).await?;
+        if needed {
+            let case = uuid::Uuid::new_v4().to_string();
+            let admitted = sqlx::query_scalar::<_, bool>(
+                "SELECT NOT EXISTS(SELECT 1 FROM metering_input_rejections WHERE upload_id=$1)",
+            )
+            .bind(&h.upload_id)
+            .fetch_one(&mut *tx)
+            .await?;
+            if admitted {
+                sqlx::query("INSERT INTO reconciliation_cases(case_id,owner_id,environment,business_ref,state,next_check_at)
+                    VALUES($1,$2,'dev',$3,'open',floor(extract(epoch FROM clock_timestamp()))::bigint)")
+                    .bind(&case).bind(&scope.owner).bind(format!("metering-input:{}",h.upload_id)).execute(&mut *tx).await?;
+                sqlx::query("INSERT INTO metering_input_rejections(upload_id,job_id,owner_id,response_digest,bytes_digest,reason,case_id) VALUES($1,$2,$3,$4,$5,$6,$7)")
+                    .bind(&h.upload_id).bind(&scope.job).bind(&scope.owner).bind(&h.response_digest).bind(&h.sha256).bind(reason).bind(&case).execute(&mut *tx).await?;
+            }
+        }
+        self.finish_output_scope(tx, s, h, false).await
     }
     async fn validate_response(
         &self,

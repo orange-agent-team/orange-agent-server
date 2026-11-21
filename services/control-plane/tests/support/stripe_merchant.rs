@@ -238,7 +238,7 @@ async fn list_refunds(
 fn observe(p: &Provider, source: &str, kind: &str, gross: i64, fee: i64) {
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
+        .expect("fixture creation after UNIX epoch")
         .as_secs();
     let id = format!("txn_{source}");
     p.balance.lock().expect("fixture statement").entry(id.clone()).or_insert_with(||json!({
@@ -253,14 +253,14 @@ async fn balance_page(
 ) -> impl IntoResponse {
     assert!(headers_ok(&h));
     assert_eq!(q["limit"], "100");
-    let from = q["created[gte]"].parse::<u64>().unwrap();
-    let until = q["created[lt]"].parse::<u64>().unwrap();
+    let from = q["created[gte]"].parse::<u64>().expect("window start");
+    let until = q["created[lt]"].parse::<u64>().expect("window end");
     let mut rows: Vec<_> = p
         .balance
         .lock()
         .expect("fixture statement")
         .values()
-        .filter(|r| (from..until).contains(&r["created"].as_u64().unwrap()))
+        .filter(|r| (from..until).contains(&r["created"].as_u64().expect("fixture creation time")))
         .cloned()
         .collect();
     rows.sort_by(|a, b| {

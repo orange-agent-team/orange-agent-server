@@ -1,6 +1,8 @@
 //! Actual PostgreSQL, current user HTTP and Stripe wire adapter against an isolated loopback merchant double.
 #[path = "support/refund_admin.rs"]
 mod admin_fixture;
+#[path = "support/finance_sessions.rs"]
+mod finance_sessions;
 #[path = "support/stripe_merchant.rs"]
 mod merchant;
 #[path = "support/purchase_lot.rs"]

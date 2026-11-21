@@ -468,7 +468,9 @@ mod tests {
         );
         entries.insert("team:gift:available", 0);
         entries.insert("team:purchased:available", 20);
-        let payment = entries.remove("alice:earned:pending").unwrap();
+        let payment = entries
+            .remove("alice:earned:pending")
+            .expect("original supplier entry");
         entries.insert("bob:earned:pending", payment);
         assert!(
             !valid(&entries),
