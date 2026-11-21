@@ -537,3 +537,78 @@ impl Sandbox {
         Ok(d)
     }
 }
+
+#[derive(Deserialize, serde::Serialize)]
+pub(super) struct BalanceLine {
+    pub id: String,
+    object: String,
+    pub source: Option<String>,
+    pub created: i64,
+    pub currency: String,
+    pub amount: i64,
+    pub fee: i64,
+    pub net: i64,
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub reporting_category: String,
+    pub status: String,
+}
+impl BalanceLine {
+    fn valid(&self, from: i64, until: i64) -> bool {
+        let label = |s: &str| {
+            !s.is_empty() && s.len() <= 80 && s.bytes().all(|b| b.is_ascii_lowercase() || b == b'_')
+        };
+        self.object == "balance_transaction"
+            && identifier(&self.id, "txn_")
+            && self.source.as_deref().is_none_or(|s| identifier(s, ""))
+            && (from..until).contains(&self.created)
+            && self.currency.len() == 3
+            && self.currency.bytes().all(|b| b.is_ascii_lowercase())
+            && label(&self.kind)
+            && label(&self.reporting_category)
+            && matches!(self.status.as_str(), "pending" | "available")
+            && i128::from(self.amount) - i128::from(self.fee) == i128::from(self.net)
+    }
+}
+impl Sandbox {
+    pub(super) async fn balance_page(
+        &self,
+        from: i64,
+        until: i64,
+        after: &str,
+    ) -> Result<(Vec<BalanceLine>, bool), Error> {
+        #[derive(Deserialize)]
+        struct Page {
+            object: String,
+            data: Vec<BalanceLine>,
+            has_more: bool,
+        }
+        self.account().await?;
+        let mut q = self
+            .request(reqwest::Method::GET, "balance_transactions")?
+            .query(&[
+                ("created[gte]", from.to_string()),
+                ("created[lt]", until.to_string()),
+                ("limit", "100".to_owned()),
+            ]);
+        if !after.is_empty() {
+            if !identifier(after, "txn_") {
+                return Err(Error::Invalid);
+            }
+            q = q.query(&[("starting_after", after)]);
+        }
+        let p: Page = receive(q.send().await.map_err(|_| Error::Unavailable)?).await?;
+        let mut ids = std::collections::HashSet::new();
+        if p.object != "list"
+            || p.data.len() > 100
+            || (p.has_more && p.data.is_empty())
+            || p.data.windows(2).any(|w| w[0].created < w[1].created)
+            || p.data
+                .iter()
+                .any(|l| !l.valid(from, until) || l.id == after || !ids.insert(&l.id))
+        {
+            return Err(Error::Mismatch);
+        }
+        Ok((p.data, p.has_more))
+    }
+}

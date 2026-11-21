@@ -1945,8 +1945,68 @@ async fn one_no_gpu_account_traverses_consumption_supply_team_privacy_purchase_a
                 .expect("provider income");
         assert_eq!(buckets, (0, 1760));
     }
-    let recorded:i64=sqlx::query_scalar("SELECT count(*) FROM job_settlements s JOIN jobs j USING(job_id) WHERE (j.owner_id=$1 AND s.provider_owner_id=$2) OR (j.owner_id=$2 AND s.provider_owner_id=$3)").bind(org).bind(&a.owner).bind(&b.owner).fetch_one(db.pool()).await.expect("reciprocal accounting");
+    let recorded:i64=sqlx::query_scalar("SELECT count(*) FROM job_settlements s JOIN jobs j USING(job_id) WHERE (j.owner_id=$1 AND s.provider_owner_id=$2) OR (j.owner_id=$2 AND s.provider_owner_id=$3)").bind(&org).bind(&a.owner).bind(&b.owner).fetch_one(db.pool()).await.expect("reciprocal accounting");
     assert_eq!(recorded, 2);
+    // Advance only the scanner's reporting window in this disposable database. All purchase,
+    // job, delivery, settlement and refund records above retain their original timestamps.
+    let run = Uuid::new_v4().to_string();
+    let m = journey_merchant::MERCHANT;
+    sqlx::query("INSERT INTO test_statement_runs(run_id,merchant_id,from_unix,until_unix)
+       SELECT $1,$2,day,day+86400 FROM (SELECT floor(extract(epoch FROM clock_timestamp())/86400)::bigint*86400 AS day) d")
+       .bind(&run).bind(m).execute(db.pool()).await.expect("accelerate daily close");
+    sqlx::query("INSERT INTO test_statement_sync(merchant_id,run_id) VALUES($1,$2)")
+        .bind(m)
+        .bind(&run)
+        .execute(db.pool())
+        .await
+        .expect("start daily scan");
+    let postings = "SELECT count(*) FROM ledger_entries";
+    let before: i64 = sqlx::query_scalar(postings)
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    for _ in 0..4 {
+        assert!(
+            payments
+                .scan_statement_page()
+                .await
+                .expect("scan actual job receipts")
+        );
+    }
+    let verified:Vec<(String,String,i64,bool)>=sqlx::query_as("SELECT owner_id,expected_provider,charge,verified FROM test_statement_job_checks WHERE run_id=$1").bind(&run).fetch_all(db.pool()).await.unwrap();
+    assert_eq!(verified.len(), 2);
+    assert!(
+        verified.contains(&(org.clone(), a.owner.clone(), 2200, true)),
+        "{verified:?}"
+    );
+    assert!(
+        verified.contains(&(a.owner.clone(), b.owner.clone(), 2200, true)),
+        "{verified:?}"
+    );
+    let report: serde_json::Value =
+        sqlx::query_scalar("SELECT report FROM test_statement_runs WHERE run_id=$1")
+            .bind(&run)
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+    assert_eq!(report["observed_scan_issues"], "0", "{report}");
+    assert_eq!(
+        report["local_business_by_original_currency"],
+        json!([
+            {"currency":"usd","flow":"purchase","entries":"2","original_minor":"1000","purchased_bucket_change":"20000"},
+            {"currency":"usd","flow":"refund","entries":"1","original_minor":"-100","purchased_bucket_change":"-2000"}
+        ])
+    );
+    let jobs = &report["platform_wide_job_credits"];
+    assert_eq!(jobs["charged_microcredits"], "4400");
+    assert_eq!(jobs["provider_pending_microcredits"], "3520");
+    assert_eq!(jobs["platform_fee_microcredits"], "880");
+    let after: i64 = sqlx::query_scalar(postings)
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    assert_eq!(before, after);
+
     let _ = stop.send(());
     server.await.expect("merchant stopped");
 }

@@ -94,3 +94,7 @@ OIDC登录/回调的完整协议、用户API和云Host等另按整体接口计�
 草稿作者通过既有的 `pricing.publish` 动作提交审核。审批和执行均重读范围权限，只有原审核记录仍然匹配时才发布。指定未来时间的版本在到期时重新核对审批人的权限。已有启用价格时，新草稿不会暗中覆盖旧价格。所有金额均为本地开发积分。实际可报价还要求有效的用户输入授权、预算及当前 Worker 会话能力。[Admin 契约](../contracts/openapi/admin.v1.json)
 
 `GET /admin/v1/test-refunds/{case_id}` 在当前 dev 平台或租户范围内按 `refunds.read` 返回原单、所持微积分、原币最小单位和条款摘要。既有 `payment.refund` 支持开发测试订单的独立财务审批。执行的业务引用是本地退款编号；商户实际结果由退款状态查询返回。[开发退款规则](test-checkout.md)
+
+### 测试商户日报
+
+开发环境通过 `GET /admin/v1/test-statements` 分页列出扫描，`GET /admin/v1/test-statements/{run_id}` 返回封存报告和对应差异。二者仅对平台范围开放。使用 `GET /admin/v1/test-statement-issues/{issue_key}` 查看差异的带摘要观测，选填 run_id，省略时取该范围最近一次封存记录。读取需当前会话同时拥有 payments.read、ledger.read、cases.read。租户只能读归属于其账户的差异；每次读取写入独立的 Admin 审计。金额与微积分分别采用十进制整数字符串。[范围及复验](test-checkout.md)

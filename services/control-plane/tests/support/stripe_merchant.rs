@@ -28,6 +28,7 @@ pub(crate) fn config() -> SandboxConfig {
 pub(crate) struct Provider {
     pub(crate) refunds: RefundMerchant,
     pub(crate) disputed_order: Mutex<Option<String>>,
+    balance: Mutex<HashMap<String, Value>>,
     orders: Mutex<HashMap<String, (String, String)>>,
     pub(crate) posts: AtomicUsize,
     pub(crate) mode: AtomicUsize,
@@ -111,6 +112,15 @@ async fn retrieve(
         5 => result["livemode"] = json!(true),
         6 => result["payment_intent"]["amount_received"] = json!(499),
         _ => {}
+    }
+    if mode == 0 {
+        observe(
+            &p,
+            &format!("ch_{}", order.replace('-', "")),
+            "charge",
+            500,
+            15,
+        );
     }
     Json(result)
 }
@@ -196,7 +206,17 @@ async fn retrieve_refund(
     h: HeaderMap,
 ) -> impl IntoResponse {
     assert!(headers_ok(&h));
-    Json(p.refunds.records.lock().expect("records")[&id].clone())
+    let refund = p.refunds.records.lock().expect("records")[&id].clone();
+    if refund["status"] == "succeeded" {
+        observe(
+            &p,
+            &id,
+            "refund",
+            -refund["amount"].as_i64().expect("minor units"),
+            0,
+        );
+    }
+    Json(refund)
 }
 async fn list_refunds(
     State(p): State<Arc<Provider>>,
@@ -215,6 +235,47 @@ async fn list_refunds(
         .collect();
     Json(json!({"object":"list","data":results,"has_more":false}))
 }
+fn observe(p: &Provider, source: &str, kind: &str, gross: i64, fee: i64) {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let id = format!("txn_{source}");
+    p.balance.lock().expect("fixture statement").entry(id.clone()).or_insert_with(||json!({
+        "id":id,"object":"balance_transaction","source":source,"type":kind,"reporting_category":kind,
+        "created":stamp,"currency":"usd","amount":gross,"fee":fee,"net":gross-fee,"status":"available"
+    }));
+}
+async fn balance_page(
+    State(p): State<Arc<Provider>>,
+    Query(q): Query<HashMap<String, String>>,
+    h: HeaderMap,
+) -> impl IntoResponse {
+    assert!(headers_ok(&h));
+    assert_eq!(q["limit"], "100");
+    let from = q["created[gte]"].parse::<u64>().unwrap();
+    let until = q["created[lt]"].parse::<u64>().unwrap();
+    let mut rows: Vec<_> = p
+        .balance
+        .lock()
+        .expect("fixture statement")
+        .values()
+        .filter(|r| (from..until).contains(&r["created"].as_u64().unwrap()))
+        .cloned()
+        .collect();
+    rows.sort_by(|a, b| {
+        (b["created"].as_u64(), b["id"].as_str()).cmp(&(a["created"].as_u64(), a["id"].as_str()))
+    });
+    let start = q.get("starting_after").map_or(0, |id| {
+        rows.iter()
+            .position(|r| r["id"] == *id)
+            .expect("known cursor")
+            + 1
+    });
+    Json(
+        json!({"object":"list","data":rows.iter().skip(start).take(100).collect::<Vec<_>>(),"has_more":rows.len()>start+100}),
+    )
+}
 pub(crate) async fn start() -> (
     Arc<Provider>,
     std::net::SocketAddr,
@@ -224,12 +285,14 @@ pub(crate) async fn start() -> (
     let p = Arc::new(Provider {
         refunds: Default::default(),
         disputed_order: Mutex::new(None),
+        balance: Mutex::new(HashMap::new()),
         orders: Mutex::new(HashMap::new()),
         posts: AtomicUsize::new(0),
         mode: AtomicUsize::new(0),
     });
     let provider = Router::new()
         .route("/v1/account", get(account))
+        .route("/v1/balance_transactions", get(balance_page))
         .route("/v1/checkout/sessions", post(create_session))
         .route("/v1/checkout/sessions/{id}", get(retrieve))
         .route("/v1/disputes/{id}", get(dispute))

@@ -248,10 +248,21 @@ async fn serve(
         }}
     }));
     eprintln!(
-        "Development User API listening on {}; shared output Gateway is optional; no payment enabled",
+        "Development User API listening on {}; shared output Gateway and test merchant are opt-in",
         api_listener.local_addr()?
     );
     let signal_stop = stop.clone();
+    #[cfg(unix)]
+    let statements = payments.clone().map(|p|{
+        let mut shutdown=stop.subscribe();
+        tokio::spawn(async move{
+            let mut tick=tokio::time::interval(std::time::Duration::from_secs(5));
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop{tokio::select!{_=shutdown.changed()=>break,_=tick.tick()=>{
+                if p.scan_statement_page().await.is_err(){eprintln!("Sandbox merchant statement pending reconciliation");}
+            }}}
+        })
+    });
     #[cfg(unix)]
     let payment_work=payments.map(|p|{
         let mut shutdown=stop.subscribe();
@@ -260,8 +271,6 @@ async fn serve(
                 for _ in 0..8{if *shutdown.borrow(){return;}match p.process_one().await{Ok(true)=>{},Ok(false)=>break,Err(_)=>{eprintln!("Sandbox payment work remains pending reconciliation");break;}}}
                 if !*shutdown.borrow() && p.process_refund().await.is_err(){eprintln!("Sandbox refund remains pending reconciliation");}
                 if !*shutdown.borrow() && p.process_dispute().await.is_err(){eprintln!("Sandbox dispute remains pending reconciliation");}
-
-
             }}}
         })
     });
@@ -282,6 +291,10 @@ async fn serve(
     };
     queue_expiry.await?;
     cloud_results.await?;
+    #[cfg(unix)]
+    if let Some(task) = statements {
+        task.await?;
+    }
     #[cfg(unix)]
     if let Some(task) = payment_work {
         task.await?;

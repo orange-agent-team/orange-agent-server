@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 pub(super) mod audit;
 mod cases;
+mod statements;
 
 pub fn router(identity: AdminIdentity) -> Router {
     Router::new()
@@ -49,6 +50,12 @@ pub fn router(identity: AdminIdentity) -> Router {
         .route(
             "/admin/v1/test-refunds/{case_id}",
             get(super::actions::refunds::review),
+        )
+        .route("/admin/v1/test-statements", get(statements::list))
+        .route("/admin/v1/test-statements/{run}", get(statements::detail))
+        .route(
+            "/admin/v1/test-statement-issues/{issue}",
+            get(statements::evidence),
         )
         .route("/admin/v1/overview", get(overview))
         .route(
