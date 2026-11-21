@@ -4024,6 +4024,28 @@
         "observed_scan_issues": {
           "type": "string",
           "pattern": "^(0|[1-9][0-9]*)$"
+        },
+        "platform_wide_execution": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "attempts": {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]*)$"
+            },
+            "additional_attempts": {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]*)$"
+            }
+          },
+          "required": [
+            "attempts",
+            "additional_attempts"
+          ]
+        },
+        "published_artifact_byte_seconds": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$"
         }
       },
       "required": [
@@ -4035,7 +4057,9 @@
         "platform_wide_job_credits",
         "metered_storage_cash_cost",
         "metered_bandwidth_cash_cost",
-        "observed_scan_issues"
+        "observed_scan_issues",
+        "platform_wide_execution",
+        "published_artifact_byte_seconds"
       ]
     },
     "StatementIssue": {
@@ -4058,7 +4082,9 @@
             "unattributed_external",
             "stale_checkout",
             "stale_refund_hold",
-            "stale_job_hold"
+            "stale_job_hold",
+            "missing_job_settlement",
+            "job_posting_mismatch"
           ]
         },
         "business_ref": {
@@ -4465,13 +4491,16 @@
               "pattern": "^[a-z]{3}$"
             },
             "amount": {
-              "type": "integer"
+              "type": "string",
+              "pattern": "^(0|-?[1-9][0-9]*)$"
             },
             "fee": {
-              "type": "integer"
+              "type": "string",
+              "pattern": "^(0|-?[1-9][0-9]*)$"
             },
             "net": {
-              "type": "integer"
+              "type": "string",
+              "pattern": "^(0|-?[1-9][0-9]*)$"
             },
             "type": {
               "type": "string"
@@ -4498,6 +4527,84 @@
             "type",
             "reporting_category",
             "status"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "job_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "provider_owner_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "execution_state": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80
+            },
+            "settlement_state": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80
+            }
+          },
+          "required": [
+            "job_id",
+            "provider_owner_id",
+            "execution_state",
+            "settlement_state"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "job_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "transaction_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "provider_owner_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "charge": {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]*)$"
+            },
+            "provider_pending": {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]*)$"
+            },
+            "platform_fee": {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]*)$"
+            }
+          },
+          "required": [
+            "job_id",
+            "transaction_id",
+            "provider_owner_id",
+            "charge",
+            "provider_pending",
+            "platform_fee"
           ]
         }
       ]
@@ -4539,7 +4646,9 @@
             "unattributed_external",
             "stale_checkout",
             "stale_refund_hold",
-            "stale_job_hold"
+            "stale_job_hold",
+            "missing_job_settlement",
+            "job_posting_mismatch"
           ]
         },
         "business_ref": {
