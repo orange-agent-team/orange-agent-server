@@ -1,0 +1,5277 @@
+{
+  "version": 1,
+  "features": {
+    "AU-01": {
+      "name": "授权文本/源文件问答，返回引用",
+      "first_gate": "G3",
+      "milestone": "M4",
+      "work": [
+        "AG-014.02"
+      ],
+      "acceptance": [
+        "SS-06"
+      ],
+      "specification": "授权文本/源文件问答，返回引用 · G1 · 用户手动；只读",
+      "evidence_key": "product-scope/v1/AU-01"
+    },
+    "AU-02": {
+      "name": "文本摘要/结构化提纲",
+      "first_gate": "G3",
+      "milestone": "M4",
+      "work": [
+        "AG-014.02"
+      ],
+      "acceptance": [
+        "SS-06"
+      ],
+      "specification": "文本摘要/结构化提纲 · G1 · 用户手动；保存结果需授权",
+      "evidence_key": "product-scope/v1/AU-02"
+    },
+    "AU-03": {
+      "name": "音频文件转写，返回时间段/文本",
+      "first_gate": "G3",
+      "milestone": "M4",
+      "work": [
+        "AG-014.02"
+      ],
+      "acceptance": [
+        "SS-06"
+      ],
+      "specification": "音频文件转写，返回时间段/文本 · G3 · 用户上传后手动；不是后台监听麦克风",
+      "evidence_key": "product-scope/v1/AU-03"
+    },
+    "AU-04": {
+      "name": "转写后摘要/会议纪要",
+      "first_gate": "G3",
+      "milestone": "M4",
+      "work": [
+        "AG-014.02"
+      ],
+      "acceptance": [
+        "SS-06"
+      ],
+      "specification": "转写后摘要/会议纪要 · G3 · 用户手动；两个模型步骤共享预算",
+      "evidence_key": "product-scope/v1/AU-04"
+    },
+    "AU-05": {
+      "name": "已授权知识集合检索问答",
+      "first_gate": "G3",
+      "milestone": "M4",
+      "work": [
+        "AG-014.02"
+      ],
+      "acceptance": [
+        "SS-06"
+      ],
+      "specification": "已授权知识集合检索问答 · G3 · 用户手动；包括G3只读连接器资料",
+      "evidence_key": "product-scope/v1/AU-05"
+    },
+    "AU-06": {
+      "name": "代码审阅报告",
+      "first_gate": "G3",
+      "milestone": "M4",
+      "work": [
+        "AG-014.02"
+      ],
+      "acceptance": [
+        "SS-06"
+      ],
+      "specification": "代码审阅报告 · G1 · 用户选择本地仓库；不自动提交或推送",
+      "evidence_key": "product-scope/v1/AU-06"
+    },
+    "AU-07": {
+      "name": "生成补丁、预览并在批准后应用",
+      "first_gate": "G3",
+      "milestone": "M4",
+      "work": [
+        "AG-014.02"
+      ],
+      "acceptance": [
+        "SS-06"
+      ],
+      "specification": "生成补丁、预览并在批准后应用 · G1 · 用户手动；测试命令另受进程授权",
+      "evidence_key": "product-scope/v1/AU-07"
+    },
+    "AU-08": {
+      "name": "审核图像模型生成单张素材",
+      "first_gate": "G3",
+      "milestone": "M4",
+      "work": [
+        "AG-014.02"
+      ],
+      "acceptance": [
+        "SS-06"
+      ],
+      "specification": "审核图像模型生成单张素材 · G3 · 用户手动；预算与规格先确认",
+      "evidence_key": "product-scope/v1/AU-08"
+    },
+    "AU-09": {
+      "name": "定期仓库变化审阅报告",
+      "first_gate": "G4-A",
+      "milestone": "M5",
+      "work": [
+        "G4-W01",
+        "G4-W02"
+      ],
+      "acceptance": [
+        "G4-A01",
+        "G4-A02"
+      ],
+      "specification": "定期仓库变化审阅报告 · G4 · 定时/仓库事件；默认只产出报告，不自动改代码",
+      "evidence_key": "product-scope/v1/AU-09"
+    },
+    "AU-10": {
+      "name": "问题单分诊并生成标签/回复建议",
+      "first_gate": "G4-A",
+      "milestone": "M5",
+      "work": [
+        "G4-W01",
+        "G4-W04"
+      ],
+      "acceptance": [
+        "G4-A01",
+        "G4-A04"
+      ],
+      "specification": "问题单分诊并生成标签/回复建议 · G4 · GitHub/GitLab/Jira/Linear事件；写入须具体授权",
+      "evidence_key": "product-scope/v1/AU-10"
+    },
+    "AU-11": {
+      "name": "版本变更生成发布说明与草稿PR/MR",
+      "first_gate": "G4-A",
+      "milestone": "M5",
+      "work": [
+        "G4-W02",
+        "G4-W04"
+      ],
+      "acceptance": [
+        "G4-A02",
+        "G4-A04"
+      ],
+      "specification": "版本变更生成发布说明与草稿PR/MR · G4 · 手动/签名仓库事件；发布稿、推送均需授权",
+      "evidence_key": "product-scope/v1/AU-11"
+    },
+    "AU-12": {
+      "name": "授权文档的增量索引与失效清理",
+      "first_gate": "G4-A",
+      "milestone": "M5",
+      "work": [
+        "G4-W01",
+        "G4-W04"
+      ],
+      "acceptance": [
+        "G4-A01",
+        "G4-A04"
+      ],
+      "specification": "授权文档的增量索引与失效清理 · G4 · 定时/数据变更事件；权限撤销和删除先传播",
+      "evidence_key": "product-scope/v1/AU-12"
+    },
+    "AU-13": {
+      "name": "会议纪要转换为行动项/日历建议",
+      "first_gate": "G4-B",
+      "milestone": "M5",
+      "work": [
+        "G4-W07"
+      ],
+      "acceptance": [
+        "G4-A04",
+        "G4-A07"
+      ],
+      "specification": "会议纪要转换为行动项/日历建议 · G4 · 手动/授权日历事件；任务/日历写入预览批准",
+      "evidence_key": "product-scope/v1/AU-13"
+    },
+    "AU-14": {
+      "name": "团队模型用量与预算异常报告",
+      "first_gate": "G4-B",
+      "milestone": "M5",
+      "work": [
+        "G4-W01",
+        "G4-W07"
+      ],
+      "acceptance": [
+        "G4-A01",
+        "G4-A07"
+      ],
+      "specification": "团队模型用量与预算异常报告 · G4 · 定时；只读账单元数据，不自动充值或退款",
+      "evidence_key": "product-scope/v1/AU-14"
+    },
+    "AU-15": {
+      "name": "供应节点可用性与排队异常通知",
+      "first_gate": "G4-B",
+      "milestone": "M5",
+      "work": [
+        "G4-W07"
+      ],
+      "acceptance": [
+        "G4-A07"
+      ],
+      "specification": "供应节点可用性与排队异常通知 · G4 · 平台状态事件；默认应用内通知，外部发送另授权",
+      "evidence_key": "product-scope/v1/AU-15"
+    },
+    "AU-16": {
+      "name": "多Agent资料研究与交叉核对报告",
+      "first_gate": "G4-B",
+      "milestone": "M5",
+      "work": [
+        "G4-W06"
+      ],
+      "acceptance": [
+        "G4-A06"
+      ],
+      "specification": "多Agent资料研究与交叉核对报告 · G4 · 用户目标；共享根预算、引用可追踪",
+      "evidence_key": "product-scope/v1/AU-16"
+    },
+    "AU-17": {
+      "name": "隔离工作树中的测试—修复—复测",
+      "first_gate": "G4-B",
+      "milestone": "M5",
+      "work": [
+        "G4-W02",
+        "G4-W06"
+      ],
+      "acceptance": [
+        "G4-A02",
+        "G4-A06"
+      ],
+      "specification": "隔离工作树中的测试—修复—复测 · G4 · 用户/仓库事件；有迭代上限，草稿合并需审批",
+      "evidence_key": "product-scope/v1/AU-17"
+    },
+    "AU-18": {
+      "name": "文档版本比较并生成更新草稿",
+      "first_gate": "G4-A",
+      "milestone": "M5",
+      "work": [
+        "G4-W04"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "文档版本比较并生成更新草稿 · G4 · 手动/变更事件；Notion/Confluence提交需批准",
+      "evidence_key": "product-scope/v1/AU-18"
+    },
+    "AU-19": {
+      "name": "授权邮件分类与回复草稿",
+      "first_gate": "G4-B",
+      "milestone": "M5",
+      "work": [
+        "G4-W07"
+      ],
+      "acceptance": [
+        "G4-A04",
+        "G4-A07"
+      ],
+      "specification": "授权邮件分类与回复草稿 · G4 · 手动/授权邮箱事件；不默认自动发送",
+      "evidence_key": "product-scope/v1/AU-19"
+    },
+    "AU-20": {
+      "name": "团队月度成本与供给结算核对报告",
+      "first_gate": "G4-B",
+      "milestone": "M5",
+      "work": [
+        "G4-W01",
+        "G4-W07"
+      ],
+      "acceptance": [
+        "G4-A01",
+        "G4-A07"
+      ],
+      "specification": "团队月度成本与供给结算核对报告 · G4 · 定时；只读记录，不执行付款、冲正或资产交易",
+      "evidence_key": "product-scope/v1/AU-20"
+    },
+    "AU-21": {
+      "name": "新成员项目入门",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W01",
+        "G5-W02",
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A01",
+        "G5-A03",
+        "G5-A04"
+      ],
+      "specification": "新成员项目入门 · 基于授权资料的入门包和引用 · 不读取未分享的员工/客户资料",
+      "evidence_key": "product-scope/v1/AU-21"
+    },
+    "AU-22": {
+      "name": "跨库知识回答与证据核对",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W02",
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A03",
+        "G5-A04"
+      ],
+      "specification": "跨库知识回答与证据核对 · 多来源回答、冲突和版本说明 · 先ACL过滤再检索，不凭模型猜事实",
+      "evidence_key": "product-scope/v1/AU-22"
+    },
+    "AU-23": {
+      "name": "CRM记录更新提案",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A02",
+        "G5-A04"
+      ],
+      "specification": "CRM记录更新提案 · 字段差异、来源和可批准更新 · 用户批准后写入，无自动批量覆盖",
+      "evidence_key": "product-scope/v1/AU-23"
+    },
+    "AU-24": {
+      "name": "客服工单辅助",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "客服工单辅助 · 建议分类、回复草稿和依据 · 不自动发送敏感回复或承诺退款",
+      "evidence_key": "product-scope/v1/AU-24"
+    },
+    "AU-25": {
+      "name": "服务台变更审阅",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "服务台变更审阅 · 风险/影响/依赖草稿 · 不代替实际变更审批或执行",
+      "evidence_key": "product-scope/v1/AU-25"
+    },
+    "AU-26": {
+      "name": "数据质量检查",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W02",
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A03",
+        "G5-A04"
+      ],
+      "specification": "数据质量检查 · 白名单视图的异常报告 · 查询有界；不自动修改数据",
+      "evidence_key": "product-scope/v1/AU-26"
+    },
+    "AU-27": {
+      "name": "定期经营报告",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W02",
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A03",
+        "G5-A04"
+      ],
+      "specification": "定期经营报告 · 指标、图表、来源与缺失数据说明 · 读数据权限与报告分享权限分别校验",
+      "evidence_key": "product-scope/v1/AU-27"
+    },
+    "AU-28": {
+      "name": "授权/成员变化检查",
+      "first_gate": "G5-A",
+      "milestone": "M5",
+      "work": [
+        "G5-W01"
+      ],
+      "acceptance": [
+        "G5-A01",
+        "G5-A02"
+      ],
+      "specification": "授权/成员变化检查 · 应撤销的连接、任务和共享清单 · 自动撤权仍由平台确定性规则执行，模型只辅助解释",
+      "evidence_key": "product-scope/v1/AU-28"
+    },
+    "AU-29": {
+      "name": "文档保留与删除影响分析",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W02"
+      ],
+      "acceptance": [
+        "G5-A03"
+      ],
+      "specification": "文档保留与删除影响分析 · 来源谱系、派生物和待处置清单 · 模型不能自行改保留政策或销毁审计事实",
+      "evidence_key": "product-scope/v1/AU-29"
+    },
+    "AU-30": {
+      "name": "长期研究目标",
+      "first_gate": "G5-C",
+      "milestone": "M5",
+      "work": [
+        "G5-W04"
+      ],
+      "acceptance": [
+        "G5-A05"
+      ],
+      "specification": "长期研究目标 · 分阶段任务、引用和可核对预算 · 最长30天Objective，有界Run和总预算",
+      "evidence_key": "product-scope/v1/AU-30"
+    },
+    "AU-31": {
+      "name": "版本迁移影响评估",
+      "first_gate": "G5-C",
+      "milestone": "M5",
+      "work": [
+        "G5-W05"
+      ],
+      "acceptance": [
+        "G5-A06"
+      ],
+      "specification": "版本迁移影响评估 · 协议/配置/依赖影响与dry-run报告 · 不在用户生产环境自动执行迁移",
+      "evidence_key": "product-scope/v1/AU-31"
+    },
+    "AU-32": {
+      "name": "设计到实现差异审阅",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W02",
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A03",
+        "G5-A04"
+      ],
+      "specification": "设计到实现差异审阅 · 设计结构、代码/页面证据及改进提案 · 读取许可范围内设计，不自动发布应用",
+      "evidence_key": "product-scope/v1/AU-32"
+    },
+    "AU-33": {
+      "name": "算力容量规划",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W05",
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "算力容量规划 · 各池排队、模型热度和容量建议 · 扩容/预热需独立预算与批准",
+      "evidence_key": "product-scope/v1/AU-33"
+    },
+    "AU-34": {
+      "name": "区域故障辅助响应",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W05",
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A01",
+        "G6-A02",
+        "G6-A03",
+        "G6-A06"
+      ],
+      "specification": "区域故障辅助响应 · 事件时间线、影响和回退提案 · 不自动突破数据地区或变更账本主写者",
+      "evidence_key": "product-scope/v1/AU-34"
+    },
+    "AU-35": {
+      "name": "模型/引擎评测对照",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W05",
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A04",
+        "G6-A05",
+        "G6-A06"
+      ],
+      "specification": "模型/引擎评测对照 · 同环境质量、费用、延迟与资源报告 · 模拟与真机分列，不以厂商宣传值替代",
+      "evidence_key": "product-scope/v1/AU-35"
+    },
+    "AU-36": {
+      "name": "计费与用量核对",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W05",
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "计费与用量核对 · Job/usage/分录差异和待查项 · 不直接补账、冲正或退款",
+      "evidence_key": "product-scope/v1/AU-36"
+    },
+    "AU-37": {
+      "name": "依赖和扩展影响分析",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W05",
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "依赖和扩展影响分析 · 受影响版本、资源与兼容用例清单 · 不把发现版本号视作漏洞已证实；不自动装包",
+      "evidence_key": "product-scope/v1/AU-37"
+    },
+    "AU-38": {
+      "name": "发布回归与门槛汇总",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W05",
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "发布回归与门槛汇总 · 通过/失败/未测矩阵和证据入口 · 模型无权把FAIL/NOT_RUN改成PASS",
+      "evidence_key": "product-scope/v1/AU-38"
+    },
+    "AU-39": {
+      "name": "可观测数据辅助排障",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W05",
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "可观测数据辅助排障 · 授权日志/trace/指标的关联解释 · 限定租户与时间窗，敏感内容脱敏",
+      "evidence_key": "product-scope/v1/AU-39"
+    },
+    "AU-40": {
+      "name": "跨区域治理报告",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W05",
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A01",
+        "G6-A02",
+        "G6-A03",
+        "G6-A06"
+      ],
+      "specification": "跨区域治理报告 · 数据路由、授权、保留和执行证据汇总 · 报告不等同审计认证或完整计算正确性证明",
+      "evidence_key": "product-scope/v1/AU-40"
+    },
+    "CN-01/comment_issue": {
+      "name": "comment_issue",
+      "first_gate": "G4-A",
+      "milestone": "M5",
+      "work": [
+        "G4-W04"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "GitHub · comment_issue · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-01/comment_issue"
+    },
+    "CN-01/comment_pr": {
+      "name": "comment_pr",
+      "first_gate": "G4-A",
+      "milestone": "M5",
+      "work": [
+        "G4-W04"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "GitHub · comment_pr · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-01/comment_pr"
+    },
+    "CN-01/create_draft_pr": {
+      "name": "create_draft_pr",
+      "first_gate": "G4-A",
+      "milestone": "M5",
+      "work": [
+        "G4-W04"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "GitHub · create_draft_pr · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-01/create_draft_pr"
+    },
+    "CN-01/create_issue": {
+      "name": "create_issue",
+      "first_gate": "G4-A",
+      "milestone": "M5",
+      "work": [
+        "G4-W04"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "GitHub · create_issue · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-01/create_issue"
+    },
+    "CN-01/list_issues": {
+      "name": "list_issues",
+      "first_gate": "G3",
+      "milestone": "M4",
+      "work": [
+        "AG-013.04"
+      ],
+      "acceptance": [
+        "SS-02"
+      ],
+      "specification": "GitHub托管仓库 · list_issues · 只访问用户选择的仓库与允许对象；无comment/commit/push权限",
+      "evidence_key": "product-scope/v1/CN-01/list_issues"
+    },
+    "CN-01/list_pull_requests": {
+      "name": "list_pull_requests",
+      "first_gate": "G3",
+      "milestone": "M4",
+      "work": [
+        "AG-013.04"
+      ],
+      "acceptance": [
+        "SS-02"
+      ],
+      "specification": "GitHub托管仓库 · list_pull_requests · 只访问用户选择的仓库与允许对象；无comment/commit/push权限",
+      "evidence_key": "product-scope/v1/CN-01/list_pull_requests"
+    },
+    "CN-01/list_repositories": {
+      "name": "list_repositories",
+      "first_gate": "G3",
+      "milestone": "M4",
+      "work": [
+        "AG-013.04"
+      ],
+      "acceptance": [
+        "SS-02"
+      ],
+      "specification": "GitHub托管仓库 · list_repositories · 只访问用户选择的仓库与允许对象；无comment/commit/push权限",
+      "evidence_key": "product-scope/v1/CN-01/list_repositories"
+    },
+    "CN-01/read_file": {
+      "name": "read_file",
+      "first_gate": "G3",
+      "milestone": "M4",
+      "work": [
+        "AG-013.04"
+      ],
+      "acceptance": [
+        "SS-02"
+      ],
+      "specification": "GitHub托管仓库 · read_file · 只访问用户选择的仓库与允许对象；无comment/commit/push权限",
+      "evidence_key": "product-scope/v1/CN-01/read_file"
+    },
+    "CN-01/read_issue": {
+      "name": "read_issue",
+      "first_gate": "G3",
+      "milestone": "M4",
+      "work": [
+        "AG-013.04"
+      ],
+      "acceptance": [
+        "SS-02"
+      ],
+      "specification": "GitHub托管仓库 · read_issue · 只访问用户选择的仓库与允许对象；无comment/commit/push权限",
+      "evidence_key": "product-scope/v1/CN-01/read_issue"
+    },
+    "CN-01/read_pull_request": {
+      "name": "read_pull_request",
+      "first_gate": "G3",
+      "milestone": "M4",
+      "work": [
+        "AG-013.04"
+      ],
+      "acceptance": [
+        "SS-02"
+      ],
+      "specification": "GitHub托管仓库 · read_pull_request · 只访问用户选择的仓库与允许对象；无comment/commit/push权限",
+      "evidence_key": "product-scope/v1/CN-01/read_pull_request"
+    },
+    "CN-02/comment_issue": {
+      "name": "comment_issue",
+      "first_gate": "G4-A",
+      "milestone": "M5",
+      "work": [
+        "G4-W04"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "GitLab · comment_issue · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-02/comment_issue"
+    },
+    "CN-02/comment_mr": {
+      "name": "comment_mr",
+      "first_gate": "G4-A",
+      "milestone": "M5",
+      "work": [
+        "G4-W04"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "GitLab · comment_mr · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-02/comment_mr"
+    },
+    "CN-02/create_draft_mr": {
+      "name": "create_draft_mr",
+      "first_gate": "G4-A",
+      "milestone": "M5",
+      "work": [
+        "G4-W04"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "GitLab · create_draft_mr · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-02/create_draft_mr"
+    },
+    "CN-02/create_issue": {
+      "name": "create_issue",
+      "first_gate": "G4-A",
+      "milestone": "M5",
+      "work": [
+        "G4-W04"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "GitLab · create_issue · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-02/create_issue"
+    },
+    "CN-02/list_issues": {
+      "name": "list_issues",
+      "first_gate": "G3",
+      "milestone": "M4",
+      "work": [
+        "AG-013.04"
+      ],
+      "acceptance": [
+        "SS-02"
+      ],
+      "specification": "GitLab.com项目 · list_issues · 明确项目白名单；不承诺自建GitLab全版本兼容",
+      "evidence_key": "product-scope/v1/CN-02/list_issues"
+    },
+    "CN-02/list_merge_requests": {
+      "name": "list_merge_requests",
+      "first_gate": "G3",
+      "milestone": "M4",
+      "work": [
+        "AG-013.04"
+      ],
+      "acceptance": [
+        "SS-02"
+      ],
+      "specification": "GitLab.com项目 · list_merge_requests · 明确项目白名单；不承诺自建GitLab全版本兼容",
+      "evidence_key": "product-scope/v1/CN-02/list_merge_requests"
+    },
+    "CN-02/list_projects": {
+      "name": "list_projects",
+      "first_gate": "G3",
+      "milestone": "M4",
+      "work": [
+        "AG-013.04"
+      ],
+      "acceptance": [
+        "SS-02"
+      ],
+      "specification": "GitLab.com项目 · list_projects · 明确项目白名单；不承诺自建GitLab全版本兼容",
+      "evidence_key": "product-scope/v1/CN-02/list_projects"
+    },
+    "CN-02/read_file": {
+      "name": "read_file",
+      "first_gate": "G3",
+      "milestone": "M4",
+      "work": [
+        "AG-013.04"
+      ],
+      "acceptance": [
+        "SS-02"
+      ],
+      "specification": "GitLab.com项目 · read_file · 明确项目白名单；不承诺自建GitLab全版本兼容",
+      "evidence_key": "product-scope/v1/CN-02/read_file"
+    },
+    "CN-02/read_issue": {
+      "name": "read_issue",
+      "first_gate": "G3",
+      "milestone": "M4",
+      "work": [
+        "AG-013.04"
+      ],
+      "acceptance": [
+        "SS-02"
+      ],
+      "specification": "GitLab.com项目 · read_issue · 明确项目白名单；不承诺自建GitLab全版本兼容",
+      "evidence_key": "product-scope/v1/CN-02/read_issue"
+    },
+    "CN-02/read_merge_request": {
+      "name": "read_merge_request",
+      "first_gate": "G3",
+      "milestone": "M4",
+      "work": [
+        "AG-013.04"
+      ],
+      "acceptance": [
+        "SS-02"
+      ],
+      "specification": "GitLab.com项目 · read_merge_request · 明确项目白名单；不承诺自建GitLab全版本兼容",
+      "evidence_key": "product-scope/v1/CN-02/read_merge_request"
+    },
+    "CN-03/create_database_entry": {
+      "name": "create_database_entry",
+      "first_gate": "G4-A",
+      "milestone": "M5",
+      "work": [
+        "G4-W04"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "Notion · create_database_entry · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-03/create_database_entry"
+    },
+    "CN-03/create_page": {
+      "name": "create_page",
+      "first_gate": "G4-A",
+      "milestone": "M5",
+      "work": [
+        "G4-W04"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "Notion · create_page · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-03/create_page"
+    },
+    "CN-03/list_blocks": {
+      "name": "list_blocks",
+      "first_gate": "G3",
+      "milestone": "M4",
+      "work": [
+        "AG-013.04"
+      ],
+      "acceptance": [
+        "SS-02"
+      ],
+      "specification": "Notion页面/数据库内容 · list_blocks · 仅显式分享给集成的页面与数据库；不读取整个工作区",
+      "evidence_key": "product-scope/v1/CN-03/list_blocks"
+    },
+    "CN-03/query_database": {
+      "name": "query_database",
+      "first_gate": "G3",
+      "milestone": "M4",
+      "work": [
+        "AG-013.04"
+      ],
+      "acceptance": [
+        "SS-02"
+      ],
+      "specification": "Notion页面/数据库内容 · query_database · 仅显式分享给集成的页面与数据库；不读取整个工作区",
+      "evidence_key": "product-scope/v1/CN-03/query_database"
+    },
+    "CN-03/read_page": {
+      "name": "read_page",
+      "first_gate": "G3",
+      "milestone": "M4",
+      "work": [
+        "AG-013.04"
+      ],
+      "acceptance": [
+        "SS-02"
+      ],
+      "specification": "Notion页面/数据库内容 · read_page · 仅显式分享给集成的页面与数据库；不读取整个工作区",
+      "evidence_key": "product-scope/v1/CN-03/read_page"
+    },
+    "CN-03/search_pages": {
+      "name": "search_pages",
+      "first_gate": "G3",
+      "milestone": "M4",
+      "work": [
+        "AG-013.04"
+      ],
+      "acceptance": [
+        "SS-02"
+      ],
+      "specification": "Notion页面/数据库内容 · search_pages · 仅显式分享给集成的页面与数据库；不读取整个工作区",
+      "evidence_key": "product-scope/v1/CN-03/search_pages"
+    },
+    "CN-03/update_blocks": {
+      "name": "update_blocks",
+      "first_gate": "G4-A",
+      "milestone": "M5",
+      "work": [
+        "G4-W04"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "Notion · update_blocks · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-03/update_blocks"
+    },
+    "CN-04/create_page": {
+      "name": "create_page",
+      "first_gate": "G4-A",
+      "milestone": "M5",
+      "work": [
+        "G4-W04"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "Confluence Cloud · create_page · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-04/create_page"
+    },
+    "CN-04/list_children": {
+      "name": "list_children",
+      "first_gate": "G3",
+      "milestone": "M4",
+      "work": [
+        "AG-013.04"
+      ],
+      "acceptance": [
+        "SS-02"
+      ],
+      "specification": "Confluence Cloud · list_children · 单租户site与space白名单；附件进入隔离artifact",
+      "evidence_key": "product-scope/v1/CN-04/list_children"
+    },
+    "CN-04/read_attachment": {
+      "name": "read_attachment",
+      "first_gate": "G3",
+      "milestone": "M4",
+      "work": [
+        "AG-013.04"
+      ],
+      "acceptance": [
+        "SS-02"
+      ],
+      "specification": "Confluence Cloud · read_attachment · 单租户site与space白名单；附件进入隔离artifact",
+      "evidence_key": "product-scope/v1/CN-04/read_attachment"
+    },
+    "CN-04/read_page": {
+      "name": "read_page",
+      "first_gate": "G3",
+      "milestone": "M4",
+      "work": [
+        "AG-013.04"
+      ],
+      "acceptance": [
+        "SS-02"
+      ],
+      "specification": "Confluence Cloud · read_page · 单租户site与space白名单；附件进入隔离artifact",
+      "evidence_key": "product-scope/v1/CN-04/read_page"
+    },
+    "CN-04/search_pages": {
+      "name": "search_pages",
+      "first_gate": "G3",
+      "milestone": "M4",
+      "work": [
+        "AG-013.04"
+      ],
+      "acceptance": [
+        "SS-02"
+      ],
+      "specification": "Confluence Cloud · search_pages · 单租户site与space白名单；附件进入隔离artifact",
+      "evidence_key": "product-scope/v1/CN-04/search_pages"
+    },
+    "CN-04/update_page": {
+      "name": "update_page",
+      "first_gate": "G4-A",
+      "milestone": "M5",
+      "work": [
+        "G4-W04"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "Confluence Cloud · update_page · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-04/update_page"
+    },
+    "CN-05/describe_view": {
+      "name": "describe_view",
+      "first_gate": "G3",
+      "milestone": "M4",
+      "work": [
+        "AG-013.04"
+      ],
+      "acceptance": [
+        "SS-02"
+      ],
+      "specification": "用户授权PostgreSQL数据源 · describe_view · 专用只读角色、只读事务和经审核视图；无任意SQL/函数调用",
+      "evidence_key": "product-scope/v1/CN-05/describe_view"
+    },
+    "CN-05/list_views": {
+      "name": "list_views",
+      "first_gate": "G3",
+      "milestone": "M4",
+      "work": [
+        "AG-013.04"
+      ],
+      "acceptance": [
+        "SS-02"
+      ],
+      "specification": "用户授权PostgreSQL数据源 · list_views · 专用只读角色、只读事务和经审核视图；无任意SQL/函数调用",
+      "evidence_key": "product-scope/v1/CN-05/list_views"
+    },
+    "CN-05/query_view": {
+      "name": "query_view",
+      "first_gate": "G3",
+      "milestone": "M4",
+      "work": [
+        "AG-013.04"
+      ],
+      "acceptance": [
+        "SS-02"
+      ],
+      "specification": "用户授权PostgreSQL数据源 · query_view · 专用只读角色、只读事务和经审核视图；无任意SQL/函数调用",
+      "evidence_key": "product-scope/v1/CN-05/query_view"
+    },
+    "CN-06/head_object": {
+      "name": "head_object",
+      "first_gate": "G3",
+      "milestone": "M4",
+      "work": [
+        "AG-013.04"
+      ],
+      "acceptance": [
+        "SS-02"
+      ],
+      "specification": "用户授权S3兼容数据桶 · head_object · 指定bucket/prefix；仅读源数据，凭证与平台产物桶分离",
+      "evidence_key": "product-scope/v1/CN-06/head_object"
+    },
+    "CN-06/list_objects": {
+      "name": "list_objects",
+      "first_gate": "G3",
+      "milestone": "M4",
+      "work": [
+        "AG-013.04"
+      ],
+      "acceptance": [
+        "SS-02"
+      ],
+      "specification": "用户授权S3兼容数据桶 · list_objects · 指定bucket/prefix；仅读源数据，凭证与平台产物桶分离",
+      "evidence_key": "product-scope/v1/CN-06/list_objects"
+    },
+    "CN-06/put_new_object": {
+      "name": "put_new_object",
+      "first_gate": "G4-A",
+      "milestone": "M5",
+      "work": [
+        "G4-W04"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "S3兼容数据桶 · put_new_object · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-06/put_new_object"
+    },
+    "CN-06/read_object": {
+      "name": "read_object",
+      "first_gate": "G3",
+      "milestone": "M4",
+      "work": [
+        "AG-013.04"
+      ],
+      "acceptance": [
+        "SS-02"
+      ],
+      "specification": "用户授权S3兼容数据桶 · read_object · 指定bucket/prefix；仅读源数据，凭证与平台产物桶分离",
+      "evidence_key": "product-scope/v1/CN-06/read_object"
+    },
+    "CN-07/create_message_draft": {
+      "name": "create_message_draft",
+      "first_gate": "G4-B",
+      "milestone": "M5",
+      "work": [
+        "G4-W07"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "Slack · create_message_draft · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-07/create_message_draft"
+    },
+    "CN-07/list_channels": {
+      "name": "list_channels",
+      "first_gate": "G4-B",
+      "milestone": "M5",
+      "work": [
+        "G4-W07"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "Slack · list_channels · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-07/list_channels"
+    },
+    "CN-07/read_thread": {
+      "name": "read_thread",
+      "first_gate": "G4-B",
+      "milestone": "M5",
+      "work": [
+        "G4-W07"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "Slack · read_thread · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-07/read_thread"
+    },
+    "CN-07/search_messages": {
+      "name": "search_messages",
+      "first_gate": "G4-B",
+      "milestone": "M5",
+      "work": [
+        "G4-W07"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "Slack · search_messages · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-07/search_messages"
+    },
+    "CN-07/send_approved_message": {
+      "name": "send_approved_message",
+      "first_gate": "G4-B",
+      "milestone": "M5",
+      "work": [
+        "G4-W07"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "Slack · send_approved_message · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-07/send_approved_message"
+    },
+    "CN-08/create_message_draft": {
+      "name": "create_message_draft",
+      "first_gate": "G4-B",
+      "milestone": "M5",
+      "work": [
+        "G4-W07"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "Microsoft Teams · create_message_draft · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-08/create_message_draft"
+    },
+    "CN-08/list_channels": {
+      "name": "list_channels",
+      "first_gate": "G4-B",
+      "milestone": "M5",
+      "work": [
+        "G4-W07"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "Microsoft Teams · list_channels · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-08/list_channels"
+    },
+    "CN-08/read_thread": {
+      "name": "read_thread",
+      "first_gate": "G4-B",
+      "milestone": "M5",
+      "work": [
+        "G4-W07"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "Microsoft Teams · read_thread · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-08/read_thread"
+    },
+    "CN-08/send_approved_message": {
+      "name": "send_approved_message",
+      "first_gate": "G4-B",
+      "milestone": "M5",
+      "work": [
+        "G4-W07"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "Microsoft Teams · send_approved_message · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-08/send_approved_message"
+    },
+    "CN-09/export_document": {
+      "name": "export_document",
+      "first_gate": "G4-A",
+      "milestone": "M5",
+      "work": [
+        "G4-W04"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "Google Drive · export_document · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-09/export_document"
+    },
+    "CN-09/read_file": {
+      "name": "read_file",
+      "first_gate": "G4-A",
+      "milestone": "M5",
+      "work": [
+        "G4-W04"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "Google Drive · read_file · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-09/read_file"
+    },
+    "CN-09/search_files": {
+      "name": "search_files",
+      "first_gate": "G4-A",
+      "milestone": "M5",
+      "work": [
+        "G4-W04"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "Google Drive · search_files · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-09/search_files"
+    },
+    "CN-09/upload_new_file": {
+      "name": "upload_new_file",
+      "first_gate": "G4-A",
+      "milestone": "M5",
+      "work": [
+        "G4-W04"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "Google Drive · upload_new_file · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-09/upload_new_file"
+    },
+    "CN-10/download_file": {
+      "name": "download_file",
+      "first_gate": "G4-A",
+      "milestone": "M5",
+      "work": [
+        "G4-W04"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "OneDrive/SharePoint文档 · download_file · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-10/download_file"
+    },
+    "CN-10/read_file": {
+      "name": "read_file",
+      "first_gate": "G4-A",
+      "milestone": "M5",
+      "work": [
+        "G4-W04"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "OneDrive/SharePoint文档 · read_file · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-10/read_file"
+    },
+    "CN-10/search_files": {
+      "name": "search_files",
+      "first_gate": "G4-A",
+      "milestone": "M5",
+      "work": [
+        "G4-W04"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "OneDrive/SharePoint文档 · search_files · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-10/search_files"
+    },
+    "CN-10/upload_new_file": {
+      "name": "upload_new_file",
+      "first_gate": "G4-A",
+      "milestone": "M5",
+      "work": [
+        "G4-W04"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "OneDrive/SharePoint文档 · upload_new_file · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-10/upload_new_file"
+    },
+    "CN-11/comment_issue": {
+      "name": "comment_issue",
+      "first_gate": "G4-B",
+      "milestone": "M5",
+      "work": [
+        "G4-W07"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "Jira Cloud · comment_issue · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-11/comment_issue"
+    },
+    "CN-11/create_issue": {
+      "name": "create_issue",
+      "first_gate": "G4-B",
+      "milestone": "M5",
+      "work": [
+        "G4-W07"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "Jira Cloud · create_issue · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-11/create_issue"
+    },
+    "CN-11/read_issue": {
+      "name": "read_issue",
+      "first_gate": "G4-B",
+      "milestone": "M5",
+      "work": [
+        "G4-W07"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "Jira Cloud · read_issue · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-11/read_issue"
+    },
+    "CN-11/search_issues": {
+      "name": "search_issues",
+      "first_gate": "G4-B",
+      "milestone": "M5",
+      "work": [
+        "G4-W07"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "Jira Cloud · search_issues · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-11/search_issues"
+    },
+    "CN-11/transition_issue": {
+      "name": "transition_issue",
+      "first_gate": "G4-B",
+      "milestone": "M5",
+      "work": [
+        "G4-W07"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "Jira Cloud · transition_issue · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-11/transition_issue"
+    },
+    "CN-12/comment_issue": {
+      "name": "comment_issue",
+      "first_gate": "G4-B",
+      "milestone": "M5",
+      "work": [
+        "G4-W07"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "Linear · comment_issue · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-12/comment_issue"
+    },
+    "CN-12/create_issue": {
+      "name": "create_issue",
+      "first_gate": "G4-B",
+      "milestone": "M5",
+      "work": [
+        "G4-W07"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "Linear · create_issue · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-12/create_issue"
+    },
+    "CN-12/list_issues": {
+      "name": "list_issues",
+      "first_gate": "G4-B",
+      "milestone": "M5",
+      "work": [
+        "G4-W07"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "Linear · list_issues · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-12/list_issues"
+    },
+    "CN-12/read_issue": {
+      "name": "read_issue",
+      "first_gate": "G4-B",
+      "milestone": "M5",
+      "work": [
+        "G4-W07"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "Linear · read_issue · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-12/read_issue"
+    },
+    "CN-13/create_draft": {
+      "name": "create_draft",
+      "first_gate": "G4-B",
+      "milestone": "M5",
+      "work": [
+        "G4-W07"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "Gmail · create_draft · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-13/create_draft"
+    },
+    "CN-13/read_message": {
+      "name": "read_message",
+      "first_gate": "G4-B",
+      "milestone": "M5",
+      "work": [
+        "G4-W07"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "Gmail · read_message · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-13/read_message"
+    },
+    "CN-13/search_messages": {
+      "name": "search_messages",
+      "first_gate": "G4-B",
+      "milestone": "M5",
+      "work": [
+        "G4-W07"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "Gmail · search_messages · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-13/search_messages"
+    },
+    "CN-13/send_approved_draft": {
+      "name": "send_approved_draft",
+      "first_gate": "G4-B",
+      "milestone": "M5",
+      "work": [
+        "G4-W07"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "Gmail · send_approved_draft · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-13/send_approved_draft"
+    },
+    "CN-14/create_draft": {
+      "name": "create_draft",
+      "first_gate": "G4-B",
+      "milestone": "M5",
+      "work": [
+        "G4-W07"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "Outlook Mail · create_draft · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-14/create_draft"
+    },
+    "CN-14/list_messages": {
+      "name": "list_messages",
+      "first_gate": "G4-B",
+      "milestone": "M5",
+      "work": [
+        "G4-W07"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "Outlook Mail · list_messages · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-14/list_messages"
+    },
+    "CN-14/read_message": {
+      "name": "read_message",
+      "first_gate": "G4-B",
+      "milestone": "M5",
+      "work": [
+        "G4-W07"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "Outlook Mail · read_message · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-14/read_message"
+    },
+    "CN-14/send_approved_draft": {
+      "name": "send_approved_draft",
+      "first_gate": "G4-B",
+      "milestone": "M5",
+      "work": [
+        "G4-W07"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "Outlook Mail · send_approved_draft · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-14/send_approved_draft"
+    },
+    "CN-15/create_event": {
+      "name": "create_event",
+      "first_gate": "G4-B",
+      "milestone": "M5",
+      "work": [
+        "G4-W07"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "Google Calendar · create_event · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-15/create_event"
+    },
+    "CN-15/list_events": {
+      "name": "list_events",
+      "first_gate": "G4-B",
+      "milestone": "M5",
+      "work": [
+        "G4-W07"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "Google Calendar · list_events · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-15/list_events"
+    },
+    "CN-15/read_event": {
+      "name": "read_event",
+      "first_gate": "G4-B",
+      "milestone": "M5",
+      "work": [
+        "G4-W07"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "Google Calendar · read_event · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-15/read_event"
+    },
+    "CN-16/create_event": {
+      "name": "create_event",
+      "first_gate": "G4-B",
+      "milestone": "M5",
+      "work": [
+        "G4-W07"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "Microsoft Calendar · create_event · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-16/create_event"
+    },
+    "CN-16/list_events": {
+      "name": "list_events",
+      "first_gate": "G4-B",
+      "milestone": "M5",
+      "work": [
+        "G4-W07"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "Microsoft Calendar · list_events · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-16/list_events"
+    },
+    "CN-16/read_event": {
+      "name": "read_event",
+      "first_gate": "G4-B",
+      "milestone": "M5",
+      "work": [
+        "G4-W07"
+      ],
+      "acceptance": [
+        "G4-A04"
+      ],
+      "specification": "Microsoft Calendar · read_event · 已授权对象域，撤权后拒绝。写操作验证批准、幂等和结果未知后恢复。",
+      "evidence_key": "product-scope/v1/CN-16/read_event"
+    },
+    "CN-17/列出授权文档": {
+      "name": "列出授权文档",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "飞书协作文档/消息 · 列出授权文档 · 文档与消息分别取最小scope",
+      "evidence_key": "product-scope/v1/CN-17/列出授权文档"
+    },
+    "CN-17/创建文档草稿": {
+      "name": "创建文档草稿",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "飞书协作文档/消息 · 创建文档草稿 · 文档与消息分别取最小scope",
+      "evidence_key": "product-scope/v1/CN-17/创建文档草稿"
+    },
+    "CN-17/发送已批准消息": {
+      "name": "发送已批准消息",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "飞书协作文档/消息 · 发送已批准消息 · 文档与消息分别取最小scope",
+      "evidence_key": "product-scope/v1/CN-17/发送已批准消息"
+    },
+    "CN-17/读取文档": {
+      "name": "读取文档",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "飞书协作文档/消息 · 读取文档 · 文档与消息分别取最小scope",
+      "evidence_key": "product-scope/v1/CN-17/读取文档"
+    },
+    "CN-18/列出授权空间": {
+      "name": "列出授权空间",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "钉钉协作文档/消息 · 列出授权空间 · 不因组织登录获得全部员工资料",
+      "evidence_key": "product-scope/v1/CN-18/列出授权空间"
+    },
+    "CN-18/创建文档草稿": {
+      "name": "创建文档草稿",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "钉钉协作文档/消息 · 创建文档草稿 · 不因组织登录获得全部员工资料",
+      "evidence_key": "product-scope/v1/CN-18/创建文档草稿"
+    },
+    "CN-18/发送已批准消息": {
+      "name": "发送已批准消息",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "钉钉协作文档/消息 · 发送已批准消息 · 不因组织登录获得全部员工资料",
+      "evidence_key": "product-scope/v1/CN-18/发送已批准消息"
+    },
+    "CN-18/读取文档": {
+      "name": "读取文档",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "钉钉协作文档/消息 · 读取文档 · 不因组织登录获得全部员工资料",
+      "evidence_key": "product-scope/v1/CN-18/读取文档"
+    },
+    "CN-19/列出授权文档": {
+      "name": "列出授权文档",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "企业微信授权协作 · 列出授权文档 · 账号/应用权限单独验证",
+      "evidence_key": "product-scope/v1/CN-19/列出授权文档"
+    },
+    "CN-19/创建文档草稿": {
+      "name": "创建文档草稿",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "企业微信授权协作 · 创建文档草稿 · 账号/应用权限单独验证",
+      "evidence_key": "product-scope/v1/CN-19/创建文档草稿"
+    },
+    "CN-19/发送已批准消息": {
+      "name": "发送已批准消息",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "企业微信授权协作 · 发送已批准消息 · 账号/应用权限单独验证",
+      "evidence_key": "product-scope/v1/CN-19/发送已批准消息"
+    },
+    "CN-19/读取文档": {
+      "name": "读取文档",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "企业微信授权协作 · 读取文档 · 账号/应用权限单独验证",
+      "evidence_key": "product-scope/v1/CN-19/读取文档"
+    },
+    "CN-20/上传新文件": {
+      "name": "上传新文件",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "Dropbox · 上传新文件 · 禁止覆盖/删除，链接分享另授权",
+      "evidence_key": "product-scope/v1/CN-20/上传新文件"
+    },
+    "CN-20/下载文件": {
+      "name": "下载文件",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "Dropbox · 下载文件 · 禁止覆盖/删除，链接分享另授权",
+      "evidence_key": "product-scope/v1/CN-20/下载文件"
+    },
+    "CN-20/列出目录": {
+      "name": "列出目录",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "Dropbox · 列出目录 · 禁止覆盖/删除，链接分享另授权",
+      "evidence_key": "product-scope/v1/CN-20/列出目录"
+    },
+    "CN-20/读取元数据": {
+      "name": "读取元数据",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "Dropbox · 读取元数据 · 禁止覆盖/删除，链接分享另授权",
+      "evidence_key": "product-scope/v1/CN-20/读取元数据"
+    },
+    "CN-21/上传新文件": {
+      "name": "上传新文件",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "Box · 上传新文件 · 明确企业租户和协作目录",
+      "evidence_key": "product-scope/v1/CN-21/上传新文件"
+    },
+    "CN-21/下载文件": {
+      "name": "下载文件",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "Box · 下载文件 · 明确企业租户和协作目录",
+      "evidence_key": "product-scope/v1/CN-21/下载文件"
+    },
+    "CN-21/搜索文件": {
+      "name": "搜索文件",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "Box · 搜索文件 · 明确企业租户和协作目录",
+      "evidence_key": "product-scope/v1/CN-21/搜索文件"
+    },
+    "CN-21/读取元数据": {
+      "name": "读取元数据",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "Box · 读取元数据 · 明确企业租户和协作目录",
+      "evidence_key": "product-scope/v1/CN-21/读取元数据"
+    },
+    "CN-22/列出目录": {
+      "name": "列出目录",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "WebDAV文档库 · 列出目录 · 固定服务端配置；不宣称所有实现通用",
+      "evidence_key": "product-scope/v1/CN-22/列出目录"
+    },
+    "CN-22/创建新文件": {
+      "name": "创建新文件",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "WebDAV文档库 · 创建新文件 · 固定服务端配置；不宣称所有实现通用",
+      "evidence_key": "product-scope/v1/CN-22/创建新文件"
+    },
+    "CN-22/读取元数据": {
+      "name": "读取元数据",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "WebDAV文档库 · 读取元数据 · 固定服务端配置；不宣称所有实现通用",
+      "evidence_key": "product-scope/v1/CN-22/读取元数据"
+    },
+    "CN-22/读取文件": {
+      "name": "读取文件",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "WebDAV文档库 · 读取文件 · 固定服务端配置；不宣称所有实现通用",
+      "evidence_key": "product-scope/v1/CN-22/读取文件"
+    },
+    "CN-23/列出视图": {
+      "name": "列出视图",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "MySQL登记数据视图 · 列出视图 · 只读专用角色，不开放原始SQL",
+      "evidence_key": "product-scope/v1/CN-23/列出视图"
+    },
+    "CN-23/参数化查询": {
+      "name": "参数化查询",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "MySQL登记数据视图 · 参数化查询 · 只读专用角色，不开放原始SQL",
+      "evidence_key": "product-scope/v1/CN-23/参数化查询"
+    },
+    "CN-23/导出指定结果": {
+      "name": "导出指定结果",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "MySQL登记数据视图 · 导出指定结果 · 只读专用角色，不开放原始SQL",
+      "evidence_key": "product-scope/v1/CN-23/导出指定结果"
+    },
+    "CN-23/描述视图": {
+      "name": "描述视图",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "MySQL登记数据视图 · 描述视图 · 只读专用角色，不开放原始SQL",
+      "evidence_key": "product-scope/v1/CN-23/描述视图"
+    },
+    "CN-24/列出视图": {
+      "name": "列出视图",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "ClickHouse登记视图 · 列出视图 · 扫描/时间/行数限制，不能拖垮数据源",
+      "evidence_key": "product-scope/v1/CN-24/列出视图"
+    },
+    "CN-24/导出指定结果": {
+      "name": "导出指定结果",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "ClickHouse登记视图 · 导出指定结果 · 扫描/时间/行数限制，不能拖垮数据源",
+      "evidence_key": "product-scope/v1/CN-24/导出指定结果"
+    },
+    "CN-24/描述视图": {
+      "name": "描述视图",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "ClickHouse登记视图 · 描述视图 · 扫描/时间/行数限制，不能拖垮数据源",
+      "evidence_key": "product-scope/v1/CN-24/描述视图"
+    },
+    "CN-24/有界查询": {
+      "name": "有界查询",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "ClickHouse登记视图 · 有界查询 · 扫描/时间/行数限制，不能拖垮数据源",
+      "evidence_key": "product-scope/v1/CN-24/有界查询"
+    },
+    "CN-25/列出数据集": {
+      "name": "列出数据集",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "BigQuery登记数据集 · 列出数据集 · 查询可能收费，必须有调用者授权及费用上界",
+      "evidence_key": "product-scope/v1/CN-25/列出数据集"
+    },
+    "CN-25/描述表": {
+      "name": "描述表",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "BigQuery登记数据集 · 描述表 · 查询可能收费，必须有调用者授权及费用上界",
+      "evidence_key": "product-scope/v1/CN-25/描述表"
+    },
+    "CN-25/提交有界只读查询": {
+      "name": "提交有界只读查询",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "BigQuery登记数据集 · 提交有界只读查询 · 查询可能收费，必须有调用者授权及费用上界",
+      "evidence_key": "product-scope/v1/CN-25/提交有界只读查询"
+    },
+    "CN-25/查询结果状态": {
+      "name": "查询结果状态",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "BigQuery登记数据集 · 查询结果状态 · 查询可能收费，必须有调用者授权及费用上界",
+      "evidence_key": "product-scope/v1/CN-25/查询结果状态"
+    },
+    "CN-26/列出授权schema": {
+      "name": "列出授权schema",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "Snowflake登记视图 · 列出授权schema · 固定角色和资源额度，不自动扩大计算仓库",
+      "evidence_key": "product-scope/v1/CN-26/列出授权schema"
+    },
+    "CN-26/描述视图": {
+      "name": "描述视图",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "Snowflake登记视图 · 描述视图 · 固定角色和资源额度，不自动扩大计算仓库",
+      "evidence_key": "product-scope/v1/CN-26/描述视图"
+    },
+    "CN-26/有界只读查询": {
+      "name": "有界只读查询",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "Snowflake登记视图 · 有界只读查询 · 固定角色和资源额度，不自动扩大计算仓库",
+      "evidence_key": "product-scope/v1/CN-26/有界只读查询"
+    },
+    "CN-26/查询状态": {
+      "name": "查询状态",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "Snowflake登记视图 · 查询状态 · 固定角色和资源额度，不自动扩大计算仓库",
+      "evidence_key": "product-scope/v1/CN-26/查询状态"
+    },
+    "CN-27/应用已批准更新": {
+      "name": "应用已批准更新",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "Salesforce授权记录 · 应用已批准更新 · 记录/字段ACL；无批量删除",
+      "evidence_key": "product-scope/v1/CN-27/应用已批准更新"
+    },
+    "CN-27/搜索记录": {
+      "name": "搜索记录",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "Salesforce授权记录 · 搜索记录 · 记录/字段ACL；无批量删除",
+      "evidence_key": "product-scope/v1/CN-27/搜索记录"
+    },
+    "CN-27/生成更新提案": {
+      "name": "生成更新提案",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "Salesforce授权记录 · 生成更新提案 · 记录/字段ACL；无批量删除",
+      "evidence_key": "product-scope/v1/CN-27/生成更新提案"
+    },
+    "CN-27/读取记录": {
+      "name": "读取记录",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "Salesforce授权记录 · 读取记录 · 记录/字段ACL；无批量删除",
+      "evidence_key": "product-scope/v1/CN-27/读取记录"
+    },
+    "CN-28/应用已批准更新": {
+      "name": "应用已批准更新",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "HubSpot授权记录 · 应用已批准更新 · 不自动开展群发或未授权营销",
+      "evidence_key": "product-scope/v1/CN-28/应用已批准更新"
+    },
+    "CN-28/搜索记录": {
+      "name": "搜索记录",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "HubSpot授权记录 · 搜索记录 · 不自动开展群发或未授权营销",
+      "evidence_key": "product-scope/v1/CN-28/搜索记录"
+    },
+    "CN-28/生成更新提案": {
+      "name": "生成更新提案",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "HubSpot授权记录 · 生成更新提案 · 不自动开展群发或未授权营销",
+      "evidence_key": "product-scope/v1/CN-28/生成更新提案"
+    },
+    "CN-28/读取记录": {
+      "name": "读取记录",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "HubSpot授权记录 · 读取记录 · 不自动开展群发或未授权营销",
+      "evidence_key": "product-scope/v1/CN-28/读取记录"
+    },
+    "CN-29/创建评论草稿": {
+      "name": "创建评论草稿",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "Zendesk工单 · 创建评论草稿 · 外部发送与内部注释分开授权",
+      "evidence_key": "product-scope/v1/CN-29/创建评论草稿"
+    },
+    "CN-29/发布已批准评论": {
+      "name": "发布已批准评论",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "Zendesk工单 · 发布已批准评论 · 外部发送与内部注释分开授权",
+      "evidence_key": "product-scope/v1/CN-29/发布已批准评论"
+    },
+    "CN-29/搜索工单": {
+      "name": "搜索工单",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "Zendesk工单 · 搜索工单 · 外部发送与内部注释分开授权",
+      "evidence_key": "product-scope/v1/CN-29/搜索工单"
+    },
+    "CN-29/读取工单": {
+      "name": "读取工单",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "Zendesk工单 · 读取工单 · 外部发送与内部注释分开授权",
+      "evidence_key": "product-scope/v1/CN-29/读取工单"
+    },
+    "CN-30/创建变更草稿": {
+      "name": "创建变更草稿",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "ServiceNow授权记录 · 创建变更草稿 · 不把提交记录等同于基础设施变更已执行",
+      "evidence_key": "product-scope/v1/CN-30/创建变更草稿"
+    },
+    "CN-30/提交已批准变更": {
+      "name": "提交已批准变更",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "ServiceNow授权记录 · 提交已批准变更 · 不把提交记录等同于基础设施变更已执行",
+      "evidence_key": "product-scope/v1/CN-30/提交已批准变更"
+    },
+    "CN-30/搜索记录": {
+      "name": "搜索记录",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "ServiceNow授权记录 · 搜索记录 · 不把提交记录等同于基础设施变更已执行",
+      "evidence_key": "product-scope/v1/CN-30/搜索记录"
+    },
+    "CN-30/读取记录": {
+      "name": "读取记录",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "ServiceNow授权记录 · 读取记录 · 不把提交记录等同于基础设施变更已执行",
+      "evidence_key": "product-scope/v1/CN-30/读取记录"
+    },
+    "CN-31/列出批准模型": {
+      "name": "列出批准模型",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "Odoo批准对象域 · 列出批准模型 · 不开放任意模型方法/付款操作",
+      "evidence_key": "product-scope/v1/CN-31/列出批准模型"
+    },
+    "CN-31/创建已批准草稿": {
+      "name": "创建已批准草稿",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "Odoo批准对象域 · 创建已批准草稿 · 不开放任意模型方法/付款操作",
+      "evidence_key": "product-scope/v1/CN-31/创建已批准草稿"
+    },
+    "CN-31/描述模型": {
+      "name": "描述模型",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "Odoo批准对象域 · 描述模型 · 不开放任意模型方法/付款操作",
+      "evidence_key": "product-scope/v1/CN-31/描述模型"
+    },
+    "CN-31/读取记录": {
+      "name": "读取记录",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "Odoo批准对象域 · 读取记录 · 不开放任意模型方法/付款操作",
+      "evidence_key": "product-scope/v1/CN-31/读取记录"
+    },
+    "CN-32/列出文件": {
+      "name": "列出文件",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "Figma授权设计 · 列出文件 · 版本和资源ACL，素材许可另核对",
+      "evidence_key": "product-scope/v1/CN-32/列出文件"
+    },
+    "CN-32/发布已批准评论": {
+      "name": "发布已批准评论",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "Figma授权设计 · 发布已批准评论 · 版本和资源ACL，素材许可另核对",
+      "evidence_key": "product-scope/v1/CN-32/发布已批准评论"
+    },
+    "CN-32/读取设计结构": {
+      "name": "读取设计结构",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "Figma授权设计 · 读取设计结构 · 版本和资源ACL，素材许可另核对",
+      "evidence_key": "product-scope/v1/CN-32/读取设计结构"
+    },
+    "CN-32/读取评论": {
+      "name": "读取评论",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W03"
+      ],
+      "acceptance": [
+        "G5-A04"
+      ],
+      "specification": "Figma授权设计 · 读取评论 · 版本和资源ACL，素材许可另核对",
+      "evidence_key": "product-scope/v1/CN-32/读取评论"
+    },
+    "CN-33/列出workload": {
+      "name": "列出workload",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "Kubernetes授权namespace · 列出workload · 只读；不exec、不修改集群",
+      "evidence_key": "product-scope/v1/CN-33/列出workload"
+    },
+    "CN-33/描述workload": {
+      "name": "描述workload",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "Kubernetes授权namespace · 描述workload · 只读；不exec、不修改集群",
+      "evidence_key": "product-scope/v1/CN-33/描述workload"
+    },
+    "CN-33/读取事件": {
+      "name": "读取事件",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "Kubernetes授权namespace · 读取事件 · 只读；不exec、不修改集群",
+      "evidence_key": "product-scope/v1/CN-33/读取事件"
+    },
+    "CN-33/读取有界日志": {
+      "name": "读取有界日志",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "Kubernetes授权namespace · 读取有界日志 · 只读；不exec、不修改集群",
+      "evidence_key": "product-scope/v1/CN-33/读取有界日志"
+    },
+    "CN-34/列出授权实例": {
+      "name": "列出授权实例",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "AWS计算资源目录 · 列出授权实例 · 不创建/删除资源，不扩大IAM权限",
+      "evidence_key": "product-scope/v1/CN-34/列出授权实例"
+    },
+    "CN-34/生成成本估计": {
+      "name": "生成成本估计",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "AWS计算资源目录 · 生成成本估计 · 不创建/删除资源，不扩大IAM权限",
+      "evidence_key": "product-scope/v1/CN-34/生成成本估计"
+    },
+    "CN-34/读取实例状态": {
+      "name": "读取实例状态",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "AWS计算资源目录 · 读取实例状态 · 不创建/删除资源，不扩大IAM权限",
+      "evidence_key": "product-scope/v1/CN-34/读取实例状态"
+    },
+    "CN-34/读取资源指标": {
+      "name": "读取资源指标",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "AWS计算资源目录 · 读取资源指标 · 不创建/删除资源，不扩大IAM权限",
+      "evidence_key": "product-scope/v1/CN-34/读取资源指标"
+    },
+    "CN-35/列出授权实例": {
+      "name": "列出授权实例",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "Azure计算资源目录 · 列出授权实例 · 限定订阅/资源组，估计不是账单事实",
+      "evidence_key": "product-scope/v1/CN-35/列出授权实例"
+    },
+    "CN-35/生成成本估计": {
+      "name": "生成成本估计",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "Azure计算资源目录 · 生成成本估计 · 限定订阅/资源组，估计不是账单事实",
+      "evidence_key": "product-scope/v1/CN-35/生成成本估计"
+    },
+    "CN-35/读取实例状态": {
+      "name": "读取实例状态",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "Azure计算资源目录 · 读取实例状态 · 限定订阅/资源组，估计不是账单事实",
+      "evidence_key": "product-scope/v1/CN-35/读取实例状态"
+    },
+    "CN-35/读取资源指标": {
+      "name": "读取资源指标",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "Azure计算资源目录 · 读取资源指标 · 限定订阅/资源组，估计不是账单事实",
+      "evidence_key": "product-scope/v1/CN-35/读取资源指标"
+    },
+    "CN-36/列出授权实例": {
+      "name": "列出授权实例",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "Google Cloud计算资源目录 · 列出授权实例 · 限定项目，不代用户购买算力",
+      "evidence_key": "product-scope/v1/CN-36/列出授权实例"
+    },
+    "CN-36/生成成本估计": {
+      "name": "生成成本估计",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "Google Cloud计算资源目录 · 生成成本估计 · 限定项目，不代用户购买算力",
+      "evidence_key": "product-scope/v1/CN-36/生成成本估计"
+    },
+    "CN-36/读取实例状态": {
+      "name": "读取实例状态",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "Google Cloud计算资源目录 · 读取实例状态 · 限定项目，不代用户购买算力",
+      "evidence_key": "product-scope/v1/CN-36/读取实例状态"
+    },
+    "CN-36/读取资源指标": {
+      "name": "读取资源指标",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "Google Cloud计算资源目录 · 读取资源指标 · 限定项目，不代用户购买算力",
+      "evidence_key": "product-scope/v1/CN-36/读取资源指标"
+    },
+    "CN-37/列出工作区": {
+      "name": "列出工作区",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "Terraform Cloud工作区 · 列出工作区 · 只读；不触发apply或泄露state秘密",
+      "evidence_key": "product-scope/v1/CN-37/列出工作区"
+    },
+    "CN-37/读取plan": {
+      "name": "读取plan",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "Terraform Cloud工作区 · 读取plan · 只读；不触发apply或泄露state秘密",
+      "evidence_key": "product-scope/v1/CN-37/读取plan"
+    },
+    "CN-37/读取run": {
+      "name": "读取run",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "Terraform Cloud工作区 · 读取run · 只读；不触发apply或泄露state秘密",
+      "evidence_key": "product-scope/v1/CN-37/读取run"
+    },
+    "CN-37/读取脱敏输出": {
+      "name": "读取脱敏输出",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "Terraform Cloud工作区 · 读取脱敏输出 · 只读；不触发apply或泄露state秘密",
+      "evidence_key": "product-scope/v1/CN-37/读取脱敏输出"
+    },
+    "CN-38/列出dashboard": {
+      "name": "列出dashboard",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "Grafana批准数据源 · 列出dashboard · 不允许模型选择任意URL或数据源",
+      "evidence_key": "product-scope/v1/CN-38/列出dashboard"
+    },
+    "CN-38/执行有界查询": {
+      "name": "执行有界查询",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "Grafana批准数据源 · 执行有界查询 · 不允许模型选择任意URL或数据源",
+      "evidence_key": "product-scope/v1/CN-38/执行有界查询"
+    },
+    "CN-38/读取alert": {
+      "name": "读取alert",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "Grafana批准数据源 · 读取alert · 不允许模型选择任意URL或数据源",
+      "evidence_key": "product-scope/v1/CN-38/读取alert"
+    },
+    "CN-38/读取dashboard": {
+      "name": "读取dashboard",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "Grafana批准数据源 · 读取dashboard · 不允许模型选择任意URL或数据源",
+      "evidence_key": "product-scope/v1/CN-38/读取dashboard"
+    },
+    "CN-39/列出允许指标": {
+      "name": "列出允许指标",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "Prometheus租户视图 · 列出允许指标 · 查询范围/基数受限，禁止跨租户标签逃逸",
+      "evidence_key": "product-scope/v1/CN-39/列出允许指标"
+    },
+    "CN-39/有界区间查询": {
+      "name": "有界区间查询",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "Prometheus租户视图 · 有界区间查询 · 查询范围/基数受限，禁止跨租户标签逃逸",
+      "evidence_key": "product-scope/v1/CN-39/有界区间查询"
+    },
+    "CN-39/有界即时查询": {
+      "name": "有界即时查询",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "Prometheus租户视图 · 有界即时查询 · 查询范围/基数受限，禁止跨租户标签逃逸",
+      "evidence_key": "product-scope/v1/CN-39/有界即时查询"
+    },
+    "CN-39/读取告警": {
+      "name": "读取告警",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "Prometheus租户视图 · 读取告警 · 查询范围/基数受限，禁止跨租户标签逃逸",
+      "evidence_key": "product-scope/v1/CN-39/读取告警"
+    },
+    "CN-40/列出索引": {
+      "name": "列出索引",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "OpenSearch授权索引 · 列出索引 · 只读索引；其他搜索引擎另做兼容档",
+      "evidence_key": "product-scope/v1/CN-40/列出索引"
+    },
+    "CN-40/有界搜索": {
+      "name": "有界搜索",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "OpenSearch授权索引 · 有界搜索 · 只读索引；其他搜索引擎另做兼容档",
+      "evidence_key": "product-scope/v1/CN-40/有界搜索"
+    },
+    "CN-40/读取mapping": {
+      "name": "读取mapping",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "OpenSearch授权索引 · 读取mapping · 只读索引；其他搜索引擎另做兼容档",
+      "evidence_key": "product-scope/v1/CN-40/读取mapping"
+    },
+    "CN-40/读取指定文档": {
+      "name": "读取指定文档",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "OpenSearch授权索引 · 读取指定文档 · 只读索引；其他搜索引擎另做兼容档",
+      "evidence_key": "product-scope/v1/CN-40/读取指定文档"
+    },
+    "CN-41/列出集合": {
+      "name": "列出集合",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "MongoDB批准集合 · 列出集合 · 禁写入聚合/脚本，限制字段与行数",
+      "evidence_key": "product-scope/v1/CN-41/列出集合"
+    },
+    "CN-41/导出结果": {
+      "name": "导出结果",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "MongoDB批准集合 · 导出结果 · 禁写入聚合/脚本，限制字段与行数",
+      "evidence_key": "product-scope/v1/CN-41/导出结果"
+    },
+    "CN-41/描述schema": {
+      "name": "描述schema",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "MongoDB批准集合 · 描述schema · 禁写入聚合/脚本，限制字段与行数",
+      "evidence_key": "product-scope/v1/CN-41/描述schema"
+    },
+    "CN-41/有界find": {
+      "name": "有界find",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "MongoDB批准集合 · 有界find · 禁写入聚合/脚本，限制字段与行数",
+      "evidence_key": "product-scope/v1/CN-41/有界find"
+    },
+    "CN-42/有界scan": {
+      "name": "有界scan",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "Redis批准键空间 · 有界scan · 只读前缀；禁止KEYS全库、Lua和管理命令",
+      "evidence_key": "product-scope/v1/CN-42/有界scan"
+    },
+    "CN-42/读取TTL": {
+      "name": "读取TTL",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "Redis批准键空间 · 读取TTL · 只读前缀；禁止KEYS全库、Lua和管理命令",
+      "evidence_key": "product-scope/v1/CN-42/读取TTL"
+    },
+    "CN-42/读取值": {
+      "name": "读取值",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "Redis批准键空间 · 读取值 · 只读前缀；禁止KEYS全库、Lua和管理命令",
+      "evidence_key": "product-scope/v1/CN-42/读取值"
+    },
+    "CN-42/读取类型": {
+      "name": "读取类型",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "Redis批准键空间 · 读取类型 · 只读前缀；禁止KEYS全库、Lua和管理命令",
+      "evidence_key": "product-scope/v1/CN-42/读取类型"
+    },
+    "CN-43/列出消费者": {
+      "name": "列出消费者",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "RabbitMQ授权vhost · 列出消费者 · 仅管理元数据，不消费或确认消息",
+      "evidence_key": "product-scope/v1/CN-43/列出消费者"
+    },
+    "CN-43/列出队列": {
+      "name": "列出队列",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "RabbitMQ授权vhost · 列出队列 · 仅管理元数据，不消费或确认消息",
+      "evidence_key": "product-scope/v1/CN-43/列出队列"
+    },
+    "CN-43/读取binding": {
+      "name": "读取binding",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "RabbitMQ授权vhost · 读取binding · 仅管理元数据，不消费或确认消息",
+      "evidence_key": "product-scope/v1/CN-43/读取binding"
+    },
+    "CN-43/读取队列统计": {
+      "name": "读取队列统计",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "RabbitMQ授权vhost · 读取队列统计 · 仅管理元数据，不消费或确认消息",
+      "evidence_key": "product-scope/v1/CN-43/读取队列统计"
+    },
+    "CN-44/列出topic": {
+      "name": "列出topic",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "Kafka授权topic · 列出topic · 独立只读会话，不提交业务消费组offset",
+      "evidence_key": "product-scope/v1/CN-44/列出topic"
+    },
+    "CN-44/描述topic": {
+      "name": "描述topic",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "Kafka授权topic · 描述topic · 独立只读会话，不提交业务消费组offset",
+      "evidence_key": "product-scope/v1/CN-44/描述topic"
+    },
+    "CN-44/读取有界记录": {
+      "name": "读取有界记录",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "Kafka授权topic · 读取有界记录 · 独立只读会话，不提交业务消费组offset",
+      "evidence_key": "product-scope/v1/CN-44/读取有界记录"
+    },
+    "CN-44/读取消费lag": {
+      "name": "读取消费lag",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "Kafka授权topic · 读取消费lag · 独立只读会话，不提交业务消费组offset",
+      "evidence_key": "product-scope/v1/CN-44/读取消费lag"
+    },
+    "CN-45/下载artifact": {
+      "name": "下载artifact",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "Jenkins批准job · 下载artifact · 不触发构建/部署，不回传凭证日志",
+      "evidence_key": "product-scope/v1/CN-45/下载artifact"
+    },
+    "CN-45/列出job": {
+      "name": "列出job",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "Jenkins批准job · 列出job · 不触发构建/部署，不回传凭证日志",
+      "evidence_key": "product-scope/v1/CN-45/列出job"
+    },
+    "CN-45/读取build": {
+      "name": "读取build",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "Jenkins批准job · 读取build · 不触发构建/部署，不回传凭证日志",
+      "evidence_key": "product-scope/v1/CN-45/读取build"
+    },
+    "CN-45/读取有界console": {
+      "name": "读取有界console",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "Jenkins批准job · 读取有界console · 不触发构建/部署，不回传凭证日志",
+      "evidence_key": "product-scope/v1/CN-45/读取有界console"
+    },
+    "CN-46/下载artifact": {
+      "name": "下载artifact",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "Buildkite批准pipeline · 下载artifact · 同上，服务端scope与任务ACL共同校验",
+      "evidence_key": "product-scope/v1/CN-46/下载artifact"
+    },
+    "CN-46/列出pipeline": {
+      "name": "列出pipeline",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "Buildkite批准pipeline · 列出pipeline · 同上，服务端scope与任务ACL共同校验",
+      "evidence_key": "product-scope/v1/CN-46/列出pipeline"
+    },
+    "CN-46/读取build": {
+      "name": "读取build",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "Buildkite批准pipeline · 读取build · 同上，服务端scope与任务ACL共同校验",
+      "evidence_key": "product-scope/v1/CN-46/读取build"
+    },
+    "CN-46/读取日志": {
+      "name": "读取日志",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "Buildkite批准pipeline · 读取日志 · 同上，服务端scope与任务ACL共同校验",
+      "evidence_key": "product-scope/v1/CN-46/读取日志"
+    },
+    "CN-47/列出issue": {
+      "name": "列出issue",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "Sentry授权项目 · 列出issue · 错误事件可能含敏感内容，入模型前过滤",
+      "evidence_key": "product-scope/v1/CN-47/列出issue"
+    },
+    "CN-47/读取issue": {
+      "name": "读取issue",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "Sentry授权项目 · 读取issue · 错误事件可能含敏感内容，入模型前过滤",
+      "evidence_key": "product-scope/v1/CN-47/读取issue"
+    },
+    "CN-47/读取release": {
+      "name": "读取release",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "Sentry授权项目 · 读取release · 错误事件可能含敏感内容，入模型前过滤",
+      "evidence_key": "product-scope/v1/CN-47/读取release"
+    },
+    "CN-47/读取脱敏event": {
+      "name": "读取脱敏event",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "Sentry授权项目 · 读取脱敏event · 错误事件可能含敏感内容，入模型前过滤",
+      "evidence_key": "product-scope/v1/CN-47/读取脱敏event"
+    },
+    "CN-48/列出incident": {
+      "name": "列出incident",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "PagerDuty授权服务 · 列出incident · 不自动确认/关闭故障或改变值班安排",
+      "evidence_key": "product-scope/v1/CN-48/列出incident"
+    },
+    "CN-48/生成响应草稿": {
+      "name": "生成响应草稿",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "PagerDuty授权服务 · 生成响应草稿 · 不自动确认/关闭故障或改变值班安排",
+      "evidence_key": "product-scope/v1/CN-48/生成响应草稿"
+    },
+    "CN-48/读取incident": {
+      "name": "读取incident",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "PagerDuty授权服务 · 读取incident · 不自动确认/关闭故障或改变值班安排",
+      "evidence_key": "product-scope/v1/CN-48/读取incident"
+    },
+    "CN-48/读取时间线": {
+      "name": "读取时间线",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W06"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "PagerDuty授权服务 · 读取时间线 · 不自动确认/关闭故障或改变值班安排",
+      "evidence_key": "product-scope/v1/CN-48/读取时间线"
+    },
+    "TK-01": {
+      "name": "list_directory",
+      "first_gate": "G1",
+      "milestone": "M1",
+      "work": [
+        "AG-007.01"
+      ],
+      "acceptance": [
+        "SS-01"
+      ],
+      "specification": "list_directory · 已授权工作区相对路径、分页；返回条目元数据 · 只读，不跨未授权目录",
+      "evidence_key": "product-scope/v1/TK-01"
+    },
+    "TK-02": {
+      "name": "read_file",
+      "first_gate": "G1",
+      "milestone": "M1",
+      "work": [
+        "AG-007.01"
+      ],
+      "acceptance": [
+        "SS-01"
+      ],
+      "specification": "read_file · 相对路径、字节/行范围、可选预期摘要；返回文本与版本 · 只读，敏感路径拒绝",
+      "evidence_key": "product-scope/v1/TK-02"
+    },
+    "TK-03": {
+      "name": "search_files",
+      "first_gate": "G1",
+      "milestone": "M1",
+      "work": [
+        "AG-007.01"
+      ],
+      "acceptance": [
+        "SS-01"
+      ],
+      "specification": "search_files · 工作区、glob、结果上限；返回路径 · 只读，不跟随越界链接",
+      "evidence_key": "product-scope/v1/TK-03"
+    },
+    "TK-04": {
+      "name": "search_text",
+      "first_gate": "G1",
+      "milestone": "M1",
+      "work": [
+        "AG-007.01"
+      ],
+      "acceptance": [
+        "SS-01"
+      ],
+      "specification": "search_text · 目录、文本/受限正则、文件类型、上限 · 只读；超时/截断明确",
+      "evidence_key": "product-scope/v1/TK-04"
+    },
+    "TK-05": {
+      "name": "apply_patch",
+      "first_gate": "G1",
+      "milestone": "M1",
+      "work": [
+        "AG-007.02"
+      ],
+      "acceptance": [
+        "SS-01"
+      ],
+      "specification": "apply_patch · 目标文件原摘要与文本补丁；返回diff和新摘要 · 写入；预览批准后CAS，禁止顺带删除/越界文件",
+      "evidence_key": "product-scope/v1/TK-05"
+    },
+    "TK-06": {
+      "name": "write_file",
+      "first_gate": "G1",
+      "milestone": "M1",
+      "work": [
+        "AG-007.02"
+      ],
+      "acceptance": [
+        "SS-01"
+      ],
+      "specification": "write_file · 路径、UTF-8内容；仅创建新文件 · 写入；已存在报冲突，不默认覆盖",
+      "evidence_key": "product-scope/v1/TK-06"
+    },
+    "TK-07": {
+      "name": "git_status",
+      "first_gate": "G1",
+      "milestone": "M1",
+      "work": [
+        "AG-006.02"
+      ],
+      "acceptance": [
+        "SS-01"
+      ],
+      "specification": "git_status · 已授权Git工作区；返回结构化状态 · 只读，不获取凭证",
+      "evidence_key": "product-scope/v1/TK-07"
+    },
+    "TK-08": {
+      "name": "git_diff",
+      "first_gate": "G1",
+      "milestone": "M1",
+      "work": [
+        "AG-006.02"
+      ],
+      "acceptance": [
+        "SS-01"
+      ],
+      "specification": "git_diff · 明确工作区或两个已存在引用；有大小上限 · 只读，不做网络拉取",
+      "evidence_key": "product-scope/v1/TK-08"
+    },
+    "TK-09": {
+      "name": "git_log",
+      "first_gate": "G1",
+      "milestone": "M1",
+      "work": [
+        "AG-006.02"
+      ],
+      "acceptance": [
+        "SS-01"
+      ],
+      "specification": "git_log · 当前仓库、路径/提交范围、条数 · 只读，不自动fetch历史",
+      "evidence_key": "product-scope/v1/TK-09"
+    },
+    "TK-10": {
+      "name": "git_show",
+      "first_gate": "G1",
+      "milestone": "M1",
+      "work": [
+        "AG-006.02"
+      ],
+      "acceptance": [
+        "SS-01"
+      ],
+      "specification": "git_show · 已存在commit与相对文件；返回内容/元数据 · 只读，不执行hook",
+      "evidence_key": "product-scope/v1/TK-10"
+    },
+    "TK-11": {
+      "name": "process_start",
+      "first_gate": "G1",
+      "milestone": "M1",
+      "work": [
+        "AG-007.03"
+      ],
+      "acceptance": [
+        "SS-01"
+      ],
+      "specification": "process_start · 明确exe、argv、cwd、环境引用和超时；返回受管handle · 执行权限；新命令需策略许可/审批，环境白名单",
+      "evidence_key": "product-scope/v1/TK-11"
+    },
+    "TK-12": {
+      "name": "process_read",
+      "first_gate": "G1",
+      "milestone": "M1",
+      "work": [
+        "AG-007.03"
+      ],
+      "acceptance": [
+        "SS-01"
+      ],
+      "specification": "process_read · 当前Run持有的handle、游标、等待上限 · 只读输出；无任意PID访问",
+      "evidence_key": "product-scope/v1/TK-12"
+    },
+    "TK-13": {
+      "name": "process_stop",
+      "first_gate": "G1",
+      "milestone": "M1",
+      "work": [
+        "AG-007.03"
+      ],
+      "acceptance": [
+        "SS-01"
+      ],
+      "specification": "process_stop · 当前Run的handle、取消原因；返回排空状态 · 只终止自己的受管进程树，不授权任意杀进程",
+      "evidence_key": "product-scope/v1/TK-13"
+    },
+    "TK-14": {
+      "name": "knowledge_search",
+      "first_gate": "G3",
+      "milestone": "M4",
+      "work": [
+        "AG-013.04"
+      ],
+      "acceptance": [
+        "SS-01"
+      ],
+      "specification": "knowledge_search · 已授权知识集合、查询、过滤和条数 · 只读；检索前ACL过滤",
+      "evidence_key": "product-scope/v1/TK-14"
+    },
+    "TK-15": {
+      "name": "knowledge_read",
+      "first_gate": "G3",
+      "milestone": "M4",
+      "work": [
+        "AG-013.04"
+      ],
+      "acceptance": [
+        "SS-01"
+      ],
+      "specification": "knowledge_read · 已授权命中ID、版本和片段范围 · 只读；再次校验授权和删除状态",
+      "evidence_key": "product-scope/v1/TK-15"
+    },
+    "TK-16": {
+      "name": "memory_read",
+      "first_gate": "G1",
+      "milestone": "M1",
+      "work": [
+        "AG-012.04"
+      ],
+      "acceptance": [
+        "SS-01"
+      ],
+      "specification": "memory_read · 个人/明确共享记忆scope、版本和范围 · 只读；团队角色不自动扩大scope",
+      "evidence_key": "product-scope/v1/TK-16"
+    },
+    "TK-17": {
+      "name": "memory_write",
+      "first_gate": "G1",
+      "milestone": "M1",
+      "work": [
+        "AG-012.04"
+      ],
+      "acceptance": [
+        "SS-01"
+      ],
+      "specification": "memory_write · 内容、来源Run、预期版本；创建/更新/删除标记 · 持久写；模型建议先为草稿，用户确认后生效",
+      "evidence_key": "product-scope/v1/TK-17"
+    },
+    "TK-18": {
+      "name": "artifact_list",
+      "first_gate": "G3",
+      "milestone": "M4",
+      "work": [
+        "AG-022.04"
+      ],
+      "acceptance": [
+        "SS-01"
+      ],
+      "specification": "artifact_list · 当前owner/Run范围、分页 · 只读元数据，过滤未授权对象",
+      "evidence_key": "product-scope/v1/TK-18"
+    },
+    "TK-19": {
+      "name": "artifact_read",
+      "first_gate": "G3",
+      "milestone": "M4",
+      "work": [
+        "AG-022.04"
+      ],
+      "acceptance": [
+        "SS-01"
+      ],
+      "specification": "artifact_read · artifact_id、版本、范围 · 只读授权产物，不接受任意下载URL",
+      "evidence_key": "product-scope/v1/TK-19"
+    },
+    "TK-20": {
+      "name": "artifact_publish",
+      "first_gate": "G3",
+      "milestone": "M4",
+      "work": [
+        "AG-022.04"
+      ],
+      "acceptance": [
+        "SS-01"
+      ],
+      "specification": "artifact_publish · 已校验staging ID、摘要与目标Run · 写入；不可变发布，不等于对外公开分享",
+      "evidence_key": "product-scope/v1/TK-20"
+    },
+    "TK-21": {
+      "name": "image_generate",
+      "first_gate": "G3",
+      "milestone": "M4",
+      "work": [
+        "ML-003.03"
+      ],
+      "acceptance": [
+        "SS-01"
+      ],
+      "specification": "image_generate · 审核模型ID、prompt、固定规格 · 产生模型调用/费用；预算冻结后派发",
+      "evidence_key": "product-scope/v1/TK-21"
+    },
+    "TK-22": {
+      "name": "audio_transcribe",
+      "first_gate": "G3",
+      "milestone": "M4",
+      "work": [
+        "ML-004.04"
+      ],
+      "acceptance": [
+        "SS-01"
+      ],
+      "specification": "audio_transcribe · 已授权音频artifact、审核模型与语言选项 · 产生模型调用/费用；时长/格式先校验",
+      "evidence_key": "product-scope/v1/TK-22"
+    },
+    "TK-23": {
+      "name": "text_embed",
+      "first_gate": "G3",
+      "milestone": "M4",
+      "work": [
+        "ML-002.04"
+      ],
+      "acceptance": [
+        "SS-01"
+      ],
+      "specification": "text_embed · 审核模型、最多32段文本及版本 · 产生模型调用/费用；结果维度固定",
+      "evidence_key": "product-scope/v1/TK-23"
+    },
+    "TK-24": {
+      "name": "ask_user",
+      "first_gate": "G1",
+      "milestone": "M1",
+      "work": [
+        "AG-021.02"
+      ],
+      "acceptance": [
+        "SS-01"
+      ],
+      "specification": "ask_user · 最多3个简短问题、暂停原因；返回用户答复 · 暂停为awaiting_user原因；答复不等同工具授权",
+      "evidence_key": "product-scope/v1/TK-24"
+    },
+    "TK-25": {
+      "name": "move_file",
+      "first_gate": "G4-A",
+      "milestone": "M5",
+      "work": [
+        "G4-W02"
+      ],
+      "acceptance": [
+        "G4-A02"
+      ],
+      "specification": "move_file · 工作区内移动/重命名 · 源/目标双向校验，冲突拒绝",
+      "evidence_key": "product-scope/v1/TK-25"
+    },
+    "TK-26": {
+      "name": "delete_file",
+      "first_gate": "G4-A",
+      "milestone": "M5",
+      "work": [
+        "G4-W02"
+      ],
+      "acceptance": [
+        "G4-A02"
+      ],
+      "specification": "delete_file · 删除指定文件，优先可恢复回收 · 明确对象预览与批准；不接受模糊根目录删除",
+      "evidence_key": "product-scope/v1/TK-26"
+    },
+    "TK-27": {
+      "name": "extract_archive",
+      "first_gate": "G4-A",
+      "milestone": "M5",
+      "work": [
+        "G4-W02"
+      ],
+      "acceptance": [
+        "G4-A02"
+      ],
+      "specification": "extract_archive · 解压审核格式到新隔离目录 · 防路径逃逸、解压炸弹与链接；不自动执行",
+      "evidence_key": "product-scope/v1/TK-27"
+    },
+    "TK-28": {
+      "name": "extract_document",
+      "first_gate": "G4-A",
+      "milestone": "M5",
+      "work": [
+        "G4-W02"
+      ],
+      "acceptance": [
+        "G4-A02"
+      ],
+      "specification": "extract_document · PDF/DOCX等解析为带来源的文本 · 限定解析器/格式；不运行宏或嵌入代码",
+      "evidence_key": "product-scope/v1/TK-28"
+    },
+    "TK-29": {
+      "name": "git_branch",
+      "first_gate": "G4-A",
+      "milestone": "M5",
+      "work": [
+        "G4-W02"
+      ],
+      "acceptance": [
+        "G4-A02"
+      ],
+      "specification": "git_branch · 在授权仓库创建/列出分支 · 创建属于写入，名称校验",
+      "evidence_key": "product-scope/v1/TK-29"
+    },
+    "TK-30": {
+      "name": "git_checkout",
+      "first_gate": "G4-A",
+      "milestone": "M5",
+      "work": [
+        "G4-W02"
+      ],
+      "acceptance": [
+        "G4-A02"
+      ],
+      "specification": "git_checkout · 切换指定分支/工作树 · 用户未提交修改不可被覆盖",
+      "evidence_key": "product-scope/v1/TK-30"
+    },
+    "TK-31": {
+      "name": "git_commit",
+      "first_gate": "G4-A",
+      "milestone": "M5",
+      "work": [
+        "G4-W02"
+      ],
+      "acceptance": [
+        "G4-A02"
+      ],
+      "specification": "git_commit · 提交用户审阅的明确文件集合 · 绑定diff摘要，不自动执行未知hook",
+      "evidence_key": "product-scope/v1/TK-31"
+    },
+    "TK-32": {
+      "name": "git_fetch",
+      "first_gate": "G4-A",
+      "milestone": "M5",
+      "work": [
+        "G4-W02"
+      ],
+      "acceptance": [
+        "G4-A02"
+      ],
+      "specification": "git_fetch · 向已登记remote获取对象 · 明确网络/凭证scope，不接受模型指定凭证",
+      "evidence_key": "product-scope/v1/TK-32"
+    },
+    "TK-33": {
+      "name": "git_push",
+      "first_gate": "G4-A",
+      "milestone": "M5",
+      "work": [
+        "G4-W02"
+      ],
+      "acceptance": [
+        "G4-A02"
+      ],
+      "specification": "git_push · 向已批准remote/branch推送 · 每次批准；默认禁force、删远端分支和改保护规则",
+      "evidence_key": "product-scope/v1/TK-33"
+    },
+    "TK-34": {
+      "name": "browser_open",
+      "first_gate": "G4-A",
+      "milestone": "M5",
+      "work": [
+        "G4-W03"
+      ],
+      "acceptance": [
+        "G4-A03"
+      ],
+      "specification": "browser_open · 创建归属Run的浏览器上下文 · 绑定账号profile，不读取任意浏览器个人资料",
+      "evidence_key": "product-scope/v1/TK-34"
+    },
+    "TK-35": {
+      "name": "browser_navigate",
+      "first_gate": "G4-A",
+      "milestone": "M5",
+      "work": [
+        "G4-W03"
+      ],
+      "acceptance": [
+        "G4-A03"
+      ],
+      "specification": "browser_navigate · 导航到许可域名 · 重定向和新域名重新评估",
+      "evidence_key": "product-scope/v1/TK-35"
+    },
+    "TK-36": {
+      "name": "browser_snapshot",
+      "first_gate": "G4-A",
+      "milestone": "M5",
+      "work": [
+        "G4-W03"
+      ],
+      "acceptance": [
+        "G4-A03"
+      ],
+      "specification": "browser_snapshot · 页面可见结构/截图 · 结果标不可信；脱敏与数据来源可追踪",
+      "evidence_key": "product-scope/v1/TK-36"
+    },
+    "TK-37": {
+      "name": "browser_click",
+      "first_gate": "G4-A",
+      "milestone": "M5",
+      "work": [
+        "G4-W03"
+      ],
+      "acceptance": [
+        "G4-A03"
+      ],
+      "specification": "browser_click · 在已观察页面执行指定动作 · 状态版本/定位校验；提交结果未知时不盲目重点击",
+      "evidence_key": "product-scope/v1/TK-37"
+    },
+    "TK-38": {
+      "name": "browser_fill",
+      "first_gate": "G4-A",
+      "milestone": "M5",
+      "work": [
+        "G4-W03"
+      ],
+      "acceptance": [
+        "G4-A03"
+      ],
+      "specification": "browser_fill · 填入明确字段 · 密码由凭证代理处理，模型不见密钥",
+      "evidence_key": "product-scope/v1/TK-38"
+    },
+    "TK-39": {
+      "name": "browser_download",
+      "first_gate": "G4-A",
+      "milestone": "M5",
+      "work": [
+        "G4-W03"
+      ],
+      "acceptance": [
+        "G4-A03"
+      ],
+      "specification": "browser_download · 下载到隔离区并登记artifact · 大小/格式校验，不自动打开或运行",
+      "evidence_key": "product-scope/v1/TK-39"
+    },
+    "TK-40": {
+      "name": "schedule_create",
+      "first_gate": "G4-A",
+      "milestone": "M5",
+      "work": [
+        "G4-W01"
+      ],
+      "acceptance": [
+        "G4-A01"
+      ],
+      "specification": "schedule_create · 创建受限自动任务草稿并申请启用 · 必须有owner、时区、预算和授权有效期",
+      "evidence_key": "product-scope/v1/TK-40"
+    },
+    "TK-41": {
+      "name": "schedule_list",
+      "first_gate": "G4-A",
+      "milestone": "M5",
+      "work": [
+        "G4-W01"
+      ],
+      "acceptance": [
+        "G4-A01"
+      ],
+      "specification": "schedule_list · 查询授权自动任务及执行历史 · 只读，按团队/个人ACL",
+      "evidence_key": "product-scope/v1/TK-41"
+    },
+    "TK-42": {
+      "name": "schedule_cancel",
+      "first_gate": "G4-A",
+      "milestone": "M5",
+      "work": [
+        "G4-W01"
+      ],
+      "acceptance": [
+        "G4-A01"
+      ],
+      "specification": "schedule_cancel · 停止后续触发 · 在途副作用单独核对，不伪装回滚",
+      "evidence_key": "product-scope/v1/TK-42"
+    },
+    "TK-43": {
+      "name": "subagent_start",
+      "first_gate": "G4-B",
+      "milestone": "M5",
+      "work": [
+        "G4-W06"
+      ],
+      "acceptance": [
+        "G4-A06"
+      ],
+      "specification": "subagent_start · 创建fresh/fork子Run · 权限/预算取交集，不能自行扩大",
+      "evidence_key": "product-scope/v1/TK-43"
+    },
+    "TK-44": {
+      "name": "subagent_message",
+      "first_gate": "G4-B",
+      "milestone": "M5",
+      "work": [
+        "G4-W06"
+      ],
+      "acceptance": [
+        "G4-A06"
+      ],
+      "specification": "subagent_message · 向所属运行树发送输入 · 消息不授予权限；持久去重",
+      "evidence_key": "product-scope/v1/TK-44"
+    },
+    "TK-45": {
+      "name": "subagent_wait",
+      "first_gate": "G4-B",
+      "milestone": "M5",
+      "work": [
+        "G4-W06"
+      ],
+      "acceptance": [
+        "G4-A06"
+      ],
+      "specification": "subagent_wait · 等待指定子Run状态 · 超时不表示子任务已停止",
+      "evidence_key": "product-scope/v1/TK-45"
+    },
+    "TK-46": {
+      "name": "subagent_cancel",
+      "first_gate": "G4-B",
+      "milestone": "M5",
+      "work": [
+        "G4-W06"
+      ],
+      "acceptance": [
+        "G4-A06"
+      ],
+      "specification": "subagent_cancel · 请求子Run取消与排空 · 已发生外部动作不自动回滚",
+      "evidence_key": "product-scope/v1/TK-46"
+    },
+    "TK-47": {
+      "name": "team_task_update",
+      "first_gate": "G4-B",
+      "milestone": "M5",
+      "work": [
+        "G4-W06"
+      ],
+      "acceptance": [
+        "G4-A06"
+      ],
+      "specification": "team_task_update · 领取/修改有权限的DAG任务 · revision/CAS、防环；写入范围不是文件锁",
+      "evidence_key": "product-scope/v1/TK-47"
+    },
+    "TK-48": {
+      "name": "team_task_list",
+      "first_gate": "G4-B",
+      "milestone": "M5",
+      "work": [
+        "G4-W06"
+      ],
+      "acceptance": [
+        "G4-A06"
+      ],
+      "specification": "team_task_list · 查询任务及依赖状态 · 只读，不隐式访问其他运行树",
+      "evidence_key": "product-scope/v1/TK-48"
+    },
+    "TK-49": {
+      "name": "document_compare",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W02"
+      ],
+      "acceptance": [
+        "G5-A03"
+      ],
+      "specification": "document_compare · 比较两个授权文档版本，返回结构化差异 · 只读；引用精确版本，不自动改文档",
+      "evidence_key": "product-scope/v1/TK-49"
+    },
+    "TK-50": {
+      "name": "document_convert",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W02"
+      ],
+      "acceptance": [
+        "G5-A03"
+      ],
+      "specification": "document_convert · 用审核转换器生成指定文档格式 · 创建artifact；不执行宏/脚本",
+      "evidence_key": "product-scope/v1/TK-50"
+    },
+    "TK-51": {
+      "name": "dataset_list",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W02"
+      ],
+      "acceptance": [
+        "G5-A03"
+      ],
+      "specification": "dataset_list · 列出当前主体可用的登记数据集 · 只读元数据，先按ACL过滤",
+      "evidence_key": "product-scope/v1/TK-51"
+    },
+    "TK-52": {
+      "name": "dataset_query",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W02"
+      ],
+      "acceptance": [
+        "G5-A03"
+      ],
+      "specification": "dataset_query · 对登记视图执行有界结构化查询 · 只读；禁止任意SQL/函数，第三方费用需上界",
+      "evidence_key": "product-scope/v1/TK-52"
+    },
+    "TK-53": {
+      "name": "dataset_export",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W02"
+      ],
+      "acceptance": [
+        "G5-A03"
+      ],
+      "specification": "dataset_export · 将指定查询结果导出到私有artifact · 写入产物，限制行数/大小；不直接公开分享",
+      "evidence_key": "product-scope/v1/TK-53"
+    },
+    "TK-54": {
+      "name": "report_render",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W02"
+      ],
+      "acceptance": [
+        "G5-A03"
+      ],
+      "specification": "report_render · 依据审核模板和结构化数据生成报告 · 写入产物；模板不能执行任意代码",
+      "evidence_key": "product-scope/v1/TK-54"
+    },
+    "TK-55": {
+      "name": "chart_render",
+      "first_gate": "G5-B",
+      "milestone": "M5",
+      "work": [
+        "G5-W02"
+      ],
+      "acceptance": [
+        "G5-A03"
+      ],
+      "specification": "chart_render · 将有界数据生成图表与来源说明 · 写入产物，数据需有当前访问权",
+      "evidence_key": "product-scope/v1/TK-55"
+    },
+    "TK-56": {
+      "name": "objective_create",
+      "first_gate": "G5-C",
+      "milestone": "M5",
+      "work": [
+        "G5-W04"
+      ],
+      "acceptance": [
+        "G5-A05"
+      ],
+      "specification": "objective_create · 创建长期目标草稿，声明阶段/预算/到期 · 用户批准后激活；不自行授予新能力",
+      "evidence_key": "product-scope/v1/TK-56"
+    },
+    "TK-57": {
+      "name": "objective_status",
+      "first_gate": "G5-C",
+      "milestone": "M5",
+      "work": [
+        "G5-W04"
+      ],
+      "acceptance": [
+        "G5-A05"
+      ],
+      "specification": "objective_status · 查询目标、Run谱系、费用与未决操作 · 只读；目标内容与财务字段分开授权",
+      "evidence_key": "product-scope/v1/TK-57"
+    },
+    "TK-58": {
+      "name": "objective_pause",
+      "first_gate": "G5-C",
+      "milestone": "M5",
+      "work": [
+        "G5-W04"
+      ],
+      "acceptance": [
+        "G5-A05"
+      ],
+      "specification": "objective_pause · 停止目标产生新Run · 在途动作仍按取消/核对策略收尾",
+      "evidence_key": "product-scope/v1/TK-58"
+    },
+    "TK-59": {
+      "name": "objective_resume",
+      "first_gate": "G5-C",
+      "milestone": "M5",
+      "work": [
+        "G5-W04"
+      ],
+      "acceptance": [
+        "G5-A05"
+      ],
+      "specification": "objective_resume · 请求恢复已暂停目标 · 实时重验授权与原剩余额度，不重置总预算",
+      "evidence_key": "product-scope/v1/TK-59"
+    },
+    "TK-60": {
+      "name": "objective_cancel",
+      "first_gate": "G5-C",
+      "milestone": "M5",
+      "work": [
+        "G5-W04"
+      ],
+      "acceptance": [
+        "G5-A05"
+      ],
+      "specification": "objective_cancel · 终止目标后续执行 · 已发生副作用不伪装回滚",
+      "evidence_key": "product-scope/v1/TK-60"
+    },
+    "TK-61": {
+      "name": "approval_request",
+      "first_gate": "G5-A",
+      "milestone": "M5",
+      "work": [
+        "G5-W01"
+      ],
+      "acceptance": [
+        "G5-A02"
+      ],
+      "specification": "approval_request · 为明确operation创建审批申请 · 绑定目标/参数摘要；只能申请，不能批准",
+      "evidence_key": "product-scope/v1/TK-61"
+    },
+    "TK-62": {
+      "name": "approval_status",
+      "first_gate": "G5-A",
+      "milestone": "M5",
+      "work": [
+        "G5-W01"
+      ],
+      "acceptance": [
+        "G5-A02"
+      ],
+      "specification": "approval_status · 查询当前主体可见的审批状态 · 只读；旧批准不能应用于新参数/新环境",
+      "evidence_key": "product-scope/v1/TK-62"
+    },
+    "TK-63": {
+      "name": "workflow_inspect",
+      "first_gate": "G5-C",
+      "milestone": "M5",
+      "work": [
+        "G5-W05"
+      ],
+      "acceptance": [
+        "G5-A06"
+      ],
+      "specification": "workflow_inspect · 展示工作流版本、依赖、能力与数据去向 · 只读；不读取未授权凭证或个人内容",
+      "evidence_key": "product-scope/v1/TK-63"
+    },
+    "TK-64": {
+      "name": "workflow_dry_run",
+      "first_gate": "G5-C",
+      "milestone": "M5",
+      "work": [
+        "G5-W05"
+      ],
+      "acceptance": [
+        "G5-A06"
+      ],
+      "specification": "workflow_dry_run · 使用替身和只读元数据生成执行/费用计划 · 不产生真实外部写入；标记模拟结果和估计成本",
+      "evidence_key": "product-scope/v1/TK-64"
+    },
+    "TK-65": {
+      "name": "resource_inspect",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W05"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "resource_inspect · 查询授权池的节点/资源/租约摘要 · 只读，不返回其他租户输入或设备凭证",
+      "evidence_key": "product-scope/v1/TK-65"
+    },
+    "TK-66": {
+      "name": "model_capabilities",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W05"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "model_capabilities · 查询模型/模板/硬件支持单元 · 只读；未测单元不得显示为可用",
+      "evidence_key": "product-scope/v1/TK-66"
+    },
+    "TK-67": {
+      "name": "model_compare_plan",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W05"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "model_compare_plan · 生成有界候选模型评测计划 · 仅提案，不启动付费任务",
+      "evidence_key": "product-scope/v1/TK-67"
+    },
+    "TK-68": {
+      "name": "benchmark_run",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W05"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "benchmark_run · 执行批准的固定模型/输入基准 · 消耗预算和资源；公共Worker仍只推理",
+      "evidence_key": "product-scope/v1/TK-68"
+    },
+    "TK-69": {
+      "name": "benchmark_results",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W05"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "benchmark_results · 查询基准环境、指标和失败分类 · 只读；模拟与真机结果分开",
+      "evidence_key": "product-scope/v1/TK-69"
+    },
+    "TK-70": {
+      "name": "cost_report",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W05"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "cost_report · 查询授权费用事实并生成分析视图 · 财务读取权限；不充值、不退款",
+      "evidence_key": "product-scope/v1/TK-70"
+    },
+    "TK-71": {
+      "name": "usage_reconcile_report",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W05"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "usage_reconcile_report · 对比已授权usage、Job和分录，生成差异报告 · 只读；不自动补账/冲正",
+      "evidence_key": "product-scope/v1/TK-71"
+    },
+    "TK-72": {
+      "name": "evaluation_run",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W05"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "evaluation_run · 运行已批准评测集和版本组合 · 独立测试环境与预算；不下发任意代码到供给池",
+      "evidence_key": "product-scope/v1/TK-72"
+    },
+    "TK-73": {
+      "name": "evaluation_results",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W05"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "evaluation_results · 查询评测结果及证据 · 只读；不把未评分/未执行视为通过",
+      "evidence_key": "product-scope/v1/TK-73"
+    },
+    "TK-74": {
+      "name": "regression_compare",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W05"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "regression_compare · 比较两个版本在同任务集的结果 · 只读，报告样本差异与环境差异",
+      "evidence_key": "product-scope/v1/TK-74"
+    },
+    "TK-75": {
+      "name": "trace_query",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W05"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "trace_query · 查询授权Run的脱敏调用轨迹 · 只读，限制时间窗和返回大小",
+      "evidence_key": "product-scope/v1/TK-75"
+    },
+    "TK-76": {
+      "name": "audit_query",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W05"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "audit_query · 查询主体有权限的审计事实 · 只读；管理角色不自动读取私有任务明文",
+      "evidence_key": "product-scope/v1/TK-76"
+    },
+    "TK-77": {
+      "name": "connector_health",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W05"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "connector_health · 查询连接器状态、版本、限流和撤权信息 · 只读，不泄露token或测试其他租户连接",
+      "evidence_key": "product-scope/v1/TK-77"
+    },
+    "TK-78": {
+      "name": "artifact_verify",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W05"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "artifact_verify · 检查授权artifact摘要、版本及签名状态 · 只读；完整性验证不等于内容正确",
+      "evidence_key": "product-scope/v1/TK-78"
+    },
+    "TK-79": {
+      "name": "provenance_trace",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W05"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "provenance_trace · 查询产物/摘要/索引的来源谱系 · 只读；不绕过已删除来源的访问限制",
+      "evidence_key": "product-scope/v1/TK-79"
+    },
+    "TK-80": {
+      "name": "policy_explain",
+      "first_gate": "G6-C",
+      "milestone": "M5",
+      "work": [
+        "G6-W05"
+      ],
+      "acceptance": [
+        "G6-A06"
+      ],
+      "specification": "policy_explain · 解释给定动作的允许/拒绝及政策版本 · 只读，不修改政策，不返回秘密规则数据",
+      "evidence_key": "product-scope/v1/TK-80"
+    }
+  },
+  "profiles": {
+    "MP-01": {
+      "terms": [
+        "MP-01",
+        "G1/G3",
+        "Responses兼容文本接口",
+        "文本输入输出、流事件、function call/output、稳定call_id、结构化结果能力声明、usage/取消映射",
+        "厂商内置搜索/计算机工具、托管会话、Realtime、后台批任务"
+      ],
+      "first_gate": "G1",
+      "work": [
+        "AG-003.04"
+      ],
+      "acceptance": [
+        "SS-03"
+      ],
+      "source": "plan/support-scope/03-models-protocols.md"
+    },
+    "MP-02": {
+      "terms": [
+        "MP-02",
+        "G1/G3",
+        "Chat Completions兼容文本接口",
+        "messages、tool_calls/tool结果、参数分片、finish reason、usage、明确输出上限",
+        "旧functions语法自动等价、任意厂商扩展、未声明的推理字段"
+      ],
+      "first_gate": "G1",
+      "work": [
+        "AG-003.04"
+      ],
+      "acceptance": [
+        "SS-03"
+      ],
+      "source": "plan/support-scope/03-models-protocols.md"
+    },
+    "MP-03": {
+      "terms": [
+        "MP-03",
+        "G3",
+        "Embeddings兼容接口",
+        "最多32段文本、顺序对应、维度/模型版本/usage、整批失败语义",
+        "任意图片/音频向量、混维度自动拼接"
+      ],
+      "first_gate": "G3",
+      "work": [
+        "AG-003.04"
+      ],
+      "acceptance": [
+        "SS-03"
+      ],
+      "source": "plan/support-scope/03-models-protocols.md"
+    },
+    "MP-04": {
+      "terms": [
+        "MP-04",
+        "G2/G3",
+        "Orange Inference v1",
+        "Quote/Job/Attempt/Lease、4模态、不可变artifact、交付watermark、预算/价格版本",
+        "直接暴露底层引擎管理API、上传任意执行参数"
+      ],
+      "first_gate": "G2",
+      "work": [
+        "AG-003.04"
+      ],
+      "acceptance": [
+        "SS-03"
+      ],
+      "source": "plan/support-scope/03-models-protocols.md"
+    },
+    "MP-05": {
+      "terms": [
+        "MP-05",
+        "G4",
+        "Anthropic Messages",
+        "文本/声明允许的图片、工具使用/结果、流事件、usage与停止原因",
+        "所有厂商托管Agent、长驻环境与账号管理接口"
+      ],
+      "first_gate": "G4",
+      "work": [
+        "AG-003.04"
+      ],
+      "acceptance": [
+        "SS-03"
+      ],
+      "source": "plan/support-scope/03-models-protocols.md"
+    },
+    "MP-06": {
+      "terms": [
+        "MP-06",
+        "G4",
+        "Gemini generateContent/streamGenerateContent",
+        "内容/函数调用/函数结果、流式、usage及安全拒绝映射",
+        "Live语音视频、所有托管工具、模型未声明的模态"
+      ],
+      "first_gate": "G4",
+      "work": [
+        "AG-003.04"
+      ],
+      "acceptance": [
+        "SS-03"
+      ],
+      "source": "plan/support-scope/03-models-protocols.md"
+    },
+    "MP-07": {
+      "terms": [
+        "MP-07",
+        "G4",
+        "Ollama原生chat/generate",
+        "流式NDJSON、工具调用能力、done/usage、模型常驻设置",
+        "将所有Ollama模型自动认定为可用Agent模型"
+      ],
+      "first_gate": "G4",
+      "work": [
+        "AG-003.04"
+      ],
+      "acceptance": [
+        "SS-03"
+      ],
+      "source": "plan/support-scope/03-models-protocols.md"
+    },
+    "MC-01": {
+      "terms": [
+        "MC-01",
+        "本地文本；Qwen2.5-7B-Instruct审核GGUF量化",
+        "总上下文8192 token，输出上限2048；工具schema占用计入总窗口",
+        "CPU或通过验证的NVIDIA本地配置；支持受控工具循环"
+      ],
+      "first_gate": "G3",
+      "work": [
+        "ML-007.04"
+      ],
+      "acceptance": [
+        "SS-03"
+      ],
+      "source": "plan/support-scope/03-models-protocols.md"
+    },
+    "MC-02": {
+      "terms": [
+        "MC-02",
+        "远程文本；同一审核模型的服务端配置",
+        "总上下文32768，输出上限4096；以实际通过窗口为准",
+        "单GPU/单受管槽；适用GPU规格按实测目录过滤"
+      ],
+      "first_gate": "G3",
+      "work": [
+        "ML-007.04"
+      ],
+      "acceptance": [
+        "SS-03"
+      ],
+      "source": "plan/support-scope/03-models-protocols.md"
+    },
+    "MC-03": {
+      "terms": [
+        "MC-03",
+        "嵌入；multilingual-e5-small候选",
+        "每段最多512 token、每批32段；维度从审核清单固定",
+        "本地CPU/已验证GPU或远程；批次全成功才交付"
+      ],
+      "first_gate": "G3",
+      "work": [
+        "ML-007.04"
+      ],
+      "acceptance": [
+        "SS-03"
+      ],
+      "source": "plan/support-scope/03-models-protocols.md"
+    },
+    "MC-04": {
+      "terms": [
+        "MC-04",
+        "图像；SDXL Base 1.0候选",
+        "1024×1024、单次1张、固定审核步数/调度器参数",
+        "受管图像后端；禁止任意pipeline/script"
+      ],
+      "first_gate": "G3",
+      "work": [
+        "ML-007.04"
+      ],
+      "acceptance": [
+        "SS-03"
+      ],
+      "source": "plan/support-scope/03-models-protocols.md"
+    },
+    "MC-05": {
+      "terms": [
+        "MC-05",
+        "转写；faster-whisper small多语言候选",
+        "最长10分钟、单文件100 MB；固定转换产物与音频预处理",
+        "返回结构化文本/时间段；不是实时听写或语音合成"
+      ],
+      "first_gate": "G3",
+      "work": [
+        "ML-007.04"
+      ],
+      "acceptance": [
+        "SS-03"
+      ],
+      "source": "plan/support-scope/03-models-protocols.md"
+    },
+    "OS-01": {
+      "terms": [
+        "OS-01",
+        "G1/G3",
+        "桌面消费者",
+        "Windows 11 25H2 / x86_64",
+        "Flutter、凭证库、受控本地工具、远程消费",
+        "G3至少验证Home与Pro各一个干净环境"
+      ],
+      "first_gate": "G1",
+      "work": [
+        "QA-004.04"
+      ],
+      "acceptance": [
+        "SS-04"
+      ],
+      "source": "plan/support-scope/04-platforms.md"
+    },
+    "OS-02": {
+      "terms": [
+        "OS-02",
+        "G3",
+        "桌面消费者",
+        "Windows 11 26H2 / x86_64",
+        "同OS-01，新增版本回归",
+        "不把安装成功视作WSL/GPU自动通过"
+      ],
+      "first_gate": "G3",
+      "work": [
+        "QA-004.04"
+      ],
+      "acceptance": [
+        "SS-04"
+      ],
+      "source": "plan/support-scope/04-platforms.md"
+    },
+    "OS-03": {
+      "terms": [
+        "OS-03",
+        "G3",
+        "本地文本/嵌入执行",
+        "OS-01/02＋CPU",
+        "MC-01/03，受管独立进程",
+        "无性能承诺，内存不足明确拒绝"
+      ],
+      "first_gate": "G3",
+      "work": [
+        "QA-004.04"
+      ],
+      "acceptance": [
+        "SS-04"
+      ],
+      "source": "plan/support-scope/04-platforms.md"
+    },
+    "OS-04": {
+      "terms": [
+        "OS-04",
+        "G3",
+        "本地NVIDIA执行",
+        "OS-01/02＋认证NVIDIA设备",
+        "Broker、原生文本；已认证WSL图像/转写",
+        "每物理设备一个受管槽，本地优先"
+      ],
+      "first_gate": "G3",
+      "work": [
+        "QA-004.04"
+      ],
+      "acceptance": [
+        "SS-04"
+      ],
+      "source": "plan/support-scope/04-platforms.md"
+    },
+    "OS-05": {
+      "terms": [
+        "OS-05",
+        "G2/G3",
+        "贡献Worker",
+        "OS-01/02＋WSL2＋Ubuntu 24.04 LTS amd64",
+        "审核模型、单GPU槽、出站mTLS、隔离与回收",
+        "单主机一个登记用户；不调用户其他WSL发行版"
+      ],
+      "first_gate": "G2",
+      "work": [
+        "QA-004.04"
+      ],
+      "acceptance": [
+        "SS-04"
+      ],
+      "source": "plan/support-scope/04-platforms.md"
+    },
+    "OS-06": {
+      "terms": [
+        "OS-06",
+        "G0/G3",
+        "云控制面/维护角色",
+        "Ubuntu Server 24.04 LTS amd64",
+        "Rust服务、数据库/对象存储适配、运维工具",
+        "单区域权威写；不是Linux个人GPU供给承诺"
+      ],
+      "first_gate": "G0",
+      "work": [
+        "QA-004.04"
+      ],
+      "acceptance": [
+        "SS-04"
+      ],
+      "source": "plan/support-scope/04-platforms.md"
+    },
+    "OS-07": {
+      "terms": [
+        "OS-07",
+        "G4",
+        "macOS桌面消费者",
+        "macOS 26 / 27，arm64",
+        "桌面、远程消费、授权本地工具",
+        "本地CPU/Metal逐模型验证；不开放macOS贡献GPU"
+      ],
+      "first_gate": "G4",
+      "work": [
+        "QA-004.04"
+      ],
+      "acceptance": [
+        "SS-04"
+      ],
+      "source": "plan/support-scope/04-platforms.md"
+    },
+    "OS-08": {
+      "terms": [
+        "OS-08",
+        "G4",
+        "Linux桌面消费者",
+        "Ubuntu Desktop 24.04 / 26.04 LTS，amd64",
+        "桌面、远程消费、授权本地工具",
+        "X11/Wayland各自认证；其他发行版实验档"
+      ],
+      "first_gate": "G4",
+      "work": [
+        "QA-004.04"
+      ],
+      "acceptance": [
+        "SS-04"
+      ],
+      "source": "plan/support-scope/04-platforms.md"
+    },
+    "OS-09": {
+      "terms": [
+        "OS-09",
+        "G4",
+        "Linux贡献Worker",
+        "Ubuntu Server 24.04 / 26.04 LTS，amd64＋NVIDIA",
+        "审核容器推理、GPU Broker等价约束",
+        "驱动/容器/内核组合独立认证"
+      ],
+      "first_gate": "G4",
+      "work": [
+        "QA-004.04"
+      ],
+      "acceptance": [
+        "SS-04"
+      ],
+      "source": "plan/support-scope/04-platforms.md"
+    },
+    "OS-10": {
+      "terms": [
+        "OS-10",
+        "G4",
+        "云服务后续基线",
+        "Ubuntu Server 26.04 LTS amd64",
+        "在OS-06协议/数据兼容下升级",
+        "ARM服务端或多主数据库不在本矩阵"
+      ],
+      "first_gate": "G4",
+      "work": [
+        "QA-004.04"
+      ],
+      "acceptance": [
+        "SS-04"
+      ],
+      "source": "plan/support-scope/04-platforms.md"
+    },
+    "HW-01": {
+      "terms": [
+        "HW-01 纯远程消费",
+        "x86_64四核、8 GB RAM、5 GB可用磁盘、无独显",
+        "安装/登录/事件流/审批/产物/升级",
+        "无GPU设备不安装Broker或WSL也可消费"
+      ],
+      "first_gate": "G3",
+      "work": [
+        "ML-007.04"
+      ],
+      "acceptance": [
+        "SS-04"
+      ],
+      "source": "plan/support-scope/04-platforms.md"
+    },
+    "HW-02": {
+      "terms": [
+        "HW-02 本地CPU文本",
+        "16 GB RAM；模型及缓存另预留至少20 GB磁盘",
+        "MC-01/03峰值内存、取消、工具循环",
+        "不承诺达到GPU首token指标"
+      ],
+      "first_gate": "G3",
+      "work": [
+        "ML-007.04"
+      ],
+      "acceptance": [
+        "SS-04"
+      ],
+      "source": "plan/support-scope/04-platforms.md"
+    },
+    "HW-03": {
+      "terms": [
+        "HW-03 12 GB NVIDIA候选",
+        "RTX 3060 12 GB作为首档样机，32 GB系统RAM、80 GB缓存空间",
+        "原生/WSL设备映射、可运行模型子集、回收与休眠",
+        "12 GB不是所有四模态/窗口都可用的保证"
+      ],
+      "first_gate": "G3",
+      "work": [
+        "ML-007.04"
+      ],
+      "acceptance": [
+        "SS-04"
+      ],
+      "source": "plan/support-scope/04-platforms.md"
+    },
+    "HW-04": {
+      "terms": [
+        "HW-04 24 GB NVIDIA候选",
+        "RTX 4090 24 GB作为第二档样机，32 GB以上系统RAM",
+        "MC-02较长上下文、四模态与并发仲裁",
+        "同架构其他显卡不自动免测"
+      ],
+      "first_gate": "G3",
+      "work": [
+        "ML-007.04"
+      ],
+      "acceptance": [
+        "SS-04"
+      ],
+      "source": "plan/support-scope/04-platforms.md"
+    },
+    "HW-05": {
+      "terms": [
+        "HW-05 G4 Apple Silicon",
+        "arm64、16 GB统一内存起",
+        "明确模型的CPU/Metal路径和UI响应",
+        "统一内存不等于独立GPU显存，不参与NVIDIA供给计数"
+      ],
+      "first_gate": "G4",
+      "work": [
+        "ML-007.04"
+      ],
+      "acceptance": [
+        "SS-04"
+      ],
+      "source": "plan/support-scope/04-platforms.md"
+    },
+    "HW-06": {
+      "terms": [
+        "HW-06 用户已有96GB级设备",
+        "用户描述Windows＋“RTX6000 96G”；精确版型/驱动待采集",
+        "优先验证原生/WSL、模型工具协议、Broker排空",
+        "有设备不等于已认证；不能代替HW-03/04低显存验证"
+      ],
+      "first_gate": "G3",
+      "work": [
+        "ML-007.04"
+      ],
+      "acceptance": [
+        "SS-04"
+      ],
+      "source": "plan/support-scope/04-platforms.md"
+    },
+    "TR-01": {
+      "terms": [
+        "TR-01 用户手动",
+        "支持8场景",
+        "扩展到20场景；仍需资源/费用授权"
+      ],
+      "first_gate": "G3",
+      "work": [
+        "AG-019.04"
+      ],
+      "acceptance": [
+        "SS-06"
+      ],
+      "source": "plan/support-scope/06-automation.md"
+    },
+    "TR-02": {
+      "terms": [
+        "TR-02 定时",
+        "不开放",
+        "指定IANA时区，最小间隔15分钟；默认Asia/Shanghai"
+      ],
+      "first_gate": "G4",
+      "work": [
+        "AG-019.04"
+      ],
+      "acceptance": [
+        "SS-06"
+      ],
+      "source": "plan/support-scope/06-automation.md"
+    },
+    "TR-03": {
+      "terms": [
+        "TR-03 签名Webhook",
+        "不开放",
+        "仅已认证连接器事件；验证来源、事件ID、签名和重放窗口"
+      ],
+      "first_gate": "G4",
+      "work": [
+        "AG-019.04"
+      ],
+      "acceptance": [
+        "SS-06"
+      ],
+      "source": "plan/support-scope/06-automation.md"
+    },
+    "TR-04": {
+      "terms": [
+        "TR-04 授权目录变更",
+        "不开放",
+        "白名单目录，合并抖动，禁止监控整盘/敏感目录"
+      ],
+      "first_gate": "G4",
+      "work": [
+        "AG-019.04"
+      ],
+      "acceptance": [
+        "SS-06"
+      ],
+      "source": "plan/support-scope/06-automation.md"
+    },
+    "TR-05": {
+      "terms": [
+        "TR-05 渠道/邮箱输入",
+        "不开放",
+        "明确外部身份到平台主体映射；附件不可信；未绑定发送者不启动"
+      ],
+      "first_gate": "G4",
+      "work": [
+        "AG-019.04"
+      ],
+      "acceptance": [
+        "SS-06"
+      ],
+      "source": "plan/support-scope/06-automation.md"
+    },
+    "TR-06": {
+      "terms": [
+        "TR-06 平台状态事件",
+        "仅基础服务内部使用",
+        "用户自动化仅接订阅的任务/节点/费用元数据事件"
+      ],
+      "first_gate": "G4",
+      "work": [
+        "AG-019.04"
+      ],
+      "acceptance": [
+        "SS-06"
+      ],
+      "source": "plan/support-scope/06-automation.md"
+    },
+    "EX-01": {
+      "terms": [
+        "EX-01",
+        "Skill/场景模板包",
+        "官方8个；G1先提供4个",
+        "官方20个",
+        "说明、输入schema和资源引用；不自动授予工具/网络/预算"
+      ],
+      "first_gate": "G3",
+      "work": [
+        "AG-010.04"
+      ],
+      "acceptance": [
+        "SS-07"
+      ],
+      "source": "plan/support-scope/07-extensions.md"
+    },
+    "EX-02": {
+      "terms": [
+        "EX-02",
+        "MCP连接配置包",
+        "支持stdio与Streamable HTTP的已认证配置",
+        "扩展认证目录",
+        "仅描述受控server/端点/版本/权限；安装不等于启动授权"
+      ],
+      "first_gate": "G3",
+      "work": [
+        "AG-010.04"
+      ],
+      "acceptance": [
+        "SS-07"
+      ],
+      "source": "plan/support-scope/07-extensions.md"
+    },
+    "EX-03": {
+      "terms": [
+        "EX-03",
+        "官方连接器包",
+        "对应6个CN的只读能力",
+        "对应16个CN及允许动作",
+        "随签名发行物发布编译适配器；不是用户原生代码热插入"
+      ],
+      "first_gate": "G3",
+      "work": [
+        "AG-010.04"
+      ],
+      "acceptance": [
+        "SS-07"
+      ],
+      "source": "plan/support-scope/07-extensions.md"
+    },
+    "EX-04": {
+      "terms": [
+        "EX-04",
+        "Wasm工具包",
+        "关闭，仅G0实验可测",
+        "条件支持",
+        "Component/WASI路线候选；host能力白名单、fuel/内存/deadline分别限制"
+      ],
+      "first_gate": "G4",
+      "work": [
+        "AG-010.04"
+      ],
+      "acceptance": [
+        "SS-07"
+      ],
+      "source": "plan/support-scope/07-extensions.md"
+    },
+    "CX-01": {
+      "terms": [
+        "CX-01",
+        "桌面↔控制面",
+        "同一API主版本，认证当前及上一稳定minor；最低兼容版本显式返回",
+        "过旧版本允许查看升级提示，禁止新收费操作"
+      ],
+      "first_gate": "G3",
+      "work": [
+        "API-006.04"
+      ],
+      "acceptance": [
+        "SS-08"
+      ],
+      "source": "plan/support-scope/08-compatibility.md"
+    },
+    "CX-02": {
+      "terms": [
+        "CX-02",
+        "Worker↔控制面",
+        "独立protocol_version、能力位、引擎/模型摘要；同主版本协商",
+        "不支持版本不发新租约；在途任务按已授权期限收尾"
+      ],
+      "first_gate": "G3",
+      "work": [
+        "API-006.04"
+      ],
+      "acceptance": [
+        "SS-08"
+      ],
+      "source": "plan/support-scope/08-compatibility.md"
+    },
+    "CX-03": {
+      "terms": [
+        "CX-03",
+        "Flutter↔Rust/FRB",
+        "同一签名应用发行包内严格配对，生成物摘要一致",
+        "不混搭任意Dart库和Rust动态库"
+      ],
+      "first_gate": "G3",
+      "work": [
+        "API-006.04"
+      ],
+      "acceptance": [
+        "SS-08"
+      ],
+      "source": "plan/support-scope/08-compatibility.md"
+    },
+    "CX-04": {
+      "terms": [
+        "CX-04",
+        "AgentHost↔sidecar",
+        "固定已测试commit/构建，不采用浮动上游latest",
+        "协议不匹配拒绝执行，保留历史只读能力"
+      ],
+      "first_gate": "G3",
+      "work": [
+        "API-006.04"
+      ],
+      "acceptance": [
+        "SS-08"
+      ],
+      "source": "plan/support-scope/08-compatibility.md"
+    },
+    "CX-05": {
+      "terms": [
+        "CX-05",
+        "扩展↔宿主",
+        "明确host_api主/次版本与内容摘要；同主版本仅通过能力协商的子集",
+        "缺必需能力则禁用，不猜测字段含义"
+      ],
+      "first_gate": "G3",
+      "work": [
+        "API-006.04"
+      ],
+      "acceptance": [
+        "SS-08"
+      ],
+      "source": "plan/support-scope/08-compatibility.md"
+    },
+    "CX-06": {
+      "terms": [
+        "CX-06",
+        "MCP↔server",
+        "2026-07-28和2025-11-25两条独立路径",
+        "不支持版本明确拒绝，不静默全协议降级"
+      ],
+      "first_gate": "G3",
+      "work": [
+        "API-006.04"
+      ],
+      "acceptance": [
+        "SS-08"
+      ],
+      "source": "plan/support-scope/08-compatibility.md"
+    },
+    "CX-07": {
+      "terms": [
+        "CX-07",
+        "模型↔provider",
+        "MP协议档＋模型/模板版本＋能力profile联合认证",
+        "不支持工具/模态/usage时禁用对应能力"
+      ],
+      "first_gate": "G3",
+      "work": [
+        "API-006.04"
+      ],
+      "acceptance": [
+        "SS-08"
+      ],
+      "source": "plan/support-scope/08-compatibility.md"
+    },
+    "CX-08": {
+      "terms": [
+        "CX-08",
+        "会话/操作数据",
+        "当前及前两个已发行数据格式可读；迁移链和谱系可核对",
+        "未知未来格式只读拒绝或提示升级，禁止破坏性写入"
+      ],
+      "first_gate": "G3",
+      "work": [
+        "API-006.04"
+      ],
+      "acceptance": [
+        "SS-08"
+      ],
+      "source": "plan/support-scope/08-compatibility.md"
+    },
+    "CX-09": {
+      "terms": [
+        "CX-09",
+        "云数据库",
+        "向前迁移采用扩展—迁移—收缩；应用滚动升级窗口显式测试",
+        "不支持直接用旧二进制写新schema，回退依已验证方案"
+      ],
+      "first_gate": "G3",
+      "work": [
+        "API-006.04"
+      ],
+      "acceptance": [
+        "SS-08"
+      ],
+      "source": "plan/support-scope/08-compatibility.md"
+    },
+    "CX-10": {
+      "terms": [
+        "CX-10",
+        "连接器↔厂商",
+        "每CN动作锁定厂商API revision、认证方式与对象schema",
+        "厂商变更触发降级/停用，不把少字段结果记为完整成功"
+      ],
+      "first_gate": "G3",
+      "work": [
+        "API-006.04"
+      ],
+      "acceptance": [
+        "SS-08"
+      ],
+      "source": "plan/support-scope/08-compatibility.md"
+    },
+    "CX-11": {
+      "terms": [
+        "CX-11",
+        "模型/插件/Worker发行物",
+        "签名、摘要、发布者、兼容范围、撤销记录一起核验",
+        "篡改、未知发布者、被撤销版本拒绝激活"
+      ],
+      "first_gate": "G3",
+      "work": [
+        "API-006.04"
+      ],
+      "acceptance": [
+        "SS-08"
+      ],
+      "source": "plan/support-scope/08-compatibility.md"
+    },
+    "CX-12": {
+      "terms": [
+        "CX-12",
+        "文本、时间与数值",
+        "UTF-8、UTC持久化＋IANA展示时区、整数微积分/毫秒、ID无损字符串",
+        "不以本地时钟延长租约，不让JSON浮点吞掉64位ID/金额"
+      ],
+      "first_gate": "G3",
+      "work": [
+        "API-006.04"
+      ],
+      "acceptance": [
+        "SS-08"
+      ],
+      "source": "plan/support-scope/08-compatibility.md"
+    }
+  },
+  "team_permissions": {
+    "创建团队计费Run": {
+      "owner": "可，受额度限制",
+      "admin": "可，受额度限制",
+      "member": "可，受额度限制",
+      "billing": "否",
+      "viewer": "否"
+    },
+    "查看自己Run内容": {
+      "owner": "ACL",
+      "admin": "ACL",
+      "member": "ACL",
+      "billing": "否",
+      "viewer": "ACL，仅历史或已共享内容"
+    },
+    "查看团队共享内容/产物/记忆": {
+      "owner": "ACL",
+      "admin": "ACL",
+      "member": "ACL",
+      "billing": "否",
+      "viewer": "ACL"
+    },
+    "读取其他成员私有内容": {
+      "owner": "否，须其明确分享",
+      "admin": "否，须其明确分享",
+      "member": "否",
+      "billing": "否",
+      "viewer": "否"
+    },
+    "查看团队任务状态/成本元数据": {
+      "owner": "可",
+      "admin": "可",
+      "member": "本人及明确共享任务",
+      "billing": "账单所需元数据",
+      "viewer": "明确共享任务的非敏感状态"
+    },
+    "取消本人Run": {
+      "owner": "可",
+      "admin": "可",
+      "member": "可",
+      "billing": "否",
+      "viewer": "否"
+    },
+    "管理性停止团队Run": {
+      "owner": "可，记录原因",
+      "admin": "可，记录原因",
+      "member": "否",
+      "billing": "只能暂停其管理的付费额度",
+      "viewer": "否"
+    },
+    "批准本人工具操作": {
+      "owner": "可，不能超政策",
+      "admin": "可，不能超政策",
+      "member": "可，不能超政策",
+      "billing": "否",
+      "viewer": "否"
+    },
+    "批准他人的工具操作": {
+      "owner": "仅被明确指定且能审阅内容",
+      "admin": "同左",
+      "member": "仅显式委派且政策允许",
+      "billing": "否",
+      "viewer": "否"
+    },
+    "分享本人资源/调整其ACL": {
+      "owner": "可",
+      "admin": "可",
+      "member": "可",
+      "billing": "否",
+      "viewer": "否"
+    },
+    "设置组织硬预算": {
+      "owner": "可",
+      "admin": "可，在owner允许上限内",
+      "member": "否",
+      "billing": "提出预算申请，不能自行放宽硬上限",
+      "viewer": "否"
+    },
+    "分配成员消费额度": {
+      "owner": "可",
+      "admin": "可",
+      "member": "否",
+      "billing": "否",
+      "viewer": "否"
+    },
+    "查看账单/导出费用": {
+      "owner": "可",
+      "admin": "可",
+      "member": "本人用量",
+      "billing": "可",
+      "viewer": "否"
+    },
+    "发起充值/符合规则的原路退款": {
+      "owner": "可",
+      "admin": "只能申请，由owner/billing执行",
+      "member": "否",
+      "billing": "可，受支付/退款政策",
+      "viewer": "否"
+    },
+    "邀请或移除普通成员": {
+      "owner": "可",
+      "admin": "可，不能操作owner/admin",
+      "member": "否",
+      "billing": "否",
+      "viewer": "否"
+    },
+    "任命owner/admin、转让所有权": {
+      "owner": "可；禁止移除最后一个owner",
+      "admin": "否",
+      "member": "否",
+      "billing": "否",
+      "viewer": "否"
+    },
+    "审批团队连接器/扩展": {
+      "owner": "可",
+      "admin": "可，在允许清单内",
+      "member": "可申请，不可自启用团队包",
+      "billing": "否",
+      "viewer": "否"
+    },
+    "修改平台模型价格/余额流水": {
+      "owner": "否",
+      "admin": "否",
+      "member": "否",
+      "billing": "否",
+      "viewer": "否"
+    },
+    "关闭/解散组织": {
+      "owner": "可，先处理在途资金和数据",
+      "admin": "否",
+      "member": "否",
+      "billing": "否",
+      "viewer": "否"
+    }
+  }
+}

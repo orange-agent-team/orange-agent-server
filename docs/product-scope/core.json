@@ -1,0 +1,249 @@
+{
+  "milestones": {
+    "M0": "确定领域、契约和隔离探针",
+    "M1": "内部离线桌面与本地文本任务",
+    "M2": "内部账户、远程任务、测试积分与恢复",
+    "M3": "内部四种模态、团队、贡献收益和风控",
+    "M4": "拟公开注册与付费，需要同时通过联合 G3 和外部发布门禁",
+    "M5": "独立规划与认证后续能力"
+  },
+  "public_launch": {
+    "milestone": "M4",
+    "gate": "G3",
+    "registration": "open_registration",
+    "execution_authorized": false,
+    "conditions": [
+      "经营地区和收款主体获准",
+      "真实商户认证和退款核验",
+      "目标设备和操作系统验证",
+      "签名发行、值守、恢复演练和质量报告",
+      "独立的公开发布授权"
+    ]
+  },
+  "capabilities": [
+    {
+      "id": "ownership",
+      "name": "角色与私有资源",
+      "milestone": "M0",
+      "gate": "G0",
+      "owning_step": "PRD-001.04",
+      "validation_unit": "ADMIN-AUDIT-001",
+      "acceptance": "成员、外部账户和平台运维分别请求同一资源，核对允许范围、审计和拒绝效果"
+    },
+    {
+      "id": "local-text",
+      "name": "离线桌面文本",
+      "milestone": "M1",
+      "gate": "G1",
+      "owning_step": "ML-002.02",
+      "validation_unit": "MODEL-LOCAL-001",
+      "acceptance": "断网加载固定模型并产生可读取的文本，取消后停止本次推理"
+    },
+    {
+      "id": "agent-run",
+      "name": "审批和恢复",
+      "milestone": "M1",
+      "gate": "G1",
+      "owning_step": "AG-005.04",
+      "validation_unit": "AGENT-REAL-001",
+      "acceptance": "在副作用前后各中断一次，从操作日志恢复且只出现一次已批准效果"
+    },
+    {
+      "id": "private-routing",
+      "name": "隐私路由",
+      "milestone": "M1",
+      "gate": "G1",
+      "owning_step": "RT-003.04",
+      "validation_unit": "TRANSCRIPTION-REMOTE-INPUT-001",
+      "acceptance": "禁用上送后输入保持本地，撤回授权后在途任务不能再取数据"
+    },
+    {
+      "id": "identity",
+      "name": "用户与独立会话",
+      "milestone": "M2",
+      "gate": "G2",
+      "owning_step": "CP-001.04",
+      "validation_unit": "USER-OIDC-001",
+      "acceptance": "两位用户各自登录，注销或撤权后的令牌拒绝访问原资源"
+    },
+    {
+      "id": "remote-text",
+      "name": "报价与远程任务",
+      "milestone": "M2",
+      "gate": "G2",
+      "owning_step": "AG-024.04",
+      "validation_unit": "TRUSTED-PRICING-001",
+      "acceptance": "依据不可变报价和输出凭证计量，重复提交返回同一任务和账单"
+    },
+    {
+      "id": "node-enrollment",
+      "name": "设备登记和撤销",
+      "milestone": "M2",
+      "gate": "G2",
+      "owning_step": "CP-004.04",
+      "validation_unit": "WORKER-SESSION-001",
+      "acceptance": "旧凭证轮换或撤销后连接失效，新连接不能重放旧代次"
+    },
+    {
+      "id": "supply-policy",
+      "name": "供给、停止和回收",
+      "milestone": "M2",
+      "gate": "G2",
+      "owning_step": "WK-005.04",
+      "validation_unit": "NODE-POLICY-001",
+      "acceptance": "撤回贡献后拒绝新单，在途工作按租约停止并确认资源回收"
+    },
+    {
+      "id": "development-credits",
+      "name": "开发积分冻结、消费和解冻",
+      "milestone": "M2",
+      "gate": "G2",
+      "owning_step": "PAY-003.04",
+      "validation_unit": "TRUSTED-PRICING-001",
+      "acceptance": "核对冻结、成功入账与失败释放；重复回执无第二笔分录"
+    },
+    {
+      "id": "embedding",
+      "name": "文本嵌入",
+      "milestone": "M3",
+      "gate": "G3",
+      "owning_step": "ML-002.04",
+      "validation_unit": "MODEL-EMBEDDING-001",
+      "acceptance": "固定模型下输出数目、顺序、维度与输入对应；整批失败保持一致"
+    },
+    {
+      "id": "image",
+      "name": "图像生成",
+      "milestone": "M3",
+      "gate": "G3",
+      "owning_step": "ML-003.03",
+      "validation_unit": "MODEL-IMAGE-001",
+      "acceptance": "发布可解码的图像，取消或无效输入不能发布成功产物"
+    },
+    {
+      "id": "transcription",
+      "name": "语音转写",
+      "milestone": "M3",
+      "gate": "G3",
+      "owning_step": "ML-004.04",
+      "validation_unit": "TRANSCRIPTION-REMOTE-INPUT-001",
+      "acceptance": "授权录音得到可读文字及时间段，撤权后无法发布或取得收益"
+    },
+    {
+      "id": "team",
+      "name": "团队与成员预算",
+      "milestone": "M3",
+      "gate": "G3",
+      "owning_step": "CP-002.04",
+      "validation_unit": "TEAM-PORTAL-001",
+      "acceptance": "成员用团队预算发起任务，团队和个人钱包分别核对，撤权后拒绝新提交"
+    },
+    {
+      "id": "provider-income",
+      "name": "贡献收益",
+      "milestone": "M3",
+      "gate": "G3",
+      "owning_step": "PAY-004.04",
+      "validation_unit": "TRUSTED-PRICING-001",
+      "acceptance": "消费方和供应方可互换，同一分录的消费、平台费用、待入账收益守恒"
+    },
+    {
+      "id": "top-up",
+      "name": "原单充值与商户确认",
+      "milestone": "M4",
+      "gate": "G3",
+      "owning_step": "PAY-005.04",
+      "validation_unit": "SANDBOX-CHECKOUT-001",
+      "acceptance": "按原币原单读取商户凭证，重复回调仅增加一次购买余额"
+    },
+    {
+      "id": "refund",
+      "name": "原路退款与拒付",
+      "milestone": "M4",
+      "gate": "G3",
+      "owning_step": "PAY-006.04",
+      "validation_unit": "SANDBOX-CHECKOUT-001",
+      "acceptance": "独立复核、已消费批次和未知外部结果分开处理，退款确认后仅冲正一次"
+    },
+    {
+      "id": "payments-report",
+      "name": "现金与分账日报",
+      "milestone": "M4",
+      "gate": "G3",
+      "owning_step": "PAY-007.04",
+      "validation_unit": "MERCHANT-STATEMENT-001",
+      "acceptance": "按 UTC 账期和币种复核毛额、手续费、退款和平台积分，差异保留关联编号与凭证"
+    },
+    {
+      "id": "web-agent",
+      "name": "用户 Web 与托管 Agent",
+      "milestone": "M4",
+      "gate": "G3",
+      "owning_step": "AG-008.04",
+      "validation_unit": "CLOUD-MODEL-TURN-001",
+      "acceptance": "通过用户会话在获准工作区执行，撤回会话后拒绝工具与数据访问"
+    },
+    {
+      "id": "operator",
+      "name": "独立 Admin 与审批",
+      "milestone": "M4",
+      "gate": "G3",
+      "owning_step": "CP-006.04",
+      "validation_unit": "ADMIN-ACTIONS-001",
+      "acceptance": "两位不同管理员分别制单和批准，权限撤销使待执行动作失效"
+    },
+    {
+      "id": "release",
+      "name": "开放注册及受限地区收费",
+      "milestone": "M4",
+      "gate": "G3",
+      "owning_step": "REL-003.02",
+      "validation_unit": null,
+      "acceptance": "核对已选地区的商户、设备、签名和运维凭证并取得专门发布授权"
+    }
+  ],
+  "deferred": [
+    {
+      "id": "tts",
+      "name": "语音合成",
+      "disposition": "M5",
+      "admission": "独立协议、声音权利与音质、取消及计量验证"
+    },
+    {
+      "id": "cash-withdrawal",
+      "name": "贡献积分提现",
+      "disposition": "research_only",
+      "admission": "独立结算主体、合规、欺诈与资金托管评审"
+    },
+    {
+      "id": "credit-transfer",
+      "name": "用户间积分转账",
+      "disposition": "research_only",
+      "admission": "单独决策、资金监管和账户风险评审"
+    },
+    {
+      "id": "public-worker-code",
+      "name": "公共节点执行用户代码",
+      "disposition": "research_only",
+      "admission": "公共 Worker 只接审核模型推理；托管工作区另有隔离边界"
+    },
+    {
+      "id": "external-model-upload",
+      "name": "第三方任意模型上传",
+      "disposition": "research_only",
+      "admission": "模型来源、许可、格式与执行安全准入"
+    },
+    {
+      "id": "distributed-training",
+      "name": "跨节点训练",
+      "disposition": "research_only",
+      "admission": "独立资源协议、容错、隔离与成本验证"
+    },
+    {
+      "id": "chain-settlement",
+      "name": "链上资金结算",
+      "disposition": "research_only",
+      "admission": "独立产品决策、协议和资金治理"
+    }
+  ]
+}
