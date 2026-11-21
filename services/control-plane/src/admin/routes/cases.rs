@@ -205,7 +205,18 @@ pub(super) async fn activity(
         last = Some(rev);
     }
     let mut result = json!({"case_id":id,"owner_id":identifier(row.try_get("owner_id")?)?,"version":version.to_string(),"data":data});
-    if scope.environment == "dev" {
+    if scope.environment == "dev"
+        && session.authorize("payments.read", &scope).is_ok()
+        && session.authorize("ledger.read", &scope).is_ok()
+    {
+        let earning:Option<serde_json::Value>=sqlx::query_scalar("SELECT jsonb_build_object('job_id',job_id,'source_transaction',source_transaction,
+          'units',units::text,'eligible_unix',floor(extract(epoch FROM eligible_at))::bigint::text,'disposition',disposition,
+          'release_transaction',release_transaction) FROM provider_earning_status WHERE case_id=$1 AND provider_owner=$2")
+          .bind(&id).bind(row.try_get::<&str,_>("owner_id")?).fetch_optional(&mut *tx).await?;
+        if let Some(earning) = earning {
+            result["earning"] = earning;
+        }
+
         let receipt:Option<serde_json::Value>=sqlx::query_scalar("SELECT jsonb_build_object('event_id',r.event_id,'state',r.state,
             'generation',r.generation::text,'attempts',r.attempts::text,'policy_id',r.policy_id,
             'retry_deadline_unix',floor(extract(epoch FROM r.deadline))::bigint::text,
@@ -237,6 +248,10 @@ pub(super) async fn activity(
     }
     let live = identity.current_in(&headers, &mut tx).await?;
     live.authorize("cases.read", &scope)?;
+    if result.get("earning").is_some() || result.get("metering").is_some() {
+        live.authorize("payments.read", &scope)?;
+        live.authorize("ledger.read", &scope)?;
+    }
     audit::record_read(
         &mut tx,
         &live,

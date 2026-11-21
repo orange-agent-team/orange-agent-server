@@ -11,6 +11,10 @@ pub enum Edit {
         case_id: String,
         note: String,
     },
+    ReleaseEarning {
+        case_id: String,
+        job_id: String,
+    },
     RetryMetering {
         case_id: String,
         event_id: String,
@@ -25,12 +29,15 @@ impl Edit {
         match self {
             Self::Assign { case_id, .. }
             | Self::Note { case_id, .. }
+            | Self::ReleaseEarning { case_id, .. }
             | Self::RetryMetering { case_id, .. }
             | Self::Close { case_id, .. } => case_id,
         }
     }
     pub(super) fn permission(&self) -> &'static str {
-        if matches!(self, Self::RetryMetering { .. }) {
+        if matches!(self, Self::ReleaseEarning { .. }) {
+            "earnings.release"
+        } else if matches!(self, Self::RetryMetering { .. }) {
             "metering.retry"
         } else if matches!(self, Self::Close { .. }) {
             "cases.close"
@@ -44,6 +51,7 @@ impl Edit {
             Self::Note { note, .. } => {
                 reason(note, 1) && !note.chars().any(|c| c.is_control() && c != '\n')
             }
+            Self::ReleaseEarning { job_id, .. } => request.scope.environment == "dev" && id(job_id),
             Self::Close { resolution_ref, .. } => id(resolution_ref),
             Self::RetryMetering { event_id, .. } => {
                 request.scope.environment == "dev" && id(event_id)
@@ -72,6 +80,9 @@ pub(super) async fn target(
     if state == "resolved" {
         return Err(AdminError::Conflict);
     }
+    if let Edit::ReleaseEarning { case_id, job_id } = edit {
+        crate::provider_earnings::eligible(tx, case_id, job_id).await?;
+    }
     if let Edit::RetryMetering { case_id, event_id } = edit {
         let allowed:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM metering_receipts r JOIN reconciliation_cases c USING(case_id,owner_id)
           WHERE r.event_id=$1 AND r.case_id=$2 AND r.state='dead' AND c.business_ref='metering:'||r.event_id AND c.environment='dev')")
@@ -82,7 +93,7 @@ pub(super) async fn target(
     }
     if matches!(edit, Edit::Close { .. }) {
         let pending: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM metering_receipts WHERE case_id=$1 AND state<>'posted')",
+            "SELECT EXISTS(SELECT 1 FROM metering_receipts WHERE case_id=$1 AND state<>'posted') OR EXISTS(SELECT 1 FROM provider_earning_cases c WHERE c.case_id=$1 AND NOT EXISTS(SELECT 1 FROM provider_earning_releases r WHERE r.job_id=c.job_id))",
         )
         .bind(edit.case_id())
         .fetch_one(&mut **tx)
@@ -152,6 +163,11 @@ pub(super) async fn apply(
         }
         Edit::Note { case_id,.. } => sqlx::query("UPDATE reconciliation_cases SET version=$1 WHERE case_id=$2 AND version=$3")
             .bind(next).bind(case_id).bind(version).execute(&mut **tx).await?,
+        Edit::ReleaseEarning{case_id,job_id}=>{
+            crate::provider_earnings::release(tx,case_id,job_id,action).await?;
+            sqlx::query("UPDATE reconciliation_cases SET state='investigating',version=$2 WHERE case_id=$1 AND version=$3")
+                .bind(case_id).bind(next).bind(version).execute(&mut **tx).await?
+        }
         Edit::RetryMetering {case_id,event_id}=>{
             let reopened=sqlx::query("WITH reopened AS (UPDATE metering_receipts r SET state='received',generation=r.generation+1,
                 attempts=0,next_attempt=clock_timestamp(),deadline=clock_timestamp()+make_interval(secs=>p.retry_seconds)

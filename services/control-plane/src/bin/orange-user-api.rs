@@ -209,6 +209,18 @@ async fn serve(
             }}
         }
     });
+    let earning_store = store.clone();
+    let mut earning_stop = stop.subscribe();
+    let earning_reviews = tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(30));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tokio::select! {_=earning_stop.changed()=>break,_=tick.tick()=>{
+                let result=tokio::select!{_=earning_stop.changed()=>break,result=orange_control_plane::provider_earnings::prepare_reviews(earning_store.pool(),100)=>result};
+                if result.is_err(){eprintln!("Mature development earnings remain pending review");}
+            }}
+        }
+    });
     let mut expiry_stopped = stop.subscribe();
     let expiry_store = store.clone();
     let queue_expiry = tokio::spawn(async move {
@@ -289,6 +301,7 @@ async fn serve(
     } else {
         None
     };
+    earning_reviews.await?;
     queue_expiry.await?;
     cloud_results.await?;
     #[cfg(unix)]

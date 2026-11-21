@@ -13,7 +13,7 @@ pub(crate) struct Operator {
     pub(crate) token: String,
     pub(crate) csrf: String,
 }
-async fn operator(pool: &sqlx::PgPool, issuer: &str, owner: &str) -> Operator {
+async fn operator(pool: &sqlx::PgPool, issuer: &str, owner: &str, role: &str) -> Operator {
     use orange_control_plane::admin::{hash_secret, random_secret};
     let a = Operator {
         id: Uuid::new_v4().to_string(),
@@ -26,8 +26,8 @@ async fn operator(pool: &sqlx::PgPool, issuer: &str, owner: &str) -> Operator {
         .execute(pool)
         .await
         .expect("finance principal");
-    sqlx::query("INSERT INTO admin_grants(principal_id,role,environment,scope_kind,scope_id,expires_at) VALUES($1,'finance_operator','dev','tenant',$2,floor(extract(epoch FROM clock_timestamp()))::bigint+3600)")
-       .bind(&a.id).bind(owner).execute(pool).await.expect("finance grant");
+    sqlx::query("INSERT INTO admin_grants(principal_id,role,environment,scope_kind,scope_id,expires_at) VALUES($1,$3,'dev','tenant',$2,floor(extract(epoch FROM clock_timestamp()))::bigint+3600)")
+       .bind(&a.id).bind(owner).bind(role).execute(pool).await.expect("finance grant");
     sqlx::query("INSERT INTO admin_sessions(token_hash,principal_id,csrf_token,auth_time,idle_expires_at,absolute_expires_at) VALUES($1,$2,$3,floor(extract(epoch FROM clock_timestamp()))::bigint,floor(extract(epoch FROM clock_timestamp()))::bigint+600,floor(extract(epoch FROM clock_timestamp()))::bigint+3600)")
       .bind(hash_secret(&a.token)).bind(&a.id).bind(&a.csrf).execute(pool).await.expect("explicit independent session");
     a
@@ -40,6 +40,9 @@ pub(crate) struct Admin {
 }
 impl Admin {
     pub(crate) async fn new(db: &Store, owner: &str) -> Self {
+        Self::with_role(db, owner, "finance_operator").await
+    }
+    pub(crate) async fn with_role(db: &Store, owner: &str, role: &str) -> Self {
         use orange_control_plane::admin::{
             identity::{AdminIdentity, OidcConfig},
             routes,
@@ -52,8 +55,8 @@ impl Admin {
         )
         .expect("OIDC");
         let origin = cfg.admin_origin.clone();
-        let maker = operator(db.pool(), &cfg.issuer, owner).await;
-        let checker = operator(db.pool(), &cfg.issuer, owner).await;
+        let maker = operator(db.pool(), &cfg.issuer, owner, role).await;
+        let checker = operator(db.pool(), &cfg.issuer, owner, role).await;
         let app = routes::router(
             AdminIdentity::discover(db.pool().clone(), cfg)
                 .await

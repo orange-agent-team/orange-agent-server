@@ -3,6 +3,7 @@
 from locked_transcription_env import interpreter
 import argparse
 import json
+import hashlib
 import os
 from pathlib import Path
 import subprocess
@@ -22,7 +23,10 @@ parser.add_argument("--text-runtime",type=Path,default=ROOT/".local/model-runtim
 parser.add_argument("--web-repo",type=Path)
 parser.add_argument("--uv-cache",type=Path,default=ROOT/".local/uv-cache")
 parser.add_argument("--six-journeys-only",action="store_true")
+parser.add_argument("--provider-earnings",action="store_true")
+parser.add_argument("--earning-admin",type=Path)
 args=parser.parse_args()
+if (args.provider_earnings or args.earning_admin) and not args.six_journeys_only:parser.error("Earning review requires the six-journey fixture")
 args.python = args.python or interpreter(ROOT,args.uv_cache)
 browser={}
 if args.web_repo:
@@ -32,6 +36,22 @@ if args.web_repo:
     subprocess.run([sys.executable,web/"scripts/local-tls.py"],cwd=web,check=True)
     evidence=ROOT/".local/audio-consent-evidence";evidence.mkdir(mode=0o700,parents=True,exist_ok=True)
     browser={"ORANGE_AUDIO_CONSENT_BROWSER":str(web/"apps/web/scripts/real-audio-consent.mjs"),"ORANGE_AUDIO_CONSENT_NODE":str(node),"ORANGE_AUDIO_CONSENT_SCREENSHOT":str(evidence/"authorization.png")}
+
+if args.web_repo and (args.provider_earnings or args.earning_admin):
+    browser["ORANGE_EARN_USER_BROWSER"]=str(web/"apps/web/scripts/real-provider-income.mjs")
+    browser["ORANGE_EARN_USER_CAPTURE"]=str(evidence/"provider-income.png")
+if args.earning_admin:
+    reserve_origins(43112)
+    admin=args.earning_admin.resolve();node=Path.home()/".nvm/versions/node/v22.23.2/bin/node"
+    metadata=json.loads((admin/"docs/contracts/snapshot.json").read_bytes())
+    for val in metadata["files"].values():
+        if hashlib.sha256((ROOT/val["source"]).read_bytes()).hexdigest()!=val["sha256"]:raise ValueError("Earning review Admin contract mismatch")
+    subprocess.run([node,admin/"scripts/check.mjs"],cwd=admin,check=True)
+    subprocess.run([sys.executable,admin/"scripts/local-tls.py"],cwd=admin,check=True)
+    capture=ROOT/".local/earning-review";capture.mkdir(parents=True,mode=0o700,exist_ok=True)
+    browser.update(ORANGE_EARN_BROWSER=str(admin/"apps/admin/scripts/real-earning-review.mjs"),ORANGE_EARN_NODE=str(node),
+                   ORANGE_EARN_SCREENSHOT=str(capture/"release.png"))
+if args.provider_earnings or args.earning_admin:browser["ORANGE_PROVIDER_EARNING_TEST"]="1"
 
 with database(args.database_url_file,"orange_audio_grant_") as (_,url), database(args.database_url_file,"orange_audio_old_") as (_,old), tempfile.TemporaryDirectory(prefix="orange-audio-grant-") as tmp:
     folder=Path(tmp);slot=folder/"slot";slot.mkdir(mode=0o700)

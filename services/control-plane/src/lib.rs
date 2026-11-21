@@ -18,6 +18,7 @@ pub mod notion;
 pub mod payments;
 pub mod pg_view_sources;
 pub mod pg_views;
+pub mod provider_earnings;
 pub mod queue;
 pub mod repo_connector;
 pub mod s3_objects;

@@ -2007,6 +2007,12 @@ async fn one_no_gpu_account_traverses_consumption_supply_team_privacy_purchase_a
         .expect("count post-scan postings");
     assert_eq!(before, after);
 
+    if std::env::var_os("ORANGE_PROVIDER_EARNING_TEST").is_some() {
+        earning_review::after_actual_jobs(&db, &a, &b, &app, &org).await;
+    }
     let _ = stop.send(());
     server.await.expect("merchant stopped");
 }
+
+#[path = "earning_review.rs"]
+mod earning_review;

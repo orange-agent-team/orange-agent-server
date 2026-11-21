@@ -149,6 +149,9 @@ impl ActionRequest {
     fn policy(&self) -> &'static str {
         match self.payload {
             ActionPayload::Role(_) => "admin-role-governance-v1",
+            ActionPayload::Case(case_edit::Edit::ReleaseEarning { .. }) => {
+                "admin-provider-credits-v1"
+            }
             ActionPayload::Case(case_edit::Edit::RetryMetering { .. }) => {
                 "admin-metering-replay-v1"
             }
@@ -179,6 +182,9 @@ impl ActionRequest {
             ("payment.refund", ActionPayload::Refund(_)) => Some("payments.refund.approve"),
             ("pricing.publish", ActionPayload::Price(_)) => Some("pricing.publish.approve"),
             ("node.resume", ActionPayload::Node(_)) => Some("nodes.resume.approve"),
+            ("case.update", ActionPayload::Case(case_edit::Edit::ReleaseEarning { .. })) => {
+                Some("earnings.release.approve")
+            }
             ("case.update", ActionPayload::Case(case_edit::Edit::RetryMetering { .. })) => {
                 Some("metering.retry.approve")
             }

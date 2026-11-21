@@ -105,3 +105,55 @@ impl Store {
         budget_view(&row)
     }
 }
+
+impl Store {
+    pub(crate) async fn provider_income(
+        guard: &mut UserSessionGuard,
+        after: Option<&str>,
+        limit: u16,
+    ) -> Result<orange_protocol::account::ProviderIncomeList, StoreError> {
+        use orange_protocol::account::{ProviderIncome, ProviderIncomeList, ProviderIncomeState};
+        if !(1..=100).contains(&limit) || after.is_some_and(|id| !valid_id(id)) {
+            return Err(StoreError::Invalid);
+        }
+        let owner = guard.view().personal_owner_id.clone();
+        if let Some(cursor) = after {
+            let owned:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM provider_earning_origins WHERE job_id=$1 AND provider_owner=$2)")
+                .bind(cursor).bind(&owner).fetch_one(&mut **guard.transaction()).await?;
+            if !owned {
+                return Err(StoreError::Invalid);
+            }
+        }
+        let rows=sqlx::query("SELECT e.job_id,e.units,floor(extract(epoch FROM e.eligible_at))::bigint AS due,
+            r.job_id IS NOT NULL AS released,e.eligible_at<=provider_credit_now() AS matured FROM provider_earning_origins e
+            LEFT JOIN provider_earning_releases r USING(job_id) WHERE e.provider_owner=$1 AND ($2::text IS NULL OR
+              (e.settled_at,e.job_id)<(SELECT c.settled_at,c.job_id FROM provider_earning_origins c WHERE c.provider_owner=$1 AND c.job_id=$2))
+            ORDER BY e.settled_at DESC,e.job_id DESC LIMIT $3").bind(&owner).bind(after).bind(i64::from(limit)+1).fetch_all(&mut **guard.transaction()).await?;
+        let mut data = Vec::new();
+        for row in rows.iter().take(usize::from(limit)) {
+            data.push(ProviderIncome {
+                job_id: row.try_get("job_id")?,
+                units: Money(credits(row.try_get("units")?)?),
+                eligible_unix: row.try_get::<i64, _>("due")?.to_string(),
+                state: if row.try_get("released")? {
+                    ProviderIncomeState::Available
+                } else if row.try_get("matured")? {
+                    ProviderIncomeState::Review
+                } else {
+                    ProviderIncomeState::Pending
+                },
+            });
+        }
+        let next_cursor = if rows.len() > usize::from(limit) {
+            data.last().map(|r| r.job_id.clone())
+        } else {
+            None
+        };
+        Ok(ProviderIncomeList {
+            user_id: guard.view().user_id.clone(),
+            owner_id: owner,
+            data,
+            next_cursor,
+        })
+    }
+}

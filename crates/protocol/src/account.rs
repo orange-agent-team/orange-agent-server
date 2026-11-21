@@ -22,3 +22,29 @@ pub struct PersonalBudgetList {
     pub data: Vec<BudgetView>,
     pub next_cursor: Option<String>,
 }
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderIncomeState {
+    Pending,
+    Review,
+    Available,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderIncome {
+    pub job_id: String,
+    pub units: Money,
+    pub eligible_unix: String,
+    pub state: ProviderIncomeState,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderIncomeList {
+    pub user_id: String,
+    pub owner_id: String,
+    pub data: Vec<ProviderIncome>,
+    pub next_cursor: Option<String>,
+}

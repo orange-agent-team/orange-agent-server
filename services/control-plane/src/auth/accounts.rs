@@ -80,3 +80,16 @@ pub(super) async fn create_budget(
     guard.finish().await?;
     Ok(Json(result))
 }
+
+pub(super) async fn earnings(
+    State(identity): State<Arc<UserIdentity>>,
+    headers: HeaderMap,
+    query: Result<Query<BudgetQuery>, QueryRejection>,
+) -> Result<Json<orange_protocol::account::ProviderIncomeList>, UserApiError> {
+    let Query(q) = query.map_err(|_| AuthError::Invalid)?;
+    let mut session = identity.authenticate(&headers).await?;
+    let data =
+        Store::provider_income(&mut session, q.after.as_deref(), q.limit.unwrap_or(50)).await?;
+    session.finish().await?;
+    Ok(Json(data))
+}

@@ -677,8 +677,7 @@ async fn metering_deadline_preserves_hold_and_requires_independent_replay() {
     failed_settlement("client-ek", true).await;
 }
 
-#[path = "../../support/admin_browser.rs"]
-mod admin_browser;
+use crate::admin_browser;
 use crate::finance_sessions;
 
 async fn failed_settlement(cert: &str, expire: bool) {

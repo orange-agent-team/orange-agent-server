@@ -17,6 +17,7 @@ if len(policies)!=len(declared) or {rule['action_type'] for rule in policies}!=d
     raise SystemExit('Admin action policy catalog differs from the accepted action types')
 cases=next(rule for rule in policies if rule['action_type']=='case.update')
 expected={
+    'release_earning':('earnings.release','maker_checker','earnings.release.approve'),
     'retry_metering':('metering.retry','maker_checker','metering.retry.approve'),
     'assign':('cases.edit','single_operator',None),
     'note':('cases.edit','single_operator',None),

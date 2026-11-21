@@ -214,6 +214,7 @@ pub fn router(identity: UserIdentity) -> Router {
             get(team_budgets::read).post(team_budgets::adjust),
         )
         .route("/api/v1/account/wallet", get(accounts::wallet))
+        .route("/api/v1/account/earnings", get(accounts::earnings))
         .route(
             "/api/v1/account/budgets",
             get(accounts::budgets).post(accounts::create_budget),

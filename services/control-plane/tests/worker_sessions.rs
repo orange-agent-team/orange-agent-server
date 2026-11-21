@@ -1,3 +1,6 @@
+#[cfg(any(feature = "real-worker-tests", feature = "transcription-input-tests"))]
+#[path = "support/admin_browser.rs"]
+mod admin_browser;
 #[path = "worker_sessions/execution_cases.rs"]
 mod execution_cases;
 #[cfg(any(feature = "transcription-input-tests", feature = "real-worker-tests"))]
