@@ -150,37 +150,39 @@ impl TeamStore {
         key: &str,
         request: &ChangeMembership,
     ) -> Result<MembershipChange, TeamError> {
+        let mut tx = self.pool.begin().await?;
+        let result = Self::set_membership_in(&mut tx, actor, organization, key, request).await?;
+        tx.commit().await?;
+        Ok(result)
+    }
+    pub(crate) async fn set_membership_in(
+        tx: &mut Transaction<'_, Postgres>,
+        actor: &str,
+        organization: &str,
+        key: &str,
+        request: &ChangeMembership,
+    ) -> Result<MembershipChange, TeamError> {
         identifiers(&[actor, organization, key, &request.user_id])?;
         let digest = request_digest("team.membership", request).map_err(|_| TeamError::Invalid)?;
-        let mut tx = self.pool.begin().await?;
-        user(&mut tx, actor, false).await?;
-        let org = organization_row(&mut tx, organization, true).await?;
-        let authority = membership(&mut tx, organization, actor).await?;
+        user(tx, actor, false).await?;
+        let org = organization_row(tx, organization, true).await?;
+        let authority = membership(tx, organization, actor).await?;
         if !matches!(authority, TeamRole::Owner | TeamRole::Admin) {
             return Err(TeamError::Forbidden);
         }
         // Replays still require current management authority, before reading any saved result.
-        if let Some(value) = prior(
-            &mut tx,
-            actor,
-            organization,
-            "team.membership",
-            key,
-            &digest,
-        )
-        .await?
+        if let Some(value) = prior(tx, actor, organization, "team.membership", key, &digest).await?
         {
-            tx.commit().await?;
             return Ok(value);
         }
         if org.try_get::<i64, _>("policy_version")? != request.expected_policy_version {
             return Err(TeamError::Version);
         }
         if request.role.is_some() {
-            user(&mut tx, &request.user_id, false).await?;
+            user(tx, &request.user_id, false).await?;
         } else if sqlx::query("SELECT user_id FROM users WHERE user_id=$1 FOR SHARE")
             .bind(&request.user_id)
-            .fetch_optional(&mut *tx)
+            .fetch_optional(&mut **tx)
             .await?
             .is_none()
         {
@@ -191,7 +193,7 @@ impl TeamStore {
         )
         .bind(organization)
         .bind(&request.user_id)
-        .fetch_optional(&mut *tx)
+        .fetch_optional(&mut **tx)
         .await?;
         let current = previous
             .as_ref()
@@ -208,7 +210,7 @@ impl TeamStore {
             return Err(TeamError::Forbidden);
         }
         if current.as_deref() == Some("owner") && request.role != Some(TeamRole::Owner) {
-            let owners:i64=sqlx::query_scalar("SELECT count(*) FROM memberships m JOIN users u USING(user_id) WHERE m.organization_id=$1 AND m.role='owner' AND m.active AND u.active").bind(organization).fetch_one(&mut *tx).await?;
+            let owners:i64=sqlx::query_scalar("SELECT count(*) FROM memberships m JOIN users u USING(user_id) WHERE m.organization_id=$1 AND m.role='owner' AND m.active AND u.active").bind(organization).fetch_one(&mut **tx).await?;
             if owners <= 1 {
                 return Err(TeamError::LastOwner);
             }
@@ -218,7 +220,7 @@ impl TeamStore {
                 "SELECT count(*) FROM memberships WHERE organization_id=$1 AND active",
             )
             .bind(organization)
-            .fetch_one(&mut *tx)
+            .fetch_one(&mut **tx)
             .await?;
             if count >= i64::from(org.try_get::<i32, _>("member_limit")?) {
                 return Err(TeamError::Capacity);
@@ -226,19 +228,19 @@ impl TeamStore {
         }
         if let Some(role) = request.role {
             sqlx::query("INSERT INTO memberships(organization_id,user_id,role) VALUES($1,$2,$3) ON CONFLICT(organization_id,user_id) DO UPDATE SET role=EXCLUDED.role,active=TRUE")
-                .bind(organization).bind(&request.user_id).bind(role.as_str()).execute(&mut *tx).await?;
+                .bind(organization).bind(&request.user_id).bind(role.as_str()).execute(&mut **tx).await?;
         } else {
             sqlx::query(
                 "UPDATE memberships SET active=FALSE WHERE organization_id=$1 AND user_id=$2",
             )
             .bind(organization)
             .bind(&request.user_id)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
             // Rejoining must not restore old content grants, including a former creator's grants.
-            sqlx::query("UPDATE resource_acl a SET revoked=TRUE FROM team_resources r WHERE a.resource_id=r.resource_id AND r.organization_id=$1 AND a.user_id=$2").bind(organization).bind(&request.user_id).execute(&mut *tx).await?;
+            sqlx::query("UPDATE resource_acl a SET revoked=TRUE FROM team_resources r WHERE a.resource_id=r.resource_id AND r.organization_id=$1 AND a.user_id=$2").bind(organization).bind(&request.user_id).execute(&mut **tx).await?;
         }
-        let version:i64=sqlx::query_scalar("UPDATE organizations SET policy_version=policy_version+1 WHERE organization_id=$1 RETURNING policy_version").bind(organization).fetch_one(&mut *tx).await?;
+        let version:i64=sqlx::query_scalar("UPDATE organizations SET policy_version=policy_version+1 WHERE organization_id=$1 RETURNING policy_version").bind(organization).fetch_one(&mut **tx).await?;
         let result = MembershipChange {
             organization_id: organization.into(),
             user_id: request.user_id.clone(),
@@ -246,7 +248,7 @@ impl TeamStore {
             policy_version: version,
         };
         record(
-            &mut tx,
+            tx,
             actor,
             organization,
             "team.membership",
@@ -256,7 +258,7 @@ impl TeamStore {
         )
         .await?;
         audit(
-            &mut tx,
+            tx,
             organization,
             actor,
             "membership.changed",
@@ -264,7 +266,6 @@ impl TeamStore {
             &digest,
         )
         .await?;
-        tx.commit().await?;
         Ok(result)
     }
     pub async fn register_resource(
@@ -560,7 +561,7 @@ fn resource_view(row: &sqlx::postgres::PgRow) -> Result<ResourceView, TeamError>
         acl_version: row.try_get("acl_version")?,
     })
 }
-async fn prior<T: DeserializeOwned>(
+pub(crate) async fn prior<T: DeserializeOwned>(
     tx: &mut Transaction<'_, Postgres>,
     actor: &str,
     scope: &str,
@@ -580,7 +581,7 @@ async fn prior<T: DeserializeOwned>(
     }
     Ok(None)
 }
-async fn record<T: Serialize>(
+pub(crate) async fn record<T: Serialize>(
     tx: &mut Transaction<'_, Postgres>,
     actor: &str,
     scope: &str,
@@ -592,7 +593,7 @@ async fn record<T: Serialize>(
     sqlx::query("INSERT INTO team_request_keys(actor_id,scope,operation,key,digest,result) VALUES($1,$2,$3,$4,$5,$6::jsonb)").bind(actor).bind(scope).bind(operation).bind(key).bind(digest).bind(serde_json::to_string(result).map_err(|_|TeamError::Invalid)?).execute(&mut **tx).await?;
     Ok(())
 }
-async fn audit(
+pub(crate) async fn audit(
     tx: &mut Transaction<'_, Postgres>,
     org: &str,
     actor: &str,

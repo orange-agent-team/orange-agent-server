@@ -47,6 +47,8 @@ mod repository_consent;
 #[cfg(all(unix, feature = "s3-source-tests"))]
 #[path = "user_identity/s3_consent.rs"]
 mod s3_consent;
+#[path = "user_identity/team_operations.rs"]
+mod team_operations;
 struct Fixture {
     identity: UserIdentity,
     router: Router,

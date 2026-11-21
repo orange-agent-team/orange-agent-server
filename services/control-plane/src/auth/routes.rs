@@ -4,6 +4,10 @@ mod accounts;
 mod cloud_approvals;
 #[path = "cloud_runs.rs"]
 mod cloud_runs;
+#[path = "team_budgets.rs"]
+mod team_budgets;
+#[path = "team_management.rs"]
+mod team_management;
 pub async fn reconcile_cloud_models(pool: &sqlx::PgPool) -> Result<usize, sqlx::Error> {
     let mut count = 0;
     while count < 32 && crate::cloud_model::reconcile_one(pool).await? {
@@ -173,6 +177,42 @@ pub fn router(identity: UserIdentity) -> Router {
             "/api/v1/account/support-authorizations/{id}",
             get(support::get_one).delete(support::revoke),
         )
+        .route(
+            "/api/v1/organizations/{id}/members",
+            get(team_management::members).post(team_management::change),
+        )
+        .route(
+            "/api/v1/organizations/{id}/invitations",
+            get(team_management::outgoing).post(team_management::issue),
+        )
+        .route(
+            "/api/v1/organizations/{id}/invitations/{invitation}",
+            axum::routing::delete(team_management::revoke),
+        )
+        .route(
+            "/api/v1/me/team-invitations",
+            get(team_management::incoming),
+        )
+        .route(
+            "/api/v1/team-invitations/{invitation}/accept",
+            axum::routing::post(team_management::accept),
+        )
+        .route(
+            "/api/v1/team-invitations/{invitation}/decline",
+            axum::routing::post(team_management::decline),
+        )
+        .route(
+            "/api/v1/organizations/{id}/budget-policy",
+            get(team_budgets::policy).post(team_budgets::set_policy),
+        )
+        .route(
+            "/api/v1/organizations/{id}/budgets",
+            get(team_budgets::list).post(team_budgets::allocate),
+        )
+        .route(
+            "/api/v1/organizations/{id}/budgets/{budget}",
+            get(team_budgets::read).post(team_budgets::adjust),
+        )
         .route("/api/v1/account/wallet", get(accounts::wallet))
         .route(
             "/api/v1/account/budgets",
@@ -214,6 +254,17 @@ impl From<AuthError> for UserApiError {
             AuthError::Invalid => Self(StatusCode::UNPROCESSABLE_ENTITY, "VALIDATION_ERROR"),
             AuthError::Unavailable => Self(StatusCode::SERVICE_UNAVAILABLE, "SERVICE_UNAVAILABLE"),
         }
+    }
+}
+impl From<sqlx::Error> for UserApiError {
+    fn from(error: sqlx::Error) -> Self {
+        if error
+            .as_database_error()
+            .is_some_and(|e| e.code().as_deref() == Some("OA041"))
+        {
+            return Self(StatusCode::CONFLICT, "TEAM_BUDGET_EXCEEDED");
+        }
+        AuthError::from(error).into()
     }
 }
 impl From<TeamError> for UserApiError {
