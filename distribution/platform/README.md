@@ -18,3 +18,5 @@
 发行验收使用一次性 PostgreSQL 数据库与实际本地 OIDC 发现，启动解包后的用户和管理进程并检查独立入口、匿名拒绝、一个已授权的开发用户会话、迁移及停机。Worker 与云 Host 的运行资格还取决于对应的设备、凭证、隔离环境和单独的集成证据。
 
 包内 config/user-oidc.example.json 和 config/admin-oidc.example.json 给出独立的开发客户端、回调 origin 与 ACR。将示例复制到本机私有配置目录，分别填入对应客户端的私有 secret。config/worker-gateway.example.json 列出 Worker 网关需要的证书路径。
+
+用户 API 和 Admin API 可分别设置本机回环指标端口。指标字段、取消语义和启动示例见[本机 HTTP 指标](docs/local-http-metrics.md)。

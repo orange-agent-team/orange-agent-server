@@ -57,6 +57,8 @@ with tempfile.TemporaryDirectory(dir=dest,prefix=".verify-") as tmp:
     unpacked=scratch/"orange-platform"
     verified=json.loads(subprocess.check_output([sys.executable,"-I",unpacked/"verify.py"],text=True,cwd=scratch))
     smoke=check(unpacked,args.database_url_file,args.user_config.resolve(),args.admin_config.resolve(),scratch)
+    from http_metrics_smoke import check_programs, ROLES
+    smoke["private_http_metrics"]=check_programs(unpacked/"bin",args.database_url_file,args.user_config,args.admin_config,ROLES[1:])
     for program in (p for p in PLATFORM_PROGRAMS if p not in ("orange-user-api","orange-admin-api")):
         missing=subprocess.run([unpacked/"bin"/program],cwd=scratch,env={"PATH":"/usr/bin:/bin"},capture_output=True,timeout=12)
         if missing.returncode==0:raise ValueError("Unconfigured process started: "+program)
