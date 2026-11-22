@@ -10,6 +10,7 @@ import atexit
 import http.server
 import json
 import os
+from journal_schema import verify_current_journal
 from pathlib import Path
 import platform
 import plistlib
@@ -295,7 +296,7 @@ try:
             assert actual['phase'] == 'ready'
             if legacy_binary and index == 2:
                 with sqlite3.connect(database) as db:
-                    assert db.execute('PRAGMA user_version').fetchone()[0] == 30
+                    verify_current_journal(db)
                     assert db.execute('SELECT * FROM editing_approvals ORDER BY operation_id').fetchall() == saved_approvals
                     assert db.execute('SELECT count(*) FROM patch_capture_witnesses').fetchone()[0] == 0
                     assert db.execute('SELECT count(*) FROM patch_capture_receipts').fetchone()[0] == 1 + len(saved_capture_receipts)
@@ -318,7 +319,7 @@ try:
         assert complete['phase'] == 'completed' and (complete['steps'], complete['invocations']) == (7, 4)
         assert invoke('step') == complete and len(observations['positive']) == 4
         with sqlite3.connect(database) as db:
-            assert db.execute('PRAGMA user_version').fetchone()[0] == 30
+            verify_current_journal(db)
             assert db.execute('SELECT count(*) FROM patch_version_edges').fetchone()[0] == 2
             assert db.execute('SELECT count(*) FROM runtime_tool_approvals').fetchone()[0] == 3
             first = db.execute('SELECT operation_id FROM operations WHERE tool_version=? ORDER BY rowid', ('apply_patch.v1',)).fetchone()[0]
