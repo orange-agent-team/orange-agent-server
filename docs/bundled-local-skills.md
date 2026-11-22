@@ -43,3 +43,11 @@ local-agent PRIVATE_CONFIG uninstall-skill INSTALLATION_REVISION ACTIVATION_REVI
 ```
 
 将审核结果的 pin 填入配置的 skill。可同时填写整数 skill_activation_revision，启动事务会再次核对用户选择时的启用修订。安装修订按所有者、标识及版本递增，启用修订按所有者及标识递增。每个用户可以独立安装同名同版本的模板，每个用户的已审核版本只能对应一个摘要。可同时安装多个版本，显式启用旧版本即可回退。切换版本或卸载当前版本会撤销旧 Run 的续跑权限。卸载后，已有 Run 可查询其原始绑定；运行从未引用过的模板正文会清除，已用版本保留历史快照。再次安装仍需匹配原摘要。SQLite schema 31 兼容原通用 Run 和内置模板绑定。CLI 验收可运行 `python3 scripts/check-real-agent.py --verify-local-package`。
+
+## 本地代码审阅（AU-06）
+
+在已经选择的本地仓库中启用“代码审阅报告”，在任务中指定需要检查的相对文件和预期行为。模板可申请文件读取或文本搜索。用户批准读取后，模型报告问题、影响和修改建议，宿主附上实际读取版本的路径、字节区间和 SHA-256。缺少已批准的来源时，Run 以 skill_source_required 结束。审阅工具目录不含执行、提交或推送操作。
+
+使用合格的模型配置运行 `python3 scripts/check-real-agent.py --verify-code-review --review-model-7b MODEL_FILE` 会创建临时 Git 仓库，使用固定的真实 CPU 模型诊断样本计算错误，核对引用、回读报告、文件摘要和 Git 工作区状态。
+
+审阅的模型资格按权重单独记录。可通过 `--review-model-7b /path/to/qwen2.5-7b-instruct-q4_k_m-merged.gguf` 明确选用已合并的固定 7B 权重。验收会核对文件长度与完整 SHA-256，然后使用与本地目录隔离的 Unix socket 启动模型。0.5B 测试权重在早期验收中曾读取源码后误判计算逻辑。当前官方模板要求显式选择经锁定的 7B 配置；普通 0.5B 配置在创建 Run 前拒绝审阅。日志格式 32 会阻止旧宿主绕过新增的引用和模型门槛。[7B 权重来源与锁定摘要](../config/local-code-review-model.lock.json)

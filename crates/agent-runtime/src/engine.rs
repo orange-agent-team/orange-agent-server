@@ -233,7 +233,11 @@ impl Journal {
         grant: &WorkspaceGrant,
     ) -> Result<RunView, EngineError> {
         let (template, revision) = self.resolve_skill(&config.owner, pin)?;
-        if expected_revision.is_some_and(|r| r != revision) {
+        if template
+            .required_model_profile()
+            .is_some_and(|m| m != config.model_version)
+            || expected_revision.is_some_and(|r| r != revision)
+        {
             return Err(EngineError::Forbidden);
         }
         let messages = template.messages(input)?;
@@ -665,7 +669,7 @@ impl Journal {
                 && stored
                     .skill
                     .as_ref()
-                    .is_some_and(|s| s.template.scenario == "AU-01")
+                    .is_some_and(|s| s.template.requires_sources())
             {
                 result.source_references = crate::skills::source_references(&self.connection, run)?;
                 if result.source_references.is_empty() {
@@ -1184,7 +1188,7 @@ impl Journal {
             && stored
                 .skill
                 .as_ref()
-                .is_some_and(|s| s.template.scenario == "AU-01")
+                .is_some_and(|s| s.template.requires_sources())
             && crate::skills::source_references(&tx, &c.run_id)?.is_empty();
         tx.execute(
             "UPDATE runtime_invocations SET state='committed' WHERE invocation=?",

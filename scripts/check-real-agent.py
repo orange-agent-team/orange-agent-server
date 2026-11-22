@@ -27,11 +27,17 @@ parser.add_argument('--model-protocol',choices=['chat_completions','responses'],
 parser.add_argument('--model-runtime-root',type=Path,default=PRIVATE)
 parser.add_argument('--verify-skills',action='store_true',help='Also run a digest-pinned, tool-free text summary and pin the read-only question template')
 parser.add_argument('--verify-local-package',action='store_true',help='Install a reviewed local template and execute it using the real CPU model')
+parser.add_argument('--verify-code-review',action='store_true',help='Review a selected local repository with a pinned model and require a sourced finding')
+parser.add_argument('--review-model-7b',type=Path,help='Explicit separately supplied SHA-pinned 7B code-review qualification weight')
 args=parser.parse_args()
+if args.review_model_7b and not args.verify_code_review:parser.error('The optional 7B profile applies only to code-review qualification')
+if args.verify_code_review and (args.required_tool != 'read_file' or args.verify_skills or args.verify_local_package):
+    parser.error('The source-review fixture has its own repository and read-only scope')
 if args.verify_local_package: args.verify_skills=True
 PRIVATE=args.model_runtime_root.resolve()
 if args.model_protocol!='chat_completions':
     REPORT=ROOT/'.local'/('real-agent-'+args.model_protocol)
+if args.verify_code_review:REPORT=ROOT/'.local'/('real-agent-code-review-7b' if args.review_model_7b else 'real-agent-code-review')
 if args.verify_skills:REPORT=ROOT/'.local'/('real-agent-local-package' if args.verify_local_package else 'real-agent-skills')
 target=Path(os.environ.get('CARGO_TARGET_DIR',ROOT/'target')).resolve()
 
@@ -53,6 +59,12 @@ def main():
     lock=json.loads((ROOT/'config/local-model.lock.json').read_text())
     build=json.loads((PRIVATE/'build.json').read_text())
     backend=PRIVATE/'build/bin/llama-server';model=PRIVATE/(lock['model']['sha256']+'.gguf')
+    model_version='qwen-agent-test-v1'
+    context_tokens=4096
+    if args.review_model_7b:
+        lock['model']=json.loads((ROOT/'config/local-code-review-model.lock.json').read_text())
+        model=args.review_model_7b.resolve(strict=True)
+        model_version=lock['model']['model_version'];context_tokens=lock['model']['context_tokens']
     if not model.is_file() or model.stat().st_size!=lock['model']['bytes'] or digest(model)!=lock['model']['sha256']:raise RuntimeError('Pinned actual model required')
     if build['backend_commit']!=lock['backend']['commit'] or build['gpu_enabled'] or digest(backend)!=build['executable_sha256']:raise RuntimeError('Verified fixed CPU backend required')
     rustup=shutil.which('rustup') or '/opt/homebrew/opt/rustup/bin/rustup'
@@ -75,7 +87,7 @@ def main():
         (workspace/'proof.txt').write_text(sentinel+'\n')
         nonce=uuid.uuid4().hex+uuid.uuid4().hex;instance=uuid.uuid4().hex
         write(runtime/'profile.json',{'protocol':1,'runtime_directory':str(runtime),'socket_directory':str(ipc),'executable':str(backend),'executable_sha256':build['executable_sha256'],
-            'model':str(model),'model_sha256':lock['model']['sha256'],'model_bytes':lock['model']['bytes'],'model_version':'qwen-agent-test-v1','context_tokens':4096,
+            'model':str(model),'model_sha256':lock['model']['sha256'],'model_bytes':lock['model']['bytes'],'model_version':model_version,'context_tokens':context_tokens,
             'startup_timeout_seconds':120,'control_nonce':nonce,'instance_id':instance})
         with (runtime/'host.log').open('w') as log:
             host=subprocess.Popen([str(target/'debug/orange-model-host'),str(runtime/'profile.json')],cwd=ROOT,env={'PATH':'/usr/bin:/bin'},stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=log,text=True)
@@ -89,10 +101,10 @@ def main():
                 else:raise RuntimeError('Actual model readiness deadline')
                 ready=json.loads(host.stdout.readline());selector.close()
                 if ready['record']['phase']!='ready' or ready['record']['instance_id']!=instance:raise RuntimeError('Wrong model instance')
-                config={'run':{'owner':'real-agent-fixture-owner','run_id':uuid.uuid4().hex,'policy':'read-only-fixture-v1','environment':'pending-grant-info','model_version':'qwen-agent-test-v1',
-                    'max_steps':12,'max_invocations':6,'max_output_tokens':256,'deadline_unix':int(time.time())+180},'grant_id':'real-agent-fixture-grant','workspace':str(workspace),
-                    'journal':str(state/'journal.sqlite'),'private_roots':[str(runtime),str(ipc),str(state),str(PRIVATE)],'model_socket':str(ipc/'engine.sock'),'model_protocol':args.model_protocol,
-                    'model_key_file':str(runtime/'api.key'),'context_tokens':4096,
+                config={'run':{'owner':'real-agent-fixture-owner','run_id':uuid.uuid4().hex,'policy':'read-only-fixture-v1','environment':'pending-grant-info','model_version':model_version,
+                    'max_steps':12,'max_invocations':6,'max_output_tokens':256,'deadline_unix':int(time.time())+(600 if args.review_model_7b else 180)},'grant_id':'real-agent-fixture-grant','workspace':str(workspace),
+                    'journal':str(state/'journal.sqlite'),'private_roots':list(dict.fromkeys(map(str,[runtime,ipc,state,PRIVATE,model.parent]))),'model_socket':str(ipc/'engine.sock'),'model_protocol':args.model_protocol,
+                    'model_key_file':str(runtime/'api.key'),'context_tokens':context_tokens,
                     'prompt':'Use read_file to read the existing workspace file proof.txt with the relative path proof.txt. Do not guess its content. After the tool result is returned, answer with the exact file text.'}
                 if args.required_tool=='search_files':
                     config['prompt']='Perform these steps in order. First call search_files with exactly these arguments: {"path":".","glob":"proof.txt"}. Use the literal filename proof.txt as the glob, not a wildcard. Wait for its result. Then call read_file with exactly {"path":"proof.txt"}. Finally answer with the exact file text. Do not invent content or call read_file before receiving the search result.'
@@ -117,6 +129,47 @@ def main():
                     finally:
                         if child.poll() is None:child.kill();child.wait()
                 config['run']['environment']=invoke('grant-info')['environment'];write(path,config)
+                if args.verify_code_review:
+                    original=json.loads(json.dumps(config))
+                    subprocess.run(['git','init','--quiet',workspace],check=True)
+                    source=workspace/'invoice.py'
+                    source.write_text('def invoice_total(unit_price, quantity):\n    """Return the total price for all units."""\n    return unit_price + quantity\n')
+                    def status():
+                        return subprocess.check_output(['git','-C',workspace,'status','--porcelain=v1','-z'])
+                    before_status=status();before_digest=digest(source)
+                    choice=next(row for row in invoke('skills') if row['pin']['id']=='orange.code-review')
+                    if choice['enabled'] or choice['tools']!=['read_file','search_text']:raise RuntimeError('Unexpected review permissions')
+                    config['skill']=choice['pin'];config['run']['run_id']=uuid.uuid4().hex
+                    config['prompt']='Read invoice.py with read_file. Review invoice_total for correctness against its docstring and explain your finding and recommended fix.'
+                    write(path,config);config['skill_activation_revision']=invoke('enable-skill','0')['revision'];write(path,config)
+                    if choice.get('required_model_profile')!='qwen7b-reviewed-cpu-v1':
+                        raise RuntimeError('Missing review model profile')
+                    if not args.review_model_7b:
+                        denied=subprocess.run([target/'debug/examples/local-agent',path,'start'],capture_output=True,text=True)
+                        if denied.returncode==0 or 'Forbidden' not in denied.stderr:raise RuntimeError('Unqualified model was admitted')
+                        with sqlite3.connect(config['journal']) as db:
+                            if db.execute('SELECT count(*) FROM runtime_runs').fetchone()[0]:raise RuntimeError('Admission rejection created a Run')
+                        result['unqualified_review_denied']=True
+                    else:
+                        review=invoke('start')
+                        review=invoke('step')
+                        if review['phase']!='tools_pending' or len(review['pending'])!=1:raise RuntimeError('Review lacked an approved source read')
+                        item=review['pending'][0]
+                        if item['request']['tool']!='read_file' or item['request']['arguments'].get('path')!='invoice.py':raise RuntimeError('Unexpected review source selection')
+                        invoke('step',expect_error=True)
+                        invoke('approve',item['operation_id']);review=invoke('step')
+                        if review['phase']=='ready':review=invoke('step')
+                        text=(review.get('final_text') or '').lower()
+                        if (review['phase']!='completed' or 'quantity' not in text or
+                            not any(term in text for term in ('multipl','unit_price * quantity','quantity * unit_price'))):
+                            raise RuntimeError('Report did not identify the arithmetic correction from the source')
+                        refs=review.get('source_references',[])
+                        if len(refs)!=1 or (refs[0]['path'],refs[0]['sha256'],refs[0]['start_byte'],refs[0]['end_byte'])!=(
+                               'invoice.py',before_digest,'0',str(source.stat().st_size)):raise RuntimeError('Report lacked exact source provenance')
+                        if status()!=before_status or digest(source)!=before_digest or invoke('show')!=review:raise RuntimeError('Review changed repository files or lost its report on reopen')
+                        result['code_review']={'pin':choice['pin'],'verified_citation':refs[0],'report':review['final_text'],
+                                               'source_unchanged':True,'repository_status_unchanged':True,'explicit_read_approval':True}
+                    config=original;write(path,config)
                 if args.verify_skills:
                     if args.required_tool!='read_file':raise ValueError('Real Skills check uses the read-file fixture')
                     catalog={row['pin']['id']:row for row in invoke('skills')}

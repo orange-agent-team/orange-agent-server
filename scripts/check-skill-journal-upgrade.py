@@ -13,6 +13,7 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 PRIOR = {
     29: "94cfd1fc3e27dd2fb43438757af6d6b863b6e98d",
+    31: "938bc63654127951ae52810ba91f44af4eafecf2",
     30: "19533647c8f3d50885f7a8b19a0707f93edc6682",
 }
 env = dict(os.environ, CARGO_NET_OFFLINE="true")
@@ -44,9 +45,9 @@ def verify(base, prior, old, new):
               "private_roots": [str(state)], "model_socket": str(state / "unused.sock"),
               "model_key_file": str(state / "unused.key"), "context_tokens": 4096}
 
-    def run(executable, *args):
+    def run(executable, *args, manifest=None):
         file.write_text(json.dumps(config))
-        result = subprocess.run([executable, file, *args], env={"PATH": "/usr/bin:/bin"}, capture_output=True, text=True, check=True)
+        result = subprocess.run([executable, file, *args], env={"PATH": "/usr/bin:/bin"}, input=json.dumps(manifest) if manifest is not None else None, capture_output=True, text=True, check=True)
         return json.loads(result.stdout)
 
     def snapshot():
@@ -56,8 +57,14 @@ def verify(base, prior, old, new):
 
     config["run"]["environment"] = run(old, "grant-info")["environment"]
     old_pin = None
-    if prior == 30:
+    if prior == 31:
+        manifest = {"id":"local.migration-note","version":"1.0.0","name":"Migrated note","scenario":"AU-02",
+                    "instruction":"Keep amounts exactly as given.","tools":[]}
+        old_pin = run(old,"review-skill", manifest=manifest)["pin"]
+        assert run(old,"install-skill",old_pin["digest"],"0",manifest=manifest)["installation_revision"] == 1
+    elif prior == 30:
         old_pin = next(x["pin"] for x in run(old, "skills") if x["pin"]["id"] == "orange.text-summary")
+    if old_pin:
         config["skill"] = old_pin
         assert run(old, "enable-skill", "0")["revision"] == 1
     assert run(old, "start")["phase"] == "ready"
@@ -66,8 +73,8 @@ def verify(base, prior, old, new):
 
     registry = run(new, "skills")
     template = next(x for x in registry if x["pin"]["id"] == "orange.text-summary")
-    assert {x["pin"]["id"] for x in registry if x["enabled"]} == ({"orange.text-summary"} if old_pin else set())
-    assert snapshot() == (31, before) and run(new, "skill-binding") == old_pin
+    assert {x["pin"]["id"] for x in registry if x["enabled"]} == ({old_pin["id"]} if old_pin else set())
+    assert snapshot() == (32, before) and run(new, "skill-binding") == old_pin
     config["skill"] = template["pin"]
     assert run(new, "enable-skill", "0")["revision"] == 1
     if prior == 29:
@@ -81,8 +88,8 @@ def verify(base, prior, old, new):
     fingerprint = hashlib.sha256(database.read_bytes()).hexdigest()
     refused = subprocess.run([old, file, "status"], capture_output=True, text=True)
     assert refused.returncode != 0 and "Unsupported" in refused.stderr, (refused.returncode, refused.stderr)
-    assert hashlib.sha256(database.read_bytes()).hexdigest() == fingerprint and snapshot() == (31, before)
-    print(f"PASS genuine schema {prior} -> 31, unchanged messages, original binding and activation, old executable refused before mutation")
+    assert hashlib.sha256(database.read_bytes()).hexdigest() == fingerprint and snapshot() == (32, before)
+    print(f"PASS genuine schema {prior} -> 32, unchanged messages, original binding and activation, old executable refused before mutation")
 
 
 def main():

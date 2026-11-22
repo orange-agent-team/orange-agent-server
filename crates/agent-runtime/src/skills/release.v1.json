@@ -8,5 +8,10 @@
     "id": "orange.source-question",
     "version": "1.0.0",
     "digest": "d74d8fa954ecddffbae1d3b59e702ee4383dd260db4c4e7ae94cee054d748346"
+  },
+  {
+    "id": "orange.code-review",
+    "version": "1.0.0",
+    "digest": "2411efbd209a1b4a27a0110eb833793508094bb43f5028ac82b1187d62b2246c"
   }
 ]
