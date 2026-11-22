@@ -34,8 +34,9 @@ def notices(files,vendor,lockfile,packaging):
         if checked["package"]!=checksum:raise ValueError("Registry provenance mismatch: "+name)
         candidates={p for p in directory.iterdir() if p.is_file() and p.name.upper().startswith(("LICENSE","LICENCE","COPYING","NOTICE"))}
         if meta.get("license-file"):candidates.add(directory/meta["license-file"])
-        extra=directory/"licenses"
-        if extra.is_dir():candidates.update(p for p in extra.rglob("*") if p.is_file())
+        for extra in directory.iterdir():
+            if extra.is_dir() and not extra.is_symlink() and extra.name.lower() in ("licenses","licences"):
+                candidates.update(p for p in extra.rglob("*") if p.is_file())
         authors=directory/"AUTHORS"
         if authors.is_file() and authors.read_bytes().startswith(b"LICENSE:"):
             candidates.add(authors)
