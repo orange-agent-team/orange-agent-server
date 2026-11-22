@@ -1,0 +1,9 @@
+{
+  "version":"1.0.0",
+  "changes":[
+    {"id":"runtime-contract","tasks":["AG-006","AG-014"],"repository_paths":["crates/agent-runtime/src/engine.rs","crates/protocol/src/model.rs","scripts/export-shared-runtime.py"],"planning_figures":["02-runtime","01-desktop"],"verification":["AGENT-LOOP-001","CORE-RELEASE-001","DESKTOP-BRIDGE-001"]},
+    {"id":"pricing-and-refunds","tasks":["PAY-001","PAY-007"],"repository_paths":["contracts/openapi/pricing.v1.json","contracts/openapi/admin.v1.json","services/control-plane/src/artifacts/pricing.rs"],"planning_figures":["13-metering","14-ledger","19-payment-sequence"],"verification":["TRUSTED-PRICING-001","METERING-RECOVERY-001","ADMIN-ACTIONS-001"]},
+    {"id":"region-or-gpu","tasks":["WK-004","OPS-008"],"repository_paths":["services/worker","crates/protocol/src/node_control.rs"],"planning_figures":["06-scheduler","08-worker","11-artifact-storage"],"verification":["CPU-CLEANUP-001","PLATFORM-DISTRIBUTION-001"],"additional_real_evidence":"目标 GPU/四域验证按实际组合登记"},
+    {"id":"registration-and-access","tasks":["CP-002","SEC-004"],"repository_paths":["contracts/openapi/user.v1.json","contracts/openapi/team-governance.v1.json","contracts/openapi/admin.v1.json"],"planning_figures":["04-identity-team","16-risk-security","17-admin-operations"],"verification":["USER-OIDC-001","TEAM-ACL-001","ADMIN-OIDC-001"]}
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "version":"1.0.0",
+  "items":[
+    {"id":"operator","responsible":"产品及经营负责人","status":"pending_external","required":"确认主体所在地、登记主体与首发经营范围","local_evidence":"regional targets only"},
+    {"id":"merchant","responsible":"经营及财务负责人","status":"pending_external","required":"主体匹配的商户测试账户、渠道认证、真实沙箱对账记录","local_evidence":"development credit fixtures and local merchant protocol substitutes"},
+    {"id":"domain","responsible":"平台运维负责人","status":"pending_external","required":"获授权域名和 DNS 控制证明、目标域名 TLS 验证","local_evidence":"loopback TLS"},
+    {"id":"certificates","responsible":"发布负责人及独立复核人","status":"pending_external","required":"目标平台签名证书、时间戳、公证及升级验证","local_evidence":"ad-hoc local development signature"},
+    {"id":"production_identity","responsible":"身份及安全负责人","status":"pending_external","required":"正式租户、生产 MFA、密钥轮换和管理员独立批准演练","local_evidence":"local development identity and separate administrator sessions"},
+    {"id":"target_gpu","responsible":"Worker 与硬件实验负责人","status":"reported_not_certified","required":"登机授权、设备枚举、驱动与显存报告、退出及回收凭证、多卡实测","local_evidence":"operator reports RTX6000 96G; CPU verification is separate"},
+    {"id":"regional_servers","responsible":"平台运维与数据负责人","status":"target_not_certified","required":"各域资源、驻留配置、单写/接管、故障隔离及恢复记录","local_evidence":"US, Japan, China and Hong Kong are user-specified target locations"},
+    {"id":"enterprise_pilot","responsible":"企业产品与运维负责人","status":"pending_external","required":"试点参与方、授权数据、验收回执与连续 30 天实际观察","local_evidence":"accelerated isolated tests"}
+  ]
+}
