@@ -211,3 +211,30 @@ mod tests {
         assert_eq!(request.validate(), Err(ModelRequestError::Limit));
     }
 }
+
+/// Adapter observations contain only bounded categories. They never authorize replay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GatewayIssue {
+    Unclassified,
+    IdentityChanged,
+    Invalid,
+    Unavailable,
+    Protocol,
+    Limit,
+    Incomplete,
+    Cancelled,
+}
+impl GatewayIssue {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unclassified => "unclassified",
+            Self::IdentityChanged => "identity_changed",
+            Self::Invalid => "invalid",
+            Self::Unavailable => "unavailable",
+            Self::Protocol => "protocol",
+            Self::Limit => "limit",
+            Self::Incomplete => "incomplete",
+            Self::Cancelled => "cancelled",
+        }
+    }
+}

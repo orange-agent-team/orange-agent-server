@@ -50,11 +50,19 @@ impl ModelGateway for LocalModel {
         request: &'a GenerateRequest,
         cancel: watch::Receiver<bool>,
     ) -> ModelFuture<'a> {
+        let pending = self.generate_observed(request, cancel);
+        Box::pin(async move { pending.await.map_err(|_| GatewayFailure) })
+    }
+    fn generate_observed<'a>(
+        &'a self,
+        request: &'a GenerateRequest,
+        cancel: watch::Receiver<bool>,
+    ) -> orange_agent_runtime::engine::ObservedModelFuture<'a> {
         Box::pin(async move {
             let candidate = self.0.generate(request, cancel).await.map_err(|error| {
                 // ModelError has only fixed variants, no prompt, key or URL.
                 eprintln!("model_gateway_rejected kind={error:?}");
-                GatewayFailure
+                orange_protocol::model::GatewayIssue::from(error)
             })?;
             for call in &candidate.tool_calls {
                 let valid = if call.name == "ask_user" {

@@ -14,7 +14,7 @@ use orange_protocol::{valid_digest, valid_id};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::path::Path;
 
-const JOURNAL_SCHEMA_VERSION: i64 = 34;
+const JOURNAL_SCHEMA_VERSION: i64 = 35;
 
 #[derive(Debug, thiserror::Error)]
 pub enum JournalError {
@@ -323,6 +323,12 @@ impl Journal {
             let tx =
                 connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
             tx.execute_batch(include_str!("schema_v34.sql"))?;
+            tx.commit()?;
+        }
+        if version < 35 {
+            let tx =
+                connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            tx.execute_batch(include_str!("schema_v35.sql"))?;
             tx.commit()?;
         }
         connection.execute_batch("BEGIN IMMEDIATE;
