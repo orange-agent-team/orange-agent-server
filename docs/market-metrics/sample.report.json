@@ -1,0 +1,82 @@
+{
+  "as_of_unix": 1704070800,
+  "currency_totals": [
+    {
+      "attributed_service_minor": "170",
+      "chargeback_minor": "0",
+      "complete_cost_categories": [
+        "provider_fulfillment",
+        "platform_compute",
+        "retry_subsidy",
+        "storage",
+        "egress",
+        "payment_processing"
+      ],
+      "contribution_minor": "77",
+      "contribution_rate": {
+        "denominator": "170",
+        "numerator": "77"
+      },
+      "cost_per_settled_job": {
+        "denominator_jobs": 2,
+        "numerator_minor": "93"
+      },
+      "costs_minor": {
+        "egress": "8",
+        "payment_processing": "5",
+        "platform_compute": "10",
+        "provider_fulfillment": "60",
+        "retry_subsidy": "7",
+        "storage": "3"
+      },
+      "currency": "usd",
+      "known_cost_minor": "93",
+      "net_receipts_minor": "650",
+      "open_dispute_minor_as_of": "0",
+      "purchase_minor": "700",
+      "recovered_dispute_minor": "0",
+      "refund_minor": "50"
+    }
+  ],
+  "demand": {
+    "attempts": 4,
+    "cancelled": 0,
+    "delivered": 2,
+    "failed": 1,
+    "purchased_credit_consumers": 1,
+    "purchasers": 2,
+    "repeat_purchasers": 1,
+    "repurchase_rate": {
+      "denominator": "2",
+      "numerator": "1"
+    },
+    "settled": 2,
+    "submitted": 3
+  },
+  "from_unix": 1704067200,
+  "microcredits": {
+    "charged": "2000",
+    "earned_used": "100",
+    "gift_used": "200",
+    "platform_fee": "400",
+    "provider_pending": "1600",
+    "provider_released": "0",
+    "purchased_used": "1700",
+    "unattributed_purchased": "0"
+  },
+  "population": "activity_extract",
+  "supply": {
+    "completed_nodes": 1,
+    "effective_nodes": 2,
+    "eligible_slot_seconds": "4800",
+    "paid_outside_eligible_seconds": "0",
+    "paid_slot_seconds": "1320",
+    "registered_nodes": 3,
+    "utilization": {
+      "denominator": "4800",
+      "numerator": "1320"
+    }
+  },
+  "until_unix": 1704070800,
+  "version": 1
+}

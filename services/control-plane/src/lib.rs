@@ -13,6 +13,7 @@ mod document_handles;
 pub mod events;
 mod hosted_connectors;
 pub mod http;
+pub mod market_metrics;
 pub mod meter_bootstrap;
 pub mod notion;
 pub mod payments;

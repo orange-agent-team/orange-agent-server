@@ -2096,6 +2096,7 @@ dependencies = [
  "hex",
  "hmac 0.13.0",
  "httpdate",
+ "jsonschema",
  "libc",
  "opendal",
  "openidconnect",

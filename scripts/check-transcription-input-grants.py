@@ -25,7 +25,9 @@ parser.add_argument("--uv-cache",type=Path,default=ROOT/".local/uv-cache")
 parser.add_argument("--six-journeys-only",action="store_true")
 parser.add_argument("--provider-earnings",action="store_true")
 parser.add_argument("--earning-admin",type=Path)
+parser.add_argument("--market-metrics",action="store_true",help="Reconcile a pseudonymous reporting cohort with the actual two-account payment and CPU job receipts")
 args=parser.parse_args()
+if args.market_metrics and not args.six_journeys_only:parser.error("The market report needs the six-journey specimen")
 if (args.provider_earnings or args.earning_admin) and not args.six_journeys_only:parser.error("Earning review requires the six-journey fixture")
 args.python = args.python or interpreter(ROOT,args.uv_cache)
 browser={}
@@ -60,5 +62,15 @@ with database(args.database_url_file,"orange_audio_grant_") as (_,url), database
     env.update(**browser,ORANGE_TEST_DATABASE_URL=url,ORANGE_AUDIO_OLD_DATABASE_URL=old,ORANGE_AUDIO_GRANT_TESTS="1",ORANGE_ASR_PROBE_FILE=str(config),
                ORANGE_TEST_OIDC_CONFIG_FILE=str(args.identity_config.with_name("admin-config.json").resolve()),ORANGE_TEST_USER_CONFIG_FILE=str(args.identity_config.resolve()),ORANGE_AUDIO_SAMPLE=str(args.model_cache.resolve()/"jfk.wav"),CARGO_NET_OFFLINE="true")
     prepare(ROOT,folder,args.text_runtime,env)
+    if args.market_metrics:
+        evidence=Path(tempfile.mkdtemp(prefix="market-metrics-",dir=ROOT/".local"));evidence.chmod(0o700)
+        env["ORANGE_MARKET_REPORT_EVIDENCE"]=str(evidence)
+        print("Private market report evidence:",evidence.relative_to(ROOT),flush=True)
     if args.six_journeys_only:env["ORANGE_SIX_JOURNEY_TEST"]="1"
     subprocess.run([sys.executable,ROOT/"scripts/check-worker-session.py"],cwd=ROOT,env=env,check=True)
+
+if args.market_metrics:
+    report=json.loads((evidence/"paid-cohort.report.json").read_bytes())
+    if report["microcredits"]["charged"]!="4400" or report["currency_totals"][0]["net_receipts_minor"]!="900":
+        raise RuntimeError("Unconfirmed original merchant and settlement observations")
+    print("PASS marketplace SQL cohort and redacted report",flush=True)
