@@ -3,6 +3,8 @@
 use super::*;
 #[path = "cloud_model_browser.rs"]
 mod hosted;
+#[path = "team_text_fixture.rs"]
+mod team_text;
 #[tokio::test]
 async fn actual_browser_quote_model_settlement_cleanup_and_deleted_content() {
     use super::super::host_cases as host;
@@ -12,6 +14,14 @@ async fn actual_browser_quote_model_settlement_cleanup_and_deleted_content() {
         process::Command,
     };
     let c = setup_priced("client-dk").await;
+    let team = if std::env::var_os("ORANGE_TEAM_TEXT_BROWSER").is_some() {
+        Some(team_text::Allocation::seed(c.f.d.store.pool(), &c.f.user, &c.f.owner).await)
+    } else {
+        None
+    };
+    let payer = team
+        .as_ref()
+        .map_or(c.f.owner.as_str(), |t| t.owner.as_str());
     let p = profile();
     let worker_root = runtime();
     let meter_root = runtime();
@@ -130,7 +140,7 @@ async fn actual_browser_quote_model_settlement_cleanup_and_deleted_content() {
     host::event(&mut events, "ready").await;
 
     let fixture = config_root.path().join("browser.json");
-    std::fs::write(&fixture,serde_json::to_vec(&serde_json::json!({"api":format!("http://{http}/"),"origin":user_origin,"cookie":c.f.headers.get("cookie").expect("cookie fixture").to_str().expect("cookie"),"user":c.f.user,"owner":c.f.owner,"budget":c.budget,"price":c.price})).expect("JSON")).expect("fixture");
+    std::fs::write(&fixture,serde_json::to_vec(&serde_json::json!({"api":format!("http://{http}/"),"origin":user_origin,"cookie":c.f.headers.get("cookie").expect("cookie fixture").to_str().expect("cookie"),"user":c.f.user,"owner":c.f.owner,"budget":c.budget,"price":c.price,"team":team.as_ref().map(|t|serde_json::json!({"owner":t.owner,"budget":t.budget}))})).expect("JSON")).expect("fixture");
     std::fs::set_permissions(&fixture, std::fs::Permissions::from_mode(0o600)).expect("private");
     let mut browser = Command::new(std::env::var("ORANGE_WEB_NODE_BINARY").expect("pinned Node"))
         .arg(std::env::var("ORANGE_WEB_COMPUTE_DRIVER").expect("explicit Web driver"))
@@ -204,7 +214,7 @@ async fn actual_browser_quote_model_settlement_cleanup_and_deleted_content() {
         .expect("prevented original Invocation");
     let prevented_jobs: i64 =
         sqlx::query_scalar("SELECT count(*) FROM jobs WHERE owner_id=$1 AND invocation_id=$2")
-            .bind(&c.f.owner)
+            .bind(payer)
             .bind(prevented)
             .fetch_one(c.f.d.store.pool())
             .await
@@ -213,7 +223,7 @@ async fn actual_browser_quote_model_settlement_cleanup_and_deleted_content() {
     let barrier: String = sqlx::query_scalar(
         "SELECT receipt_id FROM invocation_withdrawals WHERE owner_id=$1 AND user_id=$2 AND invocation_id=$3",
     )
-    .bind(&c.f.owner)
+    .bind(payer)
     .bind(&c.f.user)
     .bind(prevented)
     .fetch_one(c.f.d.store.pool())
@@ -221,7 +231,7 @@ async fn actual_browser_quote_model_settlement_cleanup_and_deleted_content() {
     .expect("actual prevention receipt");
     assert_eq!(observation["withdrawal_receipt"], barrier);
     host::event(&mut events, "cloud_cleanup_confirmed").await;
-    let result = c.f.d.store.job(&c.f.owner, job).await.expect("actual Job");
+    let result = c.f.d.store.job(payer, job).await.expect("actual Job");
     assert_eq!(result.execution_state, "succeeded");
     assert_eq!(result.settlement_state, "settled");
     assert!(result.charge.expect("actual charge").0.units() > 0);
@@ -278,6 +288,22 @@ async fn actual_browser_quote_model_settlement_cleanup_and_deleted_content() {
     assert_eq!(count, 1);
     let balance:i64=sqlx::query_scalar("SELECT sum(e.amount)::bigint FROM ledger_entries e JOIN job_settlements s USING(transaction_id) WHERE s.job_id=$1").bind(job).fetch_one(c.f.d.store.pool()).await.expect("balanced ledger");
     assert_eq!(balance, 0);
+    if let Some(team) = team {
+        let settlement = team
+            .verify(
+                c.f.d.store.pool(),
+                &c.f.owner,
+                job,
+                result.charge.expect("settled charge").0.units(),
+            )
+            .await;
+        std::fs::write(
+            evidence.join("team-text-settlement.json"),
+            serde_json::to_vec_pretty(&settlement).expect("settlement JSON"),
+        )
+        .expect("actual fixture settlement record");
+        assert_eq!(observation["team_budget_recovery"], true);
+    }
     if let Ok(driver) = std::env::var("ORANGE_CLOUD_MODEL_BROWSER") {
         let ctx = hosted::Setup {
             pool: c.f.d.store.pool(),
