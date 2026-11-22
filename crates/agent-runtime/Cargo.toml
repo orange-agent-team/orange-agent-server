@@ -29,6 +29,7 @@ jsonschema.workspace = true
 orange-platform-files.workspace = true
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 tempfile.workspace = true
 orange-model-runtime = { path = "../model-runtime", version = "=0.1.0" }
 
