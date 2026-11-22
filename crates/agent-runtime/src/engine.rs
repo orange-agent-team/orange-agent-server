@@ -238,6 +238,7 @@ impl Journal {
             expected_revision,
             input,
             AgentAuthority::read(grant),
+            None,
         )
     }
 
@@ -253,7 +254,42 @@ impl Journal {
         if authority.create.is_some() || pin.id != "orange.reviewed-patch" {
             return Err(EngineError::Forbidden);
         }
-        self.start_skill_with_authority(config, pin, expected_revision, input, authority.internal())
+        self.start_skill_with_authority(
+            config,
+            pin,
+            expected_revision,
+            input,
+            authority.internal(),
+            None,
+        )
+    }
+
+    /// Called by a host that obtained these model facts from its authenticated local service.
+    pub fn start_agent_skill_on_local_model(
+        &mut self,
+        config: &RunConfig,
+        pin: &crate::skills::SkillPin,
+        expected_revision: Option<i64>,
+        input: String,
+        authority: AgentAuthority<'_>,
+        model: &orange_protocol::local_model::LocalModelIdentity,
+    ) -> Result<RunView, EngineError> {
+        if authority.create.is_some()
+            || !authority.memories.is_empty()
+            || !authority.source_workspaces.is_empty()
+            || !authority.source_memories.is_empty()
+            || model.connection_id().map_err(|_| EngineError::Invalid)? != config.model_version
+        {
+            return Err(EngineError::Forbidden);
+        }
+        self.start_skill_with_authority(
+            config,
+            pin,
+            expected_revision,
+            input,
+            authority,
+            Some(model),
+        )
     }
 
     fn start_skill_with_authority(
@@ -263,13 +299,15 @@ impl Journal {
         expected_revision: Option<i64>,
         input: String,
         authority: AgentAuthority<'_>,
+        model: Option<&orange_protocol::local_model::LocalModelIdentity>,
     ) -> Result<RunView, EngineError> {
         let (template, revision) = self.resolve_skill(&config.owner, pin)?;
-        if template
-            .required_model_profile()
-            .is_some_and(|m| m != config.model_version)
-            || expected_revision.is_some_and(|r| r != revision)
-        {
+        let model_ok = match (template.required_model_profile(), model) {
+            (None, _) => true,
+            (Some(_), Some(model)) => model.matches_local_7b().map_err(|_| EngineError::Invalid)?,
+            (Some(profile), None) => profile == config.model_version,
+        };
+        if !model_ok || expected_revision.is_some_and(|r| r != revision) {
             return Err(EngineError::Forbidden);
         }
         let messages = template.messages(input)?;

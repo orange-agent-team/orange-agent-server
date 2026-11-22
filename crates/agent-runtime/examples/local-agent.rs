@@ -1,4 +1,6 @@
 //! Trusted local developer CLI. Never auto-approves tool requests.
+#[path = "local-agent/verified_model.rs"]
+mod verified_model;
 use orange_agent_runtime::{
     Journal,
     engine::{CreationApproval, GatewayFailure, ModelFuture, ModelGateway, RunConfig},
@@ -645,6 +647,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         "step" => {
             let key = String::from_utf8(private_read(&config.model_key_file)?)?;
+            if journal
+                .run_skill(&config.run.owner, &config.run.run_id)?
+                .is_some_and(|p| {
+                    matches!(
+                        p.id.as_str(),
+                        "orange.code-review" | "orange.reviewed-patch"
+                    )
+                })
+            {
+                verified_model::check(
+                    &config.model_key_file,
+                    config.model_socket.as_deref(),
+                    &config.run.model_version,
+                    config.context_tokens,
+                )?;
+            }
             let client = match (&config.model_endpoint, &config.model_socket) {
                 (Some(endpoint), None) => LlamaClient::new(
                     endpoint,

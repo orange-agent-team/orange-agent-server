@@ -30,7 +30,10 @@ parser.add_argument('--verify-local-package',action='store_true',help='Install a
 parser.add_argument('--verify-code-review',action='store_true',help='Review a selected local repository with a pinned model and require a sourced finding')
 parser.add_argument('--review-model-7b',type=Path,help='Explicit separately supplied SHA-pinned 7B code-review qualification weight')
 parser.add_argument('--verify-patch-skill',type=Path,help='Verify the explicit official edit template with the supplied SHA-pinned 7B model')
+parser.add_argument('--verify-weight-admission',action='store_true',help='Run a real small model using a 7B alias and reject the persisted qualified template before inference')
 args=parser.parse_args()
+if args.verify_weight_admission and (args.verify_patch_skill or args.verify_code_review or args.verify_skills or args.verify_local_package or args.required_tool!='read_file'):
+    parser.error('Weight admission uses an independent small-model fixture')
 if args.verify_patch_skill and (args.verify_code_review or args.review_model_7b or args.verify_skills or args.verify_local_package or args.required_tool!='read_file'):
     parser.error('The patch qualification requires its own edit fixture')
 if args.review_model_7b and not args.verify_code_review:parser.error('The optional 7B profile applies only to code-review qualification')
@@ -43,6 +46,7 @@ if args.model_protocol!='chat_completions':
 if args.verify_code_review:REPORT=ROOT/'.local'/('real-agent-code-review-7b' if args.review_model_7b else 'real-agent-code-review')
 if args.verify_patch_skill:REPORT=ROOT/'.local'/'real-agent-patch-skill'
 if args.verify_skills:REPORT=ROOT/'.local'/('real-agent-local-package' if args.verify_local_package else 'real-agent-skills')
+if args.verify_weight_admission:REPORT=ROOT/'.local'/'real-agent-mismatched-weight'
 target=Path(os.environ.get('CARGO_TARGET_DIR',ROOT/'target')).resolve()
 
 def digest(path):
@@ -63,8 +67,8 @@ def main():
     lock=json.loads((ROOT/'config/local-model.lock.json').read_text())
     build=json.loads((PRIVATE/'build.json').read_text())
     backend=PRIVATE/'build/bin/llama-server';model=PRIVATE/(lock['model']['sha256']+'.gguf')
-    model_version='qwen-agent-test-v1'
-    context_tokens=4096
+    model_version='qwen7b-reviewed-cpu-v1' if args.verify_weight_admission else 'qwen-agent-test-v1'
+    context_tokens=8192 if args.verify_weight_admission else 4096
     if args.review_model_7b or args.verify_patch_skill:
         lock['model']=json.loads((ROOT/'config/local-code-review-model.lock.json').read_text())
         model=(args.review_model_7b or args.verify_patch_skill).resolve(strict=True)
@@ -149,6 +153,22 @@ def main():
                     finally:
                         if child.poll() is None:child.kill();child.wait()
                 config['run']['environment']=invoke('grant-info')['environment'];write(path,config)
+                if args.verify_weight_admission:
+                    original=json.loads(json.dumps(config))
+                    pin=next(s['pin'] for s in invoke('skills') if s['pin']['id']=='orange.code-review')
+                    config['run']['run_id']=uuid.uuid4().hex
+                    config['skill']=pin;write(path,config)
+                    invoke('enable-skill','0')
+                    if invoke('start')['phase']!='ready':raise RuntimeError('Expected a durable queued Run')
+                    del config['skill'];write(path,config)
+                    invoke('step',expected_denial='qualified model process mismatch')
+                    with sqlite3.connect(config['journal']) as db:
+                        count=db.execute('SELECT count(*) FROM runtime_invocations WHERE run_id=?',(config['run']['run_id'],)).fetchone()[0]
+                    if count!=0 or invoke('skill-binding')!=pin:raise RuntimeError('Wrong weights obtained model access or removed the binding')
+                    if ready['record']['model_sha256']!=lock['model']['sha256'] or ready['record']['model_version']!=model_version:
+                        raise RuntimeError('The fixture did not actually run the small weights under the qualified alias')
+                    result['wrong_weight_denied']={'actual_sha256':ready['record']['model_sha256'],'claimed_alias':model_version,'model_dispatches':count,'configuration_pin_removed':True}
+                    config=original;write(path,config)
                 if args.verify_patch_skill:
                     import patch_skill_fixture
                     original=json.loads(json.dumps(config))

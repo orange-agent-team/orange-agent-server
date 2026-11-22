@@ -456,3 +456,74 @@ fn official_review_refuses_an_unqualified_model_before_creating_a_run()
     assert_eq!(count, 0);
     Ok(())
 }
+
+#[test]
+fn local_model_facts_bind_the_weight_context_and_original_connection_id()
+-> Result<(), Box<dyn std::error::Error>> {
+    use orange_protocol::local_model::{LocalModelIdentity, local_7b_pin};
+    let mut f = Fixture::new();
+    let mut journal = f.open();
+    let pin = pin("orange.code-review");
+    journal.set_skill_enabled("alice", &pin, 0, true)?;
+    let mut model = LocalModelIdentity {
+        alias: "private-local-model".into(),
+        context_tokens: 8192,
+        model_sha256: local_7b_pin().map_err(|_| "invalid lock")?.sha256,
+        executable_sha256: "a".repeat(64),
+    };
+    f.config.model_version = model
+        .connection_id()
+        .map_err(|_| "invalid local identity")?;
+    let original = f.config.model_version.clone();
+    let authority = AgentAuthority::read(&f.grant);
+    let mut wrong = model.clone();
+    wrong.model_sha256 = "b".repeat(64);
+    assert!(
+        journal
+            .start_agent_skill_on_local_model(
+                &f.config,
+                &pin,
+                Some(1),
+                "review".into(),
+                authority,
+                &wrong
+            )
+            .is_err()
+    );
+    f.config.model_version = wrong.connection_id().map_err(|_| "model id")?;
+    assert!(
+        journal
+            .start_agent_skill_on_local_model(
+                &f.config,
+                &pin,
+                Some(1),
+                "review".into(),
+                authority,
+                &wrong
+            )
+            .is_err()
+    );
+    f.config.model_version = original;
+    journal.start_agent_skill_on_local_model(
+        &f.config,
+        &pin,
+        Some(1),
+        "review".into(),
+        authority,
+        &model,
+    )?;
+    model.context_tokens = 4096;
+    assert!(
+        journal
+            .start_agent_skill_on_local_model(
+                &f.config,
+                &pin,
+                Some(1),
+                "review".into(),
+                authority,
+                &model
+            )
+            .is_err()
+    );
+    Ok(())
+}
