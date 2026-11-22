@@ -296,7 +296,7 @@ try:
             assert actual['phase'] == 'ready'
             if legacy_binary and index == 2:
                 with sqlite3.connect(database) as db:
-                    verify_current_journal(db)
+                    current_schema = verify_current_journal(db)
                     assert db.execute('SELECT * FROM editing_approvals ORDER BY operation_id').fetchall() == saved_approvals
                     assert db.execute('SELECT count(*) FROM patch_capture_witnesses').fetchone()[0] == 0
                     assert db.execute('SELECT count(*) FROM patch_capture_receipts').fetchone()[0] == 1 + len(saved_capture_receipts)
@@ -319,7 +319,7 @@ try:
         assert complete['phase'] == 'completed' and (complete['steps'], complete['invocations']) == (7, 4)
         assert invoke('step') == complete and len(observations['positive']) == 4
         with sqlite3.connect(database) as db:
-            verify_current_journal(db)
+            current_schema = verify_current_journal(db)
             assert db.execute('SELECT count(*) FROM patch_version_edges').fetchone()[0] == 2
             assert db.execute('SELECT count(*) FROM runtime_tool_approvals').fetchone()[0] == 3
             first = db.execute('SELECT operation_id FROM operations WHERE tool_version=? ORDER BY rowid', ('apply_patch.v1',)).fetchone()[0]
@@ -338,7 +338,7 @@ try:
         assert len(observations['positive']) == 4
         summary.append({'scenario': 'positive', 'model_calls': 4, 'actual_edits': 2, 'reopen_no_replay': True})
         if legacy_binary:
-            summary.append({'scenario': 'schema' + str(legacy_schema) + '-to30', 'actual_old_success_and_approved_edit': True, 'approval_preserved': True, 'no_old_capture_evidence_invented': True, 'historical_source_and_pending_edit_validated': True, 'old_binary_rejected_without_data_mutation': True})
+            summary.append({'scenario': f"schema{legacy_schema}-to{current_schema}", 'actual_old_success_and_approved_edit': True, 'approval_preserved': True, 'no_old_capture_evidence_invented': True, 'historical_source_and_pending_edit_validated': True, 'old_binary_rejected_without_data_mutation': True})
 
         config, save, invoke, workspace, database, _ = fixture('combined')
         create = invoke('authorize-create', 'explicit-create')

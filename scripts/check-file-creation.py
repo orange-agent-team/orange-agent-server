@@ -194,7 +194,7 @@ try:
         assert invoke('step') == complete and len(observations) == 3
         with sqlite3.connect(database) as db:
             assert db.execute("SELECT count(*) FROM operations WHERE tool_version='write_file.v1' AND state='succeeded' AND context_applied=1").fetchone()[0] == 1
-            verify_current_journal(db)
+            current_schema = verify_current_journal(db)
         target.unlink()
         invoke('show', failed=True)
         invoke('step', failed=True)
@@ -209,4 +209,4 @@ finally:
 print('PASS actual CLI/HTTP adapter/SQLite/source read/new Unicode file/exact approval/reopen/no replay/revocation; model responses and count are explicit fixtures, not inference or OS-consent certification')
 
 if legacy_binary:
-    print('PASS actual fixed Runtime7e115c3 schema6 pending approved creation -> current current-schema snapshot/approval adoption; no extra approval or effect replay. Desktop OS access restoration is separately verified.')
+    print(f'PASS actual fixed Runtime7e115c3 schema6 pending approved creation -> schema{current_schema} snapshot/approval adoption; no extra approval or effect replay. Desktop OS access restoration is separately verified.')

@@ -14,3 +14,4 @@ def verify_current_journal(db):
                 ("trigger", "immutable_local_run_skill"), ("view", "available_skill_versions")}
     objects = set(db.execute("SELECT type, name FROM sqlite_schema"))
     assert required <= objects, required - objects
+    return actual
