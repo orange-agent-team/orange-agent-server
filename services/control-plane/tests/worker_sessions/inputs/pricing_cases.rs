@@ -909,13 +909,23 @@ async fn failed_settlement(cert: &str, expire: bool) {
 
     let balance:i64=sqlx::query_scalar("SELECT sum(e.amount)::bigint FROM ledger_entries e JOIN ledger_transactions t USING(transaction_id) WHERE t.business_key=$1").bind(&key).fetch_one(c.f.d.store.pool()).await.expect("balanced");
     assert_eq!(balance, 0);
+    let prior_session = connection.identity().session_id.clone();
+    connection.close();
+    let restored = ControlConnection::connect_output_execution(
+        worker_config(&server, &c.f.d),
+        &mut node,
+        &mut journal,
+    )
+    .await
+    .expect("fresh authorized connection after financial review");
+    assert_ne!(prior_session, restored.identity().session_id);
     raw.query_output(worker::OutputQuery {
-        session_id: connection.identity().session_id.clone(),
+        session_id: restored.identity().session_id.clone(),
         original: Some(h),
     })
     .await
-    .expect("recover original delivered fact");
-    connection.close();
+    .expect("recover original delivered fact through current session");
+    restored.close();
     server.stop().await;
     c.f.objects.drain().await.expect("drain");
     c.meter.shutdown().await.expect("counter exited");
