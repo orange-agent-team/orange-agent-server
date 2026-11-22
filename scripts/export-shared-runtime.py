@@ -23,7 +23,7 @@ members=['crates/domain','crates/protocol','crates/agent-runtime','crates/model-
 if subprocess.run(['git','cat-file','-e',args.commit+':crates/platform-files/Cargo.toml'],cwd=ROOT,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode==0:
     members.append('crates/platform-files')
 roots=['Cargo.toml','Cargo.lock',*members,'contracts/proto','contracts/fixtures/metering-v1.json','contracts/fixtures/transcription-observation.v1.json','contracts/fixtures/builtin-tool-pins.v1.json','contracts/fixtures/editing-tool-pins.v1.json','contracts/fixtures/memory-tool-pins.v1.json','contracts/fixtures/memory-tool-pins.v2.json','config/local-model.lock.json','config/local-tokenizer.lock.json']
-roots.append('contracts/json-schema/skill-template.v1.json')
+roots.extend(['contracts/json-schema/skill-template.v1.json','config/local-code-review-model.lock.json'])
 # Optional local embedding host embeds the exact E09 runner and approved profile.
 roots.extend(['config/local-embedding.lock.json','config/local-transcription.lock.json','config/transcription-probe.v1.json','config/local-image.lock.json','backends/orange_inference_backends/image.py','backends/environments/sdxl-macos/pyproject.toml','backends/environments/sdxl-macos/uv.lock','backends/orange_inference_backends/embedding.py','backends/orange_inference_backends/transcription.py','backends/pyproject.toml','backends/uv.lock'])
 entries=git('ls-tree','-r','-z',args.commit,'--',*roots).split(b'\0')
