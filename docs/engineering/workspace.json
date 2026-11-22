@@ -1,0 +1,47 @@
+{
+  "projects": {
+    "E01": ["server","crates/domain","orange-domain"],
+    "E02": ["server","crates/protocol","orange-protocol"],
+    "E03": ["server","crates/agent-runtime","orange-agent-runtime"],
+    "E04": ["server","crates/model-runtime","orange-model-runtime"],
+    "E05": ["desktop","crates/desktop-bridge","orange-desktop-bridge"],
+    "E06": ["desktop","apps/desktop","orange_desktop"],
+    "E07": ["server","services/control-plane","orange-control-plane"],
+    "E08": ["server","services/worker","orange-worker"],
+    "E09": ["server","backends","orange-inference-backends"],
+    "E10": ["web","apps/web","orange-web"],
+    "E11": ["admin","apps/admin","orange-admin"]
+  },
+  "support": {"orange-platform-files":"crates/platform-files"},
+  "production_edges": {
+    "orange-domain": [],
+    "orange-protocol": ["orange-domain"],
+    "orange-platform-files": [],
+    "orange-agent-runtime": ["orange-domain","orange-protocol","orange-platform-files"],
+    "orange-model-runtime": ["orange-domain","orange-protocol"],
+    "orange-control-plane": ["orange-domain","orange-protocol","orange-model-runtime","orange-agent-runtime"],
+    "orange-worker": ["orange-domain","orange-protocol","orange-model-runtime"]
+  },
+  "development_edges": {
+    "orange-control-plane": ["orange-worker","orange-model-runtime"],
+    "orange-agent-runtime": ["orange-model-runtime"]
+  },
+  "processes": {
+    "orange-model-host": ["orange-model-runtime","local private model supervisor"],
+    "orange-image": ["orange-model-runtime","managed CPU image backend client"],
+    "orange-embedding-host": ["orange-model-runtime","managed CPU embedding host"],
+    "orange-transcribe": ["orange-model-runtime","managed CPU transcription host"],
+    "model-fetch": ["orange-model-runtime","local model cache provisioning CLI"],
+    "model-smoke": ["orange-model-runtime","development inference verifier"],
+    "model-process-fixture": ["orange-model-runtime","explicit development fixture only"],
+    "metering-fixtures": ["orange-model-runtime","development usage metering verifier"],
+    "orange-api": ["orange-control-plane","loopback development API"],
+    "orange-admin-api": ["orange-control-plane","separate administrative authority"],
+    "orange-user-api": ["orange-control-plane","user facing control plane"],
+    "orange-worker-gateway": ["orange-control-plane","worker control transport"],
+    "orange-cloud-host-gateway": ["orange-control-plane","hosted workspace control transport"],
+    "orange-cloud-host-node": ["orange-control-plane","hosted workspace execution node"],
+    "orange-market-report": ["orange-control-plane","offline pseudonymous report CLI"],
+    "orange-worker": ["orange-worker","inference supplier process"]
+  }
+}
