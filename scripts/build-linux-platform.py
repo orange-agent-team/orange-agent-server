@@ -29,7 +29,8 @@ def git(*args):
     return subprocess.check_output(["git",*args],cwd=ROOT)
 
 def context_archive(commit,lock,cache,destination):
-    vendor=cache/"vendor"
+    versioned=cache/("vendor-"+hashlib.sha256(git("show",commit+":Cargo.lock")).hexdigest())
+    vendor=versioned if versioned.is_dir() else cache/"vendor"
     if not vendor.is_dir():
         raise ValueError("Prepare the pinned crates with cargo vendor --locked --offline --versioned-dirs .local/linux/vendor")
     archive=cache/lock["protoc"]["name"]
@@ -80,10 +81,15 @@ tar -cf - "$@"
 def main():
     cli=argparse.ArgumentParser()
     cli.add_argument("--pass-number",required=True,type=int,choices=(1,2))
+    cli.add_argument("--source",help="Exact native source commit (defaults to HEAD)")
     cli.add_argument("--context",default="colima-orange-agent")
     cli.add_argument("--cache",type=Path,default=ROOT/".local/linux")
     args=cli.parse_args();cache=args.cache.resolve()
     commit=git("rev-parse","HEAD").decode().strip()
+    if args.source:
+        if len(args.source)!=40 or not all(v in "0123456789abcdef" for v in args.source):raise ValueError("Use a full native commit")
+        if git("cat-file","-t",args.source).strip()!=b"commit":raise ValueError("Expected a commit")
+        commit=args.source
     lock=json.loads(git("show",commit+":"+LOCK))
     stamp=git("show","-s","--format=%ct",commit).decode().strip()
     directory=ROOT/".local/linux-platform-native"/commit;directory.mkdir(parents=True,mode=0o700,exist_ok=True)

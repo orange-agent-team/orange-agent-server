@@ -78,6 +78,19 @@ def locked_blob(opener,url,token,descriptor,directory):
             time.sleep(1<<attempt)
     raise RuntimeError("Registry fetch exhausted")
 
+def read_registry(opener,req,limit):
+    for attempt in range(3):
+        try:
+            with opener.open(req,timeout=35) as response:
+                data=response.read(limit+1)
+            if len(data)>limit:
+                raise ValueError("Registry metadata exceeds its limit")
+            return data
+        except (OSError,http.client.IncompleteRead) as exc:
+            if attempt==2:
+                raise RuntimeError(f"Registry metadata unavailable: {type(exc).__name__}, HTTP {getattr(exc,'code',None)}") from None
+            time.sleep(1<<attempt)
+
 def import_image(docker,entry,cache):
     ref=entry["image"]
     match=re.fullmatch(r"docker.io/library/([a-z0-9-]+)@(sha256:[0-9a-f]{64})",ref)
@@ -86,12 +99,12 @@ def import_image(docker,entry,cache):
     if local_image_id(docker,entry):
         print("Verified local image",repo,manifest_hash,flush=True);return
     opener=urllib.request.build_opener(RegistryRedirect())
-    with opener.open("https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/"+repo+":pull",timeout=30) as auth:
-        token=json.loads(auth.read(131072))["token"]
+    auth="https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/"+repo+":pull"
+    token=json.loads(read_registry(opener,auth,131072))["token"]
     base="https://registry-1.docker.io/v2/library/"+repo
     req=urllib.request.Request(base+"/manifests/"+manifest_hash,headers={"Accept":", ".join(sorted(MANIFEST_TYPES))})
     req.add_unredirected_header("Authorization","Bearer "+token)
-    with opener.open(req,timeout=40) as response:raw=response.read(1024*1024)
+    raw=read_registry(opener,req,1024*1024)
     if hashlib.sha256(raw).hexdigest()!=digest(manifest_hash):raise ValueError("Manifest digest mismatch")
     manifest=json.loads(raw);media=manifest["mediaType"]
     if media not in MANIFEST_TYPES or manifest["config"]["digest"]!=config:raise ValueError("Unexpected image manifest")

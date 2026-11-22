@@ -56,6 +56,40 @@ def listening(binary, env, label):
     if process.returncode!=0:raise RuntimeError(label+" graceful exit failed")
 
 
+def check_running(user,admin,user_config,admin_config,request,sql,migration_count):
+    """Exercise the same independent identities and accounting database on both binary targets."""
+    assert user!=admin and request(user,"/api/v1/session")[0]==401 and request(admin,"/admin/v1/session")[0]==401
+    assert request(user,"/admin/v1/session")[0]==404 and request(admin,"/api/v1/session")[0]==404
+    clients=[]
+    for origin,path,cfg in [(user,"/api/v1/auth/start",user_config),(admin,"/admin/v1/auth/start",admin_config)]:
+        config=json.loads(cfg.read_bytes());status,headers,_=request(origin,path)
+        assert status in (302,303,307)
+        where=urlsplit(headers["Location"]);issuer=urlsplit(config["issuer"])
+        assert (where.scheme,where.netloc)==(issuer.scheme,issuer.netloc)
+        assert parse_qs(where.query)["client_id"]==[config["client_id"]]
+        clients.append(config["client_id"])
+    assert clients[0]!=clients[1]
+    user_id,session_id=str(uuid.uuid4()),str(uuid.uuid4())
+    token,csrf=secrets.token_hex(32),secrets.token_hex(32)
+    hashed=hashlib.sha256(token.encode()).hexdigest()
+    sql(f"""INSERT INTO owners(owner_id) VALUES('{user_id}');
+        INSERT INTO users(user_id,issuer,subject,personal_owner_id) VALUES('{user_id}','platform-release-fixture','{user_id}','{user_id}');
+        INSERT INTO wallets(owner_id) VALUES('{user_id}');
+        INSERT INTO user_sessions(token_hash,session_id,user_id,csrf_token,auth_time,idle_expires_at,absolute_expires_at)
+        VALUES('{hashed}','{session_id}','{user_id}','{csrf}',0,floor(extract(epoch FROM clock_timestamp()))::bigint+600,
+        floor(extract(epoch FROM clock_timestamp()))::bigint+600);""")
+    cookie="__Host-orange-user="+token
+    status,headers,body=request(user,"/api/v1/session",cookie)
+    view=json.loads(body)
+    assert status==200 and view["user_id"]==user_id and view["personal_owner_id"]==user_id and headers["Cache-Control"]=="no-store"
+    assert request(admin,"/admin/v1/session",cookie)[0]==401
+    sql(f"UPDATE user_sessions SET revoked=true WHERE session_id='{session_id}'")
+    assert request(user,"/api/v1/session",cookie)[0]==401
+    migrated=int(sql("SELECT count(*) FROM _sqlx_migrations WHERE success"))
+    assert migrated==migration_count
+    return migrated
+
+
 def check(root, url_file, user_config, admin_config, scratch):
     common={"PATH":"/usr/bin:/bin","ORANGE_ENV":"development"}
     psql=shutil.which("psql") or "/opt/homebrew/opt/postgresql@17/bin/psql"
@@ -72,34 +106,6 @@ def check(root, url_file, user_config, admin_config, scratch):
         with ExitStack() as group:
             user=group.enter_context(listening(root/"bin/orange-user-api",uenv,"User API"))
             admin=group.enter_context(listening(root/"bin/orange-admin-api",aenv,"Admin API"))
-            assert user!=admin and request(user,"/api/v1/session")[0]==401 and request(admin,"/admin/v1/session")[0]==401
-            assert request(user,"/admin/v1/session")[0]==404 and request(admin,"/api/v1/session")[0]==404
-            clients=[]
-            for origin,path,cfg in [(user,"/api/v1/auth/start",user_config),(admin,"/admin/v1/auth/start",admin_config)]:
-                config=json.loads(cfg.read_bytes());status,headers,_=request(origin,path)
-                assert status in (302,303,307)
-                where=urlsplit(headers["Location"]);issuer=urlsplit(config["issuer"])
-                assert (where.scheme,where.netloc)==(issuer.scheme,issuer.netloc)
-                assert parse_qs(where.query)["client_id"]==[config["client_id"]]
-                clients.append(config["client_id"])
-            assert clients[0]!=clients[1]
-            user_id,session_id=str(uuid.uuid4()),str(uuid.uuid4())
-            token,csrf=secrets.token_hex(32),secrets.token_hex(32)
-            hashed=hashlib.sha256(token.encode()).hexdigest()
-            sql(f"""INSERT INTO owners(owner_id) VALUES('{user_id}');
-                INSERT INTO users(user_id,issuer,subject,personal_owner_id) VALUES('{user_id}','platform-release-fixture','{user_id}','{user_id}');
-                INSERT INTO wallets(owner_id) VALUES('{user_id}');
-                INSERT INTO user_sessions(token_hash,session_id,user_id,csrf_token,auth_time,idle_expires_at,absolute_expires_at)
-                VALUES('{hashed}','{session_id}','{user_id}','{csrf}',0,floor(extract(epoch FROM clock_timestamp()))::bigint+600,
-                floor(extract(epoch FROM clock_timestamp()))::bigint+600);""")
-            cookie="__Host-orange-user="+token
-            status,headers,body=request(user,"/api/v1/session",cookie)
-            view=json.loads(body)
-            assert status==200 and view["user_id"]==user_id and view["personal_owner_id"]==user_id and headers["Cache-Control"]=="no-store"
-            assert request(admin,"/admin/v1/session",cookie)[0]==401
-            sql(f"UPDATE user_sessions SET revoked=true WHERE session_id='{session_id}'")
-            assert request(user,"/api/v1/session",cookie)[0]==401
-            migrated=int(sql("SELECT count(*) FROM _sqlx_migrations WHERE success"))
-            assert migrated==len(list((root/"migrations").glob("*.sql")))
+            migrated=check_running(user,admin,user_config,admin_config,request,sql,len(list((root/"migrations").glob("*.sql"))))
     return {"actual_user_api":True,"actual_admin_api":True,"oidc_clients_distinct":True,"session_fixture_revoked":True,
             "anonymous_denied":True,"cross_surface_rejected":True,"successful_migrations":migrated,"graceful_stop":True}

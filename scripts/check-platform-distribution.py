@@ -40,34 +40,16 @@ for program in PLATFORM_PROGRAMS:
     data=(native/program).read_bytes()
     if sha(data)!=report["builds"][0][program]:raise ValueError("Binary digest mismatch")
     files["bin/"+program]=data
-def put(source,name=None):
-    dest=name or source
-    if dest in files:raise ValueError("Duplicate release path")
-    files[dest]=git("show",commit+":"+source)
-for source in ("distribution/platform/verify.py","distribution/platform/README.md"):
-    put(source,Path(source).name)
-for source in git("ls-tree","-r","--name-only",commit,"--","distribution/platform/config").decode().splitlines():
-    put(source,"config/"+Path(source).name)
-for directory in ("contracts/openapi","contracts/json-schema","contracts/proto","services/control-plane/migrations"):
-    for source in git("ls-tree","-r","--name-only",commit,"--",directory).decode().splitlines():
-        if directory.endswith("migrations"):put(source,"migrations/"+Path(source).name)
-        else:put(source)
-for source in ("Cargo.lock","rust-toolchain.toml","config/worker-development.example.json","config/trusted-meter.example.json",
-               "config/connector-releases.v1.json","docs/worker-development-host.md","docs/development-cloud-host.md","docs/cloud-isolation-development.md","docs/audio-artifact-preflight.md"):
-    put(source)
+from platform_payload import service_files,write_archive
+files.update(service_files(ROOT,commit,"distribution/platform/README.md"))
 manifest={"source":commit,"target":report["target"],"build_macos":report["macos"],"programs":list(PLATFORM_PROGRAMS),
           "sha256":{n:sha(d) for n,d in sorted(files.items())}}
 files["manifest.json"]=(json.dumps(manifest,indent=2)+"\n").encode()
 
-def write_archive(path):
-    with path.open("xb") as raw,gzip.GzipFile(fileobj=raw,mode="wb",filename="",mtime=0) as gz,tarfile.open(fileobj=gz,mode="w") as tar:
-        for name,data in sorted(files.items()):
-            item=tarfile.TarInfo("orange-platform/"+name);item.size=len(data);item.mode=0o755 if name.startswith("bin/") else 0o644
-            tar.addfile(item,io.BytesIO(data))
 dest=ROOT/".local/platform-distributions";dest.mkdir(mode=0o700,parents=True,exist_ok=True)
 with tempfile.TemporaryDirectory(dir=dest,prefix=".verify-") as tmp:
     scratch=Path(tmp);first,second=scratch/"first.tgz",scratch/"second.tgz"
-    write_archive(first);write_archive(second)
+    write_archive(first,files);write_archive(second,files)
     with first.open("rb") as a,second.open("rb") as b:
         digest=hashlib.file_digest(a,"sha256").hexdigest()
         assert hashlib.file_digest(b,"sha256").hexdigest()==digest
