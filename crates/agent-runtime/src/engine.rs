@@ -232,6 +232,38 @@ impl Journal {
         input: String,
         grant: &WorkspaceGrant,
     ) -> Result<RunView, EngineError> {
+        self.start_skill_with_authority(
+            config,
+            pin,
+            expected_revision,
+            input,
+            AgentAuthority::read(grant),
+        )
+    }
+
+    #[cfg(target_vendor = "apple")]
+    pub fn start_agent_patch_skill(
+        &mut self,
+        config: &RunConfig,
+        pin: &crate::skills::SkillPin,
+        expected_revision: Option<i64>,
+        input: String,
+        authority: EditingAuthority<'_>,
+    ) -> Result<RunView, EngineError> {
+        if authority.create.is_some() || pin.id != "orange.reviewed-patch" {
+            return Err(EngineError::Forbidden);
+        }
+        self.start_skill_with_authority(config, pin, expected_revision, input, authority.internal())
+    }
+
+    fn start_skill_with_authority(
+        &mut self,
+        config: &RunConfig,
+        pin: &crate::skills::SkillPin,
+        expected_revision: Option<i64>,
+        input: String,
+        authority: AgentAuthority<'_>,
+    ) -> Result<RunView, EngineError> {
         let (template, revision) = self.resolve_skill(&config.owner, pin)?;
         if template
             .required_model_profile()
@@ -244,7 +276,7 @@ impl Journal {
         self.start_agent_protocol(
             config,
             messages,
-            AgentAuthority::read(grant),
+            authority,
             false,
             1,
             Some((pin, &template, revision)),
@@ -299,6 +331,11 @@ impl Journal {
             None
         };
         let edit_binding = self.edit_start_binding(config, grant, edit)?;
+        if skill.is_some_and(|(_, template, _)| {
+            template.requires_edit_grant() != edit_binding.is_some()
+        }) {
+            return Err(EngineError::Forbidden);
+        }
         let config_json = encode(config)?;
         let config_digest = if memory_read_version == 2 {
             digest(
@@ -1130,6 +1167,17 @@ impl Journal {
             questions::commit_question(&tx, c, invocation, &candidate.tool_calls[0].id, args)?;
         }
         for (ordinal, (call, request)) in candidate.tool_calls.iter().zip(requests).enumerate() {
+            if let AgentRequest::Workspace(WorkspaceRequest::ApplyPatch(args)) = &request
+                && stored
+                    .skill
+                    .as_ref()
+                    .is_some_and(|s| s.template.requires_edit_grant())
+                && !crate::skills::source_references(&tx, &c.run_id)?
+                    .iter()
+                    .any(|r| r.path == args.path && r.sha256 == args.expected_sha256)
+            {
+                return Err(EngineError::Forbidden);
+            }
             let ordinal = i64::try_from(ordinal).map_err(|_| EngineError::Invalid)?;
             let id = format!("op-{}", uuid::Uuid::new_v4());
             let environment = if let AgentRequest::Memory(memory) = &request {
@@ -1190,6 +1238,8 @@ impl Journal {
                 .as_ref()
                 .is_some_and(|s| s.template.requires_sources())
             && crate::skills::source_references(&tx, &c.run_id)?.is_empty();
+        let missing_patch = done && stored.skill.as_ref().is_some_and(|s|s.template.requires_edit_grant())
+            && !tx.query_row("SELECT EXISTS(SELECT 1 FROM operations WHERE run_id=? AND state='succeeded' AND context_applied=1 AND json_extract(request_json,'$.tool')='apply_patch')", [&c.run_id], |r|r.get::<_,bool>(0))?;
         tx.execute(
             "UPDATE runtime_invocations SET state='committed' WHERE invocation=?",
             [invocation],
@@ -1198,7 +1248,7 @@ impl Journal {
             "UPDATE runtime_runs SET messages=?,phase=?,final_text=?,failure=? WHERE run_id=?",
             params![
                 encode(&messages)?,
-                if missing_source {
+                if missing_source || missing_patch {
                     "failed"
                 } else if done {
                     "completed"
@@ -1207,12 +1257,16 @@ impl Journal {
                 } else {
                     "tools_pending"
                 },
-                if done && !missing_source {
+                if done && !missing_source && !missing_patch {
                     Some(&candidate.text)
                 } else {
                     None
                 },
-                missing_source.then_some("skill_source_required"),
+                if missing_patch {
+                    Some("skill_patch_required")
+                } else {
+                    missing_source.then_some("skill_source_required")
+                },
                 c.run_id
             ],
         )?;

@@ -1,6 +1,6 @@
 # 本地 Agent 的模板选择与运行绑定
 
-此版本提供三个可选择的内置模板。代码审阅的模型配置及来源要求见下文。**文本摘要（AU-02）**仅把用户提交的文本交给本地模型，模型请求中的工具目录为空。**授权文件问答（AU-01）**可请求 read_file 和 search_text，文件访问仍需当前工作区授权及正常的操作批准。已提交的读取结果给出相对路径、SHA-256、字节起止范围，以及在搜索命中时可用的行号。没有成功读取任何来源时，该模板以 skill_source_required 结束。
+此版本提供四个可选择的内置模板。代码审阅的模型配置及来源要求见下文。**文本摘要（AU-02）**仅把用户提交的文本交给本地模型，模型请求中的工具目录为空。**授权文件问答（AU-01）**可请求 read_file 和 search_text，文件访问仍需当前工作区授权及正常的操作批准。已提交的读取结果给出相对路径、SHA-256、字节起止范围，以及在搜索命中时可用的行号。没有成功读取任何来源时，该模板以 skill_source_required 结束。
 
 模板版本记录在 crates/agent-runtime/src/skills 下的发布目录中。正文、显示名、版本、场景和工具声明共同参与摘要。每个所有者分别启用指定摘要，模板变更不会扩大工作区能力。本节说明随 Runtime 分发的只读模板。本地 JSON 包见下文。[模板接口](../contracts/json-schema/skill-template.v1.json)
 
@@ -51,3 +51,13 @@ local-agent PRIVATE_CONFIG uninstall-skill INSTALLATION_REVISION ACTIVATION_REVI
 使用合格的模型配置运行 `python3 scripts/check-real-agent.py --verify-code-review --review-model-7b MODEL_FILE` 会创建临时 Git 仓库，使用固定的真实 CPU 模型诊断样本计算错误，核对引用、回读报告、文件摘要和 Git 工作区状态。
 
 审阅的模型资格按权重单独记录。可通过 `--review-model-7b /path/to/qwen2.5-7b-instruct-q4_k_m-merged.gguf` 明确选用已合并的固定 7B 权重。验收会核对文件长度与完整 SHA-256，然后使用与本地目录隔离的 Unix socket 启动模型。0.5B 测试权重在早期验收中曾读取源码后误判计算逻辑。当前官方模板要求显式选择经锁定的 7B 配置；普通 0.5B 配置在创建 Run 前拒绝审阅。日志格式 32 会阻止旧宿主绕过新增的引用和模型门槛。[7B 权重来源与锁定摘要](../config/local-code-review-model.lock.json)
+
+## 批准后应用补丁（AU-07）
+
+macOS 本地 CLI 的“批准后应用补丁”用于修改现有文件。该官方模板需要独立的目录编辑授权、读工作区、已启用的准确版本及匹配的模型配置。它可请求 read_file 和 apply_patch。请先批准读取，然后用 `preview-edit OPERATION_ID` 查看原摘要、差异和结果摘要。核对后，用 `approve-edit OPERATION_ID PREVIEW_DIGEST` 批准这个预览，再继续 `step`。宿主保留原始文件和提交回执。
+
+创建 Run 时只提供读取权会被拒绝。补丁必须引用同一 Run 已批准读取的文件版本。没有成功的补丁回执时模型不能报告模板已完成。停用再启用后，旧 Run 已有的编辑批准也无法派发。用户安装的 local.* 清单仍只支持声明式只读工具。
+
+补丁模板使用 schema 33 阻止不识别其编辑约束的旧宿主修改日志。实际文件系统的资格以已验证的目标平台为准。
+
+本地 CPU 模型宿主接受受信启动配置中的可选整数 `inference_threads`（1 至 16）。默认值为 2。显式分配会在宿主就绪回执中给出实际启动参数的线程数与执行配置摘要。AU-07 本地组合验收使用 4 个推理线程，单次推理仍受 120 秒上限及原 Run 截止时间约束。Worker 与计量服务沿用已锁定的默认配置。

@@ -350,6 +350,7 @@ impl Journal {
         let stored = self.stored_run(operation.owner, operation.run)?;
         let binding = stored.editing.as_ref().ok_or(EngineError::Forbidden)?;
         if stored.phase != "tools_pending"
+            || stored.skill.as_ref().is_some_and(|s| !s.current)
             || now()? >= stored.config.deadline_unix
             || binding.consent_id != edit.consent_id()
             || Some(binding.version.clone()) != edit.consent_version()

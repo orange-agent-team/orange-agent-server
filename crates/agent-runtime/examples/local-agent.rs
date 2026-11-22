@@ -505,6 +505,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("Activation revision requires a skill pin".into());
     }
     let view = match command {
+        #[cfg(target_vendor = "apple")]
+        "start"
+            if config
+                .skill
+                .as_ref()
+                .is_some_and(|p| p.id == "orange.reviewed-patch") =>
+        {
+            journal.start_agent_patch_skill(
+                &config.run,
+                config.skill.as_ref().expect("selected patch template"),
+                config.skill_activation_revision,
+                config.prompt,
+                orange_agent_runtime::engine::EditingAuthority {
+                    read: &grant,
+                    create: create.as_ref(),
+                    edit: edit.as_ref().ok_or("separate edit consent required")?,
+                },
+            )?
+        }
         "start" if config.skill.is_some() => journal.start_agent_skill_reviewed(
             &config.run,
             config.skill.as_ref().expect("selected skill"),

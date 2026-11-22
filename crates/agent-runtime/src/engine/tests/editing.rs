@@ -788,3 +788,174 @@ async fn edited_source_changes_and_forged_model_projection_block_the_next_model_
         assert!(view.final_text.is_none());
     }
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn official_patch_template_binds_the_read_and_exact_write_approval()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut f = Fixture::new();
+    f.config.model_version = "qwen7b-edit-candidate-v1".into();
+    let source = f.workspace.path().join("note.txt");
+    std::fs::write(&source, b"old\n")?;
+    let mut j = f.open();
+    let selection = j
+        .skills("alice")?
+        .into_iter()
+        .find(|s| s.pin.id == "orange.reviewed-patch")
+        .expect("official patch");
+    let pin = selection.pin;
+    j.set_skill_enabled("alice", &pin, 0, true)?;
+    assert!(
+        j.start_agent_skill(&f.config, &pin, "Edit note.txt".into(), &f.grant)
+            .is_err()
+    );
+    let edit = edit(&mut j, &f);
+    j.start_agent_patch_skill(
+        &f.config,
+        &pin,
+        Some(1),
+        "Edit note.txt".into(),
+        authority(&f, &edit),
+    )?;
+    let model = ScriptedModel::new(vec![
+        tools(vec![call("read", "read_file", json!({"path":"note.txt"}))]),
+        patch_call("patch", "note.txt", "old", "new"),
+        final_response(),
+    ]);
+    let (_tx, rx) = watch::channel(false);
+    let read = advance(&mut j, &f, &edit, &model, rx.clone()).await;
+    assert_eq!(read.pending.len(), 1);
+    j.approve_agent_tool(
+        "alice",
+        "run-1",
+        &read.pending[0].operation_id,
+        f.config.deadline_unix,
+        &f.grant,
+    )?;
+    advance(&mut j, &f, &edit, &model, rx.clone()).await;
+    let proposal = advance(&mut j, &f, &edit, &model, rx.clone()).await;
+    let op = &proposal.pending[0];
+    assert_eq!(std::fs::read(&source)?, b"old\n");
+    assert!(
+        j.advance_agent_editing("alice", "run-1", authority(&f, &edit), &model, rx.clone())
+            .await
+            .is_err()
+    );
+    assert_eq!(std::fs::read(&source)?, b"old\n");
+    assert_eq!(op.request.workspace().expect("patch").name(), "apply_patch");
+    approve_patch(&mut j, &f, &edit, &proposal).await;
+    advance(&mut j, &f, &edit, &model, rx.clone()).await;
+    let done = advance(&mut j, &f, &edit, &model, rx).await;
+    assert_eq!(done.phase, Phase::Completed);
+    assert_eq!(std::fs::read(&source)?, b"new\n");
+    let requests = model.requests.lock().expect("model request inventory");
+    for q in requests.iter() {
+        assert_eq!(
+            q.tools
+                .iter()
+                .map(|t| t.name.as_str())
+                .collect::<std::collections::BTreeSet<_>>(),
+            ["apply_patch", "read_file"].into_iter().collect()
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn official_patch_template_rejects_unread_content_and_empty_completion()
+-> Result<(), Box<dyn std::error::Error>> {
+    for guessed in [true, false] {
+        let mut f = Fixture::new();
+        f.config.model_version = "qwen7b-edit-candidate-v1".into();
+        let source = f.workspace.path().join("note.txt");
+        std::fs::write(&source, b"old\n")?;
+        let mut j = f.open();
+        let pin = j
+            .skills("alice")?
+            .into_iter()
+            .find(|s| s.pin.id == "orange.reviewed-patch")
+            .expect("official patch")
+            .pin;
+        j.set_skill_enabled("alice", &pin, 0, true)?;
+        let grant = edit(&mut j, &f);
+        j.start_agent_patch_skill(
+            &f.config,
+            &pin,
+            Some(1),
+            "Edit note.txt".into(),
+            authority(&f, &grant),
+        )?;
+        let reply = if guessed {
+            patch_call("guessed", "note.txt", "old", "new")
+        } else {
+            final_response()
+        };
+        let model = ScriptedModel::new(vec![reply]);
+        let (_tx, rx) = watch::channel(false);
+        let result = j
+            .advance_agent_editing("alice", "run-1", authority(&f, &grant), &model, rx)
+            .await;
+        if guessed {
+            assert!(matches!(result, Err(EngineError::Forbidden)));
+        } else {
+            let view = result?;
+            assert_eq!(view.phase, Phase::Failed);
+            assert_eq!(view.failure.as_deref(), Some("skill_patch_required"));
+            assert!(view.final_text.is_none());
+        }
+        assert_eq!(std::fs::read(source)?, b"old\n");
+        let n: i64 = j.connection.query_row(
+            "SELECT count(*) FROM operations WHERE run_id='run-1'",
+            [],
+            |r| r.get(0),
+        )?;
+        assert_eq!(n, 0);
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn disabled_patch_template_cannot_dispatch_an_already_approved_change()
+-> Result<(), Box<dyn std::error::Error>> {
+    let mut f = Fixture::new();
+    f.config.model_version = "qwen7b-edit-candidate-v1".into();
+    let source = f.workspace.path().join("note.txt");
+    std::fs::write(&source, b"old\n")?;
+    let mut j = f.open();
+    let pin = j
+        .skills("alice")?
+        .into_iter()
+        .find(|s| s.pin.id == "orange.reviewed-patch")
+        .expect("official patch")
+        .pin;
+    j.set_skill_enabled("alice", &pin, 0, true)?;
+    let edit = edit(&mut j, &f);
+    j.start_agent_patch_skill(
+        &f.config,
+        &pin,
+        Some(1),
+        "Edit note.txt".into(),
+        authority(&f, &edit),
+    )?;
+    let model = ScriptedModel::new(vec![
+        tools(vec![call("read", "read_file", json!({"path":"note.txt"}))]),
+        patch_call("patch", "note.txt", "old", "new"),
+    ]);
+    let (_tx, rx) = watch::channel(false);
+    let read = advance(&mut j, &f, &edit, &model, rx.clone()).await;
+    j.approve_agent_tool(
+        "alice",
+        "run-1",
+        &read.pending[0].operation_id,
+        f.config.deadline_unix,
+        &f.grant,
+    )?;
+    advance(&mut j, &f, &edit, &model, rx.clone()).await;
+    let proposal = advance(&mut j, &f, &edit, &model, rx.clone()).await;
+    approve_patch(&mut j, &f, &edit, &proposal).await;
+    j.set_skill_enabled("alice", &pin, 1, false)?;
+    j.set_skill_enabled("alice", &pin, 2, true)?;
+    let stopped = advance(&mut j, &f, &edit, &model, rx).await;
+    assert_eq!(stopped.phase, Phase::Cancelled);
+    assert_eq!(std::fs::read(source)?, b"old\n");
+    Ok(())
+}

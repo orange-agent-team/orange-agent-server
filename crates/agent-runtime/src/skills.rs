@@ -74,7 +74,7 @@ impl SkillTemplate {
                 matches!(
                     t.as_str(),
                     "read_file" | "list_directory" | "search_files" | "search_text"
-                )
+                ) || (t == "apply_patch" && self.requires_edit_grant())
             })
         {
             return Err(EngineError::Invalid);
@@ -82,9 +82,16 @@ impl SkillTemplate {
         Ok(())
     }
     pub fn required_model_profile(&self) -> Option<&'static str> {
-        (self.id == "orange.code-review").then_some("qwen7b-reviewed-cpu-v1")
+        match self.id.as_str() {
+            "orange.code-review" => Some("qwen7b-reviewed-cpu-v1"),
+            "orange.reviewed-patch" => Some("qwen7b-edit-candidate-v1"),
+            _ => None,
+        }
     }
 
+    pub(crate) fn requires_edit_grant(&self) -> bool {
+        self.id == "orange.reviewed-patch"
+    }
     pub(crate) fn requires_sources(&self) -> bool {
         self.scenario == "AU-01" || self.id == "orange.code-review"
     }

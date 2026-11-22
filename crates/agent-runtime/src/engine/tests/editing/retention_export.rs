@@ -494,7 +494,7 @@ async fn export_schema17_upgrade_and_interrupted_dispatch_are_nonreplaying() {
         .connection
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .expect("version");
-    assert_eq!(version, 32);
+    assert_eq!(version, crate::JOURNAL_SCHEMA_VERSION);
     let output = tempfile::tempdir().expect("destination");
     let source = j
         .authorize_patch_retention("alice", "run-1", &op, f.workspace.path())
