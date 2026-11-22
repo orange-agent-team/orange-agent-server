@@ -115,12 +115,18 @@ def main():
                     config['prompt']='First call ask_user with exactly these arguments: {"questions":[{"prompt":"Which file should I read?"}]}. Wait for the user answer. Do not call any filesystem tool before that answer. After receiving the answers array, your next response must call read_file with path equal to the answered filename. Do not produce prose or merely repeat the filename. Only after receiving the read_file result may you return the exact file content. The task is not complete until the file content is returned.'
                 path=state/'agent.json';write(path,config)
                 def invoke(operation,*arguments,expect_error=False,input_json=None):
+                    started=time.monotonic()
                     child=subprocess.Popen([str(target/'debug/examples/local-agent'),str(path),operation,*arguments],cwd=ROOT,env={'PATH':'/usr/bin:/bin'},stdin=subprocess.PIPE if input_json is not None else subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
                     try:
                         for _ in range(25):
                             try:out,error=child.communicate(input=json.dumps(input_json) if input_json is not None and _==0 else None,timeout=5);break
                             except subprocess.TimeoutExpired:host.stdin.write('ping\n');host.stdin.flush()
                         else:raise RuntimeError('Bounded CLI transition deadline')
+                        if args.verify_code_review:
+                            variants=[line.split('=',1)[1] for line in error.splitlines()
+                                      if line.startswith('model_gateway_rejected kind=') and line.split('=',1)[1] in
+                                      ('Unavailable','Limit','Protocol','Incomplete','Invalid','Cancelled')]
+                            result.setdefault('cli_transitions',[]).append({'command':operation,'seconds':round(time.monotonic()-started,2),'gateway_errors':variants})
                         if expect_error:
                             if child.returncode==0 or 'ApprovalRequired' not in error:raise RuntimeError('Unapproved tool was not explicitly rejected')
                             return None
@@ -159,6 +165,8 @@ def main():
                         invoke('step',expect_error=True)
                         invoke('approve',item['operation_id']);review=invoke('step')
                         if review['phase']=='ready':review=invoke('step')
+                        if review['phase']!='completed':
+                            raise RuntimeError('Code review ended in '+review['phase']+' ('+str(review.get('failure'))+'); original invocation retained')
                         text=(review.get('final_text') or '').lower()
                         if (review['phase']!='completed' or 'quantity' not in text or
                             not any(term in text for term in ('multipl','unit_price * quantity','quantity * unit_price'))):
