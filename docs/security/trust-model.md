@@ -28,3 +28,5 @@ flowchart LR
 ## 重现实测
 
 在服务端根执行 `python3.12 scripts/check-security-design.py --section review`。可用 `--private-dir` 指向开发环境目录，其中包含本机测试库的连接文件、开发身份配置和固定版本的 gVisor 归档。不传递生产凭据。命令实际运行截断输入、模型校验失败、Worker 锁/未知状态/旧授权、过期 Admin 身份、当前 mTLS 输入授权与开发商户重复履约用例，并在本机 Linux 虚拟机运行受限工作负载。只需检查资产或设计责任时，分别使用 assets、exposure 或 controls。
+
+Worker 验收默认同时运行两个独立用例。用例内部的抢占、撤权和重放仍按原并发路径执行。高扇出运行的抖动另外记录，开发通过率不代表高负载下的可用性。

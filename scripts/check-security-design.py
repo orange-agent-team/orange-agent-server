@@ -80,6 +80,9 @@ def review(private):
                      ORANGE_TEST_USER_CONFIG_FILE=str(private/"identity/user-config.json"))
         verified_output([cargo,"test","-p","orange-control-plane","--features","integration-tests","--locked","--offline",
                          "--test","admin_identity",cases["R-authority"],"--","--exact"],local,[cases["R-authority"]])
+        # Each integration case owns independent fixtures but uses the same disposable database.
+        # Keep runner fan-out bounded. Concurrency inside each transaction and lease test stays intact.
+        local.setdefault("RUST_TEST_THREADS", "2")
         verified_output([sys.executable,ROOT/"scripts/check-worker-session.py"],local,[cases["R-host-privacy"]])
     verified_output([sys.executable,ROOT/"scripts/check-test-checkout.py","--database-url-file",private/"database-url",
                      "--identity-config",private/"identity/user-config.json"],env,[cases["R-billing"]])
