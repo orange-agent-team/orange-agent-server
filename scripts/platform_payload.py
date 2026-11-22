@@ -23,9 +23,10 @@ def service_files(repository,commit,readme,extra=()):
                    "docs/cloud-isolation-development.md","docs/audio-artifact-preflight.md",*extra):put(source)
     return files
 
-def write_archive(path,files):
+def write_archive(path,files,prefix="orange-platform"):
+    if prefix not in ("orange-platform","orange-market-report"):raise ValueError("Unknown distribution prefix")
     with path.open("xb") as raw,gzip.GzipFile(fileobj=raw,mode="wb",filename="",mtime=0) as gz,tarfile.open(fileobj=gz,mode="w") as tar:
         for name,data in sorted(files.items()):
-            item=tarfile.TarInfo("orange-platform/"+name)
+            item=tarfile.TarInfo(prefix+"/"+name)
             item.size=len(data);item.mode=0o755 if name.startswith("bin/") else 0o644
             tar.addfile(item,io.BytesIO(data))

@@ -1,5 +1,7 @@
 //! Compare the marketplace journeys with daily merchant facts and the whole platform ledger.
 use super::{Store, journey_merchant};
+#[path = "market_snapshot.rs"]
+mod market_snapshot;
 use orange_control_plane::payments::Payments;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -132,5 +134,15 @@ pub(super) async fn verify_days(
         .await
         .expect("count post-scan postings");
     assert_eq!(before, after);
+    if let Some(directory) = std::env::var_os("ORANGE_MARKET_REPORT_EVIDENCE") {
+        market_snapshot::verify(
+            pool,
+            merchant,
+            &[team, alice],
+            std::path::Path::new(&directory),
+        )
+        .await
+        .expect("reconciled pseudonymous report");
+    }
     println!("Reconciled two reciprocal jobs plus {other_jobs} unrelated daily settlements");
 }

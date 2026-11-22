@@ -111,6 +111,7 @@ libc.workspace = true
 rustix.workspace = true
 
 [dev-dependencies]
+jsonschema.workspace = true
 orange-model-runtime.workspace = true
 tempfile.workspace = true
 rusqlite.workspace = true

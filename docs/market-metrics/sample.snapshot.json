@@ -1,0 +1,367 @@
+{
+  "version": 1,
+  "supply_history_complete": true,
+  "from_unix": 1704067200,
+  "until_unix": 1704070800,
+  "as_of_unix": 1704070800,
+  "events": [
+    {
+      "receipt": "fbd02b98b6f894d8b70bec75eefafdd87be70aa1bfe1f523a6a8b14449ee1872",
+      "at": 1704067100,
+      "fact": {
+        "type": "node_registered",
+        "node": "b92c687430f71eaa381224205e42ff6f22f85b8ade723d2f20c44f017d3ba195"
+      }
+    },
+    {
+      "receipt": "b9b06e04a1836364ee5951bc713ce1e5bdc09ed8b3b81c221a5ab44dc902a8bc",
+      "at": 1704067100,
+      "fact": {
+        "type": "node_registered",
+        "node": "eb00524d3add21fcfd33d961fc51cf8f2f01119b377d4395c12b38de8379ea50"
+      }
+    },
+    {
+      "receipt": "ecd4275803a7f904f8ce9b916d9167726efdd3a02072ef008fe0a666da712e2e",
+      "at": 1704067100,
+      "fact": {
+        "type": "node_registered",
+        "node": "b51bfc2e02e876ecf1727bc7a22f84b61369df448b99c7ff793bf405948e30ca"
+      }
+    },
+    {
+      "receipt": "ff98fbd559ed0918a33f0ec6c738a59b94b0e7fde5f7e2b87a364d1a8b85786c",
+      "at": 1704066800,
+      "fact": {
+        "type": "purchase",
+        "order": "6ab2f58f644c7c1ef70ae4b9b2447a8324aff94ad4fafe1e7e59b69f8a43e509",
+        "payer": "9f3aa2b2d3e23b93e7af66eb23b9949d4f0b14a68887fa0688d0fbbf8982def4",
+        "currency": "usd",
+        "minor": "400",
+        "units": "4000"
+      }
+    },
+    {
+      "receipt": "3ca39fee13d5a09b2a2ee90ca42d7ba263e5d98174f6d3250f064634905473d4",
+      "at": 1704067205,
+      "fact": {
+        "type": "purchase",
+        "order": "0960ab2bffd6b28c97e9c28b0bc934d167afae1a6a73a4ff41f75954547df94f",
+        "payer": "b4ff66adaa1ca8836768ce72468329b73fa6529add5f34ccf65ba040616350b9",
+        "currency": "usd",
+        "minor": "100",
+        "units": "1000"
+      }
+    },
+    {
+      "receipt": "23cd399387783b814c72e9630b13a80bd33c1efcd76379c129cb70cb4d3a4b8c",
+      "at": 1704067210,
+      "fact": {
+        "type": "purchase",
+        "order": "7d06970c6ac60c3dace474bf5734fc702825c6c19e6c603c0aa58602776b322d",
+        "payer": "9f3aa2b2d3e23b93e7af66eb23b9949d4f0b14a68887fa0688d0fbbf8982def4",
+        "currency": "usd",
+        "minor": "600",
+        "units": "6000"
+      }
+    },
+    {
+      "receipt": "178b8c3fd407a489ba29c272189a4fca5e7d4028631e426644306193c40f947e",
+      "at": 1704067200,
+      "fact": {
+        "type": "capacity",
+        "node": "b92c687430f71eaa381224205e42ff6f22f85b8ade723d2f20c44f017d3ba195",
+        "slot": "436b254ef0a53c9354be93e69c38a08ba24ca9af14ec0d784b0f9123d6864203",
+        "until": 1704070800,
+        "state": "eligible"
+      }
+    },
+    {
+      "receipt": "80756c54fff4ce2c970e34ca9f0311988207ff4e0744ab3e5bed87f7d7dfd226",
+      "at": 1704067200,
+      "fact": {
+        "type": "capacity",
+        "node": "eb00524d3add21fcfd33d961fc51cf8f2f01119b377d4395c12b38de8379ea50",
+        "slot": "436b254ef0a53c9354be93e69c38a08ba24ca9af14ec0d784b0f9123d6864203",
+        "until": 1704069000,
+        "state": "eligible"
+      }
+    },
+    {
+      "receipt": "8d946e38eb2341857af6d50b954e6c3e1b0feb96f3fe2424e4f87294051fcbb2",
+      "at": 1704067200,
+      "fact": {
+        "type": "capacity",
+        "node": "b51bfc2e02e876ecf1727bc7a22f84b61369df448b99c7ff793bf405948e30ca",
+        "slot": "436b254ef0a53c9354be93e69c38a08ba24ca9af14ec0d784b0f9123d6864203",
+        "until": 1704070800,
+        "state": "eligible"
+      }
+    },
+    {
+      "receipt": "d583bccb7af744c65e17492af6c9623f1f26890423ee0ca1f43a245ae4c5b327",
+      "at": 1704068100,
+      "fact": {
+        "type": "capacity",
+        "node": "b92c687430f71eaa381224205e42ff6f22f85b8ade723d2f20c44f017d3ba195",
+        "slot": "436b254ef0a53c9354be93e69c38a08ba24ca9af14ec0d784b0f9123d6864203",
+        "until": 1704068700,
+        "state": "paused"
+      }
+    },
+    {
+      "receipt": "06ba7caa3f4e53b6560d91372b6bfcbe3b002c197fc3f01c40e74cb82f2353b4",
+      "at": 1704068200,
+      "fact": {
+        "type": "capacity",
+        "node": "b92c687430f71eaa381224205e42ff6f22f85b8ade723d2f20c44f017d3ba195",
+        "slot": "436b254ef0a53c9354be93e69c38a08ba24ca9af14ec0d784b0f9123d6864203",
+        "until": 1704068400,
+        "state": "disconnected"
+      }
+    },
+    {
+      "receipt": "aa56c53563649c6fbea00a5fd5fcea0d2c6e915155c11ec4b31e42ce31802cca",
+      "at": 1704067200,
+      "fact": {
+        "type": "capacity",
+        "node": "b51bfc2e02e876ecf1727bc7a22f84b61369df448b99c7ff793bf405948e30ca",
+        "slot": "436b254ef0a53c9354be93e69c38a08ba24ca9af14ec0d784b0f9123d6864203",
+        "until": 1704070800,
+        "state": "paused"
+      }
+    },
+    {
+      "receipt": "b7c37e2ad6e6fa13697373d5c13598a082614063e68dd86488d5237b48fc29de",
+      "at": 1704067230,
+      "fact": {
+        "type": "job_submitted",
+        "job": "dc2f0b08a2d42aec8f0472946457ba7adac545169ab5b2741a804a15bf25cc63",
+        "payer": "9f3aa2b2d3e23b93e7af66eb23b9949d4f0b14a68887fa0688d0fbbf8982def4"
+      }
+    },
+    {
+      "receipt": "a1ce8d830207e09a4d2d43b584d7c60e2fa40f35ee327ff7099bfde95b260e3d",
+      "at": 1704068750,
+      "fact": {
+        "type": "job_submitted",
+        "job": "a17a12621d04e8c28ec08504d9b7ea3d6172b0e89c6ffffbc5e0a962d7335aad",
+        "payer": "9f3aa2b2d3e23b93e7af66eb23b9949d4f0b14a68887fa0688d0fbbf8982def4"
+      }
+    },
+    {
+      "receipt": "6a7228291c7caef415594e098c32d06ca1ad8dc4f363b5b63e0148184dd38689",
+      "at": 1704067300,
+      "fact": {
+        "type": "job_submitted",
+        "job": "75259673d886bdfd3b51f0d9ff5d185787b704ff67f3a9eed9c2b4913b93248e",
+        "payer": "b4ff66adaa1ca8836768ce72468329b73fa6529add5f34ccf65ba040616350b9"
+      }
+    },
+    {
+      "receipt": "51c4f20b4fe1c93d03be4e58f1df2a7499aa63e24a8f76a256751dee4d45c1f7",
+      "at": 1704067320,
+      "fact": {
+        "type": "attempt",
+        "attempt": "98e666125f83a858b664a778f3ae03235082b3ccb77b4858e480ccaa89d7ed91",
+        "job": "dc2f0b08a2d42aec8f0472946457ba7adac545169ab5b2741a804a15bf25cc63",
+        "node": "b92c687430f71eaa381224205e42ff6f22f85b8ade723d2f20c44f017d3ba195",
+        "slot": "436b254ef0a53c9354be93e69c38a08ba24ca9af14ec0d784b0f9123d6864203",
+        "until": 1704067920
+      }
+    },
+    {
+      "receipt": "810f024dc58dc025afaa6a524dc8b80980e4c2668e0914f0d4daf2be24f273d0",
+      "at": 1704068800,
+      "fact": {
+        "type": "attempt",
+        "attempt": "7dbbf333c5c35c1d9867370e7d0e938900bd1871da85a79409f520fa6d7495cd",
+        "job": "a17a12621d04e8c28ec08504d9b7ea3d6172b0e89c6ffffbc5e0a962d7335aad",
+        "node": "b92c687430f71eaa381224205e42ff6f22f85b8ade723d2f20c44f017d3ba195",
+        "slot": "436b254ef0a53c9354be93e69c38a08ba24ca9af14ec0d784b0f9123d6864203",
+        "until": 1704068900
+      }
+    },
+    {
+      "receipt": "de9c596c945e37a441d6748a0fe910e320a4eee9a0eaef4a9ea023d4db3af41f",
+      "at": 1704069000,
+      "fact": {
+        "type": "attempt",
+        "attempt": "cd5a991f8c3bb0d8239185c0f280cb884cbcd6a05899923c63290c3c682e89eb",
+        "job": "a17a12621d04e8c28ec08504d9b7ea3d6172b0e89c6ffffbc5e0a962d7335aad",
+        "node": "b92c687430f71eaa381224205e42ff6f22f85b8ade723d2f20c44f017d3ba195",
+        "slot": "436b254ef0a53c9354be93e69c38a08ba24ca9af14ec0d784b0f9123d6864203",
+        "until": 1704069720
+      }
+    },
+    {
+      "receipt": "759b5af2af782a1691a14479735eecb4f7ffa941d6a000f7e7a8dd9efbf60120",
+      "at": 1704067440,
+      "fact": {
+        "type": "attempt",
+        "attempt": "1269c2ae2eba7d880f170e6a6111bc84aa5ef528eb37547f26ef613b86005071",
+        "job": "75259673d886bdfd3b51f0d9ff5d185787b704ff67f3a9eed9c2b4913b93248e",
+        "node": "eb00524d3add21fcfd33d961fc51cf8f2f01119b377d4395c12b38de8379ea50",
+        "slot": "436b254ef0a53c9354be93e69c38a08ba24ca9af14ec0d784b0f9123d6864203",
+        "until": 1704067560
+      }
+    },
+    {
+      "receipt": "7ad9882cdb3b1f56fd4efd6cd4592b1c8657d163c00a337570c107450eb1a7e1",
+      "at": 1704067920,
+      "fact": {
+        "type": "job_finished",
+        "job": "dc2f0b08a2d42aec8f0472946457ba7adac545169ab5b2741a804a15bf25cc63",
+        "outcome": "delivered",
+        "winner": "98e666125f83a858b664a778f3ae03235082b3ccb77b4858e480ccaa89d7ed91"
+      }
+    },
+    {
+      "receipt": "f14caf568cb9ea8e2913271c442229e68b9cc7be60207ddc7cb0c12186c115e2",
+      "at": 1704069720,
+      "fact": {
+        "type": "job_finished",
+        "job": "a17a12621d04e8c28ec08504d9b7ea3d6172b0e89c6ffffbc5e0a962d7335aad",
+        "outcome": "delivered",
+        "winner": "cd5a991f8c3bb0d8239185c0f280cb884cbcd6a05899923c63290c3c682e89eb"
+      }
+    },
+    {
+      "receipt": "628fe601f8f8f3db329be095bee19141f6539d68ab9ed923996070f62e7f654e",
+      "at": 1704067560,
+      "fact": {
+        "type": "job_finished",
+        "job": "75259673d886bdfd3b51f0d9ff5d185787b704ff67f3a9eed9c2b4913b93248e",
+        "outcome": "failed",
+        "winner": null
+      }
+    },
+    {
+      "receipt": "312374f1591ca371eb6fdbed63eeea420c159216236fab9fc86e6af933043b2a",
+      "at": 1704067950,
+      "fact": {
+        "type": "settlement",
+        "job": "dc2f0b08a2d42aec8f0472946457ba7adac545169ab5b2741a804a15bf25cc63",
+        "charge": "1000",
+        "gift": "200",
+        "earned": "0",
+        "purchased": "800",
+        "lots": [
+          {
+            "order": "6ab2f58f644c7c1ef70ae4b9b2447a8324aff94ad4fafe1e7e59b69f8a43e509",
+            "units": "800"
+          }
+        ],
+        "provider_pending": "800",
+        "platform_fee": "200"
+      }
+    },
+    {
+      "receipt": "d3b1e962c22a16bd391f2596f44be42da6fae8915170f22dc958948c795450f9",
+      "at": 1704069750,
+      "fact": {
+        "type": "settlement",
+        "job": "a17a12621d04e8c28ec08504d9b7ea3d6172b0e89c6ffffbc5e0a962d7335aad",
+        "charge": "1000",
+        "gift": "0",
+        "earned": "100",
+        "purchased": "900",
+        "lots": [
+          {
+            "order": "6ab2f58f644c7c1ef70ae4b9b2447a8324aff94ad4fafe1e7e59b69f8a43e509",
+            "units": "900"
+          }
+        ],
+        "provider_pending": "800",
+        "platform_fee": "200"
+      }
+    },
+    {
+      "receipt": "22455a990609c7f41e6df309842b8f6df2e83591e6b8e824477b05949b9e9c05",
+      "at": 1704070200,
+      "fact": {
+        "type": "refund",
+        "refund": "727a689fd16636df2b922f27a60722483dd680f99a049196c845f83ce3788f6e",
+        "order": "0960ab2bffd6b28c97e9c28b0bc934d167afae1a6a73a4ff41f75954547df94f",
+        "minor": "50",
+        "units": "500"
+      }
+    },
+    {
+      "receipt": "f5ea11f2fcb3fa818194e1cb54918931ea347436804a0fe0139478caa42b9eca",
+      "at": 1704070700,
+      "fact": {
+        "type": "expense",
+        "currency": "usd",
+        "category": "provider_fulfillment",
+        "minor": "60"
+      }
+    },
+    {
+      "receipt": "a14ca8a8493585d226b95b1c2a906d15dedb821da9e125102f8c83205664b2e5",
+      "at": 1704070700,
+      "fact": {
+        "type": "expense",
+        "currency": "usd",
+        "category": "platform_compute",
+        "minor": "10"
+      }
+    },
+    {
+      "receipt": "d7d1c6cff897aeba2c214dcad8588bd636a8a6905c4a5d00dbe51422a16b7cc8",
+      "at": 1704070700,
+      "fact": {
+        "type": "expense",
+        "currency": "usd",
+        "category": "retry_subsidy",
+        "minor": "7"
+      }
+    },
+    {
+      "receipt": "757011dda49dc54025ea3823894c75d4d6eccab0953b81274745cfbd66feea91",
+      "at": 1704070700,
+      "fact": {
+        "type": "expense",
+        "currency": "usd",
+        "category": "storage",
+        "minor": "3"
+      }
+    },
+    {
+      "receipt": "b5511507a4758711ac69d8b1d6b72b3289b458c921e137545ce54d66bf7eab6e",
+      "at": 1704070700,
+      "fact": {
+        "type": "expense",
+        "currency": "usd",
+        "category": "egress",
+        "minor": "8"
+      }
+    },
+    {
+      "receipt": "a8522bef950fe9ad720602c4bfee0ca2f7140ae7c526ea2b6ae711ee4db3bbf0",
+      "at": 1704070700,
+      "fact": {
+        "type": "expense",
+        "currency": "usd",
+        "category": "payment_processing",
+        "minor": "5"
+      }
+    }
+  ],
+  "cost_coverage": [
+    {
+      "currency": "usd",
+      "complete": [
+        "provider_fulfillment",
+        "platform_compute",
+        "retry_subsidy",
+        "storage",
+        "egress",
+        "payment_processing"
+      ],
+      "receipt": "edb574c4e0623159fd261ca4b490d584ed03fd8156c214b02422c88f96da9ca1"
+    }
+  ],
+  "population": "activity_extract",
+  "earning_releases_complete": true
+}

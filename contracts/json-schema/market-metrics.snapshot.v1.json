@@ -1,0 +1,489 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:orange:market-metrics:snapshot:v1",
+  "type": "object",
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "population": {
+      "enum": [
+        "activity_extract",
+        "settled_payer_cohort"
+      ]
+    },
+    "from_unix": {
+      "$ref": "#/$defs/unix"
+    },
+    "until_unix": {
+      "$ref": "#/$defs/unix"
+    },
+    "as_of_unix": {
+      "$ref": "#/$defs/unix"
+    },
+    "supply_history_complete": {
+      "type": "boolean"
+    },
+    "earning_releases_complete": {
+      "type": "boolean"
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "receipt": {
+            "$ref": "#/$defs/key"
+          },
+          "at": {
+            "$ref": "#/$defs/unix"
+          },
+          "fact": {
+            "$ref": "#/$defs/fact"
+          }
+        },
+        "required": [
+          "receipt",
+          "at",
+          "fact"
+        ],
+        "additionalProperties": false
+      },
+      "maxItems": 1000000
+    },
+    "cost_coverage": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "currency": {
+            "$ref": "#/$defs/currency"
+          },
+          "complete": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/cost"
+            },
+            "uniqueItems": true
+          },
+          "receipt": {
+            "$ref": "#/$defs/key"
+          }
+        },
+        "required": [
+          "currency",
+          "complete",
+          "receipt"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "version",
+    "population",
+    "from_unix",
+    "until_unix",
+    "as_of_unix",
+    "supply_history_complete",
+    "earning_releases_complete",
+    "events",
+    "cost_coverage"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "key": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "nonnegative": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]{0,18})$",
+      "description": "Canonical nonnegative i64, range checked at ingest."
+    },
+    "unix": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    },
+    "currency": {
+      "type": "string",
+      "pattern": "^[a-z]{3}$"
+    },
+    "cost": {
+      "enum": [
+        "provider_fulfillment",
+        "platform_compute",
+        "retry_subsidy",
+        "storage",
+        "egress",
+        "payment_processing"
+      ]
+    },
+    "fact": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "node_registered"
+            },
+            "node": {
+              "$ref": "#/$defs/key"
+            }
+          },
+          "required": [
+            "type",
+            "node"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "capacity"
+            },
+            "node": {
+              "$ref": "#/$defs/key"
+            },
+            "slot": {
+              "$ref": "#/$defs/key"
+            },
+            "until": {
+              "$ref": "#/$defs/unix"
+            },
+            "state": {
+              "enum": [
+                "eligible",
+                "paused",
+                "disconnected",
+                "quarantined"
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "node",
+            "slot",
+            "until",
+            "state"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "job_submitted"
+            },
+            "job": {
+              "$ref": "#/$defs/key"
+            },
+            "payer": {
+              "$ref": "#/$defs/key"
+            }
+          },
+          "required": [
+            "type",
+            "job",
+            "payer"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "attempt"
+            },
+            "attempt": {
+              "$ref": "#/$defs/key"
+            },
+            "job": {
+              "$ref": "#/$defs/key"
+            },
+            "node": {
+              "$ref": "#/$defs/key"
+            },
+            "slot": {
+              "$ref": "#/$defs/key"
+            },
+            "until": {
+              "$ref": "#/$defs/unix"
+            }
+          },
+          "required": [
+            "type",
+            "attempt",
+            "job",
+            "node",
+            "slot",
+            "until"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "job_finished"
+            },
+            "job": {
+              "$ref": "#/$defs/key"
+            },
+            "outcome": {
+              "enum": [
+                "delivered",
+                "failed",
+                "cancelled"
+              ]
+            },
+            "winner": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/key"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "job",
+            "outcome"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "purchase"
+            },
+            "order": {
+              "$ref": "#/$defs/key"
+            },
+            "payer": {
+              "$ref": "#/$defs/key"
+            },
+            "currency": {
+              "$ref": "#/$defs/currency"
+            },
+            "minor": {
+              "$ref": "#/$defs/nonnegative"
+            },
+            "units": {
+              "$ref": "#/$defs/nonnegative"
+            }
+          },
+          "required": [
+            "type",
+            "order",
+            "payer",
+            "currency",
+            "minor",
+            "units"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "refund"
+            },
+            "refund": {
+              "$ref": "#/$defs/key"
+            },
+            "order": {
+              "$ref": "#/$defs/key"
+            },
+            "minor": {
+              "$ref": "#/$defs/nonnegative"
+            },
+            "units": {
+              "$ref": "#/$defs/nonnegative"
+            }
+          },
+          "required": [
+            "type",
+            "refund",
+            "order",
+            "minor",
+            "units"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "chargeback"
+            },
+            "dispute": {
+              "$ref": "#/$defs/key"
+            },
+            "order": {
+              "$ref": "#/$defs/key"
+            },
+            "minor": {
+              "$ref": "#/$defs/nonnegative"
+            }
+          },
+          "required": [
+            "type",
+            "dispute",
+            "order",
+            "minor"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "chargeback_recovery"
+            },
+            "dispute": {
+              "$ref": "#/$defs/key"
+            },
+            "minor": {
+              "$ref": "#/$defs/nonnegative"
+            }
+          },
+          "required": [
+            "type",
+            "dispute",
+            "minor"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "settlement"
+            },
+            "job": {
+              "$ref": "#/$defs/key"
+            },
+            "charge": {
+              "$ref": "#/$defs/nonnegative"
+            },
+            "gift": {
+              "$ref": "#/$defs/nonnegative"
+            },
+            "earned": {
+              "$ref": "#/$defs/nonnegative"
+            },
+            "purchased": {
+              "$ref": "#/$defs/nonnegative"
+            },
+            "provider_pending": {
+              "$ref": "#/$defs/nonnegative"
+            },
+            "platform_fee": {
+              "$ref": "#/$defs/nonnegative"
+            },
+            "lots": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "order": {
+                    "$ref": "#/$defs/key"
+                  },
+                  "units": {
+                    "$ref": "#/$defs/nonnegative"
+                  }
+                },
+                "required": [
+                  "order",
+                  "units"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "type",
+            "job",
+            "charge",
+            "gift",
+            "earned",
+            "purchased",
+            "provider_pending",
+            "platform_fee",
+            "lots"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "earning_released"
+            },
+            "job": {
+              "$ref": "#/$defs/key"
+            },
+            "units": {
+              "$ref": "#/$defs/nonnegative"
+            }
+          },
+          "required": [
+            "type",
+            "job",
+            "units"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "expense"
+            },
+            "currency": {
+              "$ref": "#/$defs/currency"
+            },
+            "category": {
+              "$ref": "#/$defs/cost"
+            },
+            "minor": {
+              "$ref": "#/$defs/nonnegative"
+            }
+          },
+          "required": [
+            "type",
+            "currency",
+            "category",
+            "minor"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "population": {
+            "const": "settled_payer_cohort"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "supply_history_complete": {
+            "const": false
+          }
+        }
+      }
+    }
+  ]
+}

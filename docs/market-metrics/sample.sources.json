@@ -1,0 +1,113 @@
+{
+  "basis": "illustrative fixtures, original minor units and microcredits",
+  "merchant": [
+    {
+      "flow": "purchase",
+      "reference": "6ab2f58f644c7c1ef70ae4b9b2447a8324aff94ad4fafe1e7e59b69f8a43e509",
+      "payer": "9f3aa2b2d3e23b93e7af66eb23b9949d4f0b14a68887fa0688d0fbbf8982def4",
+      "currency": "usd",
+      "minor": "400",
+      "purchased_units": "4000",
+      "in_window": false,
+      "at_unix": 1704066800,
+      "original_order": "6ab2f58f644c7c1ef70ae4b9b2447a8324aff94ad4fafe1e7e59b69f8a43e509"
+    },
+    {
+      "flow": "purchase",
+      "reference": "7d06970c6ac60c3dace474bf5734fc702825c6c19e6c603c0aa58602776b322d",
+      "payer": "9f3aa2b2d3e23b93e7af66eb23b9949d4f0b14a68887fa0688d0fbbf8982def4",
+      "currency": "usd",
+      "minor": "600",
+      "purchased_units": "6000",
+      "in_window": true,
+      "at_unix": 1704067210,
+      "original_order": "7d06970c6ac60c3dace474bf5734fc702825c6c19e6c603c0aa58602776b322d"
+    },
+    {
+      "flow": "purchase",
+      "reference": "0960ab2bffd6b28c97e9c28b0bc934d167afae1a6a73a4ff41f75954547df94f",
+      "payer": "b4ff66adaa1ca8836768ce72468329b73fa6529add5f34ccf65ba040616350b9",
+      "currency": "usd",
+      "minor": "100",
+      "purchased_units": "1000",
+      "in_window": true,
+      "at_unix": 1704067205,
+      "original_order": "0960ab2bffd6b28c97e9c28b0bc934d167afae1a6a73a4ff41f75954547df94f"
+    },
+    {
+      "flow": "refund",
+      "reference": "727a689fd16636df2b922f27a60722483dd680f99a049196c845f83ce3788f6e",
+      "payer": "b4ff66adaa1ca8836768ce72468329b73fa6529add5f34ccf65ba040616350b9",
+      "currency": "usd",
+      "minor": "-50",
+      "purchased_units": "-500",
+      "in_window": true,
+      "at_unix": 1704070200,
+      "original_order": "0960ab2bffd6b28c97e9c28b0bc934d167afae1a6a73a4ff41f75954547df94f"
+    }
+  ],
+  "ledger": [
+    {
+      "job": "dc2f0b08a2d42aec8f0472946457ba7adac545169ab5b2741a804a15bf25cc63",
+      "gift": "-200",
+      "earned": "0",
+      "purchased": "-800",
+      "provider_pending": "800",
+      "platform_fee": "200",
+      "reservation": {
+        "gift": "200",
+        "earned": "0",
+        "purchased": "1000"
+      },
+      "returned": {
+        "gift": "0",
+        "earned": "0",
+        "purchased": "200"
+      }
+    },
+    {
+      "job": "a17a12621d04e8c28ec08504d9b7ea3d6172b0e89c6ffffbc5e0a962d7335aad",
+      "gift": "0",
+      "earned": "-100",
+      "purchased": "-900",
+      "provider_pending": "800",
+      "platform_fee": "200",
+      "reservation": {
+        "gift": "0",
+        "earned": "100",
+        "purchased": "1100"
+      },
+      "returned": {
+        "gift": "0",
+        "earned": "0",
+        "purchased": "200"
+      }
+    },
+    {
+      "job": "75259673d886bdfd3b51f0d9ff5d185787b704ff67f3a9eed9c2b4913b93248e",
+      "gift": "0",
+      "earned": "0",
+      "purchased": "0",
+      "provider_pending": "0",
+      "platform_fee": "0",
+      "reservation": {
+        "gift": "200",
+        "earned": "0",
+        "purchased": "0"
+      },
+      "returned": {
+        "gift": "200",
+        "earned": "0",
+        "purchased": "0"
+      }
+    }
+  ],
+  "cost_vouchers_minor": {
+    "provider_fulfillment": "60",
+    "platform_compute": "10",
+    "retry_subsidy": "7",
+    "storage": "3",
+    "egress": "8",
+    "payment_processing": "5"
+  }
+}

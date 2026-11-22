@@ -16,12 +16,16 @@ import tempfile
 root = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser()
 parser.add_argument("--commit", required=True)
-parser.add_argument("--profile", choices=(*PROFILES,"platform"), default="embedding")
+parser.add_argument("--profile", choices=(*PROFILES,"platform","market-report"), default="embedding")
 args = parser.parse_args()
 if args.profile == "platform":
     programs = PLATFORM_PROGRAMS
     packages = ["-p","orange-control-plane","-p","orange-worker"]
     target_args = [part for name in programs for part in ("--bin",name)]
+elif args.profile == "market-report":
+    programs = ["orange-market-report"]
+    packages = ["-p","orange-control-plane"]
+    target_args = ["--bin","orange-market-report"]
 else:
     programs = PROFILES[args.profile].programs
     packages = ["-p","orange-model-runtime"]
@@ -66,6 +70,9 @@ with tempfile.TemporaryDirectory(prefix="oe-build-") as tmp:
             if i==1 and builds[0][artifact.name]==files[artifact.name]:
                 shutil.copy2(artifact,dest/artifact.name)
         builds.append(files)
+        if i==0:
+            # Once the first hashes are recorded the private target directory is no longer used.
+            shutil.rmtree(tree/"target")
     report.update(builds=builds,reproducible=(builds[0]==builds[1]))
     (dest/"native-build.json").write_text(json.dumps(report,indent=2)+"\n")
     if not report["reproducible"]:
