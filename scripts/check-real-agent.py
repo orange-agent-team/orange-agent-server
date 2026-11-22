@@ -26,11 +26,13 @@ parser.add_argument('--required-tool',choices=['read_file','search_files','searc
 parser.add_argument('--model-protocol',choices=['chat_completions','responses'],default='chat_completions')
 parser.add_argument('--model-runtime-root',type=Path,default=PRIVATE)
 parser.add_argument('--verify-skills',action='store_true',help='Also run a digest-pinned, tool-free text summary and pin the read-only question template')
+parser.add_argument('--verify-local-package',action='store_true',help='Install a reviewed local template and execute it using the real CPU model')
 args=parser.parse_args()
+if args.verify_local_package: args.verify_skills=True
 PRIVATE=args.model_runtime_root.resolve()
 if args.model_protocol!='chat_completions':
     REPORT=ROOT/'.local'/('real-agent-'+args.model_protocol)
-if args.verify_skills:REPORT=ROOT/'.local'/'real-agent-skills'
+if args.verify_skills:REPORT=ROOT/'.local'/('real-agent-local-package' if args.verify_local_package else 'real-agent-skills')
 target=Path(os.environ.get('CARGO_TARGET_DIR',ROOT/'target')).resolve()
 
 def digest(path):
@@ -120,11 +122,22 @@ def main():
                     catalog={row['pin']['id']:row for row in invoke('skills')}
                     summary=catalog['orange.text-summary'];qa=catalog['orange.source-question']
                     if summary['tools'] or summary['enabled'] or set(qa['tools'])!={'read_file','search_text'}:raise ValueError('Unexpected bundled grants')
+                    if args.verify_local_package:
+                        manifest={'id':'local.delivery-report','version':'1.0.0','name':'Delivery summary','scenario':'AU-02',
+                                  'instruction':'Summarize the delivery note in one sentence. Preserve all dates and quantities.','tools':[]}
+                        review=invoke('review-skill',input_json=manifest)
+                        if review['installed'] or review['template']!=manifest:raise ValueError('Review changed the document or installed it')
+                        installed=invoke('install-skill',review['pin']['digest'],'0',input_json=manifest)
+                        if installed['installation_revision']!=1:raise ValueError('Installation revision missing')
+                        summary=next(s for s in invoke('skills') if s['pin']==review['pin'])
+                        if summary['enabled']:raise ValueError('Install activated the package')
                     original=json.loads(json.dumps(config))
                     config['skill']=summary['pin'];config['run']['run_id']=uuid.uuid4().hex
                     config['prompt']='The delivery will arrive Friday. It contains 37 crates of oranges.'
                     write(path,config);activation=invoke('enable-skill','0')
                     if activation['revision']!=1:raise ValueError('Expected original activation')
+                    if args.verify_local_package:
+                        config['skill_activation_revision']=activation['revision'];write(path,config)
                     before=invoke('start')
                     if before['phase']!='ready' or invoke('skill-binding')!=summary['pin']:raise ValueError('Run lacks its original skill binding')
                     response=invoke('step')
@@ -134,6 +147,10 @@ def main():
                         request=json.loads(db.execute('SELECT request FROM runtime_invocations WHERE run_id=?',(config['run']['run_id'],)).fetchone()[0])
                         if request['tools'] or request['messages'][0]['role']!='system' or request['messages'][-1]['content']!=config['prompt']:raise ValueError('Incorrect skill authority or separated input')
                     if invoke('disable-skill','1')['revision']!=2:raise ValueError('Disable did not advance activation')
+                    if args.verify_local_package:
+                        if invoke('uninstall-skill','1','2')['installation_revision']!=2:raise ValueError('Uninstall revision missing')
+                        if invoke('skill-binding')!=summary['pin'] or any(s['pin']==summary['pin'] for s in invoke('skills')):raise ValueError('Uninstall lost history or left an installed version')
+                        result['reviewed_local_package']={'pin':summary['pin'],'retained_historical_binding':True,'explicit_install_and_activation':True}
                     config=original;config['skill']=qa['pin'];write(path,config)
                     invoke('enable-skill','0')
                     result['skills']={'actual_summary':True,'summary_pin':summary['pin'],'qa_pin':qa['pin'],'summary_tools':0,'day_and_quantity_preserved':True}

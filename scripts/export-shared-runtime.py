@@ -51,7 +51,7 @@ if count!=1:raise SystemExit('Unrecognized workspace member declaration')
 files['Cargo.toml']=root_manifest.encode()
 rustup=shutil.which('rustup') or '/opt/homebrew/opt/rustup/bin/rustup'
 cargo=Path(subprocess.check_output([rustup,'which','--toolchain','stable','cargo'],text=True).strip())
-environment=os.environ.copy();environment['PATH']=str(cargo.parent)+os.pathsep+environment.get('PATH','');environment['CARGO_TARGET_DIR']=str(ROOT/'target')
+environment=os.environ.copy();environment['PATH']=str(cargo.parent)+os.pathsep+environment.get('PATH','');environment['CARGO_TARGET_DIR']=str(Path(environment.get('CARGO_TARGET_DIR',ROOT/'target')).resolve())
 version=subprocess.check_output([str(cargo.parent/'rustc'),'--version'],env=environment,text=True)
 if not version.startswith('rustc 1.97.1 '):raise SystemExit('Pinned Rust 1.97.1 required')
 stage_root=ROOT/'.local/shared-runtime';stage_root.mkdir(parents=True,exist_ok=True)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Upgrade a real schema-29 journal and reject old-host access without rewriting the legacy run."""
+"""Create real legacy journals and prove upgrade, exact bindings and downgrade refusal."""
 import hashlib
 import json
 import os
@@ -10,51 +10,98 @@ import subprocess
 import tempfile
 import time
 
-ROOT=Path(__file__).resolve().parents[1]
-PRIOR="94cfd1fc3e27dd2fb43438757af6d6b863b6e98d"
-env=os.environ.copy();env["CARGO_NET_OFFLINE"]="true"
-target=Path(env.get("CARGO_TARGET_DIR",ROOT/"target")).resolve();env["CARGO_TARGET_DIR"]=str(target)
-cargo=Path(subprocess.check_output([shutil.which("rustup") or "/opt/homebrew/opt/rustup/bin/rustup","which","--toolchain","1.97.1","cargo"],cwd=ROOT,text=True).strip())
-env["PATH"]=str(cargo.parent)+os.pathsep+env["PATH"]
-def build(root,out):
-    subprocess.run([cargo,"build","--locked","--offline","-p","orange-agent-runtime","--example","local-agent"],cwd=root,env=env,check=True)
-    shutil.copy2(target/"debug/examples/local-agent",out)
+ROOT = Path(__file__).resolve().parents[1]
+PRIOR = {
+    29: "94cfd1fc3e27dd2fb43438757af6d6b863b6e98d",
+    30: "19533647c8f3d50885f7a8b19a0707f93edc6682",
+}
+env = dict(os.environ, CARGO_NET_OFFLINE="true")
+target = Path(env.get("CARGO_TARGET_DIR", ROOT / "target")).resolve()
+env["CARGO_TARGET_DIR"] = str(target)
+cargo = Path(subprocess.check_output(
+    [shutil.which("rustup") or "/opt/homebrew/opt/rustup/bin/rustup", "which", "--toolchain", "1.97.1", "cargo"],
+    cwd=ROOT, text=True).strip())
+env["PATH"] = str(cargo.parent) + os.pathsep + env["PATH"]
+
+
+def build(root, out):
+    subprocess.run([cargo, "build", "--locked", "--offline", "-p", "orange-agent-runtime", "--example", "local-agent"],
+                   cwd=root, env=env, check=True)
+    shutil.copy2(target / "debug/examples/local-agent", out)
+
+
+def verify(base, prior, old, new):
+    state = base / "state"
+    workspace = base / "workspace"
+    state.mkdir()
+    workspace.mkdir()
+    database = state / "journal.sqlite"
+    file = state / "private.json"
+    config = {"run": {"owner": "migration-owner", "run_id": "old-run", "policy": "local-read", "environment": "pending",
+                      "model_version": "offline", "max_steps": 3, "max_invocations": 2, "max_output_tokens": 32,
+                      "deadline_unix": int(time.time()) + 600},
+              "prompt": "An existing journal entry", "grant_id": "workspace", "workspace": str(workspace), "journal": str(database),
+              "private_roots": [str(state)], "model_socket": str(state / "unused.sock"),
+              "model_key_file": str(state / "unused.key"), "context_tokens": 4096}
+
+    def run(executable, *args):
+        file.write_text(json.dumps(config))
+        result = subprocess.run([executable, file, *args], env={"PATH": "/usr/bin:/bin"}, capture_output=True, text=True, check=True)
+        return json.loads(result.stdout)
+
+    def snapshot():
+        with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True) as db:
+            return (db.execute("PRAGMA user_version").fetchone()[0],
+                    db.execute("SELECT config_digest,messages,phase FROM runtime_runs WHERE run_id='old-run'").fetchone())
+
+    config["run"]["environment"] = run(old, "grant-info")["environment"]
+    old_pin = None
+    if prior == 30:
+        old_pin = next(x["pin"] for x in run(old, "skills") if x["pin"]["id"] == "orange.text-summary")
+        config["skill"] = old_pin
+        assert run(old, "enable-skill", "0")["revision"] == 1
+    assert run(old, "start")["phase"] == "ready"
+    version, before = snapshot()
+    assert version == prior and before
+
+    registry = run(new, "skills")
+    template = next(x for x in registry if x["pin"]["id"] == "orange.text-summary")
+    assert {x["pin"]["id"] for x in registry if x["enabled"]} == ({"orange.text-summary"} if old_pin else set())
+    assert snapshot() == (31, before) and run(new, "skill-binding") == old_pin
+    config["skill"] = template["pin"]
+    assert run(new, "enable-skill", "0")["revision"] == 1
+    if prior == 29:
+        run(new, "skill-binding")  # Persist the selected configuration for the retry.
+        assert subprocess.run([new, file, "start"], capture_output=True).returncode != 0
+    config["run"]["run_id"] = "new-skill-run"
+    assert run(new, "start")["phase"] == "ready" and run(new, "skill-binding") == template["pin"]
+    config.pop("skill")
+    config["run"]["run_id"] = "old-run"
+    file.write_text(json.dumps(config))
+    fingerprint = hashlib.sha256(database.read_bytes()).hexdigest()
+    refused = subprocess.run([old, file, "status"], capture_output=True, text=True)
+    assert refused.returncode != 0 and "Unsupported" in refused.stderr, (refused.returncode, refused.stderr)
+    assert hashlib.sha256(database.read_bytes()).hexdigest() == fingerprint and snapshot() == (31, before)
+    print(f"PASS genuine schema {prior} -> 31, unchanged messages, original binding and activation, old executable refused before mutation")
+
 
 def main():
     os.umask(0o077)
     with tempfile.TemporaryDirectory(prefix="orange-skills-migration-") as tmp:
-        base=Path(tmp);source=base/"prior";source.mkdir()
-        archive=base/"source.tar"
-        subprocess.run(["git","archive","--format=tar","--output",archive,PRIOR],cwd=ROOT,check=True)
-        subprocess.run(["tar","-xf",archive,"-C",source],check=True)
-        old=base/"old-agent";new=base/"new-agent";build(source,old);build(ROOT,new)
-        state=base/"state";workspace=base/"workspace";state.mkdir();workspace.mkdir()
-        database=state/"journal.sqlite";file=state/"private.json"
-        config={"run":{"owner":"migration-owner","run_id":"old-run","policy":"local-read","environment":"pending","model_version":"offline","max_steps":3,"max_invocations":2,"max_output_tokens":32,"deadline_unix":int(time.time())+600},
-                "prompt":"An existing journal entry","grant_id":"workspace","workspace":str(workspace),"journal":str(database),
-                "private_roots":[str(state)],"model_socket":str(state/"unused.sock"),"model_key_file":str(state/"unused.key"),"context_tokens":4096}
-        def write():file.write_text(json.dumps(config))
-        def run(exe,*args):
-            result=subprocess.run([exe,file,*args],env={"PATH":"/usr/bin:/bin"},capture_output=True,text=True,check=True)
-            return json.loads(result.stdout)
-        def snapshot():
-            with sqlite3.connect("file:"+str(database)+"?mode=ro",uri=True) as db:
-                return db.execute("PRAGMA user_version").fetchone()[0],db.execute("SELECT config_digest,messages,phase FROM runtime_runs WHERE run_id='old-run'").fetchone()
-        write();config["run"]["environment"]=run(old,"grant-info")["environment"];write()
-        assert run(old,"start")["phase"]=="ready"
-        version,before=snapshot();assert version==29 and before
-        registry=run(new,"skills");assert len(registry)>=2 and not any(x["enabled"] for x in registry)
-        assert snapshot()==(30,before) and run(new,"skill-binding") is None
-        template=next(x for x in registry if x["pin"]["id"]=="orange.text-summary")
-        config["skill"]=template["pin"];write()
-        assert run(new,"enable-skill","0")["revision"]==1
-        assert subprocess.run([new,file,"start"],capture_output=True).returncode!=0
-        config["run"]["run_id"]="new-skill-run";write()
-        assert run(new,"start")["phase"]=="ready" and run(new,"skill-binding")==template["pin"]
-        del config["skill"];config["run"]["run_id"]="old-run";write()
-        fingerprint=hashlib.sha256(database.read_bytes()).hexdigest()
-        refused=subprocess.run([old,file,"status"],capture_output=True,text=True)
-        assert refused.returncode!=0 and "Unsupported" in refused.stderr,(refused.returncode,refused.stderr)
-        assert hashlib.sha256(database.read_bytes()).hexdigest()==fingerprint and snapshot()==(30,before)
-        print("PASS genuine schema 29 -> 30, unchanged messages/config, no implicit template, old executable refused before mutation")
-if __name__=="__main__":main()
+        base = Path(tmp)
+        new = base / "new-agent"
+        build(ROOT, new)
+        for version, commit in PRIOR.items():
+            case = base / str(version)
+            source = case / "prior"
+            source.mkdir(parents=True)
+            archive = case / "source.tar"
+            subprocess.run(["git", "archive", "--format=tar", "--output", archive, commit], cwd=ROOT, check=True)
+            subprocess.run(["tar", "-xf", archive, "-C", source], check=True)
+            old = case / "old-agent"
+            build(source, old)
+            verify(case, version, old, new)
+
+
+if __name__ == "__main__":
+    main()

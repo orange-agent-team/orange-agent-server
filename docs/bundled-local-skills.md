@@ -2,7 +2,7 @@
 
 此版本提供两个可选择的内置模板。**文本摘要（AU-02）**仅把用户提交的文本交给本地模型，模型请求中的工具目录为空。**授权文件问答（AU-01）**可请求 read_file 和 search_text，文件访问仍需当前工作区授权及正常的操作批准。已提交的读取结果给出相对路径、SHA-256、字节起止范围，以及在搜索命中时可用的行号。没有成功读取任何来源时，该模板以 skill_source_required 结束。
 
-模板版本记录在 crates/agent-runtime/src/skills 下的发布目录中。正文、显示名、版本、场景和工具声明共同参与摘要。每个所有者分别启用指定摘要，模板变更不会扩大工作区能力。当前接口面向随 Runtime 一起分发的只读模板。其他目录、第三方包安装和写操作模板仍有各自的实现与认证要求。[模板接口](../contracts/json-schema/skill-template.v1.json)
+模板版本记录在 crates/agent-runtime/src/skills 下的发布目录中。正文、显示名、版本、场景和工具声明共同参与摘要。每个所有者分别启用指定摘要，模板变更不会扩大工作区能力。本节说明随 Runtime 分发的只读模板。本地 JSON 包见下文。[模板接口](../contracts/json-schema/skill-template.v1.json)
 
 ## 本地 CLI
 
@@ -23,3 +23,23 @@ local-agent PRIVATE_CONFIG skill-binding
 ## 验收
 
 `python3 scripts/check-real-agent.py --verify-skills` 使用固定的本地 CPU 模型，核对摘要中的日期与数量，然后通过独立 CLI 进程批准实际文件读取，并比较最终引用与授权文件的真实摘要。配置已准备的模型缓存可通过 --model-runtime-root 指定。另运行 `python3 scripts/check-skill-journal-upgrade.py`，它用固定的 schema 29 源码建立原始运行记录、升级并重新用旧程序打开，以检验拒绝行为和数据保留。
+
+## 用户安装的本地模板
+
+本地 CLI 接受 UTF-8 JSON 清单，命名空间为 `local.`。单份清单上限为 16 KiB。文件的字段和工具枚举见模板接口。安装前显示完整指令、声明工具和规范化内容的 SHA-256。安装和启用分别确认，当前版本只支持声明式指令和宿主已提供的只读工具。允许的文件读取仍沿用每次真实操作的授权。AU-01 模板须取得实际读取或文本搜索的引用才能完成。
+
+```json
+{"id":"local.delivery-report","version":"1.0.0","name":"交货摘要","scenario":"AU-02","instruction":"用一句话概括交货情况，保留原文中的日期和数量。","tools":[]}
+```
+
+```sh
+local-agent PRIVATE_CONFIG review-skill < manifest.json
+local-agent PRIVATE_CONFIG install-skill REVIEWED_DIGEST INSTALLATION_REVISION < manifest.json
+local-agent PRIVATE_CONFIG skills
+local-agent PRIVATE_CONFIG enable-skill ACTIVATION_REVISION
+local-agent PRIVATE_CONFIG start
+local-agent PRIVATE_CONFIG step
+local-agent PRIVATE_CONFIG uninstall-skill INSTALLATION_REVISION ACTIVATION_REVISION
+```
+
+将审核结果的 pin 填入配置的 skill。可同时填写整数 skill_activation_revision，启动事务会再次核对用户选择时的启用修订。安装修订按所有者、标识及版本递增，启用修订按所有者及标识递增。每个用户可以独立安装同名同版本的模板，每个用户的已审核版本只能对应一个摘要。可同时安装多个版本，显式启用旧版本即可回退。切换版本或卸载当前版本会撤销旧 Run 的续跑权限。卸载后，已有 Run 可查询其原始绑定；运行从未引用过的模板正文会清除，已用版本保留历史快照。再次安装仍需匹配原摘要。SQLite schema 31 兼容原通用 Run 和内置模板绑定。CLI 验收可运行 `python3 scripts/check-real-agent.py --verify-local-package`。

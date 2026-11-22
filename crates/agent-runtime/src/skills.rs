@@ -7,6 +7,8 @@ use orange_protocol::{
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
+mod local;
+pub use local::{LOCAL_SKILL_MAX_BYTES, review_local_skill};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -41,14 +43,18 @@ impl SkillTemplate {
     fn validate(&self) -> Result<(), EngineError> {
         let version = self.version.split('.').collect::<Vec<_>>();
         let unique = self.tools.iter().collect::<BTreeSet<_>>();
-        let valid_namespace = self.id.strip_prefix("orange.").is_some_and(|name| {
-            name.as_bytes()
-                .first()
-                .is_some_and(u8::is_ascii_alphanumeric)
-                && name.bytes().all(|b| {
-                    b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'.' | b'-')
-                })
-        });
+        let valid_namespace = self
+            .id
+            .strip_prefix("orange.")
+            .or_else(|| self.id.strip_prefix("local."))
+            .is_some_and(|name| {
+                name.as_bytes()
+                    .first()
+                    .is_some_and(u8::is_ascii_alphanumeric)
+                    && name.bytes().all(|b| {
+                        b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'.' | b'-')
+                    })
+            });
         if !valid_namespace
             || !valid_id(&self.id)
             || self.scenario.len() != 5
@@ -151,7 +157,10 @@ fn pinned(doc: &str, digest: &str) -> Result<SkillTemplate, EngineError> {
 pub(crate) fn for_run(db: &Connection, run: &str) -> Result<Option<BoundSkill>, EngineError> {
     let row:Option<(String,String,bool)>=db.query_row("SELECT v.document,b.digest,coalesce(s.enabled AND s.revision=b.activation_revision AND s.digest=b.digest,0)
       FROM runtime_skill_bindings b JOIN skill_versions v USING(digest) JOIN runs r USING(run_id)
-      LEFT JOIN owner_skills s ON s.owner=r.owner AND s.package_id=v.package_id WHERE b.run_id=?", [run],
+      LEFT JOIN owner_skills s ON s.owner=r.owner AND s.package_id=v.package_id WHERE b.run_id=?1
+      UNION ALL SELECT p.document,b.digest,coalesce(s.enabled AND s.revision=b.activation_revision AND s.digest=b.digest AND p.installed,0)
+      FROM local_run_skills b JOIN local_skill_packages p USING(owner,package_id,digest)
+      LEFT JOIN local_skill_selections s USING(owner,package_id) WHERE b.run_id=?1", [run],
       |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
     row.map(|(doc, digest, current)| {
         Ok(BoundSkill {
@@ -160,6 +169,27 @@ pub(crate) fn for_run(db: &Connection, run: &str) -> Result<Option<BoundSkill>, 
         })
     })
     .transpose()
+}
+
+pub(crate) fn bind(
+    db: &Connection,
+    owner: &str,
+    run: &str,
+    pin: &SkillPin,
+    revision: i64,
+) -> Result<(), EngineError> {
+    let sql = if pin.id.starts_with("local.") {
+        "INSERT INTO local_run_skills(run_id,owner,package_id,digest,activation_revision)
+         SELECT ?1,owner,package_id,digest,revision FROM available_skill_versions
+         WHERE owner=?2 AND package_id=?3 AND digest=?4 AND revision=?5 AND enabled"
+    } else {
+        "INSERT INTO runtime_skill_bindings(run_id,digest,activation_revision)
+         SELECT ?1,digest,revision FROM owner_skills WHERE owner=?2 AND package_id=?3 AND digest=?4 AND revision=?5 AND enabled"
+    };
+    if db.execute(sql, params![run, owner, pin.id, pin.digest, revision])? != 1 {
+        return Err(EngineError::Forbidden);
+    }
+    Ok(())
 }
 
 impl Journal {
@@ -187,6 +217,7 @@ impl Journal {
                 revision,
             });
         }
+        result.extend(self.local_skills(owner)?);
         Ok(result)
     }
     pub fn set_skill_enabled(
@@ -198,6 +229,9 @@ impl Journal {
     ) -> Result<i64, EngineError> {
         if !valid_id(owner) || expected < 0 {
             return Err(EngineError::Invalid);
+        }
+        if pin.id.starts_with("local.") {
+            return self.set_local_skill_enabled(owner, pin, expected, enable);
         }
         let template = bundled()?
             .into_iter()
@@ -260,10 +294,11 @@ impl Journal {
         &self,
         owner: &str,
         pin: &SkillPin,
-    ) -> Result<SkillTemplate, EngineError> {
-        let doc:Option<String>=self.connection.query_row("SELECT v.document FROM owner_skills s JOIN skill_versions v USING(digest) WHERE s.owner=? AND s.package_id=? AND v.version=? AND s.digest=? AND s.enabled",
-            params![owner,pin.id,pin.version,pin.digest],|r|r.get(0)).optional()?;
-        pinned(&doc.ok_or(EngineError::Forbidden)?, &pin.digest)
+    ) -> Result<(SkillTemplate, i64), EngineError> {
+        let (doc, revision): (String,i64)=self.connection.query_row(
+            "SELECT document,revision FROM available_skill_versions WHERE owner=? AND package_id=? AND version=? AND digest=? AND enabled",
+            params![owner,pin.id,pin.version,pin.digest],|r|Ok((r.get(0)?,r.get(1)?))).optional()?.ok_or(EngineError::Forbidden)?;
+        Ok((pinned(&doc, &pin.digest)?, revision))
     }
 }
 

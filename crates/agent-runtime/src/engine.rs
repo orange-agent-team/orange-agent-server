@@ -220,7 +220,22 @@ impl Journal {
         input: String,
         grant: &WorkspaceGrant,
     ) -> Result<RunView, EngineError> {
-        let template = self.resolve_skill(&config.owner, pin)?;
+        self.start_agent_skill_reviewed(config, pin, None, input, grant)
+    }
+
+    /// A UI passes its displayed activation revision. Older callers resolve it at request time.
+    pub fn start_agent_skill_reviewed(
+        &mut self,
+        config: &RunConfig,
+        pin: &crate::skills::SkillPin,
+        expected_revision: Option<i64>,
+        input: String,
+        grant: &WorkspaceGrant,
+    ) -> Result<RunView, EngineError> {
+        let (template, revision) = self.resolve_skill(&config.owner, pin)?;
+        if expected_revision.is_some_and(|r| r != revision) {
+            return Err(EngineError::Forbidden);
+        }
         let messages = template.messages(input)?;
         self.start_agent_protocol(
             config,
@@ -228,7 +243,7 @@ impl Journal {
             AgentAuthority::read(grant),
             false,
             1,
-            Some((pin, &template)),
+            Some((pin, &template, revision)),
         )
     }
     fn start_agent_protocol(
@@ -238,7 +253,7 @@ impl Journal {
         authority: AgentAuthority<'_>,
         user_questions: bool,
         memory_read_version: u8,
-        skill: Option<(&crate::skills::SkillPin, &crate::skills::SkillTemplate)>,
+        skill: Option<(&crate::skills::SkillPin, &crate::skills::SkillTemplate, i64)>,
     ) -> Result<RunView, EngineError> {
         if !matches!(memory_read_version, 1 | 2)
             || (memory_read_version == 2 && authority.memories.is_empty())
@@ -328,7 +343,7 @@ impl Journal {
             digest("run-config-v1", &(config, &messages))?
         };
         let config_digest = match skill {
-            Some((pin, _)) => digest("run-config-skill-v1", &(&config_digest, pin))?,
+            Some((pin, _, _)) => digest("run-config-skill-v1", &(&config_digest, pin))?,
             None => config_digest,
         };
         let mut request = make_request_mode(
@@ -343,7 +358,7 @@ impl Journal {
                 version: memory_read_version,
             },
         );
-        if let Some((_, template)) = skill {
+        if let Some((_, template, _)) = skill {
             request.tools.retain(|t| template.tools.contains(&t.name));
             if request.tools.len() != template.tools.len() {
                 return Err(EngineError::Invalid);
@@ -365,6 +380,11 @@ impl Journal {
             )
             .optional()?;
         if let Some(old) = old {
+            if skill.is_some()
+                && !crate::skills::for_run(&tx, &config.run_id)?.is_some_and(|s| s.current)
+            {
+                return Err(EngineError::Forbidden);
+            }
             if old != config_digest {
                 return Err(JournalError::Conflict.into());
             }
@@ -391,12 +411,8 @@ impl Journal {
             params![config.run_id, config.owner, config.policy],
         )?;
         tx.execute("INSERT INTO runtime_runs(run_id,config,config_digest,environment,messages,phase) VALUES(?,?,?,?,?,'ready')",params![config.run_id,config_json,config_digest,config.environment,encode(&messages)?])?;
-        if let Some((pin, _)) = skill {
-            let inserted=tx.execute("INSERT INTO runtime_skill_bindings(run_id,digest,activation_revision) SELECT ?,digest,revision FROM owner_skills
-             WHERE owner=? AND package_id=? AND digest=? AND enabled",params![config.run_id,config.owner,pin.id,pin.digest])?;
-            if inserted != 1 {
-                return Err(EngineError::Forbidden);
-            }
+        if let Some((pin, _, revision)) = skill {
+            crate::skills::bind(&tx, &config.owner, &config.run_id, pin, revision)?;
         }
         tx.execute(
             "INSERT INTO runtime_memory_protocol VALUES(?,?)",

@@ -33,6 +33,8 @@ struct Config {
     #[serde(default)]
     skill: Option<orange_agent_runtime::skills::SkillPin>,
     #[serde(default)]
+    skill_activation_revision: Option<i64>,
+    #[serde(default)]
     user_questions: bool,
     #[serde(default)]
     creation_consent_id: Option<String>,
@@ -157,7 +159,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     let command=args.get(2).map(String::as_str).ok_or("usage: local-agent PRIVATE_CONFIG COMMAND; editing requires separate authorize-edit, preview-edit and approve-edit")?;
     let expected = match command {
-        "skills" | "skill-binding" => 3,
+        "skills" | "skill-binding" | "review-skill" => 3,
+        "install-skill" | "uninstall-skill" => 5,
         "enable-skill" | "disable-skill" => 4,
         "pending-edits" if args.len() == 4 => 4,
         "pending-edits" => 3,
@@ -175,10 +178,51 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config: Config = serde_json::from_slice(&private_read(Path::new(&args[1]))?)?;
     if matches!(
         command,
-        "skills" | "skill-binding" | "enable-skill" | "disable-skill"
+        "skills"
+            | "skill-binding"
+            | "enable-skill"
+            | "disable-skill"
+            | "review-skill"
+            | "install-skill"
+            | "uninstall-skill"
     ) {
         let mut journal = Journal::open(&config.journal)?;
         match command {
+            "review-skill" | "install-skill" => {
+                let mut bytes = Vec::new();
+                std::io::stdin()
+                    .take(orange_agent_runtime::skills::LOCAL_SKILL_MAX_BYTES as u64 + 1)
+                    .read_to_end(&mut bytes)?;
+                if command == "review-skill" {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(
+                            &journal.review_skill_package(&config.run.owner, &bytes)?
+                        )?
+                    );
+                } else {
+                    let revision = journal.install_skill_package(
+                        &config.run.owner,
+                        &bytes,
+                        &args[3],
+                        args[4].parse()?,
+                    )?;
+                    println!("{}", serde_json::json!({"installation_revision":revision}));
+                }
+            }
+            "uninstall-skill" => {
+                let pin = config
+                    .skill
+                    .as_ref()
+                    .ok_or("Select the reviewed skill pin")?;
+                let revision = journal.uninstall_skill_package(
+                    &config.run.owner,
+                    pin,
+                    args[3].parse()?,
+                    args[4].parse()?,
+                )?;
+                println!("{}", serde_json::json!({"installation_revision":revision}));
+            }
             "skills" => println!(
                 "{}",
                 serde_json::to_string_pretty(&journal.skills(&config.run.owner)?)?
@@ -457,10 +501,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("{}", serde_json::to_string_pretty(&view)?);
         return Ok(());
     }
+    if command == "start" && config.skill_activation_revision.is_some() && config.skill.is_none() {
+        return Err("Activation revision requires a skill pin".into());
+    }
     let view = match command {
-        "start" if config.skill.is_some() => journal.start_agent_skill(
+        "start" if config.skill.is_some() => journal.start_agent_skill_reviewed(
             &config.run,
             config.skill.as_ref().expect("selected skill"),
+            config.skill_activation_revision,
             config.prompt,
             &grant,
         )?,

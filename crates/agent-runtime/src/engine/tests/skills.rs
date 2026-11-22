@@ -265,3 +265,157 @@ fn packaged_templates_match_the_offline_schema_and_catalog_pins() {
         assert!(!validator.is_valid(&doc));
     }
 }
+
+fn package(version: &str, instruction: &str) -> Vec<u8> {
+    serde_json::json!({
+        "id":"local.release-notes", "version":version, "scenario":"AU-02",
+        "name":"Release notes", "instruction":instruction, "tools":[]
+    })
+    .to_string()
+    .into_bytes()
+}
+
+#[tokio::test]
+async fn local_package_review_install_remove_and_recover_authority()
+-> Result<(), Box<dyn std::error::Error>> {
+    let f = Fixture::new();
+    let mut j = f.open();
+    let bytes = package("1.0.0", "Summarize the supplied changelog.");
+    let review = j.review_skill_package("alice", &bytes)?;
+    let pin = review.pin;
+    assert_eq!(
+        (
+            review.installation_revision,
+            review.activation_revision,
+            review.installed
+        ),
+        (0, 0, false)
+    );
+    assert!(
+        j.install_skill_package("alice", &bytes, &"0".repeat(64), 0)
+            .is_err()
+    );
+    for _ in 0..2 {
+        assert_eq!(j.install_skill_package("alice", &bytes, &pin.digest, 0)?, 1);
+    }
+    assert!(
+        j.start_agent_skill(&f.config, &pin, "input".into(), &f.grant)
+            .is_err()
+    );
+    j.set_skill_enabled("alice", &pin, 0, true)?;
+    j.start_agent_skill(&f.config, &pin, "input".into(), &f.grant)?;
+    assert!(j.uninstall_skill_package("alice", &pin, 1, 0).is_err());
+    assert_eq!(j.uninstall_skill_package("alice", &pin, 1, 1)?, 2);
+    assert_eq!(j.uninstall_skill_package("alice", &pin, 1, 1)?, 2);
+    drop(j);
+    let mut j = f.open();
+    assert!(j.skills("alice")?.iter().all(|s| s.pin != pin));
+    assert!(
+        j.install_skill_package("alice", &bytes, &pin.digest, 0)
+            .is_err()
+    );
+    let other = package("1.0.0", "Different reviewed content");
+    assert!(j.review_skill_package("alice", &other).is_err());
+    let bob = j.review_skill_package("bob", &other)?.pin;
+    assert_ne!(pin, bob);
+    assert!(j.set_skill_enabled("bob", &pin, 0, true).is_err());
+    j.install_skill_package("bob", &other, &bob.digest, 0)?;
+    j.set_skill_enabled("bob", &bob, 0, true)?;
+    assert!(j.run_skill("bob", "run-1").is_err());
+    assert!(j.uninstall_skill_package("bob", &pin, 1, 1).is_err());
+    j.install_skill_package("alice", &bytes, &pin.digest, 2)?;
+    j.set_skill_enabled("alice", &pin, 2, true)?;
+    assert!(
+        j.start_agent_skill_reviewed(&f.config, &pin, Some(1), "input".into(), &f.grant)
+            .is_err()
+    );
+    assert!(
+        j.start_agent_skill_reviewed(&f.config, &pin, Some(3), "input".into(), &f.grant)
+            .is_err()
+    );
+    let mut fresh = f.config.clone();
+    fresh.run_id = "fresh-run".into();
+    assert!(
+        j.start_agent_skill_reviewed(&fresh, &pin, Some(1), "input".into(), &f.grant)
+            .is_err()
+    );
+    j.start_agent_skill_reviewed(&fresh, &pin, Some(3), "input".into(), &f.grant)
+        .expect("fresh run with reviewed revision");
+    assert_eq!(j.run_skill("alice", "run-1")?, Some(pin));
+    let model = ScriptedModel::new(vec![]);
+    let (_tx, rx) = watch::channel(false);
+    let view = f.advance(&mut j, &model, rx).await?;
+    assert_eq!(view.phase, Phase::Cancelled);
+    assert!(
+        model
+            .requests
+            .lock()
+            .expect("recorded model requests")
+            .is_empty()
+    );
+    assert_eq!(
+        j.skills("bob")?
+            .iter()
+            .filter(|s| s.enabled)
+            .map(|s| &s.pin)
+            .collect::<Vec<_>>(),
+        vec![&bob]
+    );
+    Ok(())
+}
+
+#[test]
+fn local_version_switch_requires_current_selection_and_drops_unused_document()
+-> Result<(), Box<dyn std::error::Error>> {
+    let f = Fixture::new();
+    let mut j = f.open();
+    let first = package("1.0.0", "Answer concisely.");
+    let second = package("1.1.0", "Return two sentences.");
+    let a = j.review_skill_package("alice", &first)?.pin;
+    let b = j.review_skill_package("alice", &second)?.pin;
+    j.install_skill_package("alice", &first, &a.digest, 0)?;
+    j.install_skill_package("alice", &second, &b.digest, 0)?;
+    assert_eq!(j.set_skill_enabled("alice", &a, 0, true)?, 1);
+    assert_eq!(j.set_skill_enabled("alice", &b, 1, true)?, 2);
+    assert!(j.set_skill_enabled("alice", &a, 1, true).is_err());
+    assert_eq!(j.set_skill_enabled("alice", &a, 2, false)?, 2);
+    assert_eq!(j.set_skill_enabled("alice", &a, 2, true)?, 3);
+    assert_eq!(j.uninstall_skill_package("alice", &b, 1, 3)?, 2);
+    let document: Option<String> = j.connection.query_row(
+        "SELECT document FROM local_skill_packages WHERE digest=?",
+        [&b.digest],
+        |r| r.get(0),
+    )?;
+    assert!(document.is_none());
+    assert_eq!(
+        j.skills("alice")?
+            .into_iter()
+            .filter(|s| s.enabled)
+            .map(|s| s.pin)
+            .collect::<Vec<_>>(),
+        vec![a]
+    );
+    Ok(())
+}
+
+#[test]
+fn local_review_rejects_unknown_fields_namespace_and_tool_escalation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let bytes = package("1.0.0", "Only use the source.");
+    assert!(
+        crate::skills::review_local_skill(&vec![b' '; crate::skills::LOCAL_SKILL_MAX_BYTES + 1])
+            .is_err()
+    );
+    for (field, value) in [
+        ("id", serde_json::json!("orange.text-summary")),
+        ("code", serde_json::json!("noop")),
+        ("version", serde_json::json!("01.0.0")),
+        ("tools", serde_json::json!(["write_file"])),
+        ("tools", serde_json::json!(["read_file", "read_file"])),
+    ] {
+        let mut doc: serde_json::Value = serde_json::from_slice(&bytes)?;
+        doc[field] = value;
+        assert!(crate::skills::review_local_skill(&serde_json::to_vec(&doc)?).is_err());
+    }
+    Ok(())
+}
