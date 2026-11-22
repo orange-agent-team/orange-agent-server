@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler
 import shutil
+import sqlite3
 import socketserver
 import subprocess
 import tempfile
@@ -20,12 +21,26 @@ class Response(BaseHTTPRequestHandler):
         self.rfile.read(int(self.headers.get('Content-Length', '0')))
         self.server.calls += 1
         self.server.received.set()
-        if self.server.behavior != 'error':
+        behavior=self.server.behavior
+        status=503
+        content_type='application/json'
+        data=b''
+        if behavior in ('protocol','limit','incomplete'):
+            status=200
+            if behavior=='protocol':data=b'{}'
+            elif behavior=='limit':data=b'{"input_tokens":1000000}'
+            elif self.path.endswith('/input_tokens'):data=b'{"input_tokens":4}'
+            else:
+                content_type='text/event-stream'
+                data=b'data: [DONE]\n\n'
+        elif behavior!='error':
             self.server.release.wait(15)
         try:
-            self.send_response(503)
-            self.send_header('Content-Length','0')
+            self.send_response(status)
+            self.send_header('Content-Length',str(len(data)))
+            self.send_header('Content-Type',content_type)
             self.end_headers()
+            self.wfile.write(data)
         except (BrokenPipeError,ConnectionResetError):
             pass
 
@@ -61,7 +76,9 @@ def check(exe,base,behavior):
             else:
                 assert invoke('step')['phase']=='recovery_required'
             observation=invoke('model-observation')
-            assert observation['kind']=={'error':'gateway_failed','interrupted':'host_reopened','deadline':'run_deadline'}[behavior],observation
+            assert observation['kind']=={'interrupted':'host_reopened','deadline':'run_deadline'}.get(behavior,'gateway_failed'),observation
+            if behavior in ('error','protocol','limit','incomplete'):assert observation.get('adapter_code')=={'error':'unavailable'}.get(behavior,behavior),observation
+            else: assert 'adapter_code' not in observation
             if behavior=='interrupted':
                 assert 'elapsed_ms' not in observation and 'wait_limit_ms' not in observation
             else:
@@ -70,8 +87,10 @@ def check(exe,base,behavior):
                 if behavior=='deadline':assert 0<limit<=4000 and elapsed>=limit
                 else:assert limit==120000
             assert invoke('step')['phase']=='recovery_required' and invoke('model-observation')==observation
-            assert server.calls==1
-            assert set(observation)<= {'invocation','kind','observed_at_unix','wait_limit_ms','elapsed_ms'}
+            assert server.calls==(2 if behavior=='incomplete' else 1)
+            with sqlite3.connect(state/'journal.sqlite') as db:
+                assert db.execute('SELECT count(*) FROM runtime_invocations').fetchone()[0]==1
+            assert set(observation)<= {'invocation','kind','observed_at_unix','wait_limit_ms','elapsed_ms','adapter_code'}
             print(json.dumps({'case':behavior,'observation':observation,'actual_endpoint_calls':server.calls}),flush=True)
         finally:
             if child is not None and child.poll() is None:child.kill();child.wait(timeout=10)
@@ -86,7 +105,7 @@ def main():
     subprocess.run([cargo,'build','--locked','--offline','-p','orange-agent-runtime','--example','local-agent'],cwd=ROOT,env=env,check=True)
     with tempfile.TemporaryDirectory(prefix='omd-',dir='/private/tmp' if os.uname().sysname=='Darwin' else None) as tmp:
         base=Path(tmp).resolve();exe=base/'agent';shutil.copy2(target/'debug/examples/local-agent',exe)
-        for case in ('error','deadline','interrupted'):check(exe,base/case,case)
+        for case in ('error','protocol','limit','incomplete','deadline','interrupted'):check(exe,base/case,case)
     print('PASS real CLI / SQLite / private HTTP faults, original dispatch recovery and no replay')
 
 if __name__=='__main__':main()

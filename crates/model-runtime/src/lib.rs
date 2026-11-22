@@ -39,3 +39,16 @@ impl From<orange_protocol::model::ModelRequestError> for ModelError {
         }
     }
 }
+
+impl From<ModelError> for orange_protocol::model::GatewayIssue {
+    fn from(error: ModelError) -> Self {
+        match error {
+            ModelError::Invalid => Self::Invalid,
+            ModelError::Unavailable => Self::Unavailable,
+            ModelError::Protocol => Self::Protocol,
+            ModelError::Limit => Self::Limit,
+            ModelError::Incomplete => Self::Incomplete,
+            ModelError::Cancelled => Self::Cancelled,
+        }
+    }
+}

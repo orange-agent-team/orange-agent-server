@@ -12,6 +12,7 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 PRIOR = {
+    34: "2a82e8e018b696adc32e5bb66f1f39e73d558982",
     33: "7876359b73b86c54292e6231da32179556994299",
     29: "94cfd1fc3e27dd2fb43438757af6d6b863b6e98d",
     32: "5349843fa7225df110df733e49e66daf73f509b1",
@@ -59,7 +60,7 @@ def verify(base, prior, old, new):
 
     config["run"]["environment"] = run(old, "grant-info")["environment"]
     old_pin = None
-    if prior in (32,33):
+    if prior in (32,33,34):
         config["run"]["model_version"]="qwen7b-reviewed-cpu-v1"
         old_pin=next(x["pin"] for x in run(old,"skills") if x["pin"]["id"]=="orange.code-review")
     elif prior == 31:
@@ -79,7 +80,7 @@ def verify(base, prior, old, new):
     registry = run(new, "skills")
     template = next(x for x in registry if x["pin"]["id"] == "orange.text-summary")
     assert {x["pin"]["id"] for x in registry if x["enabled"]} == ({old_pin["id"]} if old_pin else set())
-    assert snapshot() == (34, before) and run(new, "skill-binding") == old_pin
+    assert snapshot() == (35, before) and run(new, "skill-binding") == old_pin
     assert run(new,"model-observation") is None
     config["skill"] = template["pin"]
     assert run(new, "enable-skill", "0")["revision"] == 1
@@ -94,8 +95,8 @@ def verify(base, prior, old, new):
     fingerprint = hashlib.sha256(database.read_bytes()).hexdigest()
     refused = subprocess.run([old, file, "status"], capture_output=True, text=True)
     assert refused.returncode != 0 and "Unsupported" in refused.stderr, (refused.returncode, refused.stderr)
-    assert hashlib.sha256(database.read_bytes()).hexdigest() == fingerprint and snapshot() == (34, before)
-    print(f"PASS genuine schema {prior} -> 34, unchanged messages, original binding and activation, old executable refused before mutation")
+    assert hashlib.sha256(database.read_bytes()).hexdigest() == fingerprint and snapshot() == (35, before)
+    print(f"PASS genuine schema {prior} -> 35, unchanged messages, original binding and activation, old executable refused before mutation")
 
 
 def main():

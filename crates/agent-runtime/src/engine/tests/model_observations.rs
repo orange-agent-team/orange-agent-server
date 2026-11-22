@@ -78,8 +78,27 @@ async fn gateway_refusal_and_journal_write_failure_have_distinct_evidence()
                 .latest_model_observation("alice", "run-1")?
                 .expect("gateway outcome");
             assert_eq!(obs.kind, "gateway_failed");
+            assert_eq!(obs.adapter_code.as_deref(), Some("unclassified"));
             assert!(obs.elapsed_ms.is_some());
         }
     }
+    Ok(())
+}
+
+#[test]
+fn upgrading_a_prior_gateway_observation_does_not_infer_its_adapter_code()
+-> Result<(), Box<dyn std::error::Error>> {
+    let db = rusqlite::Connection::open_in_memory()?;
+    db.execute_batch("PRAGMA foreign_keys=ON; CREATE TABLE runtime_invocations(invocation TEXT PRIMARY KEY); INSERT INTO runtime_invocations VALUES('previous'),('next');")?;
+    db.execute_batch(include_str!("../../schema_v34.sql"))?;
+    db.execute(
+        "INSERT INTO runtime_model_observations VALUES('previous','gateway_failed',17,120000,89)",
+        [],
+    )?;
+    db.execute_batch(include_str!("../../schema_v35.sql"))?;
+    let old:(String,i64,Option<String>)=db.query_row("SELECT kind,elapsed_ms,adapter_code FROM runtime_model_observations WHERE invocation='previous'",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
+    assert_eq!(old, ("gateway_failed".into(), 89, None));
+    assert!(db.execute("UPDATE runtime_model_observations SET adapter_code='invalid' WHERE invocation='previous'",[]).is_err());
+    assert!(db.execute("INSERT INTO runtime_model_observations VALUES('next','gateway_failed',18,120000,100,'raw error text')",[]).is_err());
     Ok(())
 }

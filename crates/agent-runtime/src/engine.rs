@@ -42,6 +42,13 @@ use tokio::sync::watch;
 
 pub type ModelFuture<'a> =
     Pin<Box<dyn Future<Output = Result<ResponseCandidate, GatewayFailure>> + Send + 'a>>;
+pub type ObservedModelFuture<'a> = Pin<
+    Box<
+        dyn Future<Output = Result<ResponseCandidate, orange_protocol::model::GatewayIssue>>
+            + Send
+            + 'a,
+    >,
+>;
 /// Implemented only by trusted adapters. Implementations must never execute tools.
 pub trait ModelGateway {
     fn generate<'a>(
@@ -49,6 +56,18 @@ pub trait ModelGateway {
         request: &'a GenerateRequest,
         cancel: watch::Receiver<bool>,
     ) -> ModelFuture<'a>;
+    fn generate_observed<'a>(
+        &'a self,
+        request: &'a GenerateRequest,
+        cancel: watch::Receiver<bool>,
+    ) -> ObservedModelFuture<'a> {
+        let pending = self.generate(request, cancel);
+        Box::pin(async move {
+            pending
+                .await
+                .map_err(|_| orange_protocol::model::GatewayIssue::Unclassified)
+        })
+    }
 }
 // This signals adapter-owned work; it is not evidence of provider drain.
 struct ModelCallCancellation(watch::Sender<bool>);
@@ -874,9 +893,9 @@ impl Journal {
         if let Some(observation) = observation {
             let elapsed = i64::try_from(observation.started.elapsed().as_millis())
                 .map_err(|_| EngineError::Invalid)?;
-            let observed=tx.execute("INSERT INTO runtime_model_observations(invocation,kind,observed_at,wait_limit_ms,elapsed_ms)
-                SELECT invocation,?,unixepoch(),?,? FROM runtime_invocations WHERE invocation=? AND run_id=? AND state='dispatched'",
-                params![observation.kind,observation.wait_limit.as_millis() as i64,elapsed,observation.invocation,run])?;
+            let observed=tx.execute("INSERT INTO runtime_model_observations(invocation,kind,observed_at,wait_limit_ms,elapsed_ms,adapter_code)
+                SELECT invocation,?,unixepoch(),?,?,? FROM runtime_invocations WHERE invocation=? AND run_id=? AND state='dispatched'",
+                params![observation.kind,observation.wait_limit.as_millis() as i64,elapsed,observation.adapter_issue.map(|v|v.as_str()),observation.invocation,run])?;
             if observed != 1 {
                 return Err(EngineError::RecoveryRequired);
             }
@@ -1072,9 +1091,10 @@ impl Journal {
         let adapter_signal = ModelCallCancellation(adapter_sender);
         let started = tokio::time::Instant::now();
         let wait_limit = Duration::from_secs(remaining);
-        let observation = |kind| {
+        let observation = |kind, adapter_issue| {
             Some(model_observation::DispatchObservation {
                 kind,
+                adapter_issue,
                 invocation: &invocation,
                 started,
                 wait_limit,
@@ -1083,7 +1103,7 @@ impl Journal {
         let result = tokio::select! {
             _=async{let _=cancellation.changed().await;adapter_signal.0.send_replace(true);}=>{return self.cancel_agent(owner,run,grant);}
             _=async{memory::wait_authority_revoked(authority).await;adapter_signal.0.send_replace(true);}=>{if authority.read.is_revoked(){return self.cancel_agent(owner,run,grant);}self.stop_agent(run,"recovery_required","memory_permission_revoked")?;return self.agent_view(owner,run);}
-            result=tokio::time::timeout(wait_limit,gateway.generate(&request,adapter_cancellation))=>result,
+            result=tokio::time::timeout(wait_limit,gateway.generate_observed(&request,adapter_cancellation))=>result,
         };
         if *cancellation.borrow() || grant.is_revoked() {
             return self.cancel_agent(owner, run, grant);
@@ -1093,7 +1113,7 @@ impl Journal {
                 run,
                 "recovery_required",
                 "model_deadline",
-                observation("run_deadline"),
+                observation("run_deadline", None),
             )?;
             return self.agent_view(owner, run);
         }
@@ -1120,17 +1140,17 @@ impl Journal {
                     return Err(error);
                 }
             }
-            Ok(Err(_)) => self.stop_agent_observed(
+            Ok(Err(issue)) => self.stop_agent_observed(
                 run,
                 "recovery_required",
                 "model_unknown",
-                observation("gateway_failed"),
+                observation("gateway_failed", Some(issue)),
             )?,
             Err(_) => self.stop_agent_observed(
                 run,
                 "recovery_required",
                 "model_unknown",
-                observation("call_time_limit"),
+                observation("call_time_limit", None),
             )?,
         }
         if stored.skill.is_some() {

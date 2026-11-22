@@ -7,6 +7,8 @@ pub struct ModelObservation {
     pub kind: String,
     pub observed_at_unix: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub adapter_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub wait_limit_ms: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub elapsed_ms: Option<String>,
@@ -15,6 +17,7 @@ pub struct ModelObservation {
 pub(super) struct DispatchObservation<'a> {
     pub invocation: &'a str,
     pub kind: &'static str,
+    pub adapter_issue: Option<orange_protocol::model::GatewayIssue>,
     pub wait_limit: Duration,
     pub started: tokio::time::Instant,
 }
@@ -26,7 +29,7 @@ impl Journal {
         run: &str,
     ) -> Result<Option<ModelObservation>, EngineError> {
         let observation=self.connection.query_row(
-            "SELECT o.invocation,o.kind,o.observed_at,o.wait_limit_ms,o.elapsed_ms
+            "SELECT o.invocation,o.kind,o.observed_at,o.wait_limit_ms,o.elapsed_ms,o.adapter_code
              FROM runs r LEFT JOIN runtime_model_observations o ON o.invocation=(
                  SELECT i.invocation FROM runtime_invocations i JOIN runtime_model_observations m USING(invocation)
                  WHERE i.run_id=r.run_id AND i.state='unknown' ORDER BY i.ordinal DESC LIMIT 1)
@@ -34,7 +37,7 @@ impl Journal {
             params![run,owner], |r|{
                 let Some(invocation)=r.get::<_,Option<String>>(0)? else {return Ok(None);};
                 Ok(Some(ModelObservation{
-                    invocation,kind:r.get(1)?,observed_at_unix:r.get::<_,i64>(2)?.to_string(),
+                    invocation,kind:r.get(1)?,adapter_code:r.get(5)?,observed_at_unix:r.get::<_,i64>(2)?.to_string(),
                     wait_limit_ms:r.get::<_,Option<i64>>(3)?.map(|n|n.to_string()),elapsed_ms:r.get::<_,Option<i64>>(4)?.map(|n|n.to_string())
                 }))
             }
