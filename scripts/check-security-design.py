@@ -76,7 +76,8 @@ def review(private):
         for key in ids:
             verified_output([cargo,"test","-p",project,"--lib","--locked","--offline",cases[key]],env,[cases[key]])
     with database(private/"database-url","orange_security_") as (_, url):
-        local = dict(env, ORANGE_TEST_DATABASE_URL=url, ORANGE_TEST_OIDC_CONFIG_FILE=str(private/"identity/admin-config.json"))
+        local = dict(env, ORANGE_TEST_DATABASE_URL=url, ORANGE_TEST_OIDC_CONFIG_FILE=str(private/"identity/admin-config.json"),
+                     ORANGE_TEST_USER_CONFIG_FILE=str(private/"identity/user-config.json"))
         verified_output([cargo,"test","-p","orange-control-plane","--features","integration-tests","--locked","--offline",
                          "--test","admin_identity",cases["R-authority"],"--","--exact"],local,[cases["R-authority"]])
         verified_output([sys.executable,ROOT/"scripts/check-worker-session.py"],local,[cases["R-host-privacy"]])
