@@ -79,6 +79,10 @@ name = "worker_sessions"
 required-features = ["integration-tests"]
 
 [dependencies]
+opentelemetry.workspace = true
+opentelemetry_sdk.workspace = true
+opentelemetry-prometheus.workspace = true
+prometheus.workspace = true
 orange-agent-runtime = { path = "../../crates/agent-runtime", version = "=0.1.0" }
 orange-model-runtime.workspace = true
 orange-domain.workspace = true

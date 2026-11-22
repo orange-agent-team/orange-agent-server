@@ -1,3 +1,4 @@
+use orange_control_plane::telemetry::{self, ApiRole};
 use orange_control_plane::{
     admin::{
         identity::{AdminIdentity, OidcConfig},
@@ -34,12 +35,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .await?;
         identity = identity.with_support_reader(reader);
     }
+    let (app, _metrics) = telemetry::configure(routes::router(identity), ApiRole::Admin).await?;
     let listener = tokio::net::TcpListener::bind(address).await?;
     eprintln!(
         "Development Admin API listening on {}; node intents/approvals enabled, device completion remains separate",
         listener.local_addr()?
     );
-    axum::serve(listener, routes::router(identity))
+    axum::serve(listener, app)
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;
         })

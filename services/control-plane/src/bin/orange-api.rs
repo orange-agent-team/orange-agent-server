@@ -1,3 +1,4 @@
+use orange_control_plane::telemetry::{self, ApiRole};
 use orange_control_plane::{
     http::{ApiState, DevIdentity, router},
     store::Store,
@@ -23,9 +24,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let store = Store::connect(&env::var("DATABASE_URL")?).await?;
     store.migrate().await?;
     let app = router(ApiState::development(store, identities)?);
+    let (app, _metrics) = telemetry::configure(app, ApiRole::Development).await?;
     let listener = tokio::net::TcpListener::bind(address).await?;
     eprintln!(
-        "Orange development API listening on {address}; no production or payment routes enabled"
+        "Orange development API listening on {}; no production or payment routes enabled",
+        listener.local_addr()?
     );
     axum::serve(listener, app)
         .with_graceful_shutdown(async {

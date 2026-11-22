@@ -1,3 +1,4 @@
+use orange_control_plane::telemetry::{self, ApiRole};
 use orange_control_plane::{
     auth::{
         routes,
@@ -157,6 +158,7 @@ async fn serve(
             audio,
         ));
     }
+    let (app, _metrics) = telemetry::configure(app, ApiRole::User).await?;
     let api_listener = tokio::net::TcpListener::bind(address).await?;
     let (stop, mut stopped) = tokio::sync::watch::channel(false);
     let mut http_stopped = stop.subscribe();

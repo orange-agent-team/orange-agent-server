@@ -27,4 +27,5 @@ pub mod s3_sources;
 pub mod store;
 mod store_cleanup;
 pub mod team;
+pub mod telemetry;
 pub mod worker;
