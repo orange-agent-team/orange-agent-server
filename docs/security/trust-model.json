@@ -1,0 +1,40 @@
+{
+  "domains": {
+    "consumer": {"authority":"chooses data, payer and allowed model or tool effect","assets":["user files","source grants","local consent"]},
+    "desktop": {"authority":"broker-mediated native access and local operation journal","assets":["local model cache","operation approvals","desktop account session"]},
+    "platform": {"authority":"authorizes user and team requests, allocates held budgets and owns the ledger","assets":["job ownership","wallets","leases","encrypted object references"]},
+    "admin": {"authority":"scoped operator session and independent approvals","assets":["role grants","audit records","merchant refund decisions"]},
+    "cloud_host": {"authority":"assigns hosted workspaces and bounds each execution lease","assets":["workspace volumes","sandbox configuration","host credentials"]},
+    "workload": {"authority":"only the resources and mount rights granted to one execution","assets":["ephemeral process memory","declared job input"]},
+    "supplier": {"authority":"operating-system administrator with physical or kernel access to the supplied machine","assets":["driver and device","local memory","worker certificate"]},
+    "worker": {"authority":"carries one matching lease for an approved inference profile","assets":["model files","leased input","pending execution receipt"]},
+    "merchant": {"authority":"external test or live merchant owns its payment objects and event authentication","assets":["merchant event identifiers","capture and refund amounts"]},
+    "identity": {"authority":"external identity issuer authenticates an account within the configured realm","assets":["issuer identity","authentication keys"]},
+    "publisher": {"authority":"originates release sources, model bytes or dependency artifacts","assets":["release manifests","model digests","dependency locks"]}
+  },
+  "flows": [
+    ["consumer","desktop","explicit source and local operation consent"],
+    ["consumer","platform","account token, quote, budget and job request"],
+    ["identity","platform","issuer-bound authenticated user identity"],
+    ["identity","admin","separate scoped operator identity and step-up"],
+    ["admin","platform","approved administrative mutation or scoped read"],
+    ["merchant","platform","signed financial event and authoritative settlement object"],
+    ["platform","cloud_host","workspace assignment and execution lease"],
+    ["cloud_host","workload","bounded filesystem, runtime and process resources"],
+    ["platform","worker","mTLS lease and model-specific input grant"],
+    ["worker","platform","measured result, usage and cleanup receipt"],
+    ["supplier","worker","physical control, registration and contribution policy"],
+    ["publisher","desktop","fixed model and runtime package"],
+    ["publisher","worker","fixed implementation and inference profile"]
+  ],
+  "risks": [
+    {"id":"R-input","surface":"input parsing","direction":["consumer-to-supplier"],"domain":"workload","impact":"host","owner":"E03/E04","control":"Only complete schema-valid arguments become candidates, followed by capability approval before effects.","source":"crates/model-runtime/src/stream.rs","test":"incomplete_or_truncated_tool_arguments_never_form_candidates","residual":"Parsers for other modalities and OS backends require their own qualification.","gate":"first"},
+    {"id":"R-authority","surface":"credential misuse","direction":["platform-to-consumer"],"domain":"admin","impact":"privacy","owner":"E07/E11","control":"Session validity, active principal and current scoped grants are evaluated for protected Admin reads.","source":"services/control-plane/tests/admin_identity.rs","test":"expired_session_inactive_principal_and_expired_grants_fail_closed","residual":"Enterprise issuer, MFA enrolment and staff operational controls need real organizational validation.","gate":"first"},
+    {"id":"R-device","surface":"resource fraud","direction":["supplier-to-consumer","consumer-to-supplier"],"domain":"worker","impact":"host","owner":"E04/E08","control":"Host admission checks live locks, uncertain journal state and prior grants before accepting CPU work.","source":"services/worker/src/host/tests.rs","test":"real_cpu_admission_refuses_live_lock_unknown_record_and_prior_grant","residual":"Multi-GPU topology, device-level cleanup and independently attested capacity require hardware validation.","gate":"first"},
+    {"id":"R-billing","surface":"payment replay","direction":["merchant-to-platform"],"domain":"platform","impact":"funds","owner":"E07","control":"Verify raw signed events and consult the authoritative development merchant object. A repeated fulfillment may create only one wallet credit.","source":"services/control-plane/tests/test_checkout.rs","test":"checkout_unknown_concurrency_raw_signatures_and_authoritative_test_credit_fulfillment","residual":"Real merchant certification, disputed payment operations and public charging stay closed.","gate":"first"},
+    {"id":"R-package","surface":"supply chain","direction":["publisher-to-host"],"domain":"desktop","impact":"host","owner":"E04/E05/E08","control":"Check the locked artifact digest before activating the model cache. Repeated invalid content stays unpublished.","source":"crates/model-runtime/src/cache.rs","test":"corrupt_bytes_get_only_three_attempts_and_are_never_published","residual":"A digest does not verify origin identity. Production signing, trusted update distribution and revocation require separate evidence.","gate":"first"},
+    {"id":"R-host-privacy","surface":"supplier visibility","direction":["supplier-to-consumer"],"domain":"supplier","impact":"privacy","owner":"E05/E07/E10","control":"Make remote execution and data transfer visible before grant. Public devices receive only explicitly authorized model inputs.","source":"services/control-plane/tests/worker_sessions/inputs.rs","test":"exact_customer_input_requires_start_and_rechecks_deletion_on_real_mtls","residual":"The physical host can inspect plaintext during inference. Private workloads require an eligible execution domain; no hardware confidentiality qualification is asserted.","gate":"first"},
+    {"id":"R-workload","surface":"hosted workspace boundary","direction":["consumer-to-supplier"],"domain":"cloud_host","impact":"host","owner":"E07","control":"The hosted pool owns OCI/gVisor configuration. A workload has a dedicated writable workspace, a bounded process budget and no broker credential.","source":"config/cloud-isolation.lock.json","test":"HOST-ISOLATION-001","residual":"Local Linux ARM64 validation covers one controlled payload. Production pool isolation, runtime patching and regional residency remain open.","gate":"first"},
+    {"id":"R-reuse","surface":"stale assignment","direction":["platform-to-consumer","consumer-to-supplier"],"domain":"worker","impact":"funds","owner":"E07/E08","control":"Persist assignment identity and accepted execution start before acknowledging replay or restart.","source":"services/worker/src/execution_journal.rs","test":"durable_assignment_ack_and_exact_start_cannot_replay_after_restart","residual":"Duration and correlated partition behavior across four operating regions need independent observation.","gate":"later"}
+  ]
+}
