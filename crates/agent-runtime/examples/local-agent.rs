@@ -161,7 +161,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     let command=args.get(2).map(String::as_str).ok_or("usage: local-agent PRIVATE_CONFIG COMMAND; editing requires separate authorize-edit, preview-edit and approve-edit")?;
     let expected = match command {
-        "skills" | "skill-binding" | "review-skill" => 3,
+        "skills" | "skill-binding" | "review-skill" | "model-observation" => 3,
         "install-skill" | "uninstall-skill" => 5,
         "enable-skill" | "disable-skill" => 4,
         "pending-edits" if args.len() == 4 => 4,
@@ -252,6 +252,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
             }
         }
+        return Ok(());
+    }
+    if command == "model-observation" {
+        let journal = Journal::open(&config.journal)?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(
+                &journal.latest_model_observation(&config.run.owner, &config.run.run_id)?
+            )?
+        );
         return Ok(());
     }
     if command == "status" {

@@ -67,3 +67,9 @@ macOS 本地 CLI 的“批准后应用补丁”用于修改现有文件。该官
 桌面等宿主可以将已鉴别的模型别名、上下文长度、权重摘要和后端程序摘要一起绑定到 Run。桌面的历史连接标识仍取原有四项的规范化摘要。代码审阅和补丁模板使用已锁定的 7B 权重及其 8192 token 配置。可信宿主通过 `start_agent_skill_on_local_model` 传入实际连接和当前工作区权限。
 
 本地 CLI 在推进这两种模板时会读取原 Run 的绑定，并检查私有模型服务的 profile.json、process.json、Unix socket、会话密钥位置和运行实例。编辑配置文件中的模板或仅改变模型别名无法替换原 Run 的权重约束。可用 `python3 scripts/check-real-agent.py --verify-weight-admission` 验证真实 0.5B 权重被拒时没有模型调用。合并后仅供本地导入的权重可通过 ModelCache 的 `ArtifactSpec::local_only` 校验，导入来源是用户明确选择的文件。
+
+## 模型派发中断的核对
+
+本地 CLI 的 `model-observation` 使用配置中的原所有者和 Run 编号，读取最近一次已观测到的未确认模型派发。返回调用编号、观测时间及原因。运行时先到达单次等待上限为 `call_time_limit`，模型适配器先返回失败为 `gateway_failed`，整个 Run 的截止时间到达为 `run_deadline`。这三类还返回当时设置的等待上限和实际单调时钟耗时（毫秒）。宿主重新打开日志时发现先前仍处于已派发状态，会记录 `host_reopened`，其耗时未知。
+
+诊断与相应恢复状态在同一 SQLite 事务中提交。记录仅对仍获授权的原所有者开放，不含消息正文、路径、密钥或模型回复。既有 `model_unknown` 和不重放约束继续生效。schema 34 对已经标为未知的历史行保留原记录，不推断事后原因。
