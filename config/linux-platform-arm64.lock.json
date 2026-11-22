@@ -1,0 +1,30 @@
+{
+  "format": 1,
+  "target": "aarch64-unknown-linux-gnu",
+  "os": "linux/arm64",
+  "rust_version": "1.97.1",
+  "build_image": {
+    "tag": "1.97.1-bookworm",
+    "manifest_list": "sha256:0e2bcaef56d041a486784e54104a81aebe0da44bd03019bd70bc0401e42e4a97",
+    "image": "docker.io/library/rust@sha256:6e957ef098dcc77d33e310261e4ed5843bb108d5c3b5dc2b476cbc8b6caf53fa",
+    "config_digest": "sha256:72db5382ffef4a5dbf89a125ee07bf0073404cee718902ed4ef0d6da99b0261a"
+  },
+  "runtime_image": {
+    "tag": "24.04",
+    "manifest_list": "sha256:9c7f200c07e3d4a03e7249d2c16bf66a51120fb876aa2242cf31451412543289",
+    "image": "docker.io/library/ubuntu@sha256:cd04f18ea6639206fcecf4c148bde909cd08098e1d0569117c2af59242059558",
+    "config_digest": "sha256:7cf0c39cbf1f2d11eee47faaec04414d407cec919beca31f81b1ce9f9e75b8ce"
+  },
+  "protoc": {
+    "name": "protoc-36.2-linux-aarch_64.zip",
+    "browser_download_url": "https://github.com/protocolbuffers/protobuf/releases/download/v36.2/protoc-36.2-linux-aarch_64.zip",
+    "digest": "sha256:8b8f18bd2b30346efbc698dd5a73dd7c805f3ef8380f6dfc95c768f3f1852f6a",
+    "size": 3631325
+  },
+  "test_database": {
+    "tag": "17-bookworm",
+    "manifest_list": "sha256:837bed18782820fe967067cb5328b02b0d9992c1be9a37ee0c9c492cfc03af3b",
+    "image": "docker.io/library/postgres@sha256:783f838eb1cd91c8371dca3569c21c4eed2df03e18fbc430240ab36a5e030e9e",
+    "config_digest": "sha256:f37137dbae5999baee30aae4091e8bdcc42a141a399b5b1feac346b7dea97251"
+  }
+}
