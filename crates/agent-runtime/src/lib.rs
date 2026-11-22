@@ -83,7 +83,7 @@ impl Journal {
             rusqlite::OpenFlags::default() | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
         )?;
         let version: i64 = connection.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if !(0..=31).contains(&version) {
+        if !(0..=32).contains(&version) {
             return Err(JournalError::UnsupportedVersion);
         }
         if version >= 25 {
@@ -300,6 +300,14 @@ impl Journal {
             let tx =
                 connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
             tx.execute_batch(include_str!("schema_v31.sql"))?;
+            tx.commit()?;
+        }
+        // Schema 32 requires the review profile and real source citations on every resumed review.
+        // Earlier hosts do not enforce either condition and must refuse this database.
+        if version < 32 {
+            let tx =
+                connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            tx.pragma_update(None, "user_version", 32)?;
             tx.commit()?;
         }
         connection.execute_batch("BEGIN IMMEDIATE;

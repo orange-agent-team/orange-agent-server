@@ -540,7 +540,7 @@ async fn source_set_migration_preserves_actual_v25_read_and_immutable_bindings()
         j.connection
             .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .expect("schema"),
-        31
+        32
     );
     assert_eq!(
         j.connection

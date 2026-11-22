@@ -167,6 +167,7 @@ impl Journal {
             let (doc, digest, enabled, revision) = row?;
             let template = pinned(&doc, &digest)?;
             result.push(SkillStatus {
+                required_model_profile: template.required_model_profile(),
                 pin: template.pin()?,
                 name: template.name,
                 scenario: template.scenario,

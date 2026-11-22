@@ -1914,7 +1914,7 @@ async fn create_agent_schema_five_migration_never_upgrades_existing_run() {
         .connection
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .expect("version");
-    assert_eq!(version, 31);
+    assert_eq!(version, 32);
     assert_eq!(
         j.agent_view("alice", "run-1").expect("old run").phase,
         Phase::Ready

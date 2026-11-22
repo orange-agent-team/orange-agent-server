@@ -120,66 +120,76 @@ async fn disabling_then_reenabling_does_not_revive_an_old_run() {
 
 #[tokio::test]
 async fn pinned_read_skill_denies_a_model_proposed_write_before_journaling_an_effect() {
-    let f = Fixture::new();
-    let mut j = f.open();
-    let chosen = pin("orange.source-question");
-    j.set_skill_enabled("alice", &chosen, 0, true)
-        .expect("activate");
-    j.start_agent_skill(&f.config, &chosen, "Find a source.".into(), &f.grant)
-        .expect("start");
-    let model = ScriptedModel::new(vec![tools(vec![call(
-        "callw",
-        "write_file",
-        json!({"path":"unexpected.txt","content":"unapproved"}),
-    )])]);
-    let (_tx, rx) = watch::channel(false);
-    match f.advance(&mut j, &model, rx).await {
-        Err(EngineError::Forbidden) => {}
-        Ok(view) => assert!(matches!(
-            view.phase,
-            Phase::Failed | Phase::RecoveryRequired
-        )),
-        Err(other) => panic!("unexpected error {other:?}"),
+    for name in ["orange.source-question", "orange.code-review"] {
+        let mut f = Fixture::new();
+        if name == "orange.code-review" {
+            f.config.model_version = "qwen7b-reviewed-cpu-v1".into();
+        }
+        let mut j = f.open();
+        let chosen = pin(name);
+        j.set_skill_enabled("alice", &chosen, 0, true)
+            .expect("activate");
+        j.start_agent_skill(&f.config, &chosen, "Find a source.".into(), &f.grant)
+            .expect("start");
+        let model = ScriptedModel::new(vec![tools(vec![call(
+            "callw",
+            "write_file",
+            json!({"path":"unexpected.txt","content":"unapproved"}),
+        )])]);
+        let (_tx, rx) = watch::channel(false);
+        match f.advance(&mut j, &model, rx).await {
+            Err(EngineError::Forbidden) => {}
+            Ok(view) => assert!(matches!(
+                view.phase,
+                Phase::Failed | Phase::RecoveryRequired
+            )),
+            Err(other) => panic!("unexpected error {other:?}"),
+        }
+        let requests = model.requests.lock().expect("requests");
+        assert_eq!(
+            requests[0]
+                .tools
+                .iter()
+                .map(|t| t.name.as_str())
+                .collect::<Vec<_>>(),
+            ["read_file", "search_text"]
+        );
+        let count: i64 = j
+            .connection
+            .query_row(
+                "SELECT count(*) FROM operations WHERE run_id='run-1'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("effects");
+        assert_eq!(count, 0);
+        assert!(!f.workspace.path().join("unexpected.txt").exists());
     }
-    let requests = model.requests.lock().expect("requests");
-    assert_eq!(
-        requests[0]
-            .tools
-            .iter()
-            .map(|t| t.name.as_str())
-            .collect::<Vec<_>>(),
-        ["read_file", "search_text"]
-    );
-    let count: i64 = j
-        .connection
-        .query_row(
-            "SELECT count(*) FROM operations WHERE run_id='run-1'",
-            [],
-            |r| r.get(0),
-        )
-        .expect("effects");
-    assert_eq!(count, 0);
-    assert!(!f.workspace.path().join("unexpected.txt").exists());
 }
 
 #[tokio::test]
 async fn a_file_answer_without_committed_source_is_not_published() {
-    let f = Fixture::new();
-    let mut j = f.open();
-    let chosen = pin("orange.source-question");
-    j.set_skill_enabled("alice", &chosen, 0, true)
-        .expect("activate");
-    j.start_agent_skill(&f.config, &chosen, "Answer from note.txt.".into(), &f.grant)
-        .expect("start");
-    let model = ScriptedModel::new(vec![final_response()]);
-    let (_tx, rx) = watch::channel(false);
-    let view = f
-        .advance(&mut j, &model, rx)
-        .await
-        .expect("checked ungrounded response");
-    assert_eq!(view.phase, Phase::Failed);
-    assert_eq!(view.failure.as_deref(), Some("skill_source_required"));
-    assert!(view.final_text.is_none() && view.source_references.is_empty());
+    for name in ["orange.source-question", "orange.code-review"] {
+        let mut f = Fixture::new();
+        if name == "orange.code-review" {
+            f.config.model_version = "qwen7b-reviewed-cpu-v1".into();
+        }
+        let mut j = f.open();
+        let chosen = pin(name);
+        j.set_skill_enabled("alice", &chosen, 0, true)
+            .expect("activate");
+        j.start_agent_skill(&f.config, &chosen, "Answer from note.txt.".into(), &f.grant)
+            .expect("start");
+        let model = ScriptedModel::new(vec![final_response()]);
+        let (_tx, rx) = watch::channel(false);
+        let view = f
+            .advance(&mut j, &model, rx)
+            .await
+            .expect("checked ungrounded response");
+        assert_eq!(view.phase, Phase::Failed);
+        assert_eq!(view.failure.as_deref(), Some("skill_source_required"));
+        assert!(view.final_text.is_none() && view.source_references.is_empty());
+    }
 }
 
 #[tokio::test]
@@ -417,5 +427,32 @@ fn local_review_rejects_unknown_fields_namespace_and_tool_escalation()
         doc[field] = value;
         assert!(crate::skills::review_local_skill(&serde_json::to_vec(&doc)?).is_err());
     }
+    Ok(())
+}
+
+#[test]
+fn official_review_refuses_an_unqualified_model_before_creating_a_run()
+-> Result<(), Box<dyn std::error::Error>> {
+    let f = Fixture::new();
+    let mut j = f.open();
+    let p = pin("orange.code-review");
+    j.set_skill_enabled("alice", &p, 0, true)?;
+    let declared = j
+        .skills("alice")?
+        .into_iter()
+        .find(|row| row.pin == p)
+        .expect("official template");
+    assert_eq!(
+        declared.required_model_profile,
+        Some("qwen7b-reviewed-cpu-v1")
+    );
+    assert!(matches!(
+        j.start_agent_skill(&f.config, &p, "Review note.txt".into(), &f.grant),
+        Err(EngineError::Forbidden)
+    ));
+    let count: i64 = j
+        .connection
+        .query_row("SELECT count(*) FROM runtime_runs", [], |r| r.get(0))?;
+    assert_eq!(count, 0);
     Ok(())
 }

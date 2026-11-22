@@ -81,6 +81,13 @@ impl SkillTemplate {
         }
         Ok(())
     }
+    pub fn required_model_profile(&self) -> Option<&'static str> {
+        (self.id == "orange.code-review").then_some("qwen7b-reviewed-cpu-v1")
+    }
+
+    pub(crate) fn requires_sources(&self) -> bool {
+        self.scenario == "AU-01" || self.id == "orange.code-review"
+    }
     pub(crate) fn messages(&self, input: String) -> Result<Vec<Message>, EngineError> {
         if input.trim().is_empty() || input.len() > 65536 {
             return Err(EngineError::Invalid);
@@ -136,6 +143,8 @@ pub struct SkillStatus {
     pub name: String,
     pub tools: Vec<String>,
     pub instruction: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub required_model_profile: Option<&'static str>,
     pub enabled: bool,
     pub revision: i64,
 }
@@ -208,6 +217,7 @@ impl Journal {
                 .is_some_and(|(digest, _, active)| *active && digest == &pin.digest);
             let revision = status.map_or(0, |(_, revision, _)| revision);
             result.push(SkillStatus {
+                required_model_profile: template.required_model_profile(),
                 pin,
                 scenario: template.scenario,
                 name: template.name,
