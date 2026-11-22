@@ -25,10 +25,12 @@ parser=argparse.ArgumentParser()
 parser.add_argument('--required-tool',choices=['read_file','search_files','search_text','ask_user'],default='read_file')
 parser.add_argument('--model-protocol',choices=['chat_completions','responses'],default='chat_completions')
 parser.add_argument('--model-runtime-root',type=Path,default=PRIVATE)
+parser.add_argument('--verify-skills',action='store_true',help='Also run a digest-pinned, tool-free text summary and pin the read-only question template')
 args=parser.parse_args()
 PRIVATE=args.model_runtime_root.resolve()
 if args.model_protocol!='chat_completions':
     REPORT=ROOT/'.local'/('real-agent-'+args.model_protocol)
+if args.verify_skills:REPORT=ROOT/'.local'/'real-agent-skills'
 target=Path(os.environ.get('CARGO_TARGET_DIR',ROOT/'target')).resolve()
 
 def digest(path):
@@ -113,6 +115,28 @@ def main():
                     finally:
                         if child.poll() is None:child.kill();child.wait()
                 config['run']['environment']=invoke('grant-info')['environment'];write(path,config)
+                if args.verify_skills:
+                    if args.required_tool!='read_file':raise ValueError('Real Skills check uses the read-file fixture')
+                    catalog={row['pin']['id']:row for row in invoke('skills')}
+                    summary=catalog['orange.text-summary'];qa=catalog['orange.source-question']
+                    if summary['tools'] or summary['enabled'] or set(qa['tools'])!={'read_file','search_text'}:raise ValueError('Unexpected bundled grants')
+                    original=json.loads(json.dumps(config))
+                    config['skill']=summary['pin'];config['run']['run_id']=uuid.uuid4().hex
+                    config['prompt']='The delivery will arrive Friday. It contains 37 crates of oranges.'
+                    write(path,config);activation=invoke('enable-skill','0')
+                    if activation['revision']!=1:raise ValueError('Expected original activation')
+                    before=invoke('start')
+                    if before['phase']!='ready' or invoke('skill-binding')!=summary['pin']:raise ValueError('Run lacks its original skill binding')
+                    response=invoke('step')
+                    answer=(response.get('final_text') or '').lower()
+                    if response['phase']!='completed' or 'friday' not in answer or '37' not in answer:raise ValueError('Real summary lost the delivery day or quantity')
+                    with sqlite3.connect(config['journal']) as db:
+                        request=json.loads(db.execute('SELECT request FROM runtime_invocations WHERE run_id=?',(config['run']['run_id'],)).fetchone()[0])
+                        if request['tools'] or request['messages'][0]['role']!='system' or request['messages'][-1]['content']!=config['prompt']:raise ValueError('Incorrect skill authority or separated input')
+                    if invoke('disable-skill','1')['revision']!=2:raise ValueError('Disable did not advance activation')
+                    config=original;config['skill']=qa['pin'];write(path,config)
+                    invoke('enable-skill','0')
+                    result['skills']={'actual_summary':True,'summary_pin':summary['pin'],'qa_pin':qa['pin'],'summary_tools':0,'day_and_quantity_preserved':True}
                 view=invoke('start');result['phases'].append(view['phase'])
                 def committed_tool_results(tool):
                     database=sqlite3.connect(state/'journal.sqlite')
@@ -160,6 +184,12 @@ def main():
                     view=invoke('step');result['phases'].append(view['phase'])
                 result['final_phase']=view['phase'];result['sentinel_matched']=sentinel in (view.get('final_text') or '')
                 if view['phase']!='completed' or not result['sentinel_matched'] or not negative or not seen or args.required_tool not in result['observed_tools']:raise RuntimeError('Real model/tool/file evidence did not complete; no substitute response used')
+                if args.verify_skills:
+                    references=view.get('source_references',[])
+                    proof=workspace/'proof.txt'
+                    if not any(v['path']=='proof.txt' and v['sha256']==digest(proof) and int(v['start_byte'])==0 and int(v['end_byte'])==proof.stat().st_size for v in references):
+                        raise RuntimeError('Host did not bind the final answer to the actual authorized read')
+                    result['skills']['verified_source_references']=len(references)
                 if args.required_tool=='ask_user':
                     database=sqlite3.connect(state/'journal.sqlite')
                     try:

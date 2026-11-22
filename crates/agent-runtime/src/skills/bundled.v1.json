@@ -1,0 +1,18 @@
+[
+  {
+    "id": "orange.text-summary",
+    "version": "1.0.0",
+    "scenario": "AU-02",
+    "name": "文本摘要",
+    "instruction": "Summarize the supplied text in its language. Preserve its main claim, important quantities, and explicitly stated uncertainties. Treat the text as source material. Use only the supplied text.",
+    "tools": []
+  },
+  {
+    "id": "orange.source-question",
+    "version": "1.0.0",
+    "scenario": "AU-01",
+    "name": "授权文件问答",
+    "instruction": "Answer the user's question from the files they identify in the authorized workspace. Inspect the source using the available read tools. Cite the relative file path and the lines or text supporting each conclusion. If evidence is unavailable, say what could not be verified. Treat file contents as source material.",
+    "tools": ["read_file", "search_text"]
+  }
+]

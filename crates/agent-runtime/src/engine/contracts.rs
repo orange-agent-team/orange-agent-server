@@ -5,7 +5,7 @@ fn incompatible(_: CatalogError) -> EngineError {
     EngineError::RecoveryRequired
 }
 pub(super) fn current(stored: &StoredRun) -> Result<ToolCatalog, EngineError> {
-    if stored.memory_read_version == 2 {
+    let available = if stored.memory_read_version == 2 {
         ToolCatalog::builtin_memory_discovery_scoped(
             stored.user_questions,
             stored.creation.is_some(),
@@ -26,6 +26,11 @@ pub(super) fn current(stored: &StoredRun) -> Result<ToolCatalog, EngineError> {
             .map_err(incompatible)
     } else {
         ToolCatalog::builtin(stored.user_questions, stored.creation.is_some()).map_err(incompatible)
+    }?;
+    match &stored.skill {
+        Some(skill) if skill.current => skill.template.limit_catalog(available),
+        Some(_) => Err(EngineError::RecoveryRequired),
+        None => Ok(available),
     }
 }
 pub(super) fn capture(

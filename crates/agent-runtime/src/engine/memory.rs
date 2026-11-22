@@ -157,7 +157,7 @@ impl Journal {
         authority: AgentAuthority<'_>,
         user_questions: bool,
     ) -> Result<RunView, EngineError> {
-        self.start_agent_protocol(c, messages, authority, user_questions, 2)
+        self.start_agent_protocol(c, messages, authority, user_questions, 2, None)
     }
     pub fn agent_memory_read_version(&self, owner: &str, run: &str) -> Result<u8, EngineError> {
         Ok(self.stored_run(owner, run)?.memory_read_version)

@@ -122,9 +122,12 @@ pub struct RunView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_question: Option<PendingUserQuestion>,
     pub final_text: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_references: Vec<crate::skills::SourceReference>,
     pub failure: Option<String>,
 }
 struct StoredRun {
+    skill: Option<crate::skills::BoundSkill>,
     config: RunConfig,
     messages: Vec<Message>,
     phase: String,
@@ -208,7 +211,25 @@ impl Journal {
         authority: AgentAuthority<'_>,
         user_questions: bool,
     ) -> Result<RunView, EngineError> {
-        self.start_agent_protocol(config, messages, authority, user_questions, 1)
+        self.start_agent_protocol(config, messages, authority, user_questions, 1, None)
+    }
+    pub fn start_agent_skill(
+        &mut self,
+        config: &RunConfig,
+        pin: &crate::skills::SkillPin,
+        input: String,
+        grant: &WorkspaceGrant,
+    ) -> Result<RunView, EngineError> {
+        let template = self.resolve_skill(&config.owner, pin)?;
+        let messages = template.messages(input)?;
+        self.start_agent_protocol(
+            config,
+            messages,
+            AgentAuthority::read(grant),
+            false,
+            1,
+            Some((pin, &template)),
+        )
     }
     fn start_agent_protocol(
         &mut self,
@@ -217,6 +238,7 @@ impl Journal {
         authority: AgentAuthority<'_>,
         user_questions: bool,
         memory_read_version: u8,
+        skill: Option<(&crate::skills::SkillPin, &crate::skills::SkillTemplate)>,
     ) -> Result<RunView, EngineError> {
         if !matches!(memory_read_version, 1 | 2)
             || (memory_read_version == 2 && authority.memories.is_empty())
@@ -305,7 +327,11 @@ impl Journal {
         } else {
             digest("run-config-v1", &(config, &messages))?
         };
-        let request = make_request_mode(
+        let config_digest = match skill {
+            Some((pin, _)) => digest("run-config-skill-v1", &(&config_digest, pin))?,
+            None => config_digest,
+        };
+        let mut request = make_request_mode(
             config,
             "validation",
             messages.clone(),
@@ -317,6 +343,12 @@ impl Journal {
                 version: memory_read_version,
             },
         );
+        if let Some((_, template)) = skill {
+            request.tools.retain(|t| template.tools.contains(&t.name));
+            if request.tools.len() != template.tools.len() {
+                return Err(EngineError::Invalid);
+            }
+        }
         request.validate().map_err(|_| EngineError::Invalid)?;
         let tx = self
             .connection
@@ -359,6 +391,13 @@ impl Journal {
             params![config.run_id, config.owner, config.policy],
         )?;
         tx.execute("INSERT INTO runtime_runs(run_id,config,config_digest,environment,messages,phase) VALUES(?,?,?,?,?,'ready')",params![config.run_id,config_json,config_digest,config.environment,encode(&messages)?])?;
+        if let Some((pin, _)) = skill {
+            let inserted=tx.execute("INSERT INTO runtime_skill_bindings(run_id,digest,activation_revision) SELECT ?,digest,revision FROM owner_skills
+             WHERE owner=? AND package_id=? AND digest=? AND enabled",params![config.run_id,config.owner,pin.id,pin.digest])?;
+            if inserted != 1 {
+                return Err(EngineError::Forbidden);
+            }
+        }
         tx.execute(
             "INSERT INTO runtime_memory_protocol VALUES(?,?)",
             params![config.run_id, memory_read_version],
@@ -443,6 +482,7 @@ impl Journal {
         let (config, messages, phase, invocations, steps, active, user_questions) =
             row.ok_or(EngineError::Forbidden)?;
         Ok(StoredRun {
+            skill: crate::skills::for_run(&self.connection, run)?,
             config: serde_json::from_str(&config).map_err(|_| EngineError::Invalid)?,
             messages: serde_json::from_str(&messages).map_err(|_| EngineError::Invalid)?,
             phase,
@@ -504,7 +544,9 @@ impl Journal {
     /// Legacy/metadata access cannot expose content from a memory-capable Run.
     pub fn agent_view(&self, owner: &str, run: &str) -> Result<RunView, EngineError> {
         let mut view = self.agent_view_internal(owner, run)?;
-        if !self.memory_bindings(run)?.is_empty() {
+        if !self.memory_bindings(run)?.is_empty()
+            || crate::skills::for_run(&self.connection, run)?.is_some()
+        {
             view.pending.clear();
             view.final_text = None;
             view.user_question = None;
@@ -549,6 +591,7 @@ impl Journal {
             pending: if active { pending } else { vec![] },
             user_question,
             final_text: if active { final_text } else { None },
+            source_references: Vec::new(),
             failure,
         })
     }
@@ -601,7 +644,20 @@ impl Journal {
                 self.intent_contract(&stored.config, op)?;
             }
             check_grant(&stored.config, grant)?;
-            return self.agent_view_internal(owner, run);
+            let mut result = self.agent_view_internal(owner, run)?;
+            if result.final_text.is_some()
+                && stored
+                    .skill
+                    .as_ref()
+                    .is_some_and(|s| s.template.scenario == "AU-01")
+            {
+                result.source_references = crate::skills::source_references(&self.connection, run)?;
+                if result.source_references.is_empty() {
+                    return Err(EngineError::RecoveryRequired);
+                }
+            }
+            check_grant(&stored.config, grant)?;
+            return Ok(result);
         }
         Ok(view)
     }
@@ -769,12 +825,25 @@ impl Journal {
         let grant = authority.read;
         let stored = self.stored_run(owner, run)?;
         self.check_registered_run_root(&stored.config, grant)?;
+        if stored.skill.as_ref().is_some_and(|s| !s.current)
+            && matches!(
+                stored.phase.as_str(),
+                "ready" | "model_pending" | "tools_pending" | "awaiting_user"
+            )
+        {
+            check_grant(&stored.config, grant)?;
+            self.stop_agent(run, "cancelled", "skill_disabled")?;
+            return self.agent_view(owner, run);
+        }
         if !matches!(
             stored.phase.as_str(),
             "ready" | "model_pending" | "tools_pending" | "awaiting_user"
         ) {
             let view = self.agent_view(owner, run)?;
-            if view.final_text.is_some() || !view.pending.is_empty() || view.user_question.is_some()
+            if stored.skill.is_some()
+                || view.final_text.is_some()
+                || !view.pending.is_empty()
+                || view.user_question.is_some()
             {
                 return self.agent_view_authorized(owner, run, grant).await;
             }
@@ -841,7 +910,7 @@ impl Journal {
             return self.agent_view(owner, run);
         }
         let catalog = contracts::current(&stored)?;
-        let request = make_request_mode(
+        let mut request = make_request_mode(
             &stored.config,
             &invocation,
             stored.messages.clone(),
@@ -853,6 +922,11 @@ impl Journal {
                 version: stored.memory_read_version,
             },
         );
+        if stored.skill.is_some() {
+            request.tools = catalog
+                .definitions()
+                .map_err(|_| EngineError::RecoveryRequired)?;
+        }
         if request.validate().is_err() {
             self.stop_agent(run, "limited", "context_budget")?;
             return self.agent_view(owner, run);
@@ -917,7 +991,11 @@ impl Journal {
             }
             _ => self.stop_agent(run, "recovery_required", "model_unknown")?,
         }
-        self.agent_view(owner, run)
+        if stored.skill.is_some() {
+            self.agent_view_authorized(owner, run, grant).await
+        } else {
+            self.agent_view(owner, run)
+        }
     }
     fn accept_candidate(
         &mut self,
@@ -1086,22 +1164,35 @@ impl Journal {
             )?;
         }
         let done = candidate.tool_calls.is_empty();
+        let missing_source = done
+            && stored
+                .skill
+                .as_ref()
+                .is_some_and(|s| s.template.scenario == "AU-01")
+            && crate::skills::source_references(&tx, &c.run_id)?.is_empty();
         tx.execute(
             "UPDATE runtime_invocations SET state='committed' WHERE invocation=?",
             [invocation],
         )?;
         tx.execute(
-            "UPDATE runtime_runs SET messages=?,phase=?,final_text=? WHERE run_id=?",
+            "UPDATE runtime_runs SET messages=?,phase=?,final_text=?,failure=? WHERE run_id=?",
             params![
                 encode(&messages)?,
-                if done {
+                if missing_source {
+                    "failed"
+                } else if done {
                     "completed"
                 } else if question.is_some() {
                     "awaiting_user"
                 } else {
                     "tools_pending"
                 },
-                if done { Some(&candidate.text) } else { None },
+                if done && !missing_source {
+                    Some(&candidate.text)
+                } else {
+                    None
+                },
+                missing_source.then_some("skill_source_required"),
                 c.run_id
             ],
         )?;

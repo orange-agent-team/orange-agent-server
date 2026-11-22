@@ -54,3 +54,5 @@ CLI 的 `step` 需要实际可用、模型版本匹配的 llama.cpp 服务。目
 `python3 scripts/check-agent-loop.py` 运行真实临时 SQLite/文件系统测试、协议历史负例、原生请求映射，并构建 CLI。覆盖批准缺失/过期/越权、原子响应拒绝、明确工具失败、多工具顺序、重启预算、模型 Future 中断、取消、文件改变/删除、结果提交后的恢复、撤销后正文不返回、schema 迁移及未知格式拒绝。
 
 全工作区 `python3 scripts/check.py` 同时运行格式、Rust 测试和 Clippy。测试模型为源码中的 `ScriptedModel`/`NeverModel`，仅证明控制语义；真实模型、真实桌面 UI、云 RunStore、外部工具副作用、流式用户体验、记忆/Skills/MCP 和更多模型协议仍需后续实现或独立认证。
+
+已登记的本地模板可以从同一 CLI 的 start 入口按摘要选择，详见[本地模板与运行绑定](bundled-local-skills.md)。

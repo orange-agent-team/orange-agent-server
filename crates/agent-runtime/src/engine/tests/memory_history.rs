@@ -525,7 +525,7 @@ async fn source_set_migration_preserves_actual_v25_read_and_immutable_bindings()
     // Reconstruct precisely the previous table layout, retaining real effects
     // and snapshots. Actual old-binary compatibility is additionally checked by
     // scripts/check-file-editing.py; this fixture specifically carries memory.
-    j.connection.execute_batch("DROP TABLE memory_owner_removals; DROP TABLE runtime_memory_continuity_policy; DROP INDEX memory_approved_version; DROP TABLE runtime_memory_protocol; DROP TRIGGER memory_read_source_scope; DROP TRIGGER memory_read_source_bound; DROP TRIGGER memory_read_binding; DROP TRIGGER memory_read_no_delete; ALTER TABLE runtime_memory_sources RENAME TO source_fixture;").expect("prior layout fixture");
+    j.connection.execute_batch("DROP TABLE runtime_skill_bindings; DROP TABLE owner_skills; DROP TABLE skill_versions; DROP TABLE memory_owner_removals; DROP TABLE runtime_memory_continuity_policy; DROP INDEX memory_approved_version; DROP TABLE runtime_memory_protocol; DROP TRIGGER memory_read_source_scope; DROP TRIGGER memory_read_source_bound; DROP TRIGGER memory_read_binding; DROP TRIGGER memory_read_no_delete; ALTER TABLE runtime_memory_sources RENAME TO source_fixture;").expect("prior layout fixture");
     let legacy = include_str!("../../schema_v23.sql");
     for line in legacy.lines().filter(|line| {
         line.starts_with("CREATE TABLE runtime_memory_sources")
@@ -540,7 +540,7 @@ async fn source_set_migration_preserves_actual_v25_read_and_immutable_bindings()
         j.connection
             .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .expect("schema"),
-        29
+        30
     );
     assert_eq!(
         j.connection

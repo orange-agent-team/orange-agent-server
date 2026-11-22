@@ -31,6 +31,8 @@ struct Config {
     context_tokens: u32,
     prompt: String,
     #[serde(default)]
+    skill: Option<orange_agent_runtime::skills::SkillPin>,
+    #[serde(default)]
     user_questions: bool,
     #[serde(default)]
     creation_consent_id: Option<String>,
@@ -155,6 +157,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     let command=args.get(2).map(String::as_str).ok_or("usage: local-agent PRIVATE_CONFIG COMMAND; editing requires separate authorize-edit, preview-edit and approve-edit")?;
     let expected = match command {
+        "skills" | "skill-binding" => 3,
+        "enable-skill" | "disable-skill" => 4,
         "pending-edits" if args.len() == 4 => 4,
         "pending-edits" => 3,
         "start" | "show" | "status" | "step" | "answer" | "cancel" | "grant-info" => 3,
@@ -169,6 +173,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
     let config: Config = serde_json::from_slice(&private_read(Path::new(&args[1]))?)?;
+    if matches!(
+        command,
+        "skills" | "skill-binding" | "enable-skill" | "disable-skill"
+    ) {
+        let mut journal = Journal::open(&config.journal)?;
+        match command {
+            "skills" => println!(
+                "{}",
+                serde_json::to_string_pretty(&journal.skills(&config.run.owner)?)?
+            ),
+            "skill-binding" => println!(
+                "{}",
+                serde_json::to_string_pretty(
+                    &journal.run_skill(&config.run.owner, &config.run.run_id)?
+                )?
+            ),
+            _ => {
+                let pin = config
+                    .skill
+                    .as_ref()
+                    .ok_or("Select a catalog pin in the private configuration")?;
+                let revision = journal.set_skill_enabled(
+                    &config.run.owner,
+                    pin,
+                    args[3].parse()?,
+                    command == "enable-skill",
+                )?;
+                println!(
+                    "{}",
+                    serde_json::json!({"pin":pin,"revision":revision,"enabled":command=="enable-skill"})
+                );
+            }
+        }
+        return Ok(());
+    }
     if command == "status" {
         let journal = Journal::open(&config.journal)?;
         let view = journal.agent_view(&config.run.owner, &config.run.run_id)?;
@@ -419,6 +458,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     let view = match command {
+        "start" if config.skill.is_some() => journal.start_agent_skill(
+            &config.run,
+            config.skill.as_ref().expect("selected skill"),
+            config.prompt,
+            &grant,
+        )?,
         "start" => {
             let messages = vec![Message::plain(Role::User, config.prompt)];
             #[cfg(target_vendor = "apple")]
@@ -605,14 +650,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         _ => return Err("unknown command".into()),
     };
-    let view =
-        if view.final_text.is_some() || !view.pending.is_empty() || view.user_question.is_some() {
-            journal
-                .agent_view_authorized(&config.run.owner, &config.run.run_id, &grant)
-                .await?
-        } else {
-            view
-        };
+    let view = if journal
+        .run_skill(&config.run.owner, &config.run.run_id)?
+        .is_some()
+        || view.final_text.is_some()
+        || !view.pending.is_empty()
+        || view.user_question.is_some()
+    {
+        journal
+            .agent_view_authorized(&config.run.owner, &config.run.run_id, &grant)
+            .await?
+    } else {
+        view
+    };
     println!("{}", serde_json::to_string_pretty(&view)?);
     Ok(())
 }
