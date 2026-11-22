@@ -14,3 +14,5 @@ E03源码移入本仓库，提供共享库及独立云Host入口；桌面固定�
 - [Admin JSON Schema](contracts/json-schema/admin.schema.json)：类型与命令校验模型。
 
 平台管理后台与用户组织管理使用不同主体/权限。云工作区限额内暂不单独收费，模型消费仍走原BudgetRoot/Quote/账本。新增Web/云Host/Admin工作量需另细化，不能沿用旧任务数量宣称全部已覆盖。
+
+实施选型、用户确认的范围、待实测事实和外部上线条件见[产品决策登记](docs/product-decisions/README.md)。

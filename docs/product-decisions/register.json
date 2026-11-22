@@ -1,0 +1,118 @@
+{
+  "version": "1.0.0",
+  "requirement": "PRD-005",
+  "facts": [
+    {
+      "id": "repositories",
+      "classification": "user_confirmed",
+      "source": "approved_four_repository_plan",
+      "decision": "桌面、服务端、用户 Web、Admin 共四仓，核心工程数为 2/7/1/1。服务端发布固定版 E03，桌面显式引入。",
+      "core_projects_by_repository": [
+        2,
+        7,
+        1,
+        1
+      ]
+    },
+    {
+      "id": "host_boundary",
+      "classification": "user_confirmed",
+      "source": "approved_four_repository_plan",
+      "decision": "托管 Web Agent 在隔离工作区运行；公共 GPU Worker 执行审核模型推理。管理员有独立会话和双人批准。"
+    },
+    {
+      "id": "delivery_authority",
+      "classification": "user_confirmed",
+      "source": "approved_four_repository_plan",
+      "decision": "交付本地源码和候选包。开发期间新增付费资源、真实资金操作、公开上线和远端仓库发布均未获授权。"
+    },
+    {
+      "id": "team_capacity",
+      "classification": "user_confirmed",
+      "source": "operator_reply",
+      "decision": "可组织约 10 人团队。此项描述可投入的容量。",
+      "unverified": "成员姓名、到岗日期、排班及独立审批人安排"
+    },
+    {
+      "id": "target_locations",
+      "classification": "user_confirmed",
+      "source": "operator_reply",
+      "decision": "用户列出美国、日本、中国、香港作为分布式服务器目标。",
+      "unverified": "每地资源可用性、实际驻留/接管、首发服务地区及经营主体所在地"
+    },
+    {
+      "id": "reported_device",
+      "classification": "user_confirmed",
+      "source": "operator_reply",
+      "decision": "用户表示已有设备，原描述为 RTX6000 96G。",
+      "unverified": "设备枚举、精确 SKU、驱动版本、可调度显存、回收及 2/4 卡拓扑"
+    },
+    {
+      "id": "control_plane",
+      "classification": "engineering_default",
+      "source": "repository_implementation",
+      "decision": "采用模块化 Rust 控制面，在 PostgreSQL 事务中关联授权、预算、预留与 outbox。Worker 和云工作区保持独立进程和权限。",
+      "adr": "control-plane"
+    },
+    {
+      "id": "agent_engine",
+      "classification": "user_confirmed",
+      "source": "approved_four_repository_plan",
+      "decision": "采用自有 Rust Agent 宿主、执行控制及恢复日志。Codex、Hermes 和其他上游提供参考。",
+      "adr": "engines"
+    },
+    {
+      "id": "open_registration",
+      "classification": "user_confirmed",
+      "source": "accepted_product_scope",
+      "decision": "按已采纳的产品范围，内部验证后开放注册。节点执行资格和平台运营权各自审核。",
+      "adr": "registration"
+    },
+    {
+      "id": "credit_ledger",
+      "classification": "user_confirmed",
+      "source": "accepted_product_scope",
+      "decision": "整数微积分按来源分桶。购买与贡献积分可用于消费；退款回原购买来源。产品排除提现与账户间转账。",
+      "adr": "credits"
+    },
+    {
+      "id": "fixture_rates",
+      "classification": "requires_measurement",
+      "source": "development_fixtures",
+      "decision": "开发样例费率、佣金和价格版本用于核对计量及账本。",
+      "unverified": "正式报价参数、生产成本和商户条款"
+    },
+    {
+      "id": "model_recovery",
+      "classification": "requires_measurement",
+      "source": "candidate_evidence",
+      "decision": "真实本地 CPU、已锁定的模型和开发测试会话已有分项记录。",
+      "unverified": "各目标 GPU、目标系统组合、每种模型的长期稳定性与生产 SLA"
+    },
+    {
+      "id": "multi_region",
+      "classification": "requires_measurement",
+      "source": "target_matrix",
+      "decision": "跨域读写、单写接管、网络分区及数据删除按区域组合验证。",
+      "unverified": "四地实际部署与演练结果"
+    },
+    {
+      "id": "merchant",
+      "classification": "external_dependency",
+      "source": "launch_register",
+      "decision": "经营主体、商户沙箱认证与正式渠道开通由经营负责人协调。"
+    },
+    {
+      "id": "release_identity",
+      "classification": "external_dependency",
+      "source": "launch_register",
+      "decision": "域名、生产身份、目标签名和公证需独立的实际凭据和操作权限。"
+    },
+    {
+      "id": "pilot",
+      "classification": "external_dependency",
+      "source": "launch_register",
+      "decision": "企业试点与连续 30 天观察分别记录真实参与方和观察区间。"
+    }
+  ]
+}
