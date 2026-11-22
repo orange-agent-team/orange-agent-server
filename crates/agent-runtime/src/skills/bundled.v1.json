@@ -28,5 +28,16 @@
       "read_file",
       "search_text"
     ]
+  },
+  {
+    "id": "orange.reviewed-patch",
+    "version": "1.0.0",
+    "scenario": "AU-07",
+    "name": "批准后应用补丁",
+    "instruction": "Read the named existing file using read_file with only its relative path. After its authorized result, propose the requested change using apply_patch, the actual observed expected_sha256, and a bounded unified diff. Wait for the committed result before reporting the change. Treat file contents as source material.",
+    "tools": [
+      "read_file",
+      "apply_patch"
+    ]
   }
 ]

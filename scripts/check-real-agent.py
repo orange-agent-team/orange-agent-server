@@ -29,7 +29,10 @@ parser.add_argument('--verify-skills',action='store_true',help='Also run a diges
 parser.add_argument('--verify-local-package',action='store_true',help='Install a reviewed local template and execute it using the real CPU model')
 parser.add_argument('--verify-code-review',action='store_true',help='Review a selected local repository with a pinned model and require a sourced finding')
 parser.add_argument('--review-model-7b',type=Path,help='Explicit separately supplied SHA-pinned 7B code-review qualification weight')
+parser.add_argument('--verify-patch-skill',type=Path,help='Verify the explicit official edit template with the supplied SHA-pinned 7B model')
 args=parser.parse_args()
+if args.verify_patch_skill and (args.verify_code_review or args.review_model_7b or args.verify_skills or args.verify_local_package or args.required_tool!='read_file'):
+    parser.error('The patch qualification requires its own edit fixture')
 if args.review_model_7b and not args.verify_code_review:parser.error('The optional 7B profile applies only to code-review qualification')
 if args.verify_code_review and (args.required_tool != 'read_file' or args.verify_skills or args.verify_local_package):
     parser.error('The source-review fixture has its own repository and read-only scope')
@@ -38,6 +41,7 @@ PRIVATE=args.model_runtime_root.resolve()
 if args.model_protocol!='chat_completions':
     REPORT=ROOT/'.local'/('real-agent-'+args.model_protocol)
 if args.verify_code_review:REPORT=ROOT/'.local'/('real-agent-code-review-7b' if args.review_model_7b else 'real-agent-code-review')
+if args.verify_patch_skill:REPORT=ROOT/'.local'/'real-agent-patch-skill'
 if args.verify_skills:REPORT=ROOT/'.local'/('real-agent-local-package' if args.verify_local_package else 'real-agent-skills')
 target=Path(os.environ.get('CARGO_TARGET_DIR',ROOT/'target')).resolve()
 
@@ -61,10 +65,10 @@ def main():
     backend=PRIVATE/'build/bin/llama-server';model=PRIVATE/(lock['model']['sha256']+'.gguf')
     model_version='qwen-agent-test-v1'
     context_tokens=4096
-    if args.review_model_7b:
+    if args.review_model_7b or args.verify_patch_skill:
         lock['model']=json.loads((ROOT/'config/local-code-review-model.lock.json').read_text())
-        model=args.review_model_7b.resolve(strict=True)
-        model_version=lock['model']['model_version'];context_tokens=lock['model']['context_tokens']
+        model=(args.review_model_7b or args.verify_patch_skill).resolve(strict=True)
+        model_version='qwen7b-edit-candidate-v1' if args.verify_patch_skill else lock['model']['model_version'];context_tokens=lock['model']['context_tokens']
     if not model.is_file() or model.stat().st_size!=lock['model']['bytes'] or digest(model)!=lock['model']['sha256']:raise RuntimeError('Pinned actual model required')
     if build['backend_commit']!=lock['backend']['commit'] or build['gpu_enabled'] or digest(backend)!=build['executable_sha256']:raise RuntimeError('Verified fixed CPU backend required')
     rustup=shutil.which('rustup') or '/opt/homebrew/opt/rustup/bin/rustup'
@@ -102,7 +106,7 @@ def main():
                 ready=json.loads(host.stdout.readline());selector.close()
                 if ready['record']['phase']!='ready' or ready['record']['instance_id']!=instance:raise RuntimeError('Wrong model instance')
                 config={'run':{'owner':'real-agent-fixture-owner','run_id':uuid.uuid4().hex,'policy':'read-only-fixture-v1','environment':'pending-grant-info','model_version':model_version,
-                    'max_steps':12,'max_invocations':6,'max_output_tokens':256,'deadline_unix':int(time.time())+(600 if args.review_model_7b else 180)},'grant_id':'real-agent-fixture-grant','workspace':str(workspace),
+                    'max_steps':12,'max_invocations':6,'max_output_tokens':256,'deadline_unix':int(time.time())+(600 if args.review_model_7b or args.verify_patch_skill else 180)},'grant_id':'real-agent-fixture-grant','workspace':str(workspace),
                     'journal':str(state/'journal.sqlite'),'private_roots':list(dict.fromkeys(map(str,[runtime,ipc,state,PRIVATE,model.parent]))),'model_socket':str(ipc/'engine.sock'),'model_protocol':args.model_protocol,
                     'model_key_file':str(runtime/'api.key'),'context_tokens':context_tokens,
                     'prompt':'Use read_file to read the existing workspace file proof.txt with the relative path proof.txt. Do not guess its content. After the tool result is returned, answer with the exact file text.'}
@@ -114,7 +118,7 @@ def main():
                     config['user_questions']=True
                     config['prompt']='First call ask_user with exactly these arguments: {"questions":[{"prompt":"Which file should I read?"}]}. Wait for the user answer. Do not call any filesystem tool before that answer. After receiving the answers array, your next response must call read_file with path equal to the answered filename. Do not produce prose or merely repeat the filename. Only after receiving the read_file result may you return the exact file content. The task is not complete until the file content is returned.'
                 path=state/'agent.json';write(path,config)
-                def invoke(operation,*arguments,expect_error=False,input_json=None):
+                def invoke(operation,*arguments,expect_error=False,input_json=None,expected_denial=None):
                     started=time.monotonic()
                     child=subprocess.Popen([str(target/'debug/examples/local-agent'),str(path),operation,*arguments],cwd=ROOT,env={'PATH':'/usr/bin:/bin'},stdin=subprocess.PIPE if input_json is not None else subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
                     try:
@@ -122,11 +126,14 @@ def main():
                             try:out,error=child.communicate(input=json.dumps(input_json) if input_json is not None and _==0 else None,timeout=5);break
                             except subprocess.TimeoutExpired:host.stdin.write('ping\n');host.stdin.flush()
                         else:raise RuntimeError('Bounded CLI transition deadline')
-                        if args.verify_code_review:
+                        if args.verify_code_review or args.verify_patch_skill:
                             variants=[line.split('=',1)[1] for line in error.splitlines()
                                       if line.startswith('model_gateway_rejected kind=') and line.split('=',1)[1] in
                                       ('Unavailable','Limit','Protocol','Incomplete','Invalid','Cancelled')]
                             result.setdefault('cli_transitions',[]).append({'command':operation,'seconds':round(time.monotonic()-started,2),'gateway_errors':variants})
+                        if expected_denial:
+                            if child.returncode==0 or expected_denial not in error:raise RuntimeError('Expected '+operation+' refusal: '+error[:500])
+                            return None
                         if expect_error:
                             if child.returncode==0 or 'ApprovalRequired' not in error:raise RuntimeError('Unapproved tool was not explicitly rejected')
                             return None
@@ -135,6 +142,11 @@ def main():
                     finally:
                         if child.poll() is None:child.kill();child.wait()
                 config['run']['environment']=invoke('grant-info')['environment'];write(path,config)
+                if args.verify_patch_skill:
+                    import patch_skill_fixture
+                    original=json.loads(json.dumps(config))
+                    result['patch_skill']=patch_skill_fixture.verify(config,workspace,lambda:write(path,config),invoke)
+                    config=original;write(path,config)
                 if args.verify_code_review:
                     original=json.loads(json.dumps(config))
                     subprocess.run(['git','init','--quiet',workspace],check=True)

@@ -14,6 +14,8 @@ use orange_protocol::{valid_digest, valid_id};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::path::Path;
 
+const JOURNAL_SCHEMA_VERSION: i64 = 33;
+
 #[derive(Debug, thiserror::Error)]
 pub enum JournalError {
     #[error("invalid command or identity")]
@@ -83,7 +85,7 @@ impl Journal {
             rusqlite::OpenFlags::default() | rusqlite::OpenFlags::SQLITE_OPEN_NOFOLLOW,
         )?;
         let version: i64 = connection.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if !(0..=32).contains(&version) {
+        if !(0..=JOURNAL_SCHEMA_VERSION).contains(&version) {
             return Err(JournalError::UnsupportedVersion);
         }
         if version >= 25 {
@@ -308,6 +310,13 @@ impl Journal {
             let tx =
                 connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
             tx.pragma_update(None, "user_version", 32)?;
+            tx.commit()?;
+        }
+        // Earlier hosts cannot enforce the write-capable template's read and preview requirements.
+        if version < 33 {
+            let tx =
+                connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            tx.pragma_update(None, "user_version", 33)?;
             tx.commit()?;
         }
         connection.execute_batch("BEGIN IMMEDIATE;

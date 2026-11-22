@@ -13,5 +13,10 @@
     "id": "orange.code-review",
     "version": "1.0.0",
     "digest": "ccbd9103ded15d80c2160ce59b2dfa16a36274e1fa1814212390ebd86d19ff53"
+  },
+  {
+    "id": "orange.reviewed-patch",
+    "version": "1.0.0",
+    "digest": "2f303cc6494cff26bfd23c001fc3f42682fcb5dcdabcfa3e0081cdee304760e9"
   }
 ]

@@ -44,7 +44,8 @@
           "read_file",
           "list_directory",
           "search_files",
-          "search_text"
+          "search_text",
+          "apply_patch"
         ]
       }
     }
@@ -106,5 +107,25 @@
         "end_byte"
       ]
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "tools": {
+            "contains": {
+              "const": "apply_patch"
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "id": {
+            "const": "orange.reviewed-patch"
+          }
+        }
+      }
+    }
+  ]
 }

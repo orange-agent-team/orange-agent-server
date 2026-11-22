@@ -13,6 +13,7 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 PRIOR = {
     29: "94cfd1fc3e27dd2fb43438757af6d6b863b6e98d",
+    32: "5349843fa7225df110df733e49e66daf73f509b1",
     31: "938bc63654127951ae52810ba91f44af4eafecf2",
     30: "19533647c8f3d50885f7a8b19a0707f93edc6682",
 }
@@ -57,7 +58,10 @@ def verify(base, prior, old, new):
 
     config["run"]["environment"] = run(old, "grant-info")["environment"]
     old_pin = None
-    if prior == 31:
+    if prior == 32:
+        config["run"]["model_version"]="qwen7b-reviewed-cpu-v1"
+        old_pin=next(x["pin"] for x in run(old,"skills") if x["pin"]["id"]=="orange.code-review")
+    elif prior == 31:
         manifest = {"id":"local.migration-note","version":"1.0.0","name":"Migrated note","scenario":"AU-02",
                     "instruction":"Keep amounts exactly as given.","tools":[]}
         old_pin = run(old,"review-skill", manifest=manifest)["pin"]
@@ -74,7 +78,7 @@ def verify(base, prior, old, new):
     registry = run(new, "skills")
     template = next(x for x in registry if x["pin"]["id"] == "orange.text-summary")
     assert {x["pin"]["id"] for x in registry if x["enabled"]} == ({old_pin["id"]} if old_pin else set())
-    assert snapshot() == (32, before) and run(new, "skill-binding") == old_pin
+    assert snapshot() == (33, before) and run(new, "skill-binding") == old_pin
     config["skill"] = template["pin"]
     assert run(new, "enable-skill", "0")["revision"] == 1
     if prior == 29:
@@ -88,8 +92,8 @@ def verify(base, prior, old, new):
     fingerprint = hashlib.sha256(database.read_bytes()).hexdigest()
     refused = subprocess.run([old, file, "status"], capture_output=True, text=True)
     assert refused.returncode != 0 and "Unsupported" in refused.stderr, (refused.returncode, refused.stderr)
-    assert hashlib.sha256(database.read_bytes()).hexdigest() == fingerprint and snapshot() == (32, before)
-    print(f"PASS genuine schema {prior} -> 32, unchanged messages, original binding and activation, old executable refused before mutation")
+    assert hashlib.sha256(database.read_bytes()).hexdigest() == fingerprint and snapshot() == (33, before)
+    print(f"PASS genuine schema {prior} -> 33, unchanged messages, original binding and activation, old executable refused before mutation")
 
 
 def main():
