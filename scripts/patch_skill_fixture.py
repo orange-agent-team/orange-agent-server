@@ -39,10 +39,12 @@ def verify(config, workspace, persist, invoke):
             request = item['request']
             tool = request['tool']
             operation = item['operation_id']
-            if source.read_bytes() != original:
-                raise RuntimeError('Source changed before the owned patch approval')
+            after_patch = 'apply_patch' in approved
+            expected_content = wanted if after_patch else original
+            if source.read_bytes() != expected_content:
+                raise RuntimeError('Source differs from the expected stage of the approved edit')
             invoke('step',expect_error=True)
-            if not approved and tool == 'read_file' and request['arguments']['path'] == source.name:
+            if tool == 'read_file' and request['arguments']['path'] == source.name and approved in ([], ['read_file','apply_patch']):
                 invoke('approve',operation)
             elif approved == ['read_file'] and tool == 'apply_patch' and request['arguments'] == {
                 'path':source.name,'expected_sha256':original_sha,'patch':patch
@@ -58,7 +60,7 @@ def verify(config, workspace, persist, invoke):
                 raise RuntimeError('Refused an unexpected real tool or proposed patch')
             approved.append(tool)
         view = invoke('step')
-    if approved != ['read_file','apply_patch'] or view['phase'] != 'completed' or 'status=after' not in (view.get('final_text') or ''):
+    if approved not in (['read_file','apply_patch'], ['read_file','apply_patch','read_file']) or view['phase'] != 'completed' or 'status=after' not in (view.get('final_text') or ''):
         raise RuntimeError('Expected a completed patch report after the approved edit')
     if source.read_bytes() != wanted or invoke('show') != view or invoke('step') != view:
         raise RuntimeError('Incorrect file content or changed response on reopen')
