@@ -17,6 +17,8 @@ mod import;
 pub enum CacheError {
     #[error("artifact import cancelled before publication")]
     Cancelled,
+    #[error("this pinned artifact requires an explicitly selected local file")]
+    LocalFileRequired,
     #[error("invalid artifact descriptor")]
     Invalid,
     #[error("cache path must be a private regular-file namespace")]
@@ -72,7 +74,7 @@ fn network(error: reqwest::Error) -> CacheError {
 }
 #[derive(Clone)]
 pub struct ArtifactSpec {
-    url: Url,
+    url: Option<Url>,
     digest: String,
     bytes: u64,
     allowed_hosts: BTreeSet<String>,
@@ -89,21 +91,29 @@ impl ArtifactSpec {
     ) -> Result<Self, CacheError> {
         let url = Url::parse(url).map_err(|_| CacheError::Invalid)?;
         let allowed_hosts = hosts.iter().map(|h| h.to_string()).collect::<BTreeSet<_>>();
+        if allowed_hosts.is_empty() || !allowed_url(&url, &allowed_hosts) {
+            return Err(CacheError::Invalid);
+        }
+        let mut spec = Self::local_only(digest, bytes, magic)?;
+        spec.url = Some(url);
+        spec.allowed_hosts = allowed_hosts;
+        Ok(spec)
+    }
+    /// An approved artifact without a remote object, such as two officially merged GGUF shards.
+    pub fn local_only(digest: &str, bytes: u64, magic: &[u8]) -> Result<Self, CacheError> {
         if !orange_protocol::valid_digest(digest)
             || bytes == 0
             || bytes > (1_u64 << 40)
             || magic.len() > 64
             || magic.len() as u64 > bytes
-            || allowed_hosts.is_empty()
-            || !allowed_url(&url, &allowed_hosts)
         {
             return Err(CacheError::Invalid);
         }
         Ok(Self {
-            url,
+            url: None,
             digest: digest.into(),
             bytes,
-            allowed_hosts,
+            allowed_hosts: BTreeSet::new(),
             magic: magic.to_vec(),
         })
     }
@@ -172,6 +182,14 @@ impl ModelCache {
         })
     }
     pub async fn ensure(&self, spec: &ArtifactSpec) -> Result<VerifiedArtifact, CacheError> {
+        if spec.url.is_none() {
+            let ready = self.root.join(format!("{}.gguf", spec.digest));
+            if !exists(&ready)? {
+                return Err(CacheError::LocalFileRequired);
+            }
+            verify(&ready, spec).await?;
+            return Ok(artifact(&ready, spec, true));
+        }
         let hosts = spec.allowed_hosts.clone();
         let client = Client::builder()
             .https_only(true)
@@ -505,7 +523,12 @@ async fn transfer_once<T: Transport>(
         return Err(CacheError::TooLarge);
     }
     let file = Arc::new(Mutex::new(original));
-    let mut response = transport.open(&spec.url, length).await?;
+    let mut response = transport
+        .open(
+            spec.url.as_ref().ok_or(CacheError::LocalFileRequired)?,
+            length,
+        )
+        .await?;
     match response.status {
         200 => {
             if response.range.is_some() {
@@ -928,5 +951,45 @@ mod tests {
         .await
         .expect("lease released only after write");
         assert_eq!(fs::read(target).expect("persisted bytes"), b"owned write");
+    }
+}
+
+#[cfg(test)]
+mod import_only_tests {
+    use super::*;
+    #[tokio::test]
+    async fn local_artifact_needs_selected_bytes_and_cannot_open_a_download() {
+        let dir = tempfile::tempdir().expect("owned fixture");
+        let data = b"GGUF owned local fixture";
+        let expected = hex::encode(Sha256::digest(data));
+        let spec =
+            ArtifactSpec::local_only(&expected, data.len() as u64, b"GGUF").expect("local pin");
+        let root = dir.path().join("cache");
+        let cache = ModelCache::new(&root, 1024).expect("private model cache");
+        assert!(matches!(
+            cache.ensure(&spec).await,
+            Err(CacheError::LocalFileRequired)
+        ));
+        assert!(!root.join(format!("{expected}.part")).exists());
+        let selected = dir.path().join("chosen.gguf");
+        fs::write(&selected, data).expect("source");
+        cache
+            .import_file(&spec, &selected)
+            .await
+            .expect("verified import");
+        assert!(
+            cache
+                .ensure(&spec)
+                .await
+                .expect("verify existing model")
+                .is_cached()
+        );
+        let mut corrupt = data.to_vec();
+        corrupt[8] ^= 1;
+        fs::write(root.join(format!("{expected}.gguf")), corrupt).expect("test corruption");
+        assert!(matches!(
+            cache.ensure(&spec).await,
+            Err(CacheError::Integrity)
+        ));
     }
 }

@@ -6,6 +6,7 @@ pub mod cleanup;
 pub mod events;
 #[cfg(feature = "grpc")]
 pub mod execution;
+pub mod local_model;
 pub mod model;
 pub mod node_control;
 pub mod pricing;
