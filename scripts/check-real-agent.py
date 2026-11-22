@@ -90,9 +90,11 @@ def main():
         sentinel='ORANGE_EVIDENCE_'+uuid.uuid4().hex
         (workspace/'proof.txt').write_text(sentinel+'\n')
         nonce=uuid.uuid4().hex+uuid.uuid4().hex;instance=uuid.uuid4().hex
-        write(runtime/'profile.json',{'protocol':1,'runtime_directory':str(runtime),'socket_directory':str(ipc),'executable':str(backend),'executable_sha256':build['executable_sha256'],
+        host_profile={'protocol':1,'runtime_directory':str(runtime),'socket_directory':str(ipc),'executable':str(backend),'executable_sha256':build['executable_sha256'],
             'model':str(model),'model_sha256':lock['model']['sha256'],'model_bytes':lock['model']['bytes'],'model_version':model_version,'context_tokens':context_tokens,
-            'startup_timeout_seconds':120,'control_nonce':nonce,'instance_id':instance})
+            'startup_timeout_seconds':120,'control_nonce':nonce,'instance_id':instance}
+        if args.verify_patch_skill:host_profile['inference_threads']=4
+        write(runtime/'profile.json',host_profile)
         with (runtime/'host.log').open('w') as log:
             host=subprocess.Popen([str(target/'debug/orange-model-host'),str(runtime/'profile.json')],cwd=ROOT,env={'PATH':'/usr/bin:/bin'},stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=log,text=True)
             try:
@@ -105,6 +107,11 @@ def main():
                 else:raise RuntimeError('Actual model readiness deadline')
                 ready=json.loads(host.stdout.readline());selector.close()
                 if ready['record']['phase']!='ready' or ready['record']['instance_id']!=instance:raise RuntimeError('Wrong model instance')
+                if args.verify_patch_skill:
+                    if ready.get('inference_threads')!=4 or len(ready.get('execution_profile_digest',''))!=64:
+                        raise RuntimeError('Unexpected local CPU allocation')
+                    result['inference_threads']=ready['inference_threads']
+                    result['execution_profile_digest']=ready['execution_profile_digest']
                 config={'run':{'owner':'real-agent-fixture-owner','run_id':uuid.uuid4().hex,'policy':'read-only-fixture-v1','environment':'pending-grant-info','model_version':model_version,
                     'max_steps':12,'max_invocations':6,'max_output_tokens':256,'deadline_unix':int(time.time())+(600 if args.review_model_7b or args.verify_patch_skill else 180)},'grant_id':'real-agent-fixture-grant','workspace':str(workspace),
                     'journal':str(state/'journal.sqlite'),'private_roots':list(dict.fromkeys(map(str,[runtime,ipc,state,PRIVATE,model.parent]))),'model_socket':str(ipc/'engine.sock'),'model_protocol':args.model_protocol,

@@ -53,7 +53,13 @@ pub struct CpuProfile {
 }
 impl CpuProfile {
     pub fn execution_digest(&self) -> Result<String, crate::ModelError> {
-        orange_protocol::request_digest("orange-owned-cpu-v1",&serde_json::json!({"backend_sha256":self.executable_sha256,"model_sha256":self.model_sha256,"model_bytes":self.model_bytes.to_string(),"model_version":self.model_version,"context_tokens":self.context_tokens,"startup_timeout_ms":self.startup_timeout.as_millis().to_string(),"gpu_layers":0,"parallel":1,"threads":2})).map_err(|_|crate::ModelError::Invalid)
+        self.execution_digest_with_threads(2)
+    }
+    pub fn execution_digest_with_threads(&self, threads: u16) -> Result<String, crate::ModelError> {
+        if !(1..=16).contains(&threads) {
+            return Err(crate::ModelError::Invalid);
+        }
+        orange_protocol::request_digest("orange-owned-cpu-v1",&serde_json::json!({"backend_sha256":self.executable_sha256,"model_sha256":self.model_sha256,"model_bytes":self.model_bytes.to_string(),"model_version":self.model_version,"context_tokens":self.context_tokens,"startup_timeout_ms":self.startup_timeout.as_millis().to_string(),"gpu_layers":0,"parallel":1,"threads":threads})).map_err(|_|crate::ModelError::Invalid)
     }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -94,9 +100,22 @@ impl ManagedCpuModel {
     pub async fn launch_from_host(
         root: &Path,
         profile: CpuProfile,
-        mut cancellation: tokio::sync::watch::Receiver<bool>,
+        cancellation: tokio::sync::watch::Receiver<bool>,
         instance_id: Option<String>,
     ) -> Result<Self, ProcessError> {
+        Self::launch_from_host_with_threads(root, profile, cancellation, instance_id, 2).await
+    }
+    /// Explicit local allocation. The public Worker and metering callers keep their pinned two-thread profile.
+    pub async fn launch_from_host_with_threads(
+        root: &Path,
+        profile: CpuProfile,
+        mut cancellation: tokio::sync::watch::Receiver<bool>,
+        instance_id: Option<String>,
+        threads: u16,
+    ) -> Result<Self, ProcessError> {
+        if !(1..=16).contains(&threads) {
+            return Err(ProcessError::Invalid);
+        }
         if *cancellation.borrow() || cancellation.has_changed().is_err() {
             return Err(ProcessError::Cancelled);
         }
@@ -199,7 +218,7 @@ impl ManagedCpuModel {
                 "--ctx-size",
                 &profile.context_tokens.to_string(),
                 "--threads",
-                "2",
+                &threads.to_string(),
                 "--parallel",
                 "1",
                 "--n-gpu-layers",

@@ -704,3 +704,26 @@ async fn unexplained_socket_or_linked_record_never_gets_overwritten() {
             .is_symlink()
     );
 }
+
+#[test]
+fn local_cpu_allocation_is_in_the_execution_identity() {
+    let fixture = Fixture::new(b"GGUFfixture");
+    let p = fixture.profile();
+    let default = p.execution_digest().expect("default identity");
+    let original=orange_protocol::request_digest("orange-owned-cpu-v1",&serde_json::json!({
+        "backend_sha256":p.executable_sha256,"model_sha256":p.model_sha256,"model_bytes":p.model_bytes.to_string(),
+        "model_version":p.model_version,"context_tokens":p.context_tokens,"startup_timeout_ms":p.startup_timeout.as_millis().to_string(),
+        "gpu_layers":0,"parallel":1,"threads":2
+    })).expect("legacy digest");
+    assert_eq!(default, original);
+    assert_eq!(
+        p.execution_digest_with_threads(2).expect("two threads"),
+        original
+    );
+    assert_ne!(
+        p.execution_digest_with_threads(4).expect("four threads"),
+        original
+    );
+    assert!(p.execution_digest_with_threads(0).is_err());
+    assert!(p.execution_digest_with_threads(17).is_err());
+}

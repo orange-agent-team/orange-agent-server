@@ -25,6 +25,8 @@ mod unix {
         model_bytes: u64,
         model_version: String,
         context_tokens: u32,
+        #[serde(default)]
+        inference_threads: Option<u16>,
         startup_timeout_seconds: u64,
         #[serde(default)]
         control_nonce: Option<String>,
@@ -78,12 +80,14 @@ mod unix {
         runtime.shutdown_timeout(Duration::from_secs(1));
         result
     }
-    fn report(record: &ProcessRecord) -> std::io::Result<()> {
+    fn report(record: &ProcessRecord, allocation: &Option<(u16, String)>) -> std::io::Result<()> {
+        let mut message = serde_json::json!({"protocol":1,"record":record});
+        if let Some((threads, digest)) = allocation {
+            message["inference_threads"] = serde_json::json!(threads);
+            message["execution_profile_digest"] = serde_json::json!(digest);
+        }
         let mut output = std::io::stdout().lock();
-        serde_json::to_writer(
-            &mut output,
-            &serde_json::json!({"protocol":1,"record":record}),
-        )?;
+        serde_json::to_writer(&mut output, &message)?;
         output.write_all(b"\n")?;
         output.flush()
     }
@@ -148,21 +152,27 @@ mod unix {
             let _ = cancel.send(true);
             failed
         });
-        let launched = ManagedCpuModel::launch_from_host(
+        let profile = CpuProfile {
+            socket_directory: config.socket_directory,
+            executable: config.executable,
+            executable_sha256: config.executable_sha256,
+            model: config.model,
+            model_sha256: config.model_sha256,
+            model_bytes: config.model_bytes,
+            model_version: config.model_version,
+            context_tokens: config.context_tokens,
+            startup_timeout: Duration::from_secs(config.startup_timeout_seconds),
+        };
+        let allocation = config
+            .inference_threads
+            .map(|n| profile.execution_digest_with_threads(n).map(|d| (n, d)))
+            .transpose()?;
+        let launched = ManagedCpuModel::launch_from_host_with_threads(
             &config.runtime_directory,
-            CpuProfile {
-                socket_directory: config.socket_directory,
-                executable: config.executable,
-                executable_sha256: config.executable_sha256,
-                model: config.model,
-                model_sha256: config.model_sha256,
-                model_bytes: config.model_bytes,
-                model_version: config.model_version,
-                context_tokens: config.context_tokens,
-                startup_timeout: Duration::from_secs(config.startup_timeout_seconds),
-            },
+            profile,
             receiver,
             config.instance_id,
+            config.inference_threads.unwrap_or(2),
         )
         .await;
         let mut process = match launched {
@@ -178,7 +188,7 @@ mod unix {
                 return Err(error.into());
             }
         };
-        if report(process.record()).is_err() {
+        if report(process.record(), &allocation).is_err() {
             process.shutdown().await?;
             control.abort();
             return Ok(());
@@ -189,12 +199,12 @@ mod unix {
                 result=&mut control=>break result?,
                 _=tick.tick()=>{
                     let record=process.poll_status()?;
-                    if record.phase=="stopped"{control.abort();let _=report(&record);return Err("backend exited".into());}
+                    if record.phase=="stopped"{control.abort();let _=report(&record,&allocation);return Err("backend exited".into());}
                 }
             }
         };
         process.shutdown().await?;
-        if let Err(error) = report(process.record())
+        if let Err(error) = report(process.record(), &allocation)
             && error.kind() != std::io::ErrorKind::BrokenPipe
         {
             return Err(error.into());
