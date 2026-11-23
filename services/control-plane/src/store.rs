@@ -377,6 +377,18 @@ impl Store {
             .map_err(artifact_error)?;
         }
 
+        // A funding lock or a ledger write may have waited past the expiry read at admission.
+        // Replays above only return an existing effect, so they retain the original receipt.
+        let still_valid: bool = sqlx::query_scalar(
+            "SELECT expires_at > clock_timestamp() FROM quotes WHERE quote_id=$1 AND owner_id=$2",
+        )
+        .bind(&req.quote_id)
+        .bind(owner)
+        .fetch_one(&mut *tx)
+        .await?;
+        if !still_valid {
+            return Err(StoreError::QuoteExpired);
+        }
         let view = job_view(&row)?;
         finish_submit(tx, actor).await?;
         Ok(view)

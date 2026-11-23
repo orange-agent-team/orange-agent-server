@@ -43,11 +43,20 @@ async fn owner(store: &Store, gift: i64, earned: i64, purchased: i64) -> String 
     id
 }
 async fn request(store: &Store, owner: &str, root: &str, max: i64) -> SubmitJob {
+    request_for_seconds(store, owner, root, max, 300).await
+}
+async fn request_for_seconds(
+    store: &Store,
+    owner: &str,
+    root: &str,
+    max: i64,
+    seconds: i32,
+) -> SubmitJob {
     let quote = Uuid::new_v4().to_string();
     let invocation = Uuid::new_v4().to_string();
     let digest = "a".repeat(64);
-    sqlx::query("INSERT INTO quotes(quote_id,owner_id,root_budget_id,invocation_id,projection_digest,price_version,max_amount,expires_at) VALUES($1,$2,$3,$4,$5,'test-price-v1',$6,clock_timestamp()+interval '5 minutes')")
-        .bind(&quote).bind(owner).bind(root).bind(&invocation).bind(&digest).bind(max).execute(store.pool()).await.expect("test quote");
+    sqlx::query("INSERT INTO quotes(quote_id,owner_id,root_budget_id,invocation_id,projection_digest,price_version,max_amount,expires_at) VALUES($1,$2,$3,$4,$5,'test-price-v1',$6,clock_timestamp()+($7::integer * interval '1 second'))")
+        .bind(&quote).bind(owner).bind(root).bind(&invocation).bind(&digest).bind(max).bind(seconds).execute(store.pool()).await.expect("test quote");
     SubmitJob {
         root_budget_id: root.into(),
         invocation_id: invocation,
@@ -261,15 +270,9 @@ async fn failed_freeze_and_bad_quotes_leave_no_side_effect() {
         store.submit(&who, "bad-digest", &wrong).await,
         Err(StoreError::QuoteMismatch)
     ));
-    sqlx::query(
-        "UPDATE quotes SET expires_at=clock_timestamp()-interval '1 second' WHERE quote_id=$1",
-    )
-    .bind(&req.quote_id)
-    .execute(store.pool())
-    .await
-    .expect("expire");
+    let expired = request_for_seconds(&store, &who, &root.root_budget_id, 1000, -1).await;
     assert!(matches!(
-        store.submit(&who, "expired", &req).await,
+        store.submit(&who, "expired", &expired).await,
         Err(StoreError::QuoteExpired)
     ));
 }

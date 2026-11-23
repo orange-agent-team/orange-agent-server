@@ -144,3 +144,7 @@ required-features = ["metering-upgrade-tests"]
 [[test]]
 name = "storage_contract"
 required-features = ["integration-tests"]
+
+[[test]]
+name = "quote_admission"
+required-features = ["integration-tests"]
