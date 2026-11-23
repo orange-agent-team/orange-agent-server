@@ -106,6 +106,8 @@ def execute_directory(command, control, child):
         if kind!='FILE' or not amount.isdigit() or len(filename)>128:raise RuntimeError('Invalid file metadata')
         entries.append({'name':filename,'kind':'file','bytes':amount})
     if child.stdout.readline(100)!=b'END_DIRECTORY\n':raise RuntimeError('Directory result not complete')
+    if not control.authorizes(until):
+        print(json.dumps(dict(facts,phase='operation_unknown')),flush=True);return
     journal['tool_observation_sha256']=hashlib.sha256(json.dumps(entries,sort_keys=True,separators=(',',':')).encode()).hexdigest()
     save_receipt(receipt_path,journal)
     with control.changed:
