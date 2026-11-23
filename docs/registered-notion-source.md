@@ -13,3 +13,5 @@ python3 scripts/check-notion.py --database-url-file .local/database-url --identi
 ```
 
 加入 `--web-repo ../orange-agent-web` 可通过真实 Chrome 访问四个动作、读取查询结果中的授权行，并在撤权后刷新核对。验收首先在一次性 PostgreSQL 中重建 47 版的仓库授权、调用和文件回执，然后升级并重复迁移，逐项核对原数据与文档外发选择。源端没有真实工作区令牌时，这些测试使用固定版本的本机协议夹具。
+
+迁移回归先以固定的 schema 47 User API 通过真实 HTTP 创建原 Run 的外部连接器授权。更改原请求的授权标志会被旧程序拒绝。原进程退出且数据库仍为 47 后，测试保留先前授权、撤销、调用和回执，再执行当前迁移及其重试，验证旧许可与新动作边界。随后当前处理器执行实际的 Notion 授权和撤销期间读取验收。第三方服务使用受限测试替身。历史生产者源码提交为 8ea1e3df71c3f7f90c32986cd564b5c637d13e21。首次运行从 Git 对象离线构建；缺少旧 Git 历史的检出可传入 `--schema47-source-archive` 并核对固定摘要。
