@@ -370,12 +370,9 @@ async fn disabled_price_cannot_create_a_new_quote_or_reservation() {
             .all(|offer| !offer.price_version.starts_with(&prefix))
     );
     assert_eq!(model_list(&c, "/api/v1/models", false).await.0, 401);
-    assert_eq!(
-        model_list(&c, "/api/v1/models?owner_id=another", true)
-            .await
-            .0,
-        400
-    );
+    let (invalid, error) = model_list(&c, "/api/v1/models?owner_id=another", true).await;
+    assert_eq!(invalid, 422);
+    assert_eq!(error["code"], "VALIDATION_ERROR");
     let req = quote_request(&c, 32);
     let q = quote_http(&c, &req).await;
     sqlx::query("UPDATE text_prices SET enabled=false WHERE price_version=$1")
