@@ -49,9 +49,23 @@ async fn personal_key_lifecycle_binds_owner_scope_and_original_intent() {
             .0,
         StatusCode::UNPROCESSABLE_ENTITY
     );
+    let second_token = random_secret();
+    let second_csrf = random_secret();
+    sqlx::query("INSERT INTO user_sessions(token_hash,session_id,user_id,csrf_token,auth_time,idle_expires_at,absolute_expires_at)
+        SELECT $1,$2,user_id,$3,auth_time,idle_expires_at,absolute_expires_at FROM user_sessions WHERE token_hash=$4")
+        .bind(hash_secret(&second_token)).bind(Uuid::new_v4().to_string()).bind(&second_csrf).bind(hash_secret(&f.token))
+        .execute(&f.pool).await.expect("independent concurrent session");
+    let mut second = headers.clone();
+    second.insert(
+        "cookie",
+        format!("{USER_COOKIE}={second_token}")
+            .parse()
+            .expect("test cookie"),
+    );
+    second.insert("x-csrf-token", second_csrf.parse().expect("test CSRF"));
     let (a, b) = tokio::join!(
         request(&f, "PUT", &path, Some(body.clone()), headers.clone()),
-        request(&f, "PUT", &path, Some(body.clone()), headers.clone())
+        request(&f, "PUT", &path, Some(body.clone()), second)
     );
     assert_eq!(a.0, StatusCode::OK);
     assert_eq!(a, b);
@@ -146,6 +160,16 @@ async fn personal_key_lifecycle_binds_owner_scope_and_original_intent() {
         request(&f, "GET", WALLET, None, bearer(&token)).await.0,
         StatusCode::UNAUTHORIZED
     );
+    let audit: Vec<String> = sqlx::query_scalar(
+        "SELECT e.event_type FROM durable_events e JOIN event_streams s USING(stream_id)
+        WHERE s.entity_kind='api_key' AND s.entity_id=$1 AND s.owner_id=$2 ORDER BY e.seq",
+    )
+    .bind(&id)
+    .bind(&f.user)
+    .fetch_all(&f.pool)
+    .await
+    .expect("committed lifecycle events");
+    assert_eq!(audit, ["api_key.registered", "api_key.withdrawn"]);
     let (id, token) = credential();
     let path = format!("{KEYS}/{id}");
     assert_eq!(
@@ -246,6 +270,63 @@ async fn budget_key_never_outlives_expiry_or_withdrawn_account_authority() {
         request(&f, "GET", BUDGETS, None, headers(&f)).await.0,
         StatusCode::UNAUTHORIZED
     );
+}
+
+#[tokio::test]
+async fn logout_keeps_delegation_and_user_disablement_permanently_withdraws_it() {
+    let f = fixture().await;
+    let (id, token) = credential();
+    let path = format!("{KEYS}/{id}");
+    assert_eq!(
+        request(
+            &f,
+            "PUT",
+            &path,
+            Some(registration(&token, "wallet:read")),
+            management(&f, &id)
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        request(&f, "DELETE", "/api/v1/session", None, headers(&f))
+            .await
+            .0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        request(&f, "GET", KEYS, None, headers(&f)).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        request(&f, "GET", WALLET, None, bearer(&token)).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        request(
+            &f,
+            "GET",
+            "/api/v1/automation/account/wallet?owner_id=other",
+            None,
+            bearer(&token)
+        )
+        .await
+        .0,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    for active in [false, true] {
+        sqlx::query("UPDATE users SET active=$1 WHERE user_id=$2")
+            .bind(active)
+            .bind(&f.user)
+            .execute(&f.pool)
+            .await
+            .expect("account status");
+        assert_eq!(
+            request(&f, "GET", WALLET, None, bearer(&token)).await.0,
+            StatusCode::UNAUTHORIZED
+        );
+    }
 }
 
 #[tokio::test]

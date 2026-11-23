@@ -11,7 +11,11 @@ use sqlx::{Postgres, Row, Transaction, postgres::PgRow};
 use uuid::Uuid;
 
 fn key_id(value: &str) -> bool {
-    Uuid::parse_str(value).is_ok_and(|id| id.get_version_num() == 4 && id.to_string() == value)
+    Uuid::parse_str(value).is_ok_and(|id| {
+        id.get_variant() == uuid::Variant::RFC4122
+            && id.get_version_num() == 4
+            && id.to_string() == value
+    })
 }
 
 fn write_intent(
