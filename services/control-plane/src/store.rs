@@ -212,9 +212,22 @@ impl Store {
         {
             return Err(StoreError::Invalid);
         }
-        for attempt in 0..3 {
+        // PostgreSQL 40001 and 40P01 both confirm that the transaction aborted.
+        // Retry all authorization and funding checks with a fresh snapshot and the same key.
+        // A lost response or connection carries no such proof and is returned for reconciliation.
+        let retry_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+        for attempt in 0..7 {
             match self.submit_once(owner, key, req, actor, origin).await {
-                Err(e) if e.retryable() && attempt < 2 => retry_backoff(attempt).await,
+                Err(error)
+                    if error.retryable()
+                        && attempt < 6
+                        && tokio::time::Instant::now() < retry_deadline =>
+                {
+                    retry_backoff(attempt.min(3)).await;
+                    if tokio::time::Instant::now() >= retry_deadline {
+                        return Err(error);
+                    }
+                }
                 result => return result,
             }
         }
