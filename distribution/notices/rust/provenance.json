@@ -15,6 +15,30 @@
     "sha256": "117829c3ca21efb132d81a44b55363d395ab8eea18526873bc828da4c0e5f038",
     "upstream_path": "LICENSE"
   },
+  "opentelemetry-0.33.1": {
+    "blob": "261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64",
+    "commit": "372ebbc74d4dba71bb9820732f57f7316b4e7a1e",
+    "local": "distribution/notices/rust/opentelemetry-372ebbc74d4d/LICENSE",
+    "repository": "https://github.com/open-telemetry/opentelemetry-rust",
+    "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+    "upstream_path": "LICENSE"
+  },
+  "opentelemetry-prometheus-0.33.1": {
+    "blob": "261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64",
+    "commit": "372ebbc74d4dba71bb9820732f57f7316b4e7a1e",
+    "local": "distribution/notices/rust/opentelemetry-372ebbc74d4d/LICENSE",
+    "repository": "https://github.com/open-telemetry/opentelemetry-rust",
+    "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+    "upstream_path": "LICENSE"
+  },
+  "opentelemetry_sdk-0.33.1": {
+    "blob": "261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64",
+    "commit": "372ebbc74d4dba71bb9820732f57f7316b4e7a1e",
+    "local": "distribution/notices/rust/opentelemetry-372ebbc74d4d/LICENSE",
+    "repository": "https://github.com/open-telemetry/opentelemetry-rust",
+    "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+    "upstream_path": "LICENSE"
+  },
   "rsqlite-vfs-0.1.1": {
     "blob": "8839511c01e91a5d4ac8c9b753c165b52d86f530",
     "commit": "1bb309784f25c401ddf95131dcde4c4cdad7aee7",
