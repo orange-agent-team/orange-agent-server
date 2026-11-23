@@ -59,10 +59,23 @@ def verify(base, prior, old, new):
         return json.loads(result.stdout)
 
     def snapshot(current=False):
-        with sqlite3.connect(database.resolve(strict=True).as_uri() + "?mode=ro", uri=True) as db:
-            version = verify_current_journal(db) if current else db.execute("PRAGMA user_version").fetchone()[0]
-            return (version,
-                    db.execute("SELECT config_digest,messages,phase FROM runtime_runs WHERE run_id='old-run'").fetchone())
+        # Both child processes have exited. Recover committed WAL pages on a private copy
+        # so a read cannot create lock files or checkpoint the journal under verification.
+        with tempfile.TemporaryDirectory(dir=base) as copy_dir:
+            replica = Path(copy_dir) / database.name
+            shutil.copyfile(database, replica)
+            for suffix in ("-wal", "-journal"):
+                sidecar = database.with_name(database.name + suffix)
+                if sidecar.exists():
+                    shutil.copyfile(sidecar, replica.with_name(replica.name + suffix))
+            db = sqlite3.connect(replica)
+            try:
+                db.execute("PRAGMA query_only=ON")
+                version = verify_current_journal(db) if current else db.execute("PRAGMA user_version").fetchone()[0]
+                return version, db.execute("SELECT config_digest,messages,phase FROM runtime_runs WHERE run_id='old-run'").fetchone()
+            finally:
+                db.close()
+
 
     config["run"]["environment"] = run(old, "grant-info")["environment"]
     old_pin = None
@@ -100,10 +113,15 @@ def verify(base, prior, old, new):
     config.pop("skill")
     config["run"]["run_id"] = "old-run"
     file.write_text(json.dumps(config))
-    fingerprint = hashlib.sha256(database.read_bytes()).hexdigest()
+    def durable_fingerprint():
+        return {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+                for p in (database, database.with_name(database.name + "-wal"), database.with_name(database.name + "-journal"))
+                if p.exists()}
+
+    fingerprint = durable_fingerprint()
     refused = subprocess.run([old, file, "status"], capture_output=True, text=True)
     assert refused.returncode != 0 and "Unsupported" in refused.stderr, (refused.returncode, refused.stderr)
-    assert hashlib.sha256(database.read_bytes()).hexdigest() == fingerprint and snapshot(current=True) == (destination, before)
+    assert durable_fingerprint() == fingerprint and snapshot(current=True) == (destination, before)
     print(f"PASS genuine schema {prior} -> {destination}, unchanged messages, original binding and activation, old executable refused before mutation")
 
 
