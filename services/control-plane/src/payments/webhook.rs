@@ -367,6 +367,8 @@ mod tests {
         let time = 1770000000;
         let all = format!("t={time},v1={},v1={tag}", "0".repeat(64));
         assert!(verify(secret, &all, payload, time + 300).is_ok());
+        assert!(verify("sk_test_not_a_callback_signing_secret", &all, payload, time).is_err());
+        assert!(verify("development_browser_session_fixture", &all, payload, time).is_err());
         assert!(verify(secret, &all, payload, time + 301).is_err());
         assert!(verify(secret, &all, b"changed", time).is_err());
         assert!(verify(secret, &format!("{all},t={time}"), payload, time).is_err());

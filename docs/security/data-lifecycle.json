@@ -111,6 +111,12 @@
         "connection_epoch",
         "node_policy_generation",
         "received_at"
+      ],
+      "execution_certificate_purposes": [
+        "certificate_sha256",
+        "purpose",
+        "subject_id",
+        "enrollment_user_id"
       ]
     },
     "ownership_links": [
@@ -133,13 +139,22 @@
       [
         "worker_isolation_observations.certificate_sha256",
         "worker_credentials.certificate_sha256"
+      ],
+      [
+        "worker_credentials.certificate_sha256",
+        "execution_certificate_purposes.certificate_sha256"
+      ],
+      [
+        "cloud_pool_hosts.certificate_sha256",
+        "execution_certificate_purposes.certificate_sha256"
       ]
     ],
     "implementation": [
       "crates/agent-runtime/src/lib.rs",
       "services/control-plane/src/auth/users.rs",
       "services/control-plane/src/admin/identity.rs",
-      "services/control-plane/src/worker/isolation_observations.rs"
+      "services/control-plane/src/worker/isolation_observations.rs",
+      "services/control-plane/migrations/0079_execution_certificate_purposes.sql"
     ]
   },
   "events": {

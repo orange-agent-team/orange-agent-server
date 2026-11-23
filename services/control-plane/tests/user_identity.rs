@@ -162,6 +162,64 @@ async fn request(
     )
 }
 #[tokio::test]
+async fn user_and_admin_session_values_are_refused_by_each_other_after_cookie_rename() {
+    use orange_control_plane::admin::{
+        self,
+        identity::{AdminIdentity, OidcConfig},
+    };
+    let f = fixture().await;
+    let config: OidcConfig = serde_json::from_slice(
+        &std::fs::read(std::env::var("ORANGE_TEST_OIDC_CONFIG_FILE").expect("admin discovery"))
+            .expect("config"),
+    )
+    .expect("admin config");
+    let principal = Uuid::new_v4().to_string();
+    let token = admin::random_secret();
+    sqlx::query("INSERT INTO admin_principals(principal_id,issuer,subject) VALUES($1,$2,$1)")
+        .bind(&principal)
+        .bind(&config.issuer)
+        .execute(&f.pool)
+        .await
+        .expect("principal fixture");
+    sqlx::query("INSERT INTO admin_grants(principal_id,role,environment,scope_kind,scope_id,expires_at)
+        VALUES($1,'compute_operator','dev','tenant',$2,EXTRACT(EPOCH FROM clock_timestamp())::bigint+3600)")
+        .bind(&principal).bind(&f.user).execute(&f.pool).await.expect("scoped admin role fixture");
+    sqlx::query("INSERT INTO admin_sessions(token_hash,principal_id,csrf_token,auth_time,idle_expires_at,absolute_expires_at)
+        VALUES($1,$2,$3,extract(epoch FROM now())::bigint,extract(epoch FROM now())::bigint+300,extract(epoch FROM now())::bigint+600)")
+        .bind(admin::hash_secret(&token)).bind(&principal).bind(admin::random_secret()).execute(&f.pool).await.expect("real admin session row");
+    let admin_api = admin::routes::router(
+        AdminIdentity::discover(f.pool.clone(), config)
+            .await
+            .expect("provider"),
+    );
+    for (router, path, name, good, other) in [
+        (&f.router, "/api/v1/session", USER_COOKIE, &f.token, &token),
+        (
+            &admin_api,
+            "/admin/v1/session",
+            admin::SESSION_COOKIE,
+            &token,
+            &f.token,
+        ),
+    ] {
+        for (value, status) in [(good, StatusCode::OK), (other, StatusCode::UNAUTHORIZED)] {
+            let answer = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(path)
+                        .header("cookie", format!("{name}={value}"))
+                        .body(Body::empty())
+                        .expect("session request"),
+                )
+                .await
+                .expect("real router");
+            assert_eq!(answer.status(), status);
+        }
+    }
+}
+
+#[tokio::test]
 async fn user_api_requires_separate_cookie_current_actor_and_csrf_with_idempotent_organization_creation()
  {
     let f = fixture().await;

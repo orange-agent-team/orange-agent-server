@@ -14,6 +14,7 @@ def service_files(repository,commit,readme,extra=()):
         if name in files:raise ValueError("Duplicate release path: "+name)
         files[name]=git("show",commit+":"+source)
     put("distribution/platform/verify.py","verify.py")
+    put("distribution/platform/verify-candidate-signature.py","verify-candidate-signature.py")
     put("distribution/platform/reconcile-wallets.py","reconcile-wallets.py")
     put("distribution/platform/recover-private-artifacts.py","recover-private-artifacts.py")
     put("distribution/platform/sql/replay-artifact-redactions.sql","sql/replay-artifact-redactions.sql")
@@ -25,7 +26,7 @@ def service_files(repository,commit,readme,extra=()):
     for source in ("Cargo.lock","rust-toolchain.toml","crates/protocol/generation.lock.json","config/worker-development.example.json","config/trusted-meter.example.json",
                    "config/worker-isolation-release.v1.json","config/connector-releases.v1.json","docs/worker-development-host.md","docs/development-cloud-host.md",
                    "docs/cloud-isolation-development.md","docs/audio-artifact-preflight.md","docs/local-http-metrics.md","docs/engineering/api-configuration-diagnostics.md","docs/engineering/job-state-revisions.md","docs/engineering/owned-job-events.md",
-                   "docs/events-queue-implementation.md","docs/worker/nvidia-inventory.md","docs/worker/isolation-report.md",
+                   "docs/events-queue-implementation.md","docs/worker/nvidia-inventory.md","docs/worker/isolation-report.md","docs/security/credential-purposes.md",
                    "docs/security/data-lifecycle.md","docs/security/quarantined-private-root-recovery.md","docs/security/data-lifecycle.json","docs/engineering/identity-deadlines.md","docs/database/transaction-keys.json","docs/database/transactions-and-retention.md",*extra):put(source)
     return files
 

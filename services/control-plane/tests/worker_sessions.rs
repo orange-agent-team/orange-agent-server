@@ -294,7 +294,28 @@ async fn verified_certificate_binds_node_and_heartbeat_only_renews_control() {
 #[tokio::test]
 async fn absent_foreign_and_unregistered_certificates_never_claim_session() {
     let d = device("client-b").await;
+    // A valid leaf trusted by the test CA and registered as a managed host still has no public Worker identity.
+    let host_leaf = hex::encode(Sha256::digest(file("client-purpose-host.der")));
+    sqlx::query("INSERT INTO cloud_pool_hosts(host_instance_id,certificate_sha256,profile_id,attestation_digest,region_id,max_workspaces,credential_expires_at)
+        VALUES($1,$2,'dev-gvisor-linux-arm64-v1',repeat('b',64),'dev',1,clock_timestamp()+interval '1 hour')")
+        .bind(Uuid::new_v4().to_string()).bind(&host_leaf).execute(d.store.pool()).await.expect("registered platform host");
+    let denied=sqlx::query("INSERT INTO worker_credentials(certificate_sha256,node_id,enrollment_user_id,not_before,expires_at)
+        VALUES($1,$2,$3,clock_timestamp()-interval '1 minute',clock_timestamp()+interval '1 hour')")
+        .bind(&host_leaf).bind(&d.node).bind(&d.user).execute(d.store.pool()).await.expect_err("host cannot become public worker");
+    assert_eq!(
+        denied.as_database_error().and_then(|e| e.code()).as_deref(),
+        Some("23514")
+    );
     let server = Running::start(&d.store).await;
+    let mut platform = server
+        .client(Some("client-purpose-host"))
+        .await
+        .expect("valid TLS transport");
+    let error = control(&mut platform, hello(&d.node))
+        .await
+        .err()
+        .expect("platform leaf has no Worker admission");
+    assert_eq!(error.code(), tonic::Code::Unauthenticated);
     for certificate in [None, Some("wrong-ca"), Some("unregistered")] {
         if let Ok(mut client) = server.client(certificate).await {
             assert!(
