@@ -401,6 +401,12 @@ pub fn exit(result: std::result::Result<(), Box<dyn std::error::Error>>) -> std:
     };
     let envelope = if let Some(config) = cause.downcast_ref::<StartupError>() {
         json!({"event":"startup_failed","code":config.code,"class":"configuration","field":config.field,"source":config.source,"retryable":false})
+    } else if matches!(
+        cause.downcast_ref::<crate::store::StoreError>(),
+        Some(crate::store::StoreError::Migration(_))
+    ) {
+        json!({"event":"startup_failed","code":"STARTUP_MIGRATION_FAILED","class":"migration","field":"database",
+               "retryable":false,"recovery":"inspect_migration_history"})
     } else {
         let (class, retryable) = match cause
             .downcast_ref::<std::io::Error>()

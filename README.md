@@ -1,5 +1,7 @@
 # Orange Agent Server
 
+首次运行可按[本地环境与恢复手册](docs/engineering/first-run.md)核对依赖，从空目录运行一次真实协议往返并清理测试资源。
+
 **代码实施已开始：** 当前领域、协议、PostgreSQL资金预留切片与SQLite操作恢复已有代码及本机测试，见[实施状态](docs/implementation-status.md)。完整G3/G4—G6尚未完成；下方原文为设计背景，不代表所有工程仍只有文档。
 
 日期：2026-11-04。服务端仓库承载E01 Domain、E02 Protocol、E03 Agent Runtime、E04 Model Runtime、E07 Control Plane、E08 Worker、E09 Python Backends，共7工程；另有桌面2、用户Web 1、Admin 1，总数11。

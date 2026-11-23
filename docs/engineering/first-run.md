@@ -45,9 +45,12 @@ python3.12 scripts/local-postgres.py stop
 | LOCAL_PREREQUISITE | 查看 component；对照 doctor 的锁定版本 | 修正该工具的路径或预置对应工件，重新运行 doctor |
 | Cargo 离线缺少包 | 查看 Cargo.lock 对应的版本、校验值与 CARGO_HOME | 从可信源补齐该锁的输入，再重建空 target |
 | 端口有冲突，或集群目录不匹配 | 查询 development-readiness.py 的退出状态与本地配置的端口 | 为测试选择独立实例；不要停止其他目录拥有的进程 |
+| STARTUP_MIGRATION_FAILED | 只读检查 _sqlx_migrations 的版本、success 与 checksum，核对包内迁移及源码摘要 | 保留数据和日志，恢复与既有历史匹配的发布物或按备份流程恢复后重试。不要手改真实库中的校验值 |
 | 401 或 MFA 不通过 | 查看独立 user/admin 配置来源和当前会话 | 核对 issuer、客户端与要求的认证级别，再执行对应登录用例 |
 | Worker 无法收到输入或输出被拒绝 | 核对会话、租约及授权，以及 job 的诊断标识 | 查询原命令和撤权状态；尚未确认执行的操作保留原幂等身份 |
 | 生成器或 ABI 不一致 | 运行工具链 upgrade 检查 | 将编译器、生成器、依赖锁和绑定作为同组升级或回退 |
 | 测试清理失败 | 读取保留目录，确认所属 cluster 和容器标记 | 用该控制目录停止其服务，复验已不可达后再清理 |
+
+数据库本地服务日志在 .local/postgres/server.log。进程启动错误从标准错误读取，关联排查见 [API 诊断](api-configuration-diagnostics.md)。替换开发凭据时，使用私有文件原子替换后重启其所属服务，再验证旧凭据被拒绝、新凭据只获得预期操作权限。对于 OIDC，应由其身份提供者和客户端配置共同更新凭据。一次性测试可以直接重建独立 realm。
 
 更新时先保留已验证的提交、构建摘要和真实测试凭据，再运行[协议升级](protocol-upgrades.md)、工具链复现和本手册的首次启动。实际 GPU、商户、跨区域及生产签名仍按各自的资格检查执行。
