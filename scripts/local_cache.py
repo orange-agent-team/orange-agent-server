@@ -191,7 +191,11 @@ def main():
             state=load(path)
             info=container(state) if state else None
             require(info and info["State"]["Running"],"No running owned cache")
-            probe(state,host_port(info))
+            port=host_port(info)
+            probe(state,port)
+            if state.get("port")!=port:
+                state["port"]=port
+                record(path,state)
         print(json.dumps({"ready":True,"host":"127.0.0.1","port":state["port"],"user":"orange_cache","prefix":state["prefix"],"credential_file":str(path)}))
 
 
