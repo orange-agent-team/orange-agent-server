@@ -209,7 +209,24 @@ async fn append_core(
         sqlx::query_scalar("SELECT nextval(pg_get_serial_sequence('outbox','event_id'))")
             .fetch_one(&mut **tx)
             .await?;
-    let event:String=sqlx::query_scalar("INSERT INTO durable_events(stream_id,seq,event_type,payload_digest,correlation_id,occurred_at,source_outbox_id,attempt_id) VALUES($1,$2,$3,$4,$5,clock_timestamp(),$6,$7) RETURNING event_id").bind(stream).bind(seq).bind(kind).bind(&digest).bind(entity).bind(outbox).bind(attempt).fetch_one(&mut **tx).await?;
+    // Events without attempt provenance retain their original insertion contract.
+    // Only an actual Worker attempt requires the schema-68 relation and its ownership check.
+    let statement = if attempt.is_some() {
+        "INSERT INTO durable_events(stream_id,seq,event_type,payload_digest,correlation_id,occurred_at,source_outbox_id,attempt_id) VALUES($1,$2,$3,$4,$5,clock_timestamp(),$6,$7) RETURNING event_id"
+    } else {
+        "INSERT INTO durable_events(stream_id,seq,event_type,payload_digest,correlation_id,occurred_at,source_outbox_id) VALUES($1,$2,$3,$4,$5,clock_timestamp(),$6) RETURNING event_id"
+    };
+    let mut insert = sqlx::query_scalar(statement)
+        .bind(stream)
+        .bind(seq)
+        .bind(kind)
+        .bind(&digest)
+        .bind(entity)
+        .bind(outbox);
+    if let Some(id) = attempt {
+        insert = insert.bind(id);
+    }
+    let event: String = insert.fetch_one(&mut **tx).await?;
     sqlx::query("INSERT INTO outbox(event_id,owner_id,entity_id,event_type,payload,domain_event_id) VALUES($1,$2,$3,$4,$5,$6)").bind(outbox).bind(owner).bind(entity).bind(kind).bind(payload).bind(event).execute(&mut **tx).await?;
     Ok(())
 }

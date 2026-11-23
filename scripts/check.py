@@ -47,6 +47,9 @@ else:
                     # The migration-under-test needs schema 66, while its sibling tests require current schema.
                     from owned_postgres import database_at
                     with database_at(environment['ORANGE_TEST_DATABASE_URL'],'orange_pg_upgrade_') as (_,upgrade_url):
-                        run(*command,env=dict(environment,ORANGE_TEST_UPGRADE_DATABASE_URL=upgrade_url))
+                        db_env=dict(environment,ORANGE_TEST_UPGRADE_DATABASE_URL=upgrade_url)
+                        # Per-test races are explicit. Limit unrelated fixture transactions in this shared test cluster.
+                        db_env.setdefault('RUST_TEST_THREADS','2')
+                        run(*command,env=db_env)
                 else:
                     run(*command)
