@@ -18,16 +18,19 @@ struct Record {
     ledger: Ledger,
 }
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct User {
     id: String,
     personal_owner: String,
 }
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Organization {
     id: String,
     members: Vec<String>,
 }
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Job {
     id: String,
     owner: String,
@@ -37,21 +40,25 @@ struct Job {
     duration_limit_ms: String,
 }
 #[derive(Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 struct Model {
     id: String,
     sha256: String,
 }
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Node {
     id: String,
     owner: String,
 }
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Artifact {
     owner: String,
     reference: ArtifactRef,
 }
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Attempt {
     id: String,
     job: String,
@@ -60,6 +67,7 @@ struct Attempt {
     outcome: String,
 }
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Ledger {
     id: String,
     owner: String,
@@ -233,6 +241,17 @@ fn reject_crossed_relationships_and_invalid_amount_or_duration() {
         *row.pointer_mut(pointer).expect("fixture path") = replacement;
         assert_eq!(validate(row), Err(error), "{pointer}");
     }
+    let mut extra = rows[0].clone();
+    extra["input"]["source"]["skip_authorization"] = json!(true);
+    assert_eq!(validate(extra), Err("wire"));
+    let mut oversized = rows[1].clone();
+    let mut rejected = oversized["attempts"][0].clone();
+    let attempts = oversized["attempts"].as_array_mut().expect("attempt array");
+    for id in ["retry-three", "retry-four"] {
+        rejected["id"] = json!(id);
+        attempts.insert(0, rejected.clone());
+    }
+    assert_eq!(validate(oversized), Err("attempt_limit"));
     let mut missing = rows[1].clone();
     missing["job"].as_object_mut().expect("job").remove("owner");
     assert_eq!(validate(missing), Err("wire"));

@@ -116,30 +116,6 @@ pub struct SubmittedJob<'a> {
     pub job: JobId<'a>,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn identities_preserve_valid_legacy_spelling_and_reject_bad_boundaries() {
-        for id in ["old_node:az-1.02", "123", "A:B.C_D-99"] {
-            assert_eq!(OwnerId::try_from(id).expect("valid legacy ID").as_str(), id);
-            assert_eq!(JobId::try_from(id).expect("valid legacy ID").as_str(), id);
-            assert_eq!(UserId::try_from(id).expect("valid legacy ID").as_str(), id);
-        }
-        assert!(JobId::try_from("x".repeat(128).as_str()).is_ok());
-        for id in [
-            "",
-            "x/y",
-            "owner name",
-            "\n",
-            "用户",
-            "x".repeat(129).as_str(),
-        ] {
-            assert_eq!(OwnerId::try_from(id), Err(InvalidId));
-        }
-    }
-}
-
 /// A version key without a verified content digest is not a pinned artifact.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ArtifactPin<'a> {
@@ -203,5 +179,29 @@ impl std::str::FromStr for Milliseconds {
 impl Milliseconds {
     pub fn get(self) -> u64 {
         self.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn identities_preserve_valid_legacy_spelling_and_reject_bad_boundaries() {
+        for id in ["old_node:az-1.02", "123", "A:B.C_D-99"] {
+            assert_eq!(OwnerId::try_from(id).expect("valid legacy ID").as_str(), id);
+            assert_eq!(JobId::try_from(id).expect("valid legacy ID").as_str(), id);
+            assert_eq!(UserId::try_from(id).expect("valid legacy ID").as_str(), id);
+        }
+        assert!(JobId::try_from("x".repeat(128).as_str()).is_ok());
+        for id in [
+            "",
+            "x/y",
+            "owner name",
+            "\n",
+            "用户",
+            "x".repeat(129).as_str(),
+        ] {
+            assert_eq!(OwnerId::try_from(id), Err(InvalidId));
+        }
     }
 }
