@@ -1,13 +1,17 @@
 #requires -Version 5.1
-[CmdletBinding()]
+[CmdletBinding(DefaultParameterSetName='Observe')]
 param(
+    [Parameter(ParameterSetName='Observe')]
     [ValidateSet('Consume', 'Contribute')]
     [string]$Mode = 'Contribute',
-    [UInt64]$RequiredPackageVolumeBytes = 0
+    [Parameter(ParameterSetName='Observe')]
+    [UInt64]$RequiredPackageVolumeBytes = 0,
+    [Parameter(ParameterSetName='Policy', Mandatory=$true)]
+    [switch]$CheckIsolationFiles
 )
 
 $ErrorActionPreference = 'Stop'
-if ($Mode -eq 'Consume') {
+if (-not $CheckIsolationFiles -and $Mode -eq 'Consume') {
     [ordered]@{
         evidence_version = 2
         mode = 'consume'
@@ -18,11 +22,43 @@ if ($Mode -eq 'Consume') {
     exit 0
 }
 
-if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
-    throw 'Windows x64 is required for this target-machine check.'
+function Get-IsolationFiles([object]$Manifest) {
+    if ($Manifest.target -cne 'x86_64-pc-windows-gnullvm' -or
+        $Manifest.isolation_probe_target -cne 'x86_64-unknown-linux-musl' -or
+        $Manifest.source -cnotmatch '^[a-f0-9]{40}$') { throw 'Unexpected isolation package identity.' }
+    $folder = Get-Item -LiteralPath (Join-Path $PSScriptRoot 'isolation') -Force
+    if (-not $folder.PSIsContainer -or ($folder.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        throw 'A regular packaged isolation directory is required.'
+    }
+    $hashes = [ordered]@{}
+    foreach ($name in @('wsl.conf','oci-base.json','prepare-inference-policy.py','inspect-target.py','orange-isolation-probe','README.md')) {
+        $file = Get-Item -LiteralPath (Join-Path $folder.FullName $name) -Force
+        $key = 'isolation/' + $name
+        $expected = $Manifest.sha256.PSObject.Properties[$key]
+        if ($file.PSIsContainer -or ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+            $null -eq $expected -or $expected.Value -cnotmatch '^[a-f0-9]{64}$') { throw 'Invalid isolation package member.' }
+        $actual = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($expected.Value -cne $actual) { throw 'Isolation package member SHA-256 mismatch.' }
+        $hashes[$key] = $actual
+    }
+    return [ordered]@{
+        profile = 'wsl2-reviewed-text-v1'
+        target = $Manifest.isolation_probe_target
+        member_sha256 = $hashes
+        runtime_verified = $false
+        supply_authorized = $false
+    }
 }
 
+if (-not $CheckIsolationFiles -and [Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
+    throw 'Windows x64 is required for this target-machine check.'
+}
 $manifest = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'manifest.json') -Raw | ConvertFrom-Json
+$isolationFiles = Get-IsolationFiles $manifest
+if ($CheckIsolationFiles) {
+    [ordered]@{ evidence_version = 1; source = $manifest.source; isolation_files = $isolationFiles } | ConvertTo-Json -Depth 5
+    exit 0
+}
 $exe = Join-Path $PSScriptRoot 'bin\orange-worker.exe'
 $expected = $manifest.sha256.'bin/orange-worker.exe'
 $actual = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -59,7 +95,7 @@ function Get-OptionalFeatureObservation([string]$Name) {
     }
 }
 
-$observations = [ordered]@{}
+$observations = [ordered]@{ isolation_files = $isolationFiles }
 try {
     $os = Get-CimInstance -ClassName Win32_OperatingSystem -Property Version, BuildNumber, OSArchitecture -OperationTimeoutSec 5
     $observations.os_version = $os.Version

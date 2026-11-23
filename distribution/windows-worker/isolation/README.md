@@ -26,3 +26,9 @@ python3.12 prepare-inference-policy.py verify --bundle "$PRIVATE_BUNDLE" --trust
 开发包内 `orange-isolation-probe` 是可在 Linux x86_64 运行的静态 ELF。它从真正的运行进程内部核对限制，使用 Unix 套接字往返两个测试字节，核对 IPv4 套接字是否被内核拒绝，并区分路径不存在、权限拒绝和未观测。探针只输出枚举与数量。运行时可能按 OCI 规范逐个挂载标准字符设备，探针逐项匹配路径、文件类型及设备号。[OCI 1.1.0 默认设备](https://github.com/opencontainers/runtime-spec/blob/v1.1.0/config-linux.md#default-devices)
 
 源码验收 `python3.12 scripts/check-contributor-oci.py` 在隔离的 Linux arm64 测试虚拟机使用实际 runc，以静态诊断程序替代模型，只替换目标架构、客体 uid/gid 映射及测试实例标识，并省去 GPU 设备。宿主从活动 PID 核对七个命名空间与 cgroup v2 的内存、交换、CPU、进程数限制，然后确认实例及其 cgroup 消失。此项验收与目标 Windows 的 GPU 驱动观测、模型加载和显存回收分别登记。
+
+根文件系统中的引擎、模型和会话密钥的所有上级目录都须允许容器 UID 65532 遍历。引擎应为具有可执行加载段的 Linux x86_64 ELF，所需解释器须在审核的只读文件系统内。模型须对推理用户可读。
+
+从包根目录运行 `Test-WorkerInventory.ps1 -CheckIsolationFiles` 可离线核对六个固定文件及 Linux 探针的目标。贡献模式也会执行这项检查，消费模式保持独立。它核对的是与本地 manifest.json 的一致性，外部提供的 ZIP SHA-256 仍需单独核对。
+
+诊断专用的 `orange-isolation-probe --bounded-controls` 在已观察到受限进程边界后，再核对两个正对照。第一项要求诊断镜像中有 `/opt/orange/qa/readonly-control`，属主 65532、权限 0600，内容为 `orange-readonly-control.v1` 加换行，仅尝试以写方式打开。文件缺失、权限拒绝及只读文件系统错误分别记录。第二项先确认本进程软硬文件描述符上限均为 256，再用有界数量的只读 /dev/null 句柄验证 EMFILE，释放后重新打开以确认恢复。两项均不签发推理权限。

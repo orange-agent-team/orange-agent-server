@@ -46,7 +46,71 @@ fn device_leaf(dest: &str, root: &str, kind: &str) -> bool {
     fs::symlink_metadata(dest).is_ok_and(|m| m.file_type().is_char_device() && m.rdev() == expected)
 }
 
-fn observe(hold: bool) -> io::Result<bool> {
+// An opt-in comparison on a diagnostic-only file whose DAC permissions allow a
+// write-open. The probe never writes to it. EROFS demonstrates the mount boundary.
+fn readonly_control() -> &'static str {
+    const PATH: &str = "/opt/orange/qa/readonly-control";
+    let meta = match fs::symlink_metadata(PATH) {
+        Ok(value) => value,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return "fixture_absent",
+        Err(_) => return "unobserved",
+    };
+    if !meta.is_file()
+        || meta.uid() != 65532
+        || meta.mode() & 0o777 != 0o600
+        || meta.nlink() != 1
+        || !small(PATH, 64).is_ok_and(|s| s == "orange-readonly-control.v1\n")
+    {
+        return "unexpected_fixture";
+    }
+    match File::options().write(true).open(PATH) {
+        Err(e) if e.raw_os_error() == Some(30) => "readonly_filesystem",
+        Err(e) if e.kind() == io::ErrorKind::PermissionDenied => "permission_denied",
+        Err(_) => "unobserved",
+        Ok(_) => "write_open_allowed",
+    }
+}
+
+// Exercise only this process's verified small hard limit. Never allocate tasks,
+// GPU memory, network traffic or unbounded system resources.
+fn descriptor_limit() -> &'static str {
+    let Ok(limits) = small("/proc/self/limits", 16384) else {
+        return "unobserved";
+    };
+    let bounded = limits
+        .lines()
+        .find_map(|l| l.strip_prefix("Max open files"))
+        .is_some_and(|v| v.split_whitespace().collect::<Vec<_>>() == ["256", "256", "files"]);
+    if !bounded
+        || !fs::symlink_metadata("/dev/null")
+            .is_ok_and(|m| m.file_type().is_char_device() && m.rdev() == 0x103)
+    {
+        return "unexpected_fixture";
+    }
+    let mut private = Vec::with_capacity(256);
+    let mut cause = "limit_not_observed";
+    for _ in 0..=256 {
+        match File::open("/dev/null") {
+            Ok(fd) => private.push(fd),
+            Err(e) => {
+                cause = if e.raw_os_error() == Some(24) {
+                    "process_descriptor_limit"
+                } else {
+                    "unconfirmed_failure"
+                };
+                break;
+            }
+        }
+    }
+    drop(private);
+    if cause == "process_descriptor_limit" && File::open("/dev/null").is_ok() {
+        "process_limit_released"
+    } else {
+        cause
+    }
+}
+
+fn observe(hold: bool, exercise: bool) -> io::Result<bool> {
     let status = small("/proc/self/status", 65536)?;
     let fact = |key: &str| {
         status.lines().find_map(|l| {
@@ -145,10 +209,22 @@ fn observe(hold: bool) -> io::Result<bool> {
         && [windows, docker, containerd, interop]
             .iter()
             .all(|v| matches!(*v, "absent" | "permission_denied"));
-    let checked = private && gpu == "character_device";
+    let (readonly_fixture, fd_limit) = if !exercise {
+        ("not_requested", "not_requested")
+    } else if private {
+        (readonly_control(), descriptor_limit())
+    } else {
+        (
+            "unconfirmed_process_boundary",
+            "unconfirmed_process_boundary",
+        )
+    };
+    let controls_ok = !exercise
+        || (readonly_fixture == "readonly_filesystem" && fd_limit == "process_limit_released");
+    let checked = private && controls_ok && gpu == "character_device";
     // All interpolated strings below are fixed observation enums; never echo process or mount data.
     println!(
-        r#"{{"protocol":1,"status":"{}","uid_gid_match":{identity},"no_new_privileges":{no_priv},"seccomp_filter":{seccomp},"capabilities_empty":{no_caps},"root_readonly":{readonly},"private_tmp":{tmp},"private_control":{control},"unix_round_trip":{unix},"unexpected_mounts":{unexpected},"device_leaf_mounts":{device_leaves},"nonloopback_interfaces":{external},"inet_socket":"{ip}","windows_volume":"{windows}","container_socket":"{docker}","containerd_socket":"{containerd}","interop":"{interop}","gpu_bridge":"{gpu}","process_policy_match":{private},"runtime_verified":false,"supply_authorized":false}}"#,
+        r#"{{"protocol":1,"status":"{}","uid_gid_match":{identity},"no_new_privileges":{no_priv},"seccomp_filter":{seccomp},"capabilities_empty":{no_caps},"root_readonly":{readonly},"private_tmp":{tmp},"private_control":{control},"unix_round_trip":{unix},"unexpected_mounts":{unexpected},"device_leaf_mounts":{device_leaves},"nonloopback_interfaces":{external},"inet_socket":"{ip}","windows_volume":"{windows}","container_socket":"{docker}","containerd_socket":"{containerd}","interop":"{interop}","gpu_bridge":"{gpu}","process_policy_match":{private},"readonly_fixture":"{readonly_fixture}","descriptor_test":"{fd_limit}","runtime_verified":false,"supply_authorized":false}}"#,
         if checked {
             "observations_match"
         } else {
@@ -164,10 +240,11 @@ fn observe(hold: bool) -> io::Result<bool> {
 fn main() {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     let hold = args.as_slice() == [std::ffi::OsStr::new("--hold-for-inspection")];
-    if !args.is_empty() && !hold {
+    let exercise = hold || args.as_slice() == [std::ffi::OsStr::new("--bounded-controls")];
+    if !args.is_empty() && !exercise {
         std::process::exit(2);
     }
-    match observe(hold) {
+    match observe(hold, exercise) {
         Ok(true) => {}
         Ok(false) => std::process::exit(2),
         Err(_) => {

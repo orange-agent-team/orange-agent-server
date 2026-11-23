@@ -11,6 +11,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import struct
 import tarfile
 import tempfile
 import zipfile
@@ -76,12 +77,16 @@ def check(directory,guest):
         if guest:
             # Explicit synthetic ELF/weights. This tests image integrity and key handling,
             # not execution of that model or acceptance of these values on the real CLI.
-            image=scratch/"rootfs";image.mkdir(mode=0o700)
+            image=scratch/"rootfs";image.mkdir(mode=0o755);image.chmod(0o755)
             for rel in (p.KEY,p.MODEL,p.ENGINE):(image/rel).parent.mkdir(mode=0o755,parents=True,exist_ok=True)
             for directory in image.rglob("*"):
                 if directory.is_dir(): directory.chmod(0o755)
             model=b"test weights";weights=image/p.MODEL;weights.write_bytes(model);weights.chmod(0o644)
-            eng=image/p.ENGINE;eng.write_bytes(b"\x7fELF\x02\x01"+bytes(12)+b"\x3e\0"+b"fixture");eng.chmod(0o555)
+            # One minimal, bounded executable load segment for the structural fixture.
+            header=struct.pack("<16sHHIQQQIHHHHHH",b"\x7fELF\x02\x01\x01"+bytes(9),2,62,1,0x400078,64,0,0,64,56,1,0,0,0)
+            segment=struct.pack("<IIQQQQQQ",1,5,0,0x400000,0,121,121,4096)
+            elf=header+segment+b"\xc3"
+            eng=image/p.ENGINE;eng.write_bytes(elf);eng.chmod(0o555)
             secret=image/p.KEY
             def change_key(value):
                 if secret.exists():secret.chmod(0o600)
@@ -96,6 +101,10 @@ def check(directory,guest):
             link=image/"external";link.symlink_to("/etc/passwd");expect_error(measure);link.unlink()
             link.hardlink_to(image/p.MODEL);expect_error(measure);link.unlink()
             fifo=image/"fifo";os.mkfifo(fifo);expect_error(measure);fifo.unlink()
+            eng.chmod(0o444);expect_error(measure);eng.chmod(0o555)
+            weights.chmod(0o600);expect_error(measure);weights.chmod(0o644)
+            eng.parent.chmod(0o700);expect_error(measure);eng.parent.chmod(0o755)
+            eng.chmod(0o755);eng.write_bytes(elf[:20]);expect_error(measure);eng.write_bytes(elf);eng.chmod(0o555)
             assert measure()==first
         report=obs.observe()
         assert not report["supply_authorized"] and not report["runtime_verified"]
@@ -105,7 +114,8 @@ def check(directory,guest):
                           "artificial_inputs_for_positive_template":True}),flush=True)
 
 
-def installed_sources(destination):
+def installed_sources(scratch,powershell):
+    destination=scratch/"isolation";destination.mkdir()
     source=subprocess.check_output(["git","rev-parse","HEAD"],cwd=ROOT,text=True).strip()
     dist=ROOT/".local/windows-worker-distributions"
     records=(json.loads(f.read_bytes()) for f in dist.glob("*.json"))
@@ -119,6 +129,8 @@ def installed_sources(destination):
         assert z.testzip() is None and len(z.namelist())==len(set(z.namelist()))
         manifest=json.loads(z.read("orange-worker/manifest.json"))
         assert manifest["source"]==source
+        (scratch/"manifest.json").write_bytes(z.read("orange-worker/manifest.json"))
+        (scratch/"Test-WorkerInventory.ps1").write_bytes(z.read("orange-worker/Test-WorkerInventory.ps1"))
         for name in ("README.md","wsl.conf","oci-base.json","prepare-inference-policy.py","inspect-target.py","orange-isolation-probe"):
             payload=z.read("orange-worker/isolation/"+name)
             assert hashlib.sha256(payload).hexdigest()==manifest["sha256"]["isolation/"+name]
@@ -128,16 +140,37 @@ def installed_sources(destination):
     result=json.loads(subprocess.check_output([sys.executable,destination/"prepare-inference-policy.py","describe"],text=True))
     assert result["profile"]=="wsl2-reviewed-text-v1" and not result["supply_authorized"]
     print("PASS installed Windows package and x86_64 Linux static diagnostic",record["sha256"],flush=True)
+    if powershell:
+        command=[powershell,"-NoProfile","-NonInteractive","-File",scratch/"Test-WorkerInventory.ps1","-CheckIsolationFiles"]
+        env=dict(os.environ,POWERSHELL_TELEMETRY_OPTOUT="1",POWERSHELL_UPDATECHECK="Off",XDG_CONFIG_HOME=str(scratch/"config"),
+                 XDG_DATA_HOME=str(scratch/"data"),XDG_CACHE_HOME=str(scratch/"cache"))
+        metadata=json.loads(subprocess.check_output(command,cwd=scratch,env=env,text=True,timeout=20))
+        info=metadata["isolation_files"]
+        assert metadata["source"]==source and info["target"]=="x86_64-unknown-linux-musl"
+        assert not info["supply_authorized"] and not info["runtime_verified"] and len(info["member_sha256"])==6
+        expected=manifest["sha256"]["isolation/orange-isolation-probe"]
+        assert info["member_sha256"]["isolation/orange-isolation-probe"]==expected
+        # Keep the original copy intact while checking that the reader refuses tampering.
+        original=destination/"wsl.conf";saved=destination/"saved-wsl.conf"
+        original.rename(saved)
+        try:
+            original.write_bytes(b"[interop]\nenabled=true\n")
+            denied=subprocess.run(command,cwd=scratch,env=env,capture_output=True,timeout=20)
+            assert denied.returncode!=0 and not denied.stdout.strip()
+        finally:
+            original.unlink(missing_ok=True);saved.rename(original)
+        print("PASS packaged PowerShell verifies all six isolation payloads and rejects a changed distribution configuration")
     return destination
 
 
 def main():
     parser=argparse.ArgumentParser();parser.add_argument("--linux",action="store_true")
-    parser.add_argument("--installed",action="store_true");parser.add_argument("--inside",type=Path);args=parser.parse_args()
+    parser.add_argument("--powershell",type=Path);parser.add_argument("--installed",action="store_true");parser.add_argument("--inside",type=Path);args=parser.parse_args()
+    if args.powershell and not args.installed:parser.error("--powershell requires --installed")
     if args.inside:
         check(args.inside,True);return
     with ExitStack() as stack:
-        directory=installed_sources(Path(stack.enter_context(tempfile.TemporaryDirectory()))) if args.installed else ASSETS
+        directory=installed_sources(Path(stack.enter_context(tempfile.TemporaryDirectory())),args.powershell.resolve(strict=True) if args.powershell else None) if args.installed else ASSETS
         check(directory,False)
         if args.linux:guest_check(directory)
     print("PASS reviewed WSL/OCI configuration, strict device rules and closed admission; Windows/GPU isolation and inference require target verification")

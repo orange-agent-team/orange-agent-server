@@ -73,6 +73,11 @@ def main():
         (bundle/"config.json").write_text(json.dumps(cfg))
         for folder in ["proc","dev","tmp","run","run/orange"]:
             directory=fs/folder;directory.mkdir(mode=0o755);os.chown(directory,uid_base,gid_base)
+        fixture=fs/"opt/orange/qa/readonly-control"
+        fixture.parent.mkdir(parents=True,mode=0o755)
+        for directory in [fs/"opt",fs/"opt/orange",fixture.parent]:
+            directory.chmod(0o755);os.chown(directory,uid_base,gid_base)
+        fixture.write_bytes(b"orange-readonly-control.v1\n");fixture.chmod(0o600);os.chown(fixture,uid_base+65532,gid_base+65532)
         probe.chmod(0o555);os.chown(probe,uid_base,gid_base);os.chown(fs,uid_base,gid_base)
         args=[runtime,"--root",str(state)]
         cgroup=Path("/sys/fs/cgroup")/instance
@@ -90,6 +95,9 @@ def main():
                 observation=json.loads(line)
                 check(observation["process_policy_match"] and observation["gpu_bridge"]=="absent" and not observation["supply_authorized"],
                       "Unexpected diagnostic observations: "+str(observation))
+                check(observation["readonly_fixture"]=="readonly_filesystem" and observation["descriptor_test"]=="process_limit_released",
+                      "Bounded control did not distinguish policy denial and release")
+                check(fixture.read_bytes()==b"orange-readonly-control.v1\n","Read-only control content changed")
                 running=json.loads(subprocess.check_output([*args,"state",instance]))
                 check(running["status"]=="running" and running["id"]==instance,"Unexpected OCI instance")
                 pid=int(running["pid"])

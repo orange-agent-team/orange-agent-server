@@ -8,6 +8,7 @@ from pathlib import Path
 import platform
 import re
 import stat
+import struct
 import sys
 import tempfile
 
@@ -142,6 +143,35 @@ def target_binding():
     return major,minor,subordinate_range(trusted_text("/etc/subuid",1024*1024)),subordinate_range(trusted_text("/etc/subgid",1024*1024))
 
 
+def linux_engine(stream,root,size):
+    header=stream.read(64)
+    require(len(header)==64 and header[:7]==b"\x7fELF\x02\x01\x01","x86_64_elf_engine_required")
+    kind,machine,version,entry,phoff=struct.unpack_from("<HHIQQ",header,16)
+    _,stride,count=struct.unpack_from("<HHH",header,52)
+    require(kind in (2,3) and machine==62 and version==1 and stride==56 and 0<count<=512
+            and 64<=phoff<=size-count*stride,"invalid_elf_program_headers")
+    executable=False;interpreter=False
+    for index in range(count):
+        stream.seek(phoff+index*stride)
+        segment,flags,offset,address,_,file_size,mem_size,_=struct.unpack("<IIQQQQQQ",stream.read(stride))
+        require(offset+file_size<=size,"elf_segment_outside_file")
+        if segment==1:
+            require(mem_size>=file_size,"invalid_load_segment")
+            executable|=bool(flags&1) and file_size>0 and address<=entry<address+file_size
+        elif segment==3:
+            require(not interpreter and 2<=file_size<=4096,"invalid_elf_interpreter")
+            interpreter=True
+            stream.seek(offset);raw=stream.read(file_size)
+            require(raw.endswith(b"\0") and raw.count(b"\0")==1,"invalid_elf_interpreter")
+            path=Path(raw[:-1].decode())
+            require(path.is_absolute() and path.root=="/" and ".." not in path.parts,"invalid_elf_interpreter")
+            loader=(root/path.relative_to("/")).resolve(strict=True)
+            require(loader.is_relative_to(root.resolve()) and loader.is_file() and loader.stat().st_mode&0o005==0o005,
+                    "unavailable_elf_interpreter")
+    require(executable,"elf_entry_outside_executable_bytes")
+    stream.seek(0)
+
+
 def rootfs_digest(root,owners,expected_model):
     require(root.is_dir() and not root.is_symlink(),"reviewed_rootfs_required")
     tree=hashlib.sha256()
@@ -166,6 +196,8 @@ def rootfs_digest(root,owners,expected_model):
             sensitive=relative==KEY
             expected_uid,expected_gid=owners["key"] if sensitive else owners["image"]
             require((item.st_uid,item.st_gid)==(expected_uid,expected_gid) and not mode&0o6000,"untrusted_image_owner_or_setid")
+            if any(member.startswith(relative+"/") for member in (KEY,MODEL,ENGINE)):
+                require(stat.S_ISDIR(item.st_mode) and mode&0o001,"inaccessible_payload_directory")
             if relative in (KEY,MODEL,ENGINE):
                 require(stat.S_ISREG(item.st_mode),"required_member_not_regular")
                 found.add(relative)
@@ -192,9 +224,9 @@ def rootfs_digest(root,owners,expected_model):
                             content="private-session-key"
                         else:
                             if relative==ENGINE:
-                                ident=f.read(20)
-                                require(mode&0o111 and len(ident)==20 and ident[:6]==b"\x7fELF\x02\x01" and ident[18:20]==b"\x3e\0","x86_64_elf_engine_required")
-                                f.seek(0)
+                                require(mode&0o005==0o005,"unexecutable_engine")
+                                linux_engine(f,root,meta.st_size)
+                            if relative==MODEL:require(mode&0o004,"unreadable_model")
                             content=hashlib.file_digest(f,"sha256").hexdigest()
                             if relative==MODEL:require(content==expected_model,"reviewed_model_digest_mismatch")
                     record([relative,"file",mode,content])
@@ -204,7 +236,7 @@ def rootfs_digest(root,owners,expected_model):
     fd=os.open(root,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
     try:
         start=os.fstat(fd);mode=stat.S_IMODE(start.st_mode)
-        require((start.st_uid,start.st_gid)==owners["image"] and not mode&0o6022 and not os.listxattr(fd),"invalid_image_root")
+        require((start.st_uid,start.st_gid)==owners["image"] and not mode&0o6022 and mode&0o001 and not os.listxattr(fd),"invalid_image_root")
         record([".","directory",mode]);visit(fd,"",0)
         require(start.st_ctime_ns==os.fstat(fd).st_ctime_ns,"changed_image_member")
     finally:os.close(fd)
