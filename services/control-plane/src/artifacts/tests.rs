@@ -770,6 +770,41 @@ async fn real_http_enforces_cookie_csrf_streaming_integrity_and_revocation() {
         response.bytes().await.expect("bounded stream").as_ref(),
         bytes.as_slice()
     );
+    sqlx::query(
+        "INSERT INTO artifact_pins(artifact_id,reference_id) VALUES($1,'active-client-fixture')",
+    )
+    .bind(&ready.artifact_id)
+    .execute(&f.store.inner.pool)
+    .await
+    .expect("active usage");
+    let attempted = client
+        .delete(format!("{collection}/{}", req.upload_id))
+        .header("cookie", &cookie)
+        .header("origin", &origin)
+        .header("x-csrf-token", &csrf)
+        .header("idempotency-key", &req.upload_id)
+        .send()
+        .await
+        .expect("authenticated delete");
+    assert_eq!(attempted.status(), 409);
+    assert_eq!(
+        attempted
+            .json::<serde_json::Value>()
+            .await
+            .expect("typed response")["code"],
+        "ARTIFACT_IN_USE"
+    );
+    let survived = client
+        .get(&read)
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .expect("still available");
+    assert_eq!(survived.status(), 200);
+    assert_eq!(
+        survived.bytes().await.expect("current source").as_ref(),
+        bytes.as_slice()
+    );
     sqlx::query("UPDATE user_sessions SET revoked=TRUE WHERE session_id=$1")
         .bind(&f.actor.session)
         .execute(&f.store.inner.pool)
@@ -1176,4 +1211,75 @@ async fn borrowed_gateway_reader_drain_does_not_close_the_input_writer() {
         .await
         .expect("writer remains available");
     f.store.drain().await.expect("actual owner shutdown");
+}
+
+#[tokio::test]
+async fn user_deletion_preserves_active_input_until_reference_release() {
+    let f = fixture().await;
+    let req = request(b"client delete requires a released reference");
+    f.store
+        .begin_upload(&f.actor, &f.owner, &req)
+        .await
+        .expect("create input");
+    let value = f
+        .store
+        .put(
+            f.actor.clone(),
+            f.owner.clone(),
+            req.upload_id.clone(),
+            input(b"client delete requires a released reference"),
+        )
+        .await
+        .expect("publish input");
+    sqlx::query(
+        "INSERT INTO artifact_pins(artifact_id,reference_id) VALUES($1,'workflow-fixture')",
+    )
+    .bind(&value.artifact_id)
+    .execute(&f.store.inner.pool)
+    .await
+    .expect("live reference");
+    assert!(matches!(
+        f.store
+            .delete_with_reference_check(&f.actor, &f.owner, &req.upload_id, true)
+            .await,
+        Err(ArtifactError::InUse)
+    ));
+    let tombstones: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM artifact_tombstones WHERE artifact_id=$1")
+            .bind(&value.artifact_id)
+            .fetch_one(&f.store.inner.pool)
+            .await
+            .expect("count tombstones");
+    assert_eq!(tombstones, 0);
+    assert_eq!(
+        f.store
+            .status(&f.actor, &f.owner, &req.upload_id)
+            .await
+            .expect("still readable")
+            .state,
+        "available"
+    );
+    sqlx::query("DELETE FROM artifact_pins WHERE artifact_id=$1")
+        .bind(&value.artifact_id)
+        .execute(&f.store.inner.pool)
+        .await
+        .expect("release reference");
+    for _ in 0..2 {
+        assert_eq!(
+            f.store
+                .delete_with_reference_check(&f.actor, &f.owner, &req.upload_id, true)
+                .await
+                .expect("original delete or replay")
+                .state,
+            "deleted"
+        );
+    }
+    let tombstones: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM artifact_tombstones WHERE artifact_id=$1")
+            .bind(&value.artifact_id)
+            .fetch_one(&f.store.inner.pool)
+            .await
+            .expect("count committed tombstones");
+    assert_eq!(tombstones, 1);
+    f.store.drain().await.expect("drain");
 }

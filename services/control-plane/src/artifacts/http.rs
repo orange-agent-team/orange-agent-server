@@ -326,6 +326,7 @@ impl From<ArtifactError> for Error {
             }
             ArtifactError::Conflict => Self(StatusCode::CONFLICT, "IDEMPOTENCY_CONFLICT"),
             ArtifactError::NotReady => Self(StatusCode::CONFLICT, "ARTIFACT_NOT_READY"),
+            ArtifactError::InUse => Self(StatusCode::CONFLICT, "ARTIFACT_IN_USE"),
             ArtifactError::Busy => Self(StatusCode::CONFLICT, "TRANSFER_BUSY"),
             ArtifactError::Capacity => Self(StatusCode::INSUFFICIENT_STORAGE, "STORAGE_CAPACITY"),
             ArtifactError::Budget => Self(StatusCode::CONFLICT, "BUDGET_EXCEEDED"),
@@ -422,7 +423,12 @@ async fn delete(
     let actor = api.identity.artifact_actor(&headers, true).await?;
     original_key(&headers, &upload)?;
     Ok(private(
-        Json(api.store.delete(&actor, &owner, &upload).await?).into_response(),
+        Json(
+            api.store
+                .delete_with_reference_check(&actor, &owner, &upload, true)
+                .await?,
+        )
+        .into_response(),
     ))
 }
 async fn upload(

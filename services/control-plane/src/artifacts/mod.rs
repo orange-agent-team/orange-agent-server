@@ -58,6 +58,8 @@ pub enum ArtifactError {
     NotReady,
     #[error("artifact was deleted")]
     Deleted,
+    #[error("an active job or workspace still uses the input")]
+    InUse,
     #[error("artifact transfer is already in progress")]
     Busy,
     #[error("artifact storage quota exceeded")]
@@ -327,11 +329,23 @@ impl ArtifactStore {
         authority::finish(tx, actor).await?;
         Ok(result)
     }
+    /// Immediate trusted revocation. Public user deletion uses the active-reference check below.
     pub async fn delete(
         &self,
         actor: &ArtifactActor,
         owner: &str,
         upload: &str,
+    ) -> Result<ArtifactView, ArtifactError> {
+        self.delete_with_reference_check(actor, owner, upload, false)
+            .await
+    }
+
+    async fn delete_with_reference_check(
+        &self,
+        actor: &ArtifactActor,
+        owner: &str,
+        upload: &str,
+        check_active: bool,
     ) -> Result<ArtifactView, ArtifactError> {
         let mut tx = self.inner.pool.begin().await?;
         authority::scope(&mut tx, actor, owner, true).await?;
@@ -343,6 +357,26 @@ impl ArtifactStore {
         authority::resource(&mut tx, actor, owner, &row, true, true).await?;
         let mut result = view(&row)?;
         if result.state != "deleted" {
+            // row_in holds FOR UPDATE on this exact artifact. Pins and cloud admissions
+            // acquire at least a share lock before committing a new use of the source.
+            if check_active {
+                let in_use: bool = sqlx::query_scalar(
+                    "SELECT EXISTS(
+                      SELECT FROM artifact_pins p WHERE p.artifact_id=$1
+                        AND NOT EXISTS(SELECT FROM job_inputs i JOIN jobs j USING(job_id)
+                          WHERE i.artifact_id=p.artifact_id AND p.reference_id='job-input:'||i.job_id
+                            AND j.execution_state IN ('succeeded','failed','cancelled'))
+                        AND NOT EXISTS(SELECT FROM worker_output_uploads w JOIN jobs j USING(job_id)
+                          WHERE w.artifact_id=p.artifact_id AND p.reference_id='job-output:'||w.job_id
+                            AND j.execution_state IN ('succeeded','failed','cancelled'))
+                    ) OR EXISTS(SELECT FROM cloud_runs WHERE input_artifact_id=$1 AND status NOT IN ('completed','failed','cancelled'))
+                      OR EXISTS(SELECT FROM transcription_input_grants g JOIN transcription_quote_terms q USING(owner_id,grant_id)
+                        JOIN jobs j ON j.quote_id=q.quote_id WHERE g.artifact_id=$1 AND j.execution_state NOT IN ('succeeded','failed','cancelled'))"
+                ).bind(&result.artifact_id).fetch_one(&mut *tx).await?;
+                if in_use {
+                    return Err(ArtifactError::InUse);
+                }
+            }
             sqlx::query("UPDATE artifact_capacity SET records=records-1 WHERE root_id=$1")
                 .bind(&self.inner.objects.root_id)
                 .execute(&mut *tx)
