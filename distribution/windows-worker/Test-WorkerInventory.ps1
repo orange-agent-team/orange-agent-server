@@ -31,7 +31,7 @@ function Get-IsolationFiles([object]$Manifest) {
         throw 'A regular packaged isolation directory is required.'
     }
     $hashes = [ordered]@{}
-    foreach ($name in @('wsl.conf','oci-base.json','prepare-inference-policy.py','inspect-target.py','orange-isolation-probe','README.md')) {
+    foreach ($name in @('wsl.conf','oci-base.json','prepare-inference-policy.py','inspect-target.py','orange-isolation-probe','README.md','release.json')) {
         $file = Get-Item -LiteralPath (Join-Path $folder.FullName $name) -Force
         $key = 'isolation/' + $name
         $expected = $Manifest.sha256.PSObject.Properties[$key]
@@ -41,10 +41,20 @@ function Get-IsolationFiles([object]$Manifest) {
         if ($expected.Value -cne $actual) { throw 'Isolation package member SHA-256 mismatch.' }
         $hashes[$key] = $actual
     }
+    $release = Get-Content -LiteralPath (Join-Path $folder.FullName 'release.json') -Raw | ConvertFrom-Json
+    if ($release.profile_id -cne 'wsl2-reviewed-text-v1' -or $release.observation_version -ne 1 -or
+        $release.oci_policy_sha256 -cne $hashes['isolation/oci-base.json'] -or
+        $release.linux_probe_sha256 -cne $hashes['isolation/orange-isolation-probe'] -or
+        $Manifest.isolation_report_version -ne $release.observation_version) { throw 'Unexpected diagnostic release.' }
+    foreach ($disabled in @($release.wasm_enabled,$release.supply_authorized_by_report,$Manifest.wasm_enabled,$Manifest.gpu_supply_from_diagnostic)) {
+        if ($disabled -isnot [bool] -or $disabled) { throw 'Unreviewed runtime authority.' }
+    }
     return [ordered]@{
         profile = 'wsl2-reviewed-text-v1'
         target = $Manifest.isolation_probe_target
         member_sha256 = $hashes
+        report_version = $release.observation_version
+        wasm_enabled = $false
         runtime_verified = $false
         supply_authorized = $false
     }

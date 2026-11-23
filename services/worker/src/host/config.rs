@@ -21,6 +21,8 @@ pub struct WorkerConfig {
     pub allow_remote_contribution: bool,
     #[serde(default)]
     pub transcription_observation: Option<TranscriptionObservationConfig>,
+    #[serde(default)]
+    pub isolation_diagnostics: Option<IsolationDiagnostics>,
     #[serde(default = "default_output")]
     pub commit_outputs: bool,
     #[serde(default = "default_output")]
@@ -35,6 +37,15 @@ pub struct TranscriptionObservationConfig {
     pub allow_remote_execution: bool,
     pub execution_profile_id: String,
     pub private_probe_file: PathBuf,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IsolationDiagnostics {
+    pub share_with_platform: bool,
+    pub request_id: String,
+    pub private_probe_file: PathBuf,
+    pub oci_policy_sha256: String,
+    pub linux_probe_sha256: String,
 }
 fn default_output() -> bool {
     true
@@ -82,6 +93,16 @@ pub(super) fn private_directory(path: &Path) -> Result<PathBuf, HostError> {
     Ok(path.canonicalize()?)
 }
 pub(super) fn private_file(path: &Path, max: u64) -> Result<Vec<u8>, HostError> {
+    let file = checked_file(path, max)?;
+    let mut bytes = Vec::new();
+    file.take(max + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > max {
+        return Err(HostError::PrivateState);
+    }
+    Ok(bytes)
+}
+
+fn checked_file(path: &Path, max: u64) -> Result<File, HostError> {
     private_directory(path.parent().ok_or(HostError::PrivateState)?)?;
     let file = File::options()
         .read(true)
@@ -92,12 +113,25 @@ pub(super) fn private_file(path: &Path, max: u64) -> Result<Vec<u8>, HostError> 
     {
         return Err(HostError::PrivateState);
     }
-    let mut bytes = Vec::new();
-    file.take(max + 1).read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > max {
-        return Err(HostError::PrivateState);
+    Ok(file)
+}
+
+impl IsolationDiagnostics {
+    pub(super) fn snapshot(&self) -> Result<(Vec<u8>, i64), HostError> {
+        let max = orange_protocol::isolation::MAX_BYTES as u64;
+        let file = checked_file(&self.private_probe_file, max)?;
+        let before = file.metadata()?;
+        let mut bytes = Vec::new();
+        (&file).take(max + 1).read_to_end(&mut bytes)?;
+        let after = file.metadata()?;
+        if bytes.len() as u64 != before.len()
+            || before.ctime() != after.ctime()
+            || before.ctime_nsec() != after.ctime_nsec()
+        {
+            return Err(HostError::PrivateState);
+        }
+        Ok((bytes, before.mtime()))
     }
-    Ok(bytes)
 }
 impl WorkerConfig {
     pub fn read(path: &Path) -> Result<Self, HostError> {
@@ -129,6 +163,13 @@ impl WorkerConfig {
                         || o.execution_profile_id == self.profile_id))
                     || !orange_protocol::valid_id(&o.execution_profile_id)
                     || !o.private_probe_file.is_absolute()
+            })
+            || self.isolation_diagnostics.as_ref().is_some_and(|d| {
+                d.share_with_platform
+                    && (!d.private_probe_file.is_absolute()
+                        || !orange_protocol::valid_id(&d.request_id)
+                        || !orange_protocol::valid_digest(&d.oci_policy_sha256)
+                        || !orange_protocol::valid_digest(&d.linux_probe_sha256))
             })
             || !orange_protocol::valid_id(&self.profile_id)
             || !orange_protocol::valid_id(&self.profile.model_version)

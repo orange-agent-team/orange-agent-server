@@ -2,6 +2,7 @@
 mod cleanup;
 mod execution;
 mod inputs;
+mod isolation_observation;
 mod outputs;
 mod rejections;
 mod renewals;

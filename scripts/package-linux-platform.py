@@ -51,6 +51,9 @@ def package(native,context,cache):
     packages,missing=notices(files,vendor if vendor.is_dir() else cache/"vendor",files["Cargo.lock"],lambda path:git("show",packaging+":"+path))
     sums={name:sha(data) for name,data in sorted(files.items())}
     manifest={"source":native,"packaging_source":packaging,"target":lock["target"],"programs":list(PLATFORM_PROGRAMS),"sha256":sums}
+    release=json.loads(git("show",native+":config/worker-isolation-release.v1.json"))
+    manifest.update(wasm_enabled=release["wasm_enabled"],isolation_report_version=release["observation_version"],
+                    gpu_supply_from_diagnostic=release["supply_authorized_by_report"])
     files["manifest.json"]=(json.dumps(manifest,indent=2,sort_keys=True)+"\n").encode()
     files["SHA256SUMS"]="".join(sha(data)+"  "+name+"\n" for name,data in sorted(files.items())).encode()
     dest=ROOT/".local/linux-platform-distributions";dest.mkdir(mode=0o700,parents=True,exist_ok=True)

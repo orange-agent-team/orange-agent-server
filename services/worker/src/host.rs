@@ -49,6 +49,8 @@ pub struct HostEvent {
     pub protocol: u32,
     pub state: &'static str,
     pub command_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub observation_id: Option<String>,
     pub outcome: Option<String>,
     pub cleanup_confirmed: bool,
     pub policy_applied: bool,
@@ -58,6 +60,7 @@ fn event(state: &'static str) -> HostEvent {
         protocol: 1,
         state,
         command_id: None,
+        observation_id: None,
         outcome: None,
         cleanup_confirmed: false,
         policy_applied: false,
@@ -319,6 +322,38 @@ pub async fn run(
         broker,
         supervisor,
     };
+    if let Some(diagnostic) = config
+        .isolation_diagnostics
+        .as_ref()
+        .filter(|d| d.share_with_platform)
+    {
+        let (outcome, observation_id) = match diagnostic.snapshot() {
+            Ok((bytes, when)) => match resources
+                .connection
+                .report_isolation_observation(
+                    &diagnostic.request_id,
+                    &diagnostic.oci_policy_sha256,
+                    &diagnostic.linux_probe_sha256,
+                    when,
+                    bytes,
+                )
+                .await
+            {
+                Ok(receipt) => (receipt.disposition, Some(receipt.observation_id)),
+                Err(ControlError::Unsupported) => ("gateway_extension_unavailable".into(), None),
+                Err(_) => ("submission_unconfirmed".into(), None),
+            },
+            Err(_) => ("private_report_unavailable".into(), None),
+        };
+        emit(
+            &events,
+            HostEvent {
+                outcome: Some(outcome),
+                observation_id,
+                ..event("isolation_diagnostics")
+            },
+        );
+    }
     for command in resources.journal.unresolved_outputs()? {
         match resources
             .connection
@@ -444,6 +479,7 @@ pub async fn run(
                 HostEvent {
                     protocol: 1,
                     state: "execution_stopped",
+                    observation_id: None,
                     command_id: Some(exit.report.command_id.clone()),
                     outcome: Some(exit.report.outcome.clone()),
                     cleanup_confirmed: exit.report.cleanup_confirmed,

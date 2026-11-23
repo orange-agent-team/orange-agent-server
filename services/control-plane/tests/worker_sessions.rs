@@ -8,6 +8,8 @@ mod execution_cases;
 mod finance_sessions;
 #[path = "worker_sessions/inputs.rs"]
 mod input_cases;
+#[path = "worker_sessions/isolation_observations.rs"]
+mod isolation_observations;
 #[path = "worker_sessions/policy_cases.rs"]
 mod policy_cases;
 #[path = "worker_sessions/receiver_cases.rs"]

@@ -3,6 +3,7 @@ mod commands;
 pub(crate) mod execution;
 pub mod gateway;
 mod input_reads;
+pub mod isolation_observations;
 pub(crate) mod sessions;
 pub use sessions::{DeviceSession, SessionError, WorkerSessionStore};
 

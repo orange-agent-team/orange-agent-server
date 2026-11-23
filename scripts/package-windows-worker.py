@@ -49,13 +49,14 @@ def main():
     if platform.system()!="Darwin":raise ValueError("Pinned macOS cross-toolchain required")
     parser=argparse.ArgumentParser()
     parser.add_argument("--vendor", type=Path,help="Existing verified versioned cargo vendor tree")
+    parser.add_argument("--toolchain-directory", type=Path, default=ROOT/".local/windows-cross", help="Directory containing the checksum-locked cross toolchain archive")
     opts=parser.parse_args()
     commit=subprocess.check_output(["git","rev-parse","HEAD"],cwd=ROOT,text=True).strip()
     def source(name):
         return subprocess.check_output(["git","show",commit+":"+name],cwd=ROOT)
     lock=json.loads(source("config/windows-cross-toolchain.lock.json"))
     if lock["target"]!=TARGET:raise ValueError("Unexpected cross target")
-    archive=ROOT/".local/windows-cross"/lock["archive"]
+    archive=opts.toolchain_directory/lock["archive"]
     if digest(archive)!=lock["sha256"] or archive.stat().st_size!=lock["bytes"]:
         raise ValueError("Prepare the fixed toolchain first")
     rustup=shutil.which("rustup") or "/opt/homebrew/opt/rustup/bin/rustup"
@@ -123,6 +124,8 @@ def main():
                      "windows-cross-toolchain.lock.json":source("config/windows-cross-toolchain.lock.json")}
             for name in ("README.md","wsl.conf","oci-base.json","prepare-inference-policy.py","inspect-target.py"):
                 payload["isolation/"+name]=source("distribution/windows-worker/isolation/"+name)
+            payload["isolation/release.json"]=source("config/worker-isolation-release.v1.json")
+            payload["docs/isolation-report.md"]=source("docs/worker/isolation-report.md")
             diagnostic=tree/"target/orange-isolation-probe"
             subprocess.run([sys.executable,tree/"scripts/build-worker-isolation-probe.py","--target","x86_64-unknown-linux-musl","--output",diagnostic],
                            cwd=tree,check=True)
@@ -133,6 +136,11 @@ def main():
             manifest={"source":commit,"target":TARGET,"rust":lock["rust"],"toolchain_sha256":lock["sha256"],
                       "imported_system_dlls":system_imports,"bundled_runtime_imports":runtime,"isolation_probe_target":"x86_64-unknown-linux-musl","windows_runtime_verified":False,
                       "sha256":{k:hashlib.sha256(v).hexdigest() for k,v in payload.items()}}
+            release=json.loads(payload["isolation/release.json"])
+            if manifest["sha256"]["isolation/orange-isolation-probe"]!=release["linux_probe_sha256"] or manifest["sha256"]["isolation/oci-base.json"]!=release["oci_policy_sha256"]:
+                raise ValueError("Packaged probe and policy differ from the diagnostic release")
+            manifest.update(wasm_enabled=release["wasm_enabled"],isolation_report_version=release["observation_version"],
+                            gpu_supply_from_diagnostic=release["supply_authorized_by_report"])
             payload["manifest.json"]=(json.dumps(manifest,sort_keys=True,indent=2)+"\n").encode()
             output=scratch/f"worker-{n}.zip"
             with zipfile.ZipFile(output,"x",compression=zipfile.ZIP_DEFLATED,compresslevel=9) as bundle:

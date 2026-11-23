@@ -102,6 +102,24 @@ pub(super) fn stopped(root: &std::path::Path) {
         .expect("lease");
     file.try_lock().expect("owned engine actually exited");
 }
+fn share_observation(config: &std::path::Path, root: &std::path::Path) -> String {
+    let evidence = root.join("isolation.json");
+    std::fs::write(
+        &evidence,
+        include_bytes!("../../../../../contracts/fixtures/isolation-v1/linux-x64-incomplete.json"),
+    )
+    .expect("archived diagnostic fixture bytes");
+    std::fs::set_permissions(&evidence, std::fs::Permissions::from_mode(0o600))
+        .expect("private report");
+    let mut opt_in: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(config).expect("configuration")).expect("JSON");
+    let original_request = Uuid::new_v4().to_string();
+    opt_in["isolation_diagnostics"] = serde_json::json!({"share_with_platform":true,"request_id":original_request,
+        "private_probe_file":evidence,"oci_policy_sha256":orange_protocol::isolation::POLICY,"linux_probe_sha256":orange_protocol::isolation::PROBE});
+    std::fs::write(config, serde_json::to_vec(&opt_in).expect("serialize")).expect("opt in");
+    original_request
+}
+
 #[tokio::test]
 async fn actual_worker_binary_uses_real_os_admission_and_exits_on_owned_signal() {
     let p = profile();
@@ -118,7 +136,28 @@ async fn actual_worker_binary_uses_real_os_admission_and_exits_on_owned_signal()
     let server = Running::start_with_input(&f.d.store, Some(f.objects.reader())).await;
     let root = runtime();
     let config = configuration(&f, &server, &p, root.path());
+    let original_request = share_observation(&config, root.path());
     let (mut child, mut lines) = start(&config);
+    let observed = event(&mut lines, "isolation_diagnostics").await;
+    assert_eq!(observed["outcome"], "incomplete");
+    assert!(observed.get("process_observation").is_none());
+    let bound: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT FROM worker_isolation_observations WHERE node_id=$1 AND request_id=$2
+        AND observation_id=$3::text::uuid AND disposition='incomplete' AND certificate_sha256=$4)",
+    )
+    .bind(&f.d.node)
+    .bind(&original_request)
+    .bind(
+        observed["observation_id"]
+            .as_str()
+            .expect("durable receipt"),
+    )
+    .bind(&f.d.fingerprint)
+    .fetch_one(f.d.store.pool())
+    .await
+    .expect("actual foreground report");
+    assert!(bound);
+
     event(&mut lines, "ready").await;
     ready_model(root.path()).await;
     terminate(&mut child).await;
@@ -148,6 +187,13 @@ async fn actual_worker_binary_keeps_candidate_unsubmitted_and_logs_no_body() {
     let server = Running::start_with_input(&f.d.store, Some(f.objects.reader())).await;
     let root = runtime();
     let config = configuration(&f, &server, &p, root.path());
+    let mut disabled: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&config).expect("config")).expect("JSON");
+    disabled["isolation_diagnostics"] = serde_json::json!({"share_with_platform":false,"request_id":"consent-disabled",
+        "private_probe_file":root.path().join("absent.json"),"oci_policy_sha256":orange_protocol::isolation::POLICY,
+        "linux_probe_sha256":orange_protocol::isolation::PROBE});
+    std::fs::write(&config, serde_json::to_vec(&disabled).expect("config"))
+        .expect("disable sharing");
     let (mut child, mut lines) = start(&config);
     event(&mut lines, "ready").await;
     let exit = event(&mut lines, "execution_stopped").await;
@@ -158,6 +204,13 @@ async fn actual_worker_binary_keeps_candidate_unsubmitted_and_logs_no_body() {
     let (command, _) = enqueue_stop(&f.d, 1, "node.quarantine").await;
     event(&mut lines, "policy_applied").await;
     terminate(&mut child).await;
+    let stored: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM worker_isolation_observations WHERE node_id=$1")
+            .bind(&f.d.node)
+            .fetch_one(f.d.store.pool())
+            .await
+            .expect("no sharing");
+    assert_eq!(stored, 0);
     stopped(root.path());
     event(&mut lines, "unsubmitted_output_discarded").await;
     let db = rusqlite::Connection::open_with_flags(
@@ -428,7 +481,15 @@ async fn actual_user_api_and_output_gateway_share_one_writer_for_real_worker_del
     config["endpoint"] = serde_json::json!(format!("https://{gateway_address}/"));
     std::fs::write(&worker_config, serde_json::to_vec(&config).expect("JSON"))
         .expect("actual dynamic endpoint");
+    let request_id = share_observation(&worker_config, root.path());
     let (mut worker, mut events) = start(&worker_config);
+    let diagnostic = event(&mut events, "isolation_diagnostics").await;
+    assert_eq!(diagnostic["outcome"], "incomplete");
+    let id: String=sqlx::query_scalar("SELECT observation_id::text FROM current_worker_isolation_observations
+        WHERE node_id=$1 AND NOT supply_authorized AND NOT wasm_enabled AND observation_id IN
+        (SELECT observation_id FROM worker_isolation_observations WHERE request_id=$2 AND certificate_sha256=$3)")
+        .bind(&f.d.node).bind(&request_id).bind(&f.d.fingerprint).fetch_one(f.d.store.pool()).await.expect("live gateway receipt");
+    assert_eq!(diagnostic["observation_id"], id);
     event(&mut events, "ready").await;
     event(&mut events, "response_committed").await;
     let view: orange_protocol::artifacts::ArtifactView = client

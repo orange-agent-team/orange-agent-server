@@ -289,6 +289,11 @@ async fn serve(
                         result = orange_control_plane::admin::activate_due_text_prices(expiry_store.pool()) => result,
                     };
                     if activation.is_err() { eprintln!("Scheduled development price activation deferred"); }
+                    let isolation=tokio::select!{
+                        _=expiry_stopped.changed()=>break,
+                        result=orange_control_plane::worker::isolation_observations::expire(expiry_store.pool())=>result
+                    };
+                    if isolation.is_err() {eprintln!("Isolation observation retention deferred");}
                     let pruned=tokio::select!{
                         _=expiry_stopped.changed()=>break,
                         result=orange_control_plane::events::prune_old_notifications(expiry_store.pool(),8,128)=>result

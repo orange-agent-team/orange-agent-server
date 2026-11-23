@@ -131,7 +131,7 @@ def installed_sources(scratch,powershell):
         assert manifest["source"]==source
         (scratch/"manifest.json").write_bytes(z.read("orange-worker/manifest.json"))
         (scratch/"Test-WorkerInventory.ps1").write_bytes(z.read("orange-worker/Test-WorkerInventory.ps1"))
-        for name in ("README.md","wsl.conf","oci-base.json","prepare-inference-policy.py","inspect-target.py","orange-isolation-probe"):
+        for name in ("README.md","wsl.conf","oci-base.json","prepare-inference-policy.py","inspect-target.py","orange-isolation-probe","release.json"):
             payload=z.read("orange-worker/isolation/"+name)
             assert hashlib.sha256(payload).hexdigest()==manifest["sha256"]["isolation/"+name]
             (destination/name).write_bytes(payload)
@@ -147,7 +147,8 @@ def installed_sources(scratch,powershell):
         metadata=json.loads(subprocess.check_output(command,cwd=scratch,env=env,text=True,timeout=20))
         info=metadata["isolation_files"]
         assert metadata["source"]==source and info["target"]=="x86_64-unknown-linux-musl"
-        assert not info["supply_authorized"] and not info["runtime_verified"] and len(info["member_sha256"])==6
+        assert not info["supply_authorized"] and not info["runtime_verified"] and len(info["member_sha256"])==7
+        assert info["wasm_enabled"] is False and info["report_version"]==1
         expected=manifest["sha256"]["isolation/orange-isolation-probe"]
         assert info["member_sha256"]["isolation/orange-isolation-probe"]==expected
         # Keep the original copy intact while checking that the reader refuses tampering.
@@ -159,7 +160,14 @@ def installed_sources(scratch,powershell):
             assert denied.returncode!=0 and not denied.stdout.strip()
         finally:
             original.unlink(missing_ok=True);saved.rename(original)
-        print("PASS packaged PowerShell verifies all six isolation payloads and rejects a changed distribution configuration")
+        changed=dict(manifest,wasm_enabled=True)
+        (scratch/"manifest.json").write_text(json.dumps(changed))
+        try:
+            denied=subprocess.run(command,cwd=scratch,env=env,capture_output=True,timeout=20)
+            assert denied.returncode!=0 and not denied.stdout.strip()
+        finally:
+            (scratch/"manifest.json").write_text(json.dumps(manifest))
+        print("PASS packaged PowerShell verifies the seven isolation payloads and rejects a changed distribution configuration")
     return destination
 
 

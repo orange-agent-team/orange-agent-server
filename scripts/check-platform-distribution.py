@@ -44,6 +44,9 @@ from platform_payload import service_files,write_archive
 files.update(service_files(ROOT,commit,"distribution/platform/README.md"))
 manifest={"source":commit,"target":report["target"],"build_macos":report["macos"],"programs":list(PLATFORM_PROGRAMS),
           "sha256":{n:sha(d) for n,d in sorted(files.items())}}
+release=json.loads(files["config/worker-isolation-release.v1.json"])
+manifest.update(wasm_enabled=release["wasm_enabled"],isolation_report_version=release["observation_version"],
+                gpu_supply_from_diagnostic=release["supply_authorized_by_report"])
 files["manifest.json"]=(json.dumps(manifest,indent=2)+"\n").encode()
 
 dest=ROOT/".local/platform-distributions";dest.mkdir(mode=0o700,parents=True,exist_ok=True)

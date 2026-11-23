@@ -173,6 +173,48 @@ fn welcome(s: &DeviceSession) -> worker::ServerFrame {
 #[tonic::async_trait]
 impl WorkerGateway for Gateway {
     type ControlStream = ReceiverStream<Result<worker::ServerFrame, Status>>;
+    async fn report_isolation_observation(
+        &self,
+        request: Request<worker::IsolationObservation>,
+    ) -> Result<Response<worker::IsolationObservationReceipt>, Status> {
+        use super::isolation_observations::Failure;
+        let fingerprint = fingerprint(&request)?;
+        let body = request.into_inner();
+        let _permit = self
+            .input_slots
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| Status::resource_exhausted("gateway busy"))?;
+        let checked = orange_protocol::isolation::check(&body).map_err(|e| match e {
+            orange_protocol::isolation::Error::Invalid => {
+                Status::invalid_argument("invalid isolation observation")
+            }
+            orange_protocol::isolation::Error::UnknownRelease => {
+                Status::failed_precondition("ISOLATION_RELEASE_UNKNOWN")
+            }
+        })?;
+        let session = self
+            .store
+            .current_peer(&fingerprint, &body.session_id)
+            .await
+            .map_err(status)?;
+        let receipt = self
+            .store
+            .record_isolation(&session, &body, checked)
+            .await
+            .map_err(|e| match e {
+                Failure::Conflict => {
+                    Status::already_exists("immutable isolation observation conflict")
+                }
+                Failure::Expired => Status::failed_precondition("ISOLATION_OBSERVATION_EXPIRED"),
+                Failure::Limited => {
+                    Status::resource_exhausted("isolation observation quota reached")
+                }
+                Failure::Session(error) => status(error),
+                Failure::Database(_) => Status::unavailable("observation store unavailable"),
+            })?;
+        Ok(Response::new(receipt))
+    }
     async fn report_transcription_observation(
         &self,
         request: Request<worker::TranscriptionObservation>,

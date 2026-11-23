@@ -83,7 +83,8 @@
     "locations": [
       "desktop private SQLite",
       "cloud PostgreSQL",
-      "browser session cookie"
+      "browser session cookie",
+      "private Worker diagnostic file and session-bound PostgreSQL metadata"
     ],
     "deletion_controller": "local user / E07 session service / cloud host",
     "postgres_columns": {
@@ -102,6 +103,14 @@
         "principal_id",
         "revoked",
         "absolute_expires_at"
+      ],
+      "worker_isolation_observations": [
+        "observation_id",
+        "node_id",
+        "session_id",
+        "connection_epoch",
+        "node_policy_generation",
+        "received_at"
       ]
     },
     "ownership_links": [
@@ -116,12 +125,21 @@
       [
         "user_sessions.user_id",
         "users.user_id"
+      ],
+      [
+        "worker_isolation_observations.node_id",
+        "nodes.node_id"
+      ],
+      [
+        "worker_isolation_observations.certificate_sha256",
+        "worker_credentials.certificate_sha256"
       ]
     ],
     "implementation": [
       "crates/agent-runtime/src/lib.rs",
       "services/control-plane/src/auth/users.rs",
-      "services/control-plane/src/admin/identity.rs"
+      "services/control-plane/src/admin/identity.rs",
+      "services/control-plane/src/worker/isolation_observations.rs"
     ]
   },
   "events": {

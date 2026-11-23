@@ -3,7 +3,7 @@ package orange.worker.v1;
 import "google/protobuf/timestamp.proto";
 
 // Transport peer identity comes from mTLS, never from node_id alone.
-service WorkerGateway { rpc ReadTranscriptionInput(TranscriptionInputRead) returns (TranscriptionInputChunk); rpc ReportTranscriptionObservation(TranscriptionObservation) returns (TranscriptionObservationReceipt); rpc Control(stream WorkerFrame) returns (stream ServerFrame); rpc ReadInput(InputReadRequest) returns (InputReadReply); rpc RenewExecution(ExecutionRenewalRequest) returns (ExecutionRenewalReply); rpc CommitOutput(stream OutputFrame) returns (OutputReceipt); rpc QueryOutput(OutputQuery) returns (OutputReceipt); rpc ConfirmCpuCleanup(CpuCleanupRequest) returns (CpuCleanupReceipt); }
+service WorkerGateway { rpc ReportIsolationObservation(IsolationObservation) returns (IsolationObservationReceipt); rpc ReadTranscriptionInput(TranscriptionInputRead) returns (TranscriptionInputChunk); rpc ReportTranscriptionObservation(TranscriptionObservation) returns (TranscriptionObservationReceipt); rpc Control(stream WorkerFrame) returns (stream ServerFrame); rpc ReadInput(InputReadRequest) returns (InputReadReply); rpc RenewExecution(ExecutionRenewalRequest) returns (ExecutionRenewalReply); rpc CommitOutput(stream OutputFrame) returns (OutputReceipt); rpc QueryOutput(OutputQuery) returns (OutputReceipt); rpc ConfirmCpuCleanup(CpuCleanupRequest) returns (CpuCleanupReceipt); }
 message Lease {
   string lease_id = 1;
   string job_id = 2;
@@ -177,3 +177,28 @@ message TranscriptionInputChunk {
 }
 
 message TranscriptionInputReference { uint32 version=1; string grant_id=2; string observation_id=3; }
+
+// Optional diagnostic-only extension. The authenticated peer and current epoch own the report.
+message IsolationObservation {
+  uint32 report_version = 1;
+  string session_id = 2;
+  uint64 connection_epoch = 3;
+  string request_id = 4;
+  string profile_id = 5;
+  string oci_policy_sha256 = 6;
+  string linux_probe_sha256 = 7;
+  bytes probe_json = 8;
+  int64 reported_capture_unix = 9;
+  optional uint64 node_policy_generation = 10;
+}
+message IsolationObservationReceipt {
+  uint32 report_version = 1;
+  string session_id = 2;
+  uint64 connection_epoch = 3;
+  string request_id = 4;
+  string observation_id = 5;
+  string observation_digest = 6;
+  string disposition = 7;
+  bool supply_authorized = 8;
+  bool wasm_enabled = 9;
+}

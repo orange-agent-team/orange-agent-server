@@ -1,0 +1,10 @@
+{
+  "profile_id": "wsl2-reviewed-text-v1",
+  "release_commit": "43faea235e52fa337e9d5a94c49a8b007815e878",
+  "windows_archive_sha256": "c019cb51c697e33d6e1bdeb88a1322f2e7f2c776a1a8317c9867b6f0d9c0d4d3",
+  "oci_policy_sha256": "2fa2e7a0b4597af9a30dfedbfec8c1a3500857f30d74d888aec4841d94d34fdb",
+  "linux_probe_sha256": "2d4afe4294922d1c2b4abb16ca4ab1ecf6cf2c038000d86ce93eca6c00f90544",
+  "observation_version": 1,
+  "supply_authorized_by_report": false,
+  "wasm_enabled": false
+}
