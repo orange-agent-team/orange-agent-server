@@ -419,3 +419,25 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod job_transition_matrix {
+    use super::*;
+    #[test]
+    fn every_job_state_accepts_only_its_start_cancel_and_completion_edges() {
+        use JobState::*;
+        for (state, start, cancel, complete, terminal) in [
+            (Queued, Some(Running), Some(Cancelled), None, false),
+            (Running, None, Some(Cancelling), Some(Succeeded), false),
+            (Cancelling, None, Some(Cancelling), None, false),
+            (Succeeded, None, None, None, true),
+            (Failed, None, None, None, true),
+            (Cancelled, None, None, None, true),
+        ] {
+            assert_eq!(state.start().ok(), start);
+            assert_eq!(state.request_cancel().ok(), cancel);
+            assert_eq!(state.complete().ok(), complete);
+            assert_eq!(state.terminal(), terminal);
+        }
+    }
+}

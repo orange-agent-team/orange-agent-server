@@ -64,7 +64,9 @@ with tempfile.TemporaryDirectory(prefix='orange-worker-mtls-') as directory:
         features='transcription-observation-tests'
     if environment.get("ORANGE_JOB_REVISION_BROWSER_TEST"): features="job-revision-browser-tests"
     command=[str(cargo),'test','-p','orange-control-plane','--features',features,'--test','worker_sessions','--locked']
-    if environment.get('ORANGE_JOB_REVISION_BROWSER_TEST'):
+    if environment.get('ORANGE_EXPIRED_ATTEMPT_TEST'):
+        command+=['execution_heartbeat_does_not_renew_and_expired_start_cannot_be_retrieved']
+    elif environment.get('ORANGE_JOB_REVISION_BROWSER_TEST'):
         command+=['input_cases::cancel_cases::browsers_review_personal_and_organization_job_versions_before_cancelling','--','--exact','--nocapture']
     elif environment.get('ORANGE_QUARANTINE_HEARTBEAT_TEST'):
         command+=['ordinary_authenticated_heartbeat_preserves_quarantine_and_cannot_recreate_execution','--','--exact']

@@ -12,7 +12,7 @@ from acceptance_origins import reserve_origins
 ROOT=Path(__file__).resolve().parents[1]
 p=argparse.ArgumentParser()
 p.add_argument("--environment",type=Path,default=ROOT/".local")
-p.add_argument("--section",required=True,choices=["race","cancel","upgrade","policy","interruptions","browser"])
+p.add_argument("--section",required=True,choices=["race","cancel","upgrade","policy","interruptions","browser","sequences"])
 p.add_argument("--web-repo",type=Path)
 args=p.parse_args()
 private=args.environment.resolve()
@@ -23,7 +23,16 @@ env.update(PATH=str(cargo.parent)+os.pathsep+env["PATH"],CARGO_NET_OFFLINE="true
 with database(private/"database-url","orange_job_revision_") as (_,url):
     env.update(ORANGE_TEST_DATABASE_URL=url,ORANGE_TEST_USER_CONFIG_FILE=str(private/"identity/user-config.json"),
                ORANGE_TEST_OIDC_CONFIG_FILE=str(private/"identity/admin-config.json"))
-    if args.section=="browser":
+    if args.section=="sequences":
+        case="every_job_state_accepts_only_its_start_cancel_and_completion_edges"
+        result=subprocess.run([cargo,"test","--locked","--offline","-p","orange-domain",case],cwd=ROOT,env=env,text=True,stdout=subprocess.PIPE)
+        print(result.stdout,flush=True)
+        result.check_returncode()
+        if case+" ... ok" not in result.stdout:raise RuntimeError("Domain transition matrix did not execute")
+        env["ORANGE_EXPIRED_ATTEMPT_TEST"]="1"
+        command=[sys.executable,ROOT/"scripts/check-worker-session.py"]
+        required={"execution_heartbeat_does_not_renew_and_expired_start_cannot_be_retrieved"}
+    elif args.section=="browser":
         if not args.web_repo:raise SystemExit("An explicit version-pinned Web checkout is required")
         web=args.web_repo.resolve()
         reserve_origins(43122)
