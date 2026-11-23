@@ -1,10 +1,11 @@
 # 四仓工具链与依赖资格
 
-开发机与本地 CI 使用同一个入口。运行 inventory 会解析实际 Cargo 元数据、npm 锁和本机工具版本，输出组件的版本、注册表校验值和上游声明的许可证。pins 输出开发 OCI 镜像和模型的不可变标识。reproduce 从各仓的 Git 提交导出四份干净源码，各自在新的构建目录运行。资格报告保留四个提交、锁文件摘要及本次构建产物摘要。
+开发机与本地 CI 使用同一个入口。运行 inventory 会解析实际 Cargo 元数据、npm 锁和本机工具版本，输出组件的版本、注册表校验值和上游声明的许可证。pins 输出开发 OCI 镜像和模型的不可变标识。inputs 查验专用 Docker 上下文内的真实镜像身份和架构，并逐字节核对四类模型缓存以及 llama-server 可执行文件。reproduce 从各仓的 Git 提交导出四份干净源码，各自在新的构建目录运行。资格报告保留四个提交、锁文件摘要及本次构建产物摘要。
 
 ```sh
 python3.12 scripts/qualify-toolchain.py --section inventory --desktop ../orange-agent-desktop --web ../orange-agent-web --admin ../orange-agent-admin
 python3.12 scripts/qualify-toolchain.py --section upgrade --desktop ../orange-agent-desktop
+python3.12 scripts/qualify-toolchain.py --section inputs --asset-cache .local
 python3.12 scripts/qualify-toolchain.py --section pins
 python3.12 scripts/qualify-toolchain.py --section reproduce --desktop ../orange-agent-desktop --web ../orange-agent-web --admin ../orange-agent-admin
 ```

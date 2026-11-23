@@ -13,6 +13,8 @@ import tarfile
 import tempfile
 import tomllib
 
+from linux_platform_inputs import local_image_id
+
 ROOT=Path(__file__).resolve().parents[1]
 TARGET="aarch64-apple-darwin"
 CRATES={
@@ -129,6 +131,35 @@ def pins():
     return {"images":images,"models":models,"llama_cpp":engine["commit"]}
 
 
+def installed_inputs(cache):
+    locks=pins()
+    cache=cache.resolve(strict=True)
+    docker=[shutil.which("docker") or "/usr/local/bin/docker","--context","colima-orange-agent"]
+    platform=load(ROOT/"config/linux-platform-arm64.lock.json")
+    images={}
+    for name in locks["images"]:
+        identity=local_image_id(docker,platform[name])
+        require(identity is not None,"Pinned local Linux/ARM64 image unavailable: "+name)
+        images[name]=identity
+    groups={"local-model":"model-runtime","local-embedding":"embedding-model","local-image":"image-model","local-transcription":"transcription-model"}
+    assets={}
+    for name,directory in groups.items():
+        spec=load(ROOT/"config"/(name+".lock.json"))
+        model=spec.get("model",spec)
+        files=model.get("files",{model.get("file","weights"):model})
+        for key,entry in files.items():
+            relative=entry["sha256"]+".gguf" if name=="local-model" else Path(key).name if name=="local-embedding" else key
+            path=(cache/directory/relative).resolve(strict=True)
+            require(path.is_relative_to(cache/directory) and path.is_file() and path.stat().st_size==entry["bytes"]
+                    and sha(path)==entry["sha256"],"Cached model differs from pinned input: "+name+"/"+key)
+            assets[name+"/"+key]=entry["sha256"]
+    receipt=load(cache/"model-runtime/build.json")
+    binary=cache/"model-runtime/build/bin/llama-server"
+    require(receipt["backend_commit"]==locks["llama_cpp"] and sha(binary)==receipt["executable_sha256"],
+            "Cached llama.cpp executable differs from its qualified build")
+    return {"images":images,"model_files":assets,"llama_server_sha256":receipt["executable_sha256"]}
+
+
 def clean_sources(root, dest, archive, commit):
     dest.mkdir()
     subprocess.run(["git","archive","--format=tar","-o",archive,commit],cwd=root,check=True)
@@ -203,13 +234,16 @@ def reproduce(roots,node):
 
 def main():
     parser=argparse.ArgumentParser()
-    parser.add_argument("--section",required=True,choices=["inventory","pins","upgrade","reproduce"])
+    parser.add_argument("--section",required=True,choices=["inventory","pins","inputs","upgrade","reproduce"])
     for key in ("desktop","web","admin"):
         parser.add_argument("--"+key,type=Path)
     parser.add_argument("--node",type=Path,default=Path.home()/".nvm/versions/node/v22.23.2/bin/node")
+    parser.add_argument("--asset-cache",type=Path,default=ROOT/".local")
     args=parser.parse_args()
     if args.section=="pins":
         report=pins()
+    elif args.section=="inputs":
+        report=installed_inputs(args.asset_cache)
     elif args.section=="upgrade":
         require(args.desktop is not None,"Supply a desktop checkout")
         report=upgrade(args.desktop.resolve())
