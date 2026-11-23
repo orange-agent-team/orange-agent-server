@@ -19,6 +19,69 @@ const EDIT: &str = "2026-11-01T00:00:00.000Z";
 fn notion_page(id: &str, title: &str, parent: Value) -> Value {
     json!({"object":"page","id":id,"in_trash":false,"last_edited_time":EDIT,"parent":parent,"properties":{"Name":{"type":"title","title":[{"type":"text","plain_text":title}]},"Status":{"type":"select","select":{"name":"Open"}}}})
 }
+async fn historical_opt_in(f: &Fixture, legacy: &str) -> String {
+    use std::process::Stdio;
+    use tokio::io::{AsyncBufReadExt, BufReader};
+    let mut child = tokio::process::Command::new(
+        std::env::var_os("ORANGE_TEST_SCHEMA47_USER_API").expect("verified schema47 producer"),
+    )
+    .env_clear()
+    .env("ORANGE_ENV", "development")
+    .env(
+        "DATABASE_URL",
+        std::env::var_os("ORANGE_TEST_DATABASE_URL").expect("owned test database"),
+    )
+    .env(
+        "ORANGE_USER_CONFIG_FILE",
+        std::env::var_os("ORANGE_TEST_USER_CONFIG_FILE").expect("development issuer"),
+    )
+    .env("ORANGE_USER_BIND", "127.0.0.1:0")
+    .stdin(Stdio::null())
+    .stdout(Stdio::null())
+    .stderr(Stdio::piped())
+    .kill_on_drop(true)
+    .spawn()
+    .expect("start schema47 producer");
+    let mut log = BufReader::new(child.stderr.take().expect("readiness")).lines();
+    let address = tokio::time::timeout(Duration::from_secs(30), async {
+        while let Some(line) = log.next_line().await.expect("readiness output") {
+            if let Some(rest) = line.strip_prefix("Development User API listening on ") {
+                return rest
+                    .split(';')
+                    .next()
+                    .expect("address")
+                    .parse::<std::net::SocketAddr>()
+                    .expect("loopback address");
+            }
+        }
+        panic!("Historical API exited before binding")
+    })
+    .await
+    .expect("historical readiness deadline");
+    let existing =
+        super::connector_run::opted_in_using(f, legacy, "allow_external_connectors", Some(address))
+            .await;
+    assert!(child.try_wait().expect("live producer").is_none());
+    let pid = rustix::process::Pid::from_raw(child.id().expect("owned historical process") as i32)
+        .expect("owned PID");
+    rustix::process::kill_process(pid, rustix::process::Signal::INT)
+        .expect("stop schema47 API before migration");
+    assert!(
+        tokio::time::timeout(Duration::from_secs(15), child.wait())
+            .await
+            .expect("shutdown deadline")
+            .expect("exit status")
+            .success()
+    );
+    let still_old:(i64,bool)=sqlx::query_as("SELECT max(version),to_regprocedure('orange_artifact_content_live(text)') IS NULL FROM _sqlx_migrations WHERE success")
+        .fetch_one(&f.pool).await.expect("old schema still unmodified");
+    assert_eq!(still_old, (47, true));
+    println!(
+        "Verified genuine schema-47 Run opt-in, changed-flag conflict and clean producer exit before migration"
+    );
+    existing
+}
+
 async fn preserved_legacy_grants() {
     let db =
         Store::connect(&std::env::var("ORANGE_TEST_DATABASE_URL").expect("disposable database"))
@@ -45,7 +108,7 @@ async fn preserved_legacy_grants() {
     assert_eq!(version, 47);
     let f = fixture_from_store(&db).await;
     let (legacy, _root) = active_run(&f).await;
-    let existing = opted_in(&f, &legacy, "allow_external_connectors").await;
+    let existing = historical_opt_in(&f, &legacy).await;
     for grant in ["old-active", "old-revoked"] {
         sqlx::query("INSERT INTO repository_source_grants(grant_id,run_id,provider,source_id,source_digest,repository_ids,request_key,request_digest,expires_at) VALUES($1,$2,'github','stored',repeat('a',64),ARRAY['17'],$1,repeat('b',64),clock_timestamp()+interval '1 hour')").bind(grant).bind(&existing).execute(pool).await.expect("prior row");
     }

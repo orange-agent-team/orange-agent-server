@@ -105,6 +105,47 @@ pub(super) async fn browser(f: &Fixture, run: &str, driver: String) -> Value {
     feature = "confluence-fixture-tests"
 ))]
 pub(super) async fn opted_in(f: &Fixture, legacy: &str, flag: &str) -> String {
+    opted_in_using(f, legacy, flag, None).await
+}
+
+// The schema-47 migration fixture uses a pinned historical process for both requests.
+// Other cases continue to invoke the current production router.
+#[cfg(any(
+    feature = "repository-fixture-tests",
+    feature = "notion-fixture-tests",
+    feature = "confluence-fixture-tests"
+))]
+pub(super) async fn opted_in_using(
+    f: &Fixture,
+    legacy: &str,
+    flag: &str,
+    old: Option<std::net::SocketAddr>,
+) -> String {
+    async fn create_run(
+        f: &Fixture,
+        flag: &str,
+        body: Value,
+        old: Option<std::net::SocketAddr>,
+    ) -> (StatusCode, Value) {
+        if let Some(address) = old {
+            assert!(address.ip().is_loopback() && address.port() != 0);
+            let response = reqwest::Client::builder()
+                .no_proxy()
+                .redirect(reqwest::redirect::Policy::none())
+                .timeout(std::time::Duration::from_secs(10))
+                .build()
+                .expect("local historical client")
+                .post(format!("http://{address}/api/v1/agent/runs"))
+                .headers(keyed(f, flag))
+                .json(&body)
+                .send()
+                .await
+                .expect("historical Run API");
+            let status = response.status();
+            return (status, response.json().await.expect("historical response"));
+        }
+        request(f, "POST", "/api/v1/agent/runs", Some(body), keyed(f, flag)).await
+    }
     use sqlx::Row;
     // Admission uses the real create handler. Only the platform Host's readiness is a fixture here.
     let input = sqlx::query(
@@ -117,14 +158,7 @@ pub(super) async fn opted_in(f: &Fixture, legacy: &str, flag: &str) -> String {
     sqlx::query("INSERT INTO cloud_pool_hosts(host_instance_id,certificate_sha256,profile_id,attestation_digest,region_id,max_workspaces,enabled,credential_expires_at,accepting,live_until,input_protocol_version) VALUES($1,$2,'dev-gvisor-linux-arm64-v1',$3,'dev',8,true,clock_timestamp()+interval '10 minutes',true,clock_timestamp()+interval '10 minutes',1)").bind(Uuid::new_v4().to_string()).bind(hex::encode(Sha256::digest(format!("{legacy}/{flag}").as_bytes()))).bind("1".repeat(64)).execute(&f.pool).await.expect("registered host fixture");
     let mut create = json!({"root_budget_id":input.get::<String,_>("root_budget_id"),"input_artifact_id":input.get::<String,_>("input_artifact_id"),"input_version_id":input.get::<String,_>("input_version_id"),"resource_profile_id":"dev-gvisor-linux-arm64-v1","workspace_ttl_seconds":300});
     create[flag] = json!(true);
-    let (code, result) = request(
-        f,
-        "POST",
-        "/api/v1/agent/runs",
-        Some(create.clone()),
-        keyed(f, flag),
-    )
-    .await;
+    let (code, result) = create_run(f, flag, create.clone(), old).await;
     assert!(
         matches!(code, StatusCode::OK | StatusCode::CREATED),
         "{result}"
@@ -132,15 +166,7 @@ pub(super) async fn opted_in(f: &Fixture, legacy: &str, flag: &str) -> String {
     let run = result["run_id"].as_str().expect("created run");
     create[flag] = json!(false);
     assert_eq!(
-        request(
-            f,
-            "POST",
-            "/api/v1/agent/runs",
-            Some(create),
-            keyed(f, flag)
-        )
-        .await
-        .0,
+        create_run(f, flag, create, old).await.0,
         StatusCode::CONFLICT
     );
     sqlx::query("UPDATE cloud_runs SET status='running',version=version+1 WHERE run_id=$1")
