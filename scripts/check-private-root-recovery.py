@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Restore an actual older pg_dump into a new quarantined DB and exercise the recovered object root."""
 import argparse
+from contextlib import ExitStack
 import hashlib
 import http.client
 import json
@@ -17,6 +18,7 @@ import uuid
 
 from owned_postgres import database
 from platform_package_smoke import listening
+from verified_platform_archive import binaries,unpack_archive
 
 ROOT=Path(__file__).resolve().parents[1]
 
@@ -40,13 +42,32 @@ def api(origin,method,path,session,csrf,site,key=None,payload=None):
 def main():
     parser=argparse.ArgumentParser()
     parser.add_argument("--environment",type=Path,default=ROOT/".local")
-    parser.add_argument("--current-bin",type=Path,required=True)
-    parser.add_argument("--baseline-bin",type=Path)
-    parser.add_argument("--tool",type=Path,default=ROOT/"distribution/platform/recover-private-artifacts.py")
-    args=parser.parse_args();private=args.environment.resolve()
-    current=args.current_bin.resolve(strict=True)
-    old=args.baseline_bin.resolve(strict=True) if args.baseline_bin else current
-    tool=[sys.executable,str(args.tool.resolve(strict=True))]
+    candidate=parser.add_mutually_exclusive_group(required=True)
+    candidate.add_argument("--current-bin",type=Path)
+    candidate.add_argument("--installed",action="store_true")
+    previous=parser.add_mutually_exclusive_group()
+    previous.add_argument("--baseline-bin",type=Path)
+    previous.add_argument("--legacy-archive",type=Path)
+    parser.add_argument("--legacy-sha256")
+    args=parser.parse_args()
+    with ExitStack() as stack:
+        if args.installed:
+            native=stack.enter_context(binaries(None))
+            current=native/"orange-user-api"
+            tool=native.parent/"recover-private-artifacts.py"
+        else:
+            current=args.current_bin.resolve(strict=True)
+            tool=ROOT/"distribution/platform/recover-private-artifacts.py"
+        if args.legacy_archive:
+            require(args.legacy_sha256 and re.fullmatch(r"[0-9a-f]{64}",args.legacy_sha256),"trusted historical digest required")
+            legacy=stack.enter_context(unpack_archive(args.legacy_archive,args.legacy_sha256))
+            old=legacy/"bin/orange-user-api"
+        else:
+            old=args.baseline_bin.resolve(strict=True) if args.baseline_bin else current
+        verify(args.environment.resolve(),current,old,[sys.executable,str(tool)])
+
+
+def verify(private,current,old,tool):
     cfg=private/"identity/user-config.json";site=json.loads(cfg.read_bytes())["user_origin"]
     require(site=="https://127.0.0.1:43122","dedicated development config required")
     def executable(name):
@@ -75,6 +96,8 @@ def main():
             dest.chmod(0o600)
             subprocess.run([openssl,"pkey","-in",dest,"-pubout","-out",public],check=True)
         copy=work/"restored-objects";backup=work/"older.dump";out=work/"quarantine"
+        refused=subprocess.run([current,"--migrate-private-restore"],env=runtime,capture_output=True,timeout=10)
+        require(refused.returncode!=0,"offline migration accepted a normal application database")
         with listening(old,runtime,"User API") as origin:
             sql(f"""INSERT INTO owners(owner_id) VALUES('{owner}'); INSERT INTO users(user_id,issuer,subject,personal_owner_id) VALUES('{owner}','test','{owner}','{owner}');
                 INSERT INTO wallets(owner_id,gift) VALUES('{owner}',1000); INSERT INTO user_sessions(token_hash,session_id,user_id,csrf_token,auth_time,idle_expires_at,absolute_expires_at)

@@ -44,7 +44,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
         }
         let store = Store::connect(&database_url).await?;
         let private:bool=sqlx::query_scalar("SELECT datname=$1 AND pg_get_userbyid(datdba)=current_user AND NOT EXISTS(
-            SELECT FROM aclexplode(coalesce(datacl,acldefault('d',datdba))) g WHERE g.grantee=0 AND g.privilege_type='CONNECT')
+            SELECT FROM aclexplode(coalesce(datacl,acldefault('d',datdba))) g WHERE g.grantee<>datdba AND g.privilege_type='CONNECT')
             FROM pg_database WHERE datname=current_database()")
             .bind(database).fetch_one(store.pool()).await?;
         if !private {
