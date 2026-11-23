@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 from urllib.parse import unquote,urlsplit,urlunsplit
 import uuid
 
@@ -28,7 +29,12 @@ def database_at(url,prefix):
     try:
         yield name,urlunsplit(base._replace(path='/'+name))
     finally:
-        if query("SELECT count(*) FROM pg_stat_activity WHERE datname='"+name+"'")!='0':
-            raise RuntimeError('Owned database retained with open connections: '+name)
+        # Child exit may precede PostgreSQL observing its last socket close.
+        # Only drop after the server itself reports no connections.
+        deadline=time.monotonic()+5
+        while query("SELECT count(*) FROM pg_stat_activity WHERE datname='"+name+"'")!='0':
+            if time.monotonic()>=deadline:
+                raise RuntimeError('Owned database retained with open connections: '+name)
+            time.sleep(0.1)
         query(f'DROP DATABASE "{name}"')
         print('Removed owned test database '+name,flush=True)
