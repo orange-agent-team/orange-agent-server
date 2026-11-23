@@ -5,6 +5,7 @@ pub mod routes;
 
 pub use crate::auth::{hash_secret, random_secret};
 use axum::{
+    Json,
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
