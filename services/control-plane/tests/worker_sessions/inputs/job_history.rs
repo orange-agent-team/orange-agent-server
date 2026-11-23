@@ -85,7 +85,28 @@ async fn owned_history_resets_after_retention_replays_only_digests_and_binds_rea
         .await
         .expect("input reader");
     let server = Running::start_with_input(&f.d.store, Some(reader)).await;
-    let (connection, _, _, _) = receiver(&f, &server).await;
+    let (mut connection, mut node, mut journal, record) = receiver(&f, &server).await;
+    let (mut broker, supervisor) = broker(&f).await;
+    connection
+        .reserve_execution(
+            &mut journal,
+            &mut broker,
+            &supervisor,
+            "cpu",
+            &record.command_id,
+        )
+        .expect("local reservation");
+    connection
+        .authorize_execution(
+            &mut journal,
+            &mut node,
+            "input-capabilities",
+            &record.command_id,
+        )
+        .await
+        .expect("durable start grant")
+        .confirm(&mut journal, &mut broker, &supervisor)
+        .expect("confirm start");
     let a = assignment(&f).await;
     let attempt = a.lease.as_ref().expect("lease").attempt_id.as_str();
     let (_, page) = read(
