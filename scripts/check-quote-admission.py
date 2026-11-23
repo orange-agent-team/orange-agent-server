@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check immutable quote terms, expiry during admission, and authenticated-effect replay."""
+"""Check immutable quote terms, expiry during admission, and replay of a previously committed reservation."""
 import argparse
 import os
 from pathlib import Path
