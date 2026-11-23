@@ -18,7 +18,7 @@ use orange_protocol::{
 use prost::Message;
 pub use rejections::{RejectionKind, RejectionView};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
-use std::{fs::File, path::Path};
+use std::path::Path;
 #[derive(Debug, thiserror::Error)]
 pub enum ExecutionJournalError {
     #[error("invalid or conflicting execution command")]
@@ -43,7 +43,7 @@ pub struct ExecutionRecord {
 }
 pub struct ExecutionJournal {
     connection: Connection,
-    _lock: File,
+    _lock: storage::JournalLock,
     node: String,
 }
 impl ExecutionJournal {

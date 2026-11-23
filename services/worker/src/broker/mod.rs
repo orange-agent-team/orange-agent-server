@@ -7,7 +7,6 @@ use orange_protocol::{request_digest, valid_digest, valid_id};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 use std::{
-    fs::File,
     future::Future,
     path::Path,
     pin::Pin,
@@ -256,7 +255,7 @@ pub enum Invalidation {
 }
 pub struct Broker {
     connection: Connection,
-    _lock: File,
+    _lock: storage::JournalLock,
     epoch: i64,
     started: Instant,
     config: BrokerConfig,
