@@ -82,6 +82,7 @@ pub struct ActionRequest {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum ActionPayload {
+    Issuer(device_issuers::Withdraw),
     Node(NodePayload),
     Case(case_edit::Edit),
     Price(prices::Publish),
@@ -91,6 +92,7 @@ pub enum ActionPayload {
     SupportRevoke(support::Revoke),
 }
 mod case_edit;
+pub(super) mod device_issuers;
 pub(super) mod prices;
 pub(crate) mod refunds;
 pub(super) mod roles;
@@ -148,6 +150,7 @@ fn reason(value: &str, min: usize) -> bool {
 impl ActionRequest {
     fn policy(&self) -> &'static str {
         match self.payload {
+            ActionPayload::Issuer(_) => "worker-issuer-withdraw-v1",
             ActionPayload::Role(_) => "admin-role-governance-v1",
             ActionPayload::Case(case_edit::Edit::ReleaseEarning { .. }) => {
                 "admin-provider-credits-v1"
@@ -164,6 +167,7 @@ impl ActionRequest {
     }
     fn read_permission(&self) -> &'static str {
         match self.payload {
+            ActionPayload::Issuer(_) => "device_issuers.read",
             ActionPayload::Role(_) => "admins.roles.read",
             ActionPayload::Case(_) => "cases.read",
             ActionPayload::Price(_) => "pricing.read",
@@ -174,6 +178,9 @@ impl ActionRequest {
     }
     fn checker_permission(&self) -> Option<&'static str> {
         match (&self.action_type[..], &self.payload) {
+            ("device_issuer.withdraw", ActionPayload::Issuer(_)) => {
+                Some("device_issuers.withdraw.approve")
+            }
             ("admin.role_grant", ActionPayload::Role(_)) => Some("admins.grant.approve"),
             ("admin.role_revoke", ActionPayload::Role(_)) => Some("admins.revoke.approve"),
             ("support_access.grant", ActionPayload::SupportGrant(_)) => {
@@ -197,6 +204,7 @@ impl ActionRequest {
 
     fn permission(&self) -> Result<&'static str, AdminError> {
         match (self.action_type.as_str(), &self.payload) {
+            ("device_issuer.withdraw", ActionPayload::Issuer(_)) => Ok("device_issuers.withdraw"),
             ("admin.role_grant", ActionPayload::Role(_)) => Ok("admins.grant"),
             ("admin.role_revoke", ActionPayload::Role(_)) => Ok("admins.revoke"),
             ("node.drain", ActionPayload::Node(_)) => Ok("nodes.drain"),
@@ -233,6 +241,7 @@ impl ActionRequest {
                 return p.validate(self);
             }
             ActionPayload::Refund(p) => return p.validate(self),
+            ActionPayload::Issuer(p) => return p.validate(self),
             ActionPayload::Role(p) => return p.validate(self),
             ActionPayload::SupportGrant(p) => return p.validate(self),
             ActionPayload::SupportRevoke(p) => return p.validate(self),
@@ -461,6 +470,7 @@ fn response(doc: Value, status: StatusCode) -> Result<Response, AdminError> {
 }
 async fn target(tx: &mut Tx<'_>, request: &ActionRequest) -> Result<(i64, String), AdminError> {
     let node = match &request.payload {
+        ActionPayload::Issuer(p) => return device_issuers::target(tx, request, p).await,
         ActionPayload::SupportGrant(p) => {
             support::check_issue(tx, request, p).await?;
             return Ok((1, "authorized".into()));
@@ -725,6 +735,11 @@ async fn mutate(
                 {
                     return Err(AdminError::Conflict);
                 }
+                if decision.decision == "approve"
+                    && let ActionPayload::Issuer(p) = &m.request.payload
+                {
+                    device_issuers::target(&mut tx, &m.request, p).await?;
+                }
                 check_preview(&m.doc, &decision.payload_digest, &decision.policy_version)?;
                 target(&mut tx, &m.request).await?;
                 let time = now(&mut tx).await?;
@@ -757,6 +772,15 @@ async fn mutate(
                 }
                 let (version, node_state) = target(&mut tx, &m.request).await?;
                 match &m.request.payload {
+                    ActionPayload::Issuer(p) => {
+                        let maker = text(&m.doc, "requested_by")?;
+                        let checker = text(&m.doc["approvals"][0], "approver_id")?;
+                        device_issuers::apply(&mut tx, &m.request, p, action, maker, checker)
+                            .await?;
+                        m.doc["business_ref"] = json!(p.signing_key_sha256);
+                        m.doc["state"] = json!("succeeded");
+                        why = "Device issuer signing key permanently withdrawn".into();
+                    }
                     ActionPayload::Role(binding) => {
                         roles::apply(&mut tx, &m.request, binding).await?;
                         m.doc["business_ref"] = json!(binding.principal_id);

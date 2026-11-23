@@ -47,6 +47,9 @@ pub(super) async fn redeem(
         return Err(AuthError::Invalid.into());
     }
     let mut tx = identity.pool.begin().await?;
+    sqlx::query("SELECT lock_worker_issuer_policy()")
+        .execute(&mut *tx)
+        .await?;
     let grant=sqlx::query("SELECT owner_id,requested_by FROM worker_enrollment_grants WHERE request_id=$1::text::uuid AND exchange_token_sha256=$2
         AND state='authorized' AND expires_at>clock_timestamp()").bind(&id).bind(&hash).fetch_optional(&mut *tx).await?.ok_or_else(invalid)?;
     let owner: String = grant.try_get("owner_id")?;
@@ -60,6 +63,13 @@ pub(super) async fn redeem(
     let cert=sqlx::query("SELECT node_id,region_id,certificate_sha256,issuer_sha256,leaf_pem,floor(extract(epoch FROM expires_at))::bigint AS expiry,
         redemption_id::text FROM worker_enrollment_certificates WHERE request_id=$1::text::uuid AND not_before<=clock_timestamp() AND expires_at>clock_timestamp() FOR UPDATE")
         .bind(&id).fetch_optional(&mut *tx).await?.ok_or(UserApiError(StatusCode::CONFLICT,"ENROLLMENT_CERTIFICATE_UNAVAILABLE"))?;
+    if !sqlx::query_scalar::<_, bool>("SELECT worker_issued_leaf_allowed($1)")
+        .bind(cert.try_get::<&str, _>("issuer_sha256")?)
+        .fetch_one(&mut *tx)
+        .await?
+    {
+        return Err(invalid());
+    }
     let node: String = cert.try_get("node_id")?;
     let fingerprint: String = cert.try_get("certificate_sha256")?;
     if let Some(prior) = cert.try_get::<Option<String>, _>("redemption_id")? {

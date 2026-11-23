@@ -2,7 +2,7 @@
 //! of the underlying Job, cleanup, payment or reconciliation.
 use super::*;
 use axum::extract::Path;
-pub(super) fn request_id(headers: &HeaderMap) -> Result<String, AdminError> {
+pub(in crate::admin) fn request_id(headers: &HeaderMap) -> Result<String, AdminError> {
     if headers.get_all("x-request-id").iter().count() > 1 {
         return Err(AdminError::Invalid);
     }
@@ -16,7 +16,7 @@ pub(super) fn request_id(headers: &HeaderMap) -> Result<String, AdminError> {
         None => Ok(uuid::Uuid::new_v4().to_string()),
     }
 }
-pub(super) fn response(value: Value, request: &str) -> Result<Response, AdminError> {
+pub(in crate::admin) fn response(value: Value, request: &str) -> Result<Response, AdminError> {
     let mut result = Json(value).into_response();
     result.headers_mut().insert(
         "x-request-id",
@@ -74,7 +74,7 @@ fn project(row: &sqlx::postgres::PgRow) -> Result<Value, AdminError> {
     }
     Ok(value)
 }
-pub(super) async fn record_read(
+pub(in crate::admin) async fn record_read(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     current: &CurrentSession,
     scope: &Scope,

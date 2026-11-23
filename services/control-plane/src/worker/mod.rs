@@ -17,3 +17,5 @@ pub mod device_issuer;
 pub(crate) mod enrollment_csr;
 
 pub(crate) mod enrollment_permissions;
+
+mod trust_path;

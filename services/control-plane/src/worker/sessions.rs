@@ -49,6 +49,7 @@ impl WorkerSessionStore {
         &self,
         hello: &orange_protocol::grpc::worker::Hello,
         fingerprint: &str,
+        signing_keys: &[String],
     ) -> Result<DeviceSession, SessionError> {
         let node = hello.node_id.as_str();
         let capabilities = hello.capabilities_digest.as_str();
@@ -71,8 +72,21 @@ impl WorkerSessionStore {
             return Err(SessionError::Invalid);
         }
         let mut tx = self.pool.begin().await?;
+        sqlx::query("SELECT lock_worker_issuer_policy()")
+            .execute(&mut *tx)
+            .await?;
+        if !sqlx::query_scalar::<_, bool>("SELECT worker_trust_path_allowed($1::text[])")
+            .bind(signing_keys)
+            .fetch_one(&mut *tx)
+            .await?
+        {
+            return Err(SessionError::Unauthorized);
+        }
         authorize(&mut tx, node, fingerprint).await?;
         let id = Uuid::new_v4().to_string();
+        sqlx::query("INSERT INTO worker_control_trust_paths(node_id,session_id,certificate_sha256,signing_keys) VALUES($1,$2,$3,$4)
+            ON CONFLICT(node_id) DO UPDATE SET session_id=excluded.session_id,certificate_sha256=excluded.certificate_sha256,signing_keys=excluded.signing_keys")
+            .bind(node).bind(&id).bind(fingerprint).bind(signing_keys).execute(&mut *tx).await?;
         let row=sqlx::query("INSERT INTO worker_sessions(node_id,gateway_instance_id,connection_epoch,session_id,certificate_sha256,capabilities_digest,last_seen_at,expires_at,node_control_version,execution_control_version,rejection_receipts_version,input_artifacts_version,renewal_version,output_version,cpu_cleanup_version) VALUES($1,$2,1,$3,$4,$5,clock_timestamp(),clock_timestamp()+interval '45 seconds',$6,$7,$8,$9,$10,$11,$12) ON CONFLICT(node_id) DO UPDATE SET gateway_instance_id=excluded.gateway_instance_id,connection_epoch=worker_sessions.connection_epoch+1,session_id=excluded.session_id,certificate_sha256=excluded.certificate_sha256,capabilities_digest=excluded.capabilities_digest,reported_capability_snapshot_id=NULL,last_seen_at=excluded.last_seen_at,expires_at=excluded.expires_at,node_control_version=excluded.node_control_version,execution_control_version=excluded.execution_control_version,rejection_receipts_version=excluded.rejection_receipts_version,input_artifacts_version=excluded.input_artifacts_version,renewal_version=excluded.renewal_version,output_version=excluded.output_version,cpu_cleanup_version=excluded.cpu_cleanup_version RETURNING connection_epoch,floor(extract(epoch FROM expires_at))::bigint AS expires")
             .bind(node).bind(&self.gateway).bind(&id).bind(fingerprint).bind(capabilities).bind(node_control_version as i32).bind(execution_control_version as i32).bind(rejection_receipts_version as i32).bind(input_artifacts_version as i32).bind(renewal_version as i32).bind(output_version as i32).bind(cpu_cleanup_version as i32).fetch_one(&mut *tx).await?;
         if transcription_input_version == 1 {
@@ -180,6 +194,9 @@ pub(crate) async fn authorize(
     node: &str,
     fingerprint: &str,
 ) -> Result<(), SessionError> {
+    sqlx::query("SELECT lock_worker_issuer_policy()")
+        .execute(&mut **tx)
+        .await?;
     let row=sqlx::query("SELECT n.owner_id,u.personal_owner_id,u.user_id FROM nodes n JOIN worker_credentials c ON c.node_id=n.node_id JOIN owners o ON o.owner_id=n.owner_id JOIN users u ON u.user_id=c.enrollment_user_id WHERE n.node_id=$1 AND c.certificate_sha256=$2 AND n.state!='revoked' AND c.active AND c.not_before<=clock_timestamp() AND c.expires_at>clock_timestamp() AND o.state='active' AND u.active FOR UPDATE OF n FOR SHARE OF c,o,u").bind(node).bind(fingerprint).fetch_optional(&mut **tx).await?.ok_or(SessionError::Unauthorized)?;
     let owner: String = row.try_get("owner_id")?;
     if owner != row.try_get::<String, _>("personal_owner_id")? {
@@ -200,7 +217,7 @@ async fn current(
     tx: &mut Transaction<'_, Postgres>,
     s: &DeviceSession,
 ) -> Result<(), SessionError> {
-    let valid:Option<i64>=sqlx::query_scalar("SELECT connection_epoch FROM worker_sessions WHERE node_id=$1 AND gateway_instance_id=$2 AND connection_epoch=$3 AND session_id=$4 AND certificate_sha256=$5 AND node_control_version=$6 AND execution_control_version=$7 AND rejection_receipts_version=$8 AND input_artifacts_version=$9 AND renewal_version=$10 AND output_version=$11 AND cpu_cleanup_version=$12 AND expires_at>clock_timestamp() FOR UPDATE").bind(&s.node_id).bind(&s.gateway_instance_id).bind(s.connection_epoch).bind(&s.session_id).bind(&s.certificate_sha256).bind(s.node_control_version as i32).bind(s.execution_control_version as i32).bind(s.rejection_receipts_version as i32).bind(s.input_artifacts_version as i32).bind(s.renewal_version as i32).bind(s.output_version as i32).bind(s.cpu_cleanup_version as i32).fetch_optional(&mut **tx).await?;
+    let valid:Option<i64>=sqlx::query_scalar("SELECT connection_epoch FROM worker_sessions WHERE node_id=$1 AND gateway_instance_id=$2 AND connection_epoch=$3 AND session_id=$4 AND certificate_sha256=$5 AND node_control_version=$6 AND execution_control_version=$7 AND rejection_receipts_version=$8 AND input_artifacts_version=$9 AND renewal_version=$10 AND output_version=$11 AND cpu_cleanup_version=$12 AND expires_at>clock_timestamp() AND worker_control_path_allowed(node_id,session_id,certificate_sha256) FOR UPDATE").bind(&s.node_id).bind(&s.gateway_instance_id).bind(s.connection_epoch).bind(&s.session_id).bind(&s.certificate_sha256).bind(s.node_control_version as i32).bind(s.execution_control_version as i32).bind(s.rejection_receipts_version as i32).bind(s.input_artifacts_version as i32).bind(s.renewal_version as i32).bind(s.output_version as i32).bind(s.cpu_cleanup_version as i32).fetch_optional(&mut **tx).await?;
     if valid.is_some() && s.transcription_input_version == 1 {
         let enabled:bool=sqlx::query_scalar("SELECT transcription_input_version=1 FROM worker_sessions WHERE node_id=$1 AND session_id=$2")
             .bind(&s.node_id).bind(&s.session_id).fetch_one(&mut **tx).await?;
@@ -232,7 +249,7 @@ pub(crate) async fn finish(
     mut tx: Transaction<'_, Postgres>,
     s: &DeviceSession,
 ) -> Result<(), SessionError> {
-    let valid:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM worker_credentials c JOIN worker_sessions s ON s.certificate_sha256=c.certificate_sha256 WHERE c.certificate_sha256=$1 AND c.active AND c.expires_at>clock_timestamp() AND c.not_before<=clock_timestamp() AND s.node_id=$2 AND s.session_id=$3 AND s.connection_epoch=$4 AND s.expires_at>clock_timestamp())").bind(&s.certificate_sha256).bind(&s.node_id).bind(&s.session_id).bind(s.connection_epoch).fetch_one(&mut *tx).await?;
+    let valid:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM worker_credentials c JOIN worker_sessions s ON s.certificate_sha256=c.certificate_sha256 WHERE c.certificate_sha256=$1 AND c.active AND c.expires_at>clock_timestamp() AND c.not_before<=clock_timestamp() AND s.node_id=$2 AND s.session_id=$3 AND s.connection_epoch=$4 AND s.expires_at>clock_timestamp() AND worker_control_path_allowed(s.node_id,s.session_id,s.certificate_sha256))").bind(&s.certificate_sha256).bind(&s.node_id).bind(&s.session_id).bind(s.connection_epoch).fetch_one(&mut *tx).await?;
     if !valid {
         return Err(SessionError::Stale);
     }

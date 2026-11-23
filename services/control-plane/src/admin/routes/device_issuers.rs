@@ -57,9 +57,9 @@ pub(super) async fn list(
             GROUP BY e.issuer_sha256 ORDER BY e.issuer_sha256 LIMIT $3
         ), facts AS (
             SELECT e.issuer_sha256, e.expires_at, e.prepared_at,
-                (e.redeemed_at IS NULL AND g.state='authorized' AND g.expires_at>statement_timestamp()
+                (e.redeemed_at IS NULL AND worker_issued_leaf_allowed(e.issuer_sha256) AND g.state='authorized' AND g.expires_at>statement_timestamp()
                  AND e.not_before<=statement_timestamp() AND e.expires_at>statement_timestamp()) AS waiting,
-                (e.redeemed_at IS NOT NULL AND g.state='authorized' AND c.active AND c.node_id=e.node_id
+                (e.redeemed_at IS NOT NULL AND worker_issued_leaf_allowed(e.issuer_sha256) AND g.state='authorized' AND c.active AND c.node_id=e.node_id
                  AND n.state!='revoked' AND e.not_before<=statement_timestamp() AND e.expires_at>statement_timestamp() AND c.not_before<=statement_timestamp() AND c.expires_at>statement_timestamp()) AS live,
                 LEAST(e.expires_at,c.expires_at) AS valid_until
             FROM page JOIN worker_enrollment_certificates e USING(issuer_sha256)

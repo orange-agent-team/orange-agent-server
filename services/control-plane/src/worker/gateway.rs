@@ -28,6 +28,7 @@ pub struct GatewayTls {
 }
 #[derive(Clone)]
 struct Gateway {
+    trust_roots: Arc<Option<super::trust_path::Roots>>,
     store: WorkerSessionStore,
     slots: Arc<Semaphore>,
     input_slots: Arc<Semaphore>,
@@ -79,7 +80,9 @@ async fn serve_storage(
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<(), tonic::transport::Error> {
     let (stop, receiver) = watch::channel(false);
+    let trust_roots = Arc::new(super::trust_path::Roots::from_pem(&tls.client_ca_pem).ok());
     let gateway = Gateway {
+        trust_roots,
         store,
         slots: Arc::new(Semaphore::new(128)),
         input_slots: Arc::new(Semaphore::new(16)),
@@ -520,6 +523,12 @@ impl WorkerGateway for Gateway {
             .first()
             .ok_or_else(|| Status::unauthenticated("peer certificate required"))?;
         let fingerprint = hex::encode(Sha256::digest(leaf.as_ref()));
+        let signing_keys = self
+            .trust_roots
+            .as_ref()
+            .as_ref()
+            .ok_or_else(|| Status::unavailable("client trust store unavailable"))?
+            .signing_keys(&certificates)?;
         let mut stream = request.into_inner();
         let mut shutdown = self.shutdown.clone();
         if *shutdown.borrow() {
@@ -551,7 +560,7 @@ impl WorkerGateway for Gateway {
             })?;
         let session = tokio::time::timeout(
             Duration::from_secs(5),
-            self.store.claim(&hello, &fingerprint),
+            self.store.claim(&hello, &fingerprint, &signing_keys),
         )
         .await
         .map_err(|_| Status::unavailable("authoritative store timeout"))?

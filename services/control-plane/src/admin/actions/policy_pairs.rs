@@ -5,6 +5,10 @@ fn accepted_actions_require_their_own_payload_family() {
     let nodes = ["node.drain", "node.quarantine", "node.resume"];
     let families: &[(&[&str], Value)] = &[
         (
+            &["device_issuer.withdraw"],
+            json!({"signing_key_sha256":"a".repeat(64)}),
+        ),
+        (
             &["admin.role_grant", "admin.role_revoke"],
             json!({"principal_id":"subject","role":"auditor"}),
         ),

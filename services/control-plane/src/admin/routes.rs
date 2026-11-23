@@ -19,6 +19,10 @@ mod statements;
 
 pub fn router(identity: AdminIdentity) -> Router {
     Router::new()
+        .route(
+            "/admin/v1/device-issuer-keys/{key}",
+            get(super::actions::device_issuers::review),
+        )
         .route("/admin/v1/device-issuers", get(device_issuers::list))
         .route(
             "/admin/v1/support-authorizations/{id}",
@@ -250,6 +254,7 @@ fn readable_actions(permissions: &BTreeSet<String>) -> Vec<String> {
     [
         ("run.cancel", "runs.read"),
         ("case.update", "cases.read"),
+        ("device_issuer.withdraw", "device_issuers.read"),
         ("node.drain", "nodes.read"),
         ("node.quarantine", "nodes.read"),
         ("node.resume", "nodes.read"),

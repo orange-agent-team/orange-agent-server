@@ -150,6 +150,16 @@ pub async fn issue_one(pool: &PgPool, path: &Path) -> Result<Option<String>, Err
     let signer = Signer::load(path)?;
     // The configured CA and its private key were matched locally. The database receives only public digests.
     let mut registration = pool.begin().await?;
+    sqlx::query("SELECT lock_worker_issuer_policy()")
+        .execute(&mut *registration)
+        .await?;
+    if !sqlx::query_scalar::<_, bool>("SELECT worker_trust_path_allowed(ARRAY[$1::text])")
+        .bind(&signer.public_key_digest)
+        .fetch_one(&mut *registration)
+        .await?
+    {
+        return Err(Error::Issuer);
+    }
     let valid:bool=sqlx::query_scalar("SELECT clock_timestamp()>=to_timestamp($1::bigint) AND clock_timestamp()<to_timestamp($2::bigint)")
         .bind(signer.start).bind(signer.end).fetch_one(&mut *registration).await?;
     if !valid {
@@ -168,6 +178,16 @@ pub async fn issue_one(pool: &PgPool, path: &Path) -> Result<Option<String>, Err
     }
     registration.commit().await?;
     let mut tx = pool.begin().await?;
+    sqlx::query("SELECT lock_worker_issuer_policy()")
+        .execute(&mut *tx)
+        .await?;
+    if !sqlx::query_scalar::<_, bool>("SELECT worker_issued_leaf_allowed($1)")
+        .bind(&signer.root)
+        .fetch_one(&mut *tx)
+        .await?
+    {
+        return Err(Error::Issuer);
+    }
     let candidate=sqlx::query("SELECT g.request_id::text,g.owner_id,g.requested_by FROM worker_enrollment_grants g
         JOIN users u ON u.user_id=g.requested_by AND u.active JOIN owners personal ON personal.owner_id=u.personal_owner_id AND personal.state='active' JOIN owners o ON o.owner_id=g.owner_id AND o.state='active'
         WHERE g.state='authorized' AND g.expires_at>clock_timestamp() AND NOT EXISTS(SELECT FROM worker_enrollment_certificates c WHERE c.request_id=g.request_id)

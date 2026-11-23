@@ -66,6 +66,7 @@ def main():
     cli.add_argument("--environment",type=Path,default=ROOT/".local")
     cli.add_argument("--installed",action="store_true")
     cli.add_argument("--device-client",action="store_true",help="Run the real Worker CLI through ambiguous and corrupted redemption responses")
+    cli.add_argument("--withdraw-issuer",action="store_true")
     args=cli.parse_args();private=args.environment.resolve()
     rustup=shutil.which("rustup") or "/opt/homebrew/opt/rustup/bin/rustup"
     cargo=Path(subprocess.check_output([rustup,"which","cargo"],cwd=ROOT,text=True).strip())
@@ -73,11 +74,15 @@ def main():
     env.update(PATH=str(cargo.parent)+os.pathsep+env["PATH"],CARGO_NET_OFFLINE="true")
     # Compile the client before issuing short-lived credentials or creating a live browser session.
     client_test=[cargo,"test","--locked","--offline","-p","orange-control-plane","--features","worker-enrollment-tests","--test","worker_sessions"]
-    subprocess.run([*client_test,"--no-run"],cwd=ROOT,env=env,check=True)
+    build=subprocess.check_output([*client_test,"--no-run","--message-format=json-render-diagnostics"],cwd=ROOT,env=env,text=True)
+    clients=[item["executable"] for item in map(json.loads,build.splitlines()) if item.get("executable")
+             and item["target"]["name"]=="worker_sessions" and item["target"]["kind"]==["test"]]
+    require(len(clients)==1,"Expected one compiled Worker session test harness")
+    client_test=[clients[0]]
     if args.installed:context=binaries(None)
     else:
         subprocess.run([cargo,"build","--offline","--locked","-p","orange-worker","-p","orange-control-plane","--bin","orange-worker",
-                        "--bin","orange-user-api","--bin","orange-worker-gateway"],cwd=ROOT,env=env,check=True)
+                        "--bin","orange-user-api","--bin","orange-worker-gateway",*(["--bin","orange-admin-api"] if args.withdraw_issuer else [])],cwd=ROOT,env=env,check=True)
         meta=json.loads(subprocess.check_output([cargo,"metadata","--no-deps","--format-version","1","--locked"],cwd=ROOT,env=env))
         context=nullcontext(Path(meta["target_directory"])/"debug")
     openssl="/opt/homebrew/opt/openssl@3/bin/openssl"
@@ -194,11 +199,16 @@ def main():
                 fixture=config(root/"live.json",{"gateway":address,"gateway_ca":str(root/"gateway-ca.pem"),"leaf":str(leaf),"private_key":str(device/(rid+".key.pem")),
                     "node":node,"revoke_url":origin+path,"cookie":headers["Cookie"],"csrf":csrf,"origin":site,"request":rid})
                 case="newly_redeemed_leaf_authenticates_the_real_worker_then_live_revocation_fences_it"
-                result=subprocess.run([*client_test,case,"--","--exact"],cwd=ROOT,env=dict(env,ORANGE_TEST_ENROLLED_DEVICE=str(fixture)),text=True,stdout=subprocess.PIPE)
+                result=subprocess.run([*client_test,case,"--exact"],cwd=ROOT,env=dict(env,ORANGE_TEST_ENROLLED_DEVICE=str(fixture)),text=True,stdout=subprocess.PIPE)
                 print(result.stdout,end="",flush=True);result.check_returncode();require("test "+case+" ... ok" in result.stdout,"Missing actual gateway revocation")
             require(http(origin,"POST",redeem,auth,rb)[0]==401 and sql("SELECT count(*) FROM worker_credentials WHERE active")=="0","Revoked token replayed")
             require(sql("SELECT count(*) FROM worker_session_audit WHERE kind='session.claimed'")=="1" and sql("SELECT count(*) FROM jobs")=="0","Unexpected control or job effects")
-        print(json.dumps({"installed":args.installed,"real_device_csr":True,"prepared_certificates":2,"team_grant_permanently_withdrawn":True,"worker_credentials":1,"active_after_revoke":0,
+            if args.withdraw_issuer:
+                from issuer_withdrawal_acceptance import exercise
+                exercise(programs=programs,base=base,private=private,root=root,device=device,ca=ca,gw=gw,gw_cfg=gw_cfg,signer=signer,cfg=cfg,
+                    issuer_hash=issuer_hash,spki_digest=spki_digest,origin=origin,owner=owner,headers=headers,sql=sql,crypto=crypto,config=config,
+                    issue=issue,http=http,gateway=gateway,listening=listening,require=require,client_test=client_test,env=env,repo=ROOT)
+        print(json.dumps({"scenario":"single-owner-withdrawal","installed":args.installed,"real_device_csr":True,"prepared_certificates":2,"team_grant_permanently_withdrawn":True,"worker_credentials":1,"active_after_revoke":0,
                           "real_mtls_welcome":True,"live_heartbeat_refused":True,"jobs":0,"production_signer":False}),flush=True)
     if args.device_client:print("PASS device CLI recovered the original redemption and its installed leaf authenticated the live Worker")
     print("PASS dedicated short certificate issuer, one-time enrollment and immediate live device revocation")

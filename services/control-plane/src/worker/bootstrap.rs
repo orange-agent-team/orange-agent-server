@@ -65,5 +65,7 @@ pub fn load(path: &Path) -> Result<(String, GatewayTls), Box<dyn Error>> {
         server_private_key_pem: read_bounded(&config.server_key_file, true)?,
         client_ca_pem: read_bounded(&config.client_ca_file, false)?,
     };
+    super::trust_path::Roots::from_pem(&tls.client_ca_pem)
+        .map_err(|_| "invalid Worker client trust roots")?;
     Ok((config.gateway_instance_id, tls))
 }

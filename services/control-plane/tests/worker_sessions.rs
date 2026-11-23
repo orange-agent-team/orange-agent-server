@@ -1280,3 +1280,59 @@ async fn newly_redeemed_leaf_authenticates_the_real_worker_then_live_revocation_
     );
     assert!(ControlConnection::connect(input()).await.is_err());
 }
+
+#[cfg(feature = "worker-enrollment-tests")]
+#[tokio::test]
+async fn independent_admin_withdrawal_fences_the_live_signer_and_preserves_another_path() {
+    use orange_worker::control::{ControlConfig, ControlConnection};
+    use std::path::Path;
+    let conf: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(std::env::var("ORANGE_TEST_SIGNER_SESSION").expect("private context"))
+            .expect("read"),
+    )
+    .expect("fixture");
+    let field = |name: &str| conf[name].as_str().expect("field");
+    let input = |kind: &str| {
+        let v = &conf[kind];
+        ControlConfig {
+            endpoint: field("gateway").into(),
+            server_name: "localhost".into(),
+            server_ca_pem: std::fs::read(field("ca")).expect("gateway CA"),
+            certificate_pem: std::fs::read(v["leaf"].as_str().expect("leaf path")).expect("leaf"),
+            private_key_pem: std::fs::read(v["key"].as_str().expect("key path")).expect("key"),
+            node_id: v["node"].as_str().expect("node").into(),
+            capabilities_digest: "a".repeat(64),
+        }
+    };
+    let mut original = ControlConnection::connect(input("target"))
+        .await
+        .expect("target before withdrawal");
+    let mut other = ControlConnection::connect(input("survivor"))
+        .await
+        .expect("unaffected signer before withdrawal");
+    original
+        .heartbeat("before-withdraw")
+        .await
+        .expect("target active");
+    other
+        .heartbeat("before-withdraw")
+        .await
+        .expect("unrelated active");
+    std::fs::write(field("ready"), b"ready").expect("ready marker");
+    tokio::time::timeout(std::time::Duration::from_secs(25), async {
+        while !Path::new(field("executed")).exists() {
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("withdrawal completed within the old control lifetime");
+    assert!(original.heartbeat("after-withdraw").await.is_err());
+    assert!(ControlConnection::connect(input("target")).await.is_err());
+    other
+        .heartbeat("after-withdraw")
+        .await
+        .expect("unrelated session remains live");
+    ControlConnection::connect(input("survivor"))
+        .await
+        .expect("unrelated signer can reconnect");
+}
