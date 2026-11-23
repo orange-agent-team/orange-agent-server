@@ -362,7 +362,10 @@ async fn disabled_price_cannot_create_a_new_quote_or_reservation() {
         .iter()
         .find(|offer| offer.price_version == c.price)
         .expect("live price");
-    assert_eq!(serde_json::to_value(offer).unwrap()["input_price"], "2000");
+    assert_eq!(
+        serde_json::to_value(offer).expect("serialize exact-priced tier")["input_price"],
+        "2000"
+    );
     assert!(
         model
             .offers
