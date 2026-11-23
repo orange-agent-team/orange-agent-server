@@ -10,6 +10,11 @@ import subprocess
 import tempfile
 import time
 
+from journal_schema import verify_current_journal
+
+if not __debug__:
+    raise SystemExit("Migration verification requires active assertions")
+
 ROOT = Path(__file__).resolve().parents[1]
 PRIOR = {
     34: "2a82e8e018b696adc32e5bb66f1f39e73d558982",
@@ -53,9 +58,10 @@ def verify(base, prior, old, new):
         result = subprocess.run([executable, file, *args], env={"PATH": "/usr/bin:/bin"}, input=json.dumps(manifest) if manifest is not None else None, capture_output=True, text=True, check=True)
         return json.loads(result.stdout)
 
-    def snapshot():
-        with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True) as db:
-            return (db.execute("PRAGMA user_version").fetchone()[0],
+    def snapshot(current=False):
+        with sqlite3.connect(database.resolve(strict=True).as_uri() + "?mode=ro", uri=True) as db:
+            version = verify_current_journal(db) if current else db.execute("PRAGMA user_version").fetchone()[0]
+            return (version,
                     db.execute("SELECT config_digest,messages,phase FROM runtime_runs WHERE run_id='old-run'").fetchone())
 
     config["run"]["environment"] = run(old, "grant-info")["environment"]
@@ -73,14 +79,16 @@ def verify(base, prior, old, new):
     if old_pin:
         config["skill"] = old_pin
         assert run(old, "enable-skill", "0")["revision"] == 1
-    assert run(old, "start")["phase"] == "ready"
+    seeded = run(old, "start")
+    assert seeded["phase"] == "ready"
     version, before = snapshot()
     assert version == prior and before
 
     registry = run(new, "skills")
     template = next(x for x in registry if x["pin"]["id"] == "orange.text-summary")
     assert {x["pin"]["id"] for x in registry if x["enabled"]} == ({old_pin["id"]} if old_pin else set())
-    assert snapshot() == (35, before) and run(new, "skill-binding") == old_pin
+    destination = json.loads((ROOT / "config/journal-schema.json").read_bytes())["user_version"]
+    assert snapshot(current=True) == (destination, before) and run(new, "skill-binding") == old_pin
     assert run(new,"model-observation") is None
     config["skill"] = template["pin"]
     assert run(new, "enable-skill", "0")["revision"] == 1
@@ -95,14 +103,14 @@ def verify(base, prior, old, new):
     fingerprint = hashlib.sha256(database.read_bytes()).hexdigest()
     refused = subprocess.run([old, file, "status"], capture_output=True, text=True)
     assert refused.returncode != 0 and "Unsupported" in refused.stderr, (refused.returncode, refused.stderr)
-    assert hashlib.sha256(database.read_bytes()).hexdigest() == fingerprint and snapshot() == (35, before)
-    print(f"PASS genuine schema {prior} -> 35, unchanged messages, original binding and activation, old executable refused before mutation")
+    assert hashlib.sha256(database.read_bytes()).hexdigest() == fingerprint and snapshot(current=True) == (destination, before)
+    print(f"PASS genuine schema {prior} -> {destination}, unchanged messages, original binding and activation, old executable refused before mutation")
 
 
 def main():
     os.umask(0o077)
     with tempfile.TemporaryDirectory(prefix="orange-skills-migration-") as tmp:
-        base = Path(tmp)
+        base = Path(tmp).resolve(strict=True)
         new = base / "new-agent"
         build(ROOT, new)
         for version, commit in PRIOR.items():
