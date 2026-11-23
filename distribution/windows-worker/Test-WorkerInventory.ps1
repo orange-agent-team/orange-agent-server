@@ -15,6 +15,20 @@ if ($manifest.target -ne 'x86_64-pc-windows-gnullvm' -or $actual -cne $expected)
     throw 'The executable does not match the packaged target and SHA-256.'
 }
 
+# Verify the app-local loader dependencies before starting the executable.
+$bin = Split-Path -LiteralPath $exe
+$expectedDlls = @($manifest.sha256.PSObject.Properties | Where-Object { $_.Name -like 'bin/*.dll' })
+foreach ($dll in $expectedDlls) {
+    if ($dll.Name -cne 'bin/libunwind.dll') { throw 'Unknown packaged loader dependency.' }
+    $path = Join-Path $bin 'libunwind.dll'
+    if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() -cne $dll.Value) {
+        throw 'Bundled runtime SHA-256 mismatch.'
+    }
+}
+if (@(Get-ChildItem -LiteralPath $bin -Filter '*.dll' -File).Count -ne $expectedDlls.Count) {
+    throw 'Unexpected DLL in the executable directory.'
+}
+
 function Get-OptionalFeatureObservation([string]$Name) {
     try {
         $feature = Get-CimInstance -ClassName Win32_OptionalFeature -Filter "Name = '$Name'" -OperationTimeoutSec 5
