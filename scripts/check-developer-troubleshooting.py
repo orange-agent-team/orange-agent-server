@@ -76,22 +76,30 @@ def main():
         failure=rejected(app,"migration")
         require(failure["code"]=="STARTUP_MIGRATION_FAILED" and failure["recovery"]=="inspect_migration_history","Missing migration recovery signal")
         sql("UPDATE _sqlx_migrations SET checksum=decode('"+original+"','hex') WHERE version=(SELECT min(version) FROM _sqlx_migrations)")
-        def get(origin,token):
+        sql("INSERT INTO owners(owner_id) VALUES ('handbook-owner'); INSERT INTO wallets(owner_id,gift,earned,purchased) VALUES ('handbook-owner',100,0,0)")
+        def request(origin,token,path,create=False):
             port=urlsplit(origin).port
             conn=http.client.HTTPConnection("127.0.0.1",port,timeout=4)
             try:
-                conn.request("GET","/api/v1/budgets/nonexistent",headers={"Authorization":"Bearer "+token})
+                headers={"Authorization":"Bearer "+token}
+                body=None
+                if create:
+                    headers.update({"Content-Type":"application/json","Idempotency-Key":"handbook-budget"})
+                    body=json.dumps({"scope_id":"handbook-test","limit":"10"})
+                conn.request("POST" if create else "GET",path,body,headers)
                 resp=conn.getresponse()
-                code=json.loads(resp.read())["code"]
-                return resp.status,code
+                return resp.status,json.loads(resp.read())
             finally:
                 conn.close()
         with listening(binary,app,"development API") as origin:
-            require(get(origin,salt)==(404,"NOT_FOUND"),"Restored deployment did not authenticate the first principal")
+            status,budget=request(origin,salt,"/api/v1/budgets",True)
+            require(status==200 and "root_budget_id" in budget,"Restored deployment could not create the owned fixture budget")
+            resource="/api/v1/budgets/"+budget["root_budget_id"]
+            require(request(origin,salt,resource)==(200,budget),"First credential could not read the owned budget")
         replacement=secrets.token_hex(32)
         rotate(replacement)
         with listening(binary,app,"development API") as origin:
-            require(get(origin,salt)[0]==401 and get(origin,replacement)==(404,"NOT_FOUND"),"Rotation failed or expanded access")
+            require(request(origin,salt,resource)[0]==401 and request(origin,replacement,resource)==(200,budget),"Credential rotation changed the principal or failed to revoke the old secret")
         require(sql("SELECT value FROM handbook_marker")=="37","Repair damaged unrelated data")
     print(json.dumps({"tool_error_redacted":True,"external_profiles_denied":True,"port_conflict":True,"corrupt_migration_denied":True,
                       "restored_release_started":True,"old_credential_rejected":True,"replacement_authenticated":True,"unrelated_data_retained":True}))
