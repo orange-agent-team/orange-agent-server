@@ -11,7 +11,7 @@ from owned_postgres import database
 ROOT=Path(__file__).resolve().parents[1]
 p=argparse.ArgumentParser()
 p.add_argument("--environment",type=Path,default=ROOT/".local")
-p.add_argument("--section",required=True,choices=["race","cancel","upgrade"])
+p.add_argument("--section",required=True,choices=["race","cancel","upgrade","policy","interruptions"])
 args=p.parse_args()
 private=args.environment.resolve()
 rustup=shutil.which("rustup") or "/opt/homebrew/opt/rustup/bin/rustup"
@@ -21,7 +21,15 @@ env.update(PATH=str(cargo.parent)+os.pathsep+env["PATH"],CARGO_NET_OFFLINE="true
 with database(private/"database-url","orange_job_revision_") as (_,url):
     env.update(ORANGE_TEST_DATABASE_URL=url,ORANGE_TEST_USER_CONFIG_FILE=str(private/"identity/user-config.json"),
                ORANGE_TEST_OIDC_CONFIG_FILE=str(private/"identity/admin-config.json"))
-    if args.section=="cancel":
+    if args.section=="policy":
+        env["ORANGE_QUARANTINE_HEARTBEAT_TEST"]="1"
+        command=[sys.executable,ROOT/"scripts/check-worker-session.py"]
+        required={"ordinary_authenticated_heartbeat_preserves_quarantine_and_cannot_recreate_execution"}
+    elif args.section=="interruptions":
+        command=[sys.executable,ROOT/"scripts/check-queue-expiry.py"]
+        required={"expiry_ledger_failure_rolls_back_and_concurrent_user_cancel_refunds_once","offered_expiry_cannot_issue_a_late_start_or_claim_resource_cleanup",
+                  "accepted_execution_never_uses_queue_refund_even_if_a_stale_state_is_injected"}
+    elif args.section=="cancel":
         env["ORANGE_CANCEL_PROTOCOL_TESTS"]="1"
         command=[sys.executable,ROOT/"scripts/check-worker-session.py"]
         required={"conditional_cancellation_replays_the_original_precondition_but_rejects_new_stale_commands",

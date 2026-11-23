@@ -1038,3 +1038,33 @@ async fn real_worker_client_old_epoch_and_dropped_heartbeat_cannot_remain_active
     a.stop().await;
     b.stop().await;
 }
+
+#[tokio::test]
+async fn ordinary_authenticated_heartbeat_preserves_quarantine_and_cannot_recreate_execution() {
+    let d = device("client-a").await;
+    let server = Running::start(&d.store).await;
+    let mut client = server.client(Some(&d.certificate)).await.expect("TLS");
+    let (sender, mut stream) = control(&mut client, hello(&d.node)).await.expect("session");
+    let session = welcome(&mut stream).await;
+    let generation:i64=sqlx::query_scalar("UPDATE nodes SET state='quarantined',policy_generation=policy_generation+1 WHERE node_id=$1 RETURNING policy_generation")
+        .bind(&d.node).fetch_one(d.store.pool()).await.expect("set policy fixture");
+    heartbeat(&sender, &mut stream, &d.node, &session)
+        .await
+        .expect("control heartbeat remains available");
+    let actual: (String, i64) =
+        sqlx::query_as("SELECT state,policy_generation FROM nodes WHERE node_id=$1")
+            .bind(&d.node)
+            .fetch_one(d.store.pool())
+            .await
+            .expect("current policy");
+    assert_eq!(actual, ("quarantined".to_owned(), generation));
+    let executions: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM worker_execution_attempts WHERE node_id=$1")
+            .bind(&d.node)
+            .fetch_one(d.store.pool())
+            .await
+            .expect("attempts");
+    assert_eq!(executions, 0);
+    drop(sender);
+    server.stop().await;
+}
