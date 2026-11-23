@@ -10,13 +10,17 @@ CREATE UNIQUE INDEX personal_key_one_replacement ON personal_automation_keys(use
 -- Only a newly inserted successor may retire the original. A replay handled by
 -- ON CONFLICT DO NOTHING never enters this trigger.
 CREATE FUNCTION retire_replaced_personal_key() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+    original personal_automation_keys%ROWTYPE;
 BEGIN
-    UPDATE personal_automation_keys SET revoked_unix=floor(extract(epoch FROM clock_timestamp()))
-     WHERE user_id=NEW.user_id AND owner_id=NEW.owner_id AND key_id=NEW.rotated_from
-       AND revoked_unix IS NULL AND scope=NEW.scope AND expires_unix>floor(extract(epoch FROM clock_timestamp()));
-    IF NOT FOUND THEN
+    SELECT * INTO original FROM personal_automation_keys
+     WHERE user_id=NEW.user_id AND owner_id=NEW.owner_id AND key_id=NEW.rotated_from FOR UPDATE;
+    IF NOT FOUND OR original.revoked_unix IS NOT NULL OR original.scope IS DISTINCT FROM NEW.scope
+       OR original.expires_unix<=floor(extract(epoch FROM clock_timestamp())) THEN
         RAISE EXCEPTION 'predecessor is not eligible for replacement' USING ERRCODE='OA073';
     END IF;
+    UPDATE personal_automation_keys SET revoked_unix=floor(extract(epoch FROM clock_timestamp()))
+     WHERE user_id=NEW.user_id AND owner_id=NEW.owner_id AND key_id=NEW.rotated_from;
     RETURN NEW;
 END $$;
 CREATE TRIGGER retire_personal_key_after_replacement AFTER INSERT ON personal_automation_keys

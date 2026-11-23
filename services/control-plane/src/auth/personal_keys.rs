@@ -114,6 +114,17 @@ async fn issue(
             crate::events::append(tx, &owner, previous, "api_key.withdrawn", "replacement").await?;
         }
         crate::events::append(tx, &owner, &id, "api_key.registered", req.scope.as_str()).await?;
+        let still_valid:bool=sqlx::query_scalar("SELECT k.expires_unix>floor(extract(epoch FROM clock_timestamp()))
+            AND (k.rotated_from IS NULL OR p.expires_unix>floor(extract(epoch FROM clock_timestamp())))
+            FROM personal_automation_keys k LEFT JOIN personal_automation_keys p ON k.user_id=p.user_id AND p.key_id=k.rotated_from
+            WHERE k.user_id=$1 AND k.key_id=$2::text::uuid")
+            .bind(&user).bind(&id).fetch_one(&mut **tx).await?;
+        if !still_valid {
+            return Err(UserApiError(
+                StatusCode::CONFLICT,
+                "KEY_EXPIRED_DURING_REGISTRATION",
+            ));
+        }
     }
     let result = view(&row)?;
     guard.finish().await?;

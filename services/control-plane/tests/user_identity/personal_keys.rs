@@ -412,6 +412,9 @@ async fn real_personal_key_browser_management() {
         "reopening_hides_secret",
         "revoke_denied_future_reads",
         "withdraw_before_create",
+        "original_revoked_at_replacement",
+        "recovered_successor",
+        "successor_withdrawn",
     ] {
         assert_eq!(report[mark], true, "missing browser observation {mark}");
     }
@@ -607,4 +610,55 @@ async fn replacement_retires_once_and_an_uncommitted_successor_cannot_retire_any
         count(*) FILTER(WHERE entity_id=$3 AND event_type='api_key.registered') FROM outbox WHERE owner_id=$1")
         .bind(&f.user).bind(&old).bind(&winner).fetch_one(&f.pool).await.expect("pair of notices");
     assert_eq!(totals, (1, 1));
+}
+
+#[tokio::test]
+async fn a_rotation_queued_on_an_expiring_predecessor_creates_no_new_authority() {
+    use std::time::Duration;
+    let f = fixture().await;
+    let (old, token) = credential();
+    let (id, next) = credential();
+    sqlx::query("WITH t AS (SELECT floor(extract(epoch FROM clock_timestamp()))::bigint-55 AS n)
+        INSERT INTO personal_automation_keys(user_id,key_id,owner_id,scope,verifier,label,created_unix,ttl_seconds,expires_unix)
+        SELECT $1,$2::text::uuid,$1,'wallet:read',$3,'short',n,60,n+60 FROM t")
+        .bind(&f.user).bind(&old).bind(hash_secret(&token)).execute(&f.pool).await.expect("expiring original");
+    let mut block = f.pool.begin().await.expect("blocker");
+    let pid:i32=sqlx::query_scalar("SELECT pg_backend_pid() FROM personal_automation_keys WHERE user_id=$1 AND key_id=$2::text::uuid FOR UPDATE")
+        .bind(&f.user).bind(&old).fetch_one(&mut *block).await.expect("lock original");
+    let path = format!("{KEYS}/{old}/replacements/{id}");
+    let rotate = request(
+        &f,
+        "PUT",
+        &path,
+        Some(registration(&next, "wallet:read")),
+        management(&f, &id),
+    );
+    let release = async {
+        tokio::time::timeout(Duration::from_secs(3),async {
+            loop{
+                let waiting:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND $1=ANY(pg_blocking_pids(pid)))")
+                    .bind(pid).fetch_one(&f.pool).await.expect("competing admission");
+                if waiting{break;}
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }).await.expect("wait before expiry");
+        sqlx::query("SELECT pg_sleep_until(to_timestamp(expires_unix)+interval '20 milliseconds') FROM personal_automation_keys WHERE user_id=$1 AND key_id=$2::text::uuid")
+            .bind(&f.user).bind(&old).execute(&mut *block).await.expect("expire original");
+        block.commit().await.expect("release");
+    };
+    let ((status, _), ()) = tokio::join!(rotate, release);
+    assert_eq!(status, StatusCode::CONFLICT);
+    let count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM personal_automation_keys WHERE user_id=$1 AND key_id=$2::text::uuid",
+    )
+    .bind(&f.user)
+    .bind(&id)
+    .fetch_one(&f.pool)
+    .await
+    .expect("no successor");
+    assert_eq!(count, 0);
+    assert_eq!(
+        request(&f, "GET", WALLET, None, bearer(&next)).await.0,
+        StatusCode::UNAUTHORIZED
+    );
 }
