@@ -601,3 +601,97 @@ async fn running_original_withdrawal_retains_hold_until_separate_cpu_cleanup() {
     server.stop().await;
     f.objects.drain().await.expect("drain");
 }
+
+/// A real PostgreSQL serialization failure at the last idempotency write rolls the entire reservation back.
+#[tokio::test]
+async fn transient_submit_conflicts_replay_only_confirmed_rollbacks_under_one_key() {
+    let f = setup("client-serialization").await;
+    let pool = f.d.store.pool();
+    let req = pending(&f).await;
+    let key = Uuid::new_v4().to_string();
+    let suffix = Uuid::new_v4().simple().to_string();
+    let ddl=format!("CREATE SEQUENCE retry_{suffix}; CREATE FUNCTION fail_submit_{suffix}() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN IF NEW.operation='submit_job' AND NEW.key='{key}' AND nextval('retry_{suffix}')<=3 THEN
+            RAISE EXCEPTION 'bounded serialization contention fixture' USING ERRCODE='40001'; END IF; RETURN NEW; END $$;
+        CREATE TRIGGER fail_submit_{suffix} BEFORE INSERT ON idempotency FOR EACH ROW EXECUTE FUNCTION fail_submit_{suffix}();");
+    sqlx::raw_sql(sqlx::AssertSqlSafe(ddl))
+        .execute(pool)
+        .await
+        .expect("install scoped fault");
+    let submit = |req: &SubmitJob, key: &str| {
+        let mut h = f.headers.clone();
+        h.insert("idempotency-key", key.parse().expect("key"));
+        h.insert("content-type", "application/json".parse().expect("mime"));
+        let mut http = axum::http::Request::builder()
+            .method("POST")
+            .uri(format!("/api/v1/owners/{}/jobs", f.owner))
+            .body(axum::body::Body::from(
+                serde_json::to_vec(req).expect("JSON"),
+            ))
+            .expect("request");
+        *http.headers_mut() = h;
+        orange_control_plane::artifacts::http::router(f.identity.clone(), f.objects.clone())
+            .oneshot(http)
+    };
+    let response = submit(&req, &key).await.expect("HTTP");
+    let first = response.status();
+    let selected: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), 32768)
+            .await
+            .expect("body"),
+    )
+    .expect("JSON");
+    assert_eq!(
+        first,
+        axum::http::StatusCode::OK,
+        "one HTTP submission after three confirmed PostgreSQL rollbacks"
+    );
+    let commit_attempts: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT last_value FROM retry_{suffix}"
+    )))
+    .fetch_one(pool)
+    .await
+    .expect("confirmed rollbacks followed by success");
+    assert_eq!(commit_attempts, 4);
+    let job = selected["job_id"].as_str().expect("committed Job");
+    let replay = submit(&req, &key).await.expect("replay");
+    assert_eq!(replay.status(), 200);
+    let original: serde_json::Value = serde_json::from_slice(
+        &axum::body::to_bytes(replay.into_body(), 32768)
+            .await
+            .expect("body"),
+    )
+    .expect("JSON");
+    assert_eq!(selected, original);
+    let rows:(i64,i64,i64,i64,i64)=sqlx::query_as("SELECT (SELECT count(*) FROM jobs WHERE owner_id=$1 AND invocation_id=$2),
+        (SELECT count(*) FROM idempotency WHERE owner_id=$1 AND key=$3),(SELECT count(*) FROM ledger_transactions WHERE owner_id=$1 AND business_key=$4),
+        gift,reserved_gift FROM wallets WHERE owner_id=$1").bind(&f.owner).bind(&req.invocation_id).bind(&key).bind(format!("reserve:{job}"))
+        .fetch_one(pool).await.expect("financial effects");
+    assert_eq!(rows, (1, 1, 1, 900, 100));
+    let next = pending(&f).await;
+    let second_key = Uuid::new_v4().to_string();
+    let persistent=format!("CREATE SEQUENCE persistent_{suffix}; CREATE OR REPLACE FUNCTION fail_submit_{suffix}() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN IF NEW.key='{second_key}' THEN PERFORM nextval('persistent_{suffix}'); RAISE EXCEPTION 'persistent transaction rollback' USING ERRCODE='40001';
+        END IF; RETURN NEW; END $$;");
+    sqlx::raw_sql(sqlx::AssertSqlSafe(persistent))
+        .execute(pool)
+        .await
+        .expect("persistent fault");
+    assert_eq!(
+        submit(&next, &second_key).await.expect("HTTP").status(),
+        503
+    );
+    let attempts: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "SELECT last_value FROM persistent_{suffix}"
+    )))
+    .fetch_one(pool)
+    .await
+    .expect("bounded attempts");
+    assert!((1..=7).contains(&attempts));
+    let effects:(i64,i64,i64)=sqlx::query_as("SELECT (SELECT count(*) FROM jobs WHERE owner_id=$1 AND invocation_id=$2),gift,reserved_gift FROM wallets WHERE owner_id=$1")
+        .bind(&f.owner).bind(&next.invocation_id).fetch_one(pool).await.expect("no partial job");
+    assert_eq!(effects, (0, 900, 100));
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!("DROP TRIGGER fail_submit_{suffix} ON idempotency; DROP FUNCTION fail_submit_{suffix}(); DROP SEQUENCE retry_{suffix},persistent_{suffix};")))
+        .execute(pool).await.expect("remove test fixtures");
+    f.objects.drain().await.expect("drain");
+}
