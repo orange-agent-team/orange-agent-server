@@ -120,6 +120,8 @@ def main():
                      "Test-WorkerInventory.ps1":source("distribution/windows-worker/Test-WorkerInventory.ps1"),
                      "Cargo.lock":source("Cargo.lock"),"rust-toolchain.toml":source("rust-toolchain.toml"),
                      "windows-cross-toolchain.lock.json":source("config/windows-cross-toolchain.lock.json")}
+            for name in ("README.md","wsl.conf","oci-base.json","prepare-inference-policy.py","inspect-target.py"):
+                payload["isolation/"+name]=source("distribution/windows-worker/isolation/"+name)
             payload.update(licenses)
             for name in runtime:
                 payload["bin/"+name]=(tools.parent/"x86_64-w64-mingw32/bin"/name).read_bytes()

@@ -9,3 +9,5 @@
 仅使用远程算力时，可以用 `Test-WorkerInventory.ps1 -Mode Consume` 输出本地需求说明。消费模式可单独运行此脚本，无需提供 Worker 程序或发行包。此分支在读取 Windows 可选功能、GPU 或 WSL 注册情况之前结束。贡献模式使用 `-Mode Contribute`，也可用 `-RequiredPackageVolumeBytes` 指定这次安装实际需要的包目录卷空间。省略时磁盘余量照常记录，容量比较为 null。
 
 贡献模式额外运行 `orange-worker.exe probe-wsl`。它对照当前用户的名称和详细列表，分别统计 WSL 1、WSL 2 的注册数量。汇总不含发行版名称、默认用户或主目录。查询失败、两次列表不一致或结果无法识别时保留原因。已有注册数量不能证明该环境属于平台或能够安全执行任务。报告的 GPU 退出码仍仅表示是否取得设备清单。[微软 WSL 列表命令](https://learn.microsoft.com/en-us/windows/wsl/basic-commands)
+
+贡献者包还包含专用 WSL 发行版设置、受限 OCI 配置渲染器和只读运行时观测工具。[贡献者隔离策略](isolation/README.md)
