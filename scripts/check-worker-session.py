@@ -101,14 +101,18 @@ with tempfile.TemporaryDirectory(prefix='orange-worker-mtls-') as directory:
     elif environment.get('ORANGE_CLEANUP_PROTOCOL_TESTS'):command+=['input_cases::cleanup_cases','--','--test-threads=1']
     elif environment.get('ORANGE_WORKER_OUTPUT_TESTS'):command+=['input_cases::output_cases','--','--test-threads=1']
     elif environment.get('ORANGE_WORKER_RENEWAL_TESTS'):command+=['input_cases::renewal_cases','--','--test-threads=1']
-    passed=False
-    with subprocess.Popen(command,cwd=ROOT,env=environment,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True) as process:
-        for line in process.stdout:
-            sys.stdout.write(line);sys.stdout.flush()
-            if re.search(r'test result: ok\. [1-9][0-9]* passed; 0 failed;',line):passed=True
-        code=process.wait()
-    if code:raise SystemExit(code)
-    if not passed:raise SystemExit('No actual selected Worker tests passed; refusing an empty-filter success')
+    if features=="integration-tests" and command[-1]=="--locked":
+        from worker_fixture_groups import run_complete
+        run_complete(command,ROOT,environment)
+    else:
+        passed=False
+        with subprocess.Popen(command,cwd=ROOT,env=environment,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True) as process:
+            for line in process.stdout:
+                sys.stdout.write(line);sys.stdout.flush()
+                if re.search(r'test result: ok\. [1-9][0-9]* passed; 0 failed;',line):passed=True
+            code=process.wait()
+        if code:raise SystemExit(code)
+        if not passed:raise SystemExit('No actual selected Worker tests passed; refusing an empty-filter success')
     subprocess.run([str(cargo),'build','-p','orange-control-plane','--bin','orange-worker-gateway','--locked'],cwd=ROOT,env=environment,check=True)
 if environment.get('ORANGE_SIX_JOURNEY_TEST'):print('PASS six product journeys on the local CPU marketplace; isolated merchant and enrollment fixtures')
 elif environment.get('ORANGE_AUDIO_GRANT_TESTS'):print('PASS bounded ASR input grants, real authenticated range reads and revocation')
