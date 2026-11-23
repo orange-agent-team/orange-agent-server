@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Worker enrollment authorization",
-    "version": "0.2.0",
+    "version": "0.2.1",
     "description": "Manager authorizes a public Worker key. The dedicated development issuer prepares a short client certificate. The original independent token redeems one node identity."
   },
   "security": [
@@ -36,16 +36,44 @@
         "operationId": "getWorkerEnrollment",
         "responses": {
           "422": {
-            "description": "Invalid request, CSR or idempotency key"
+            "description": "Invalid request, CSR or idempotency key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../json-schema/user.schema.json#/$defs/Error"
+                }
+              }
+            }
           },
           "401": {
-            "description": "Session unavailable or expired"
+            "description": "Session unavailable or expired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../json-schema/user.schema.json#/$defs/Error"
+                }
+              }
+            }
           },
           "403": {
-            "description": "Owner permission, origin or CSRF rejected"
+            "description": "Owner permission, origin or CSRF rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../json-schema/user.schema.json#/$defs/Error"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Unknown owner-scoped request"
+            "description": "Unknown owner-scoped request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../json-schema/user.schema.json#/$defs/Error"
+                }
+              }
+            }
           },
           "200": {
             "description": "Current enrollment authorization metadata",
@@ -64,22 +92,64 @@
         "operationId": "authorizeWorkerEnrollment",
         "responses": {
           "422": {
-            "description": "Invalid request, CSR or idempotency key"
+            "description": "Invalid request, CSR or idempotency key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../json-schema/user.schema.json#/$defs/Error"
+                }
+              }
+            }
           },
           "401": {
-            "description": "Session unavailable or expired"
+            "description": "Session unavailable or expired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../json-schema/user.schema.json#/$defs/Error"
+                }
+              }
+            }
           },
           "403": {
-            "description": "Owner permission, origin or CSRF rejected"
+            "description": "Owner permission, origin or CSRF rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../json-schema/user.schema.json#/$defs/Error"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Unknown owner-scoped request"
+            "description": "Unknown owner-scoped request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../json-schema/user.schema.json#/$defs/Error"
+                }
+              }
+            }
           },
           "409": {
-            "description": "Request or token commitment conflict"
+            "description": "Request or token commitment conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../json-schema/user.schema.json#/$defs/Error"
+                }
+              }
+            }
           },
           "429": {
-            "description": "Hourly owner limit reached"
+            "description": "Hourly owner limit reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../json-schema/user.schema.json#/$defs/Error"
+                }
+              }
+            }
           },
           "200": {
             "description": "Current enrollment authorization metadata",
@@ -149,16 +219,44 @@
         "operationId": "revokeWorkerEnrollment",
         "responses": {
           "422": {
-            "description": "Invalid request, CSR or idempotency key"
+            "description": "Invalid request, CSR or idempotency key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../json-schema/user.schema.json#/$defs/Error"
+                }
+              }
+            }
           },
           "401": {
-            "description": "Session unavailable or expired"
+            "description": "Session unavailable or expired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../json-schema/user.schema.json#/$defs/Error"
+                }
+              }
+            }
           },
           "403": {
-            "description": "Owner permission, origin or CSRF rejected"
+            "description": "Owner permission, origin or CSRF rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../json-schema/user.schema.json#/$defs/Error"
+                }
+              }
+            }
           },
           "404": {
-            "description": "Unknown owner-scoped request"
+            "description": "Unknown owner-scoped request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../json-schema/user.schema.json#/$defs/Error"
+                }
+              }
+            }
           },
           "200": {
             "description": "Current enrollment authorization metadata",
@@ -265,13 +363,34 @@
             }
           },
           "401": {
-            "description": "Incorrect, revoked, expired or mixed authority"
+            "description": "Incorrect, revoked, expired or mixed authority",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../json-schema/user.schema.json#/$defs/Error"
+                }
+              }
+            }
           },
           "409": {
-            "description": "Certificate unavailable or previously redeemed with another key"
+            "description": "Certificate unavailable or previously redeemed with another key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../json-schema/user.schema.json#/$defs/Error"
+                }
+              }
+            }
           },
           "422": {
-            "description": "Invalid request or idempotency key"
+            "description": "Invalid request or idempotency key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../json-schema/user.schema.json#/$defs/Error"
+                }
+              }
+            }
           }
         }
       }
