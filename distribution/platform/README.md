@@ -22,3 +22,5 @@
 用户 API 和 Admin API 可分别设置本机回环指标端口。指标字段、取消语义和启动示例见[本机 HTTP 指标](docs/local-http-metrics.md)。
 
 用户 API 和 Admin API 支持分层启动配置及 --describe-config。配置字段、错误分类、重试语义与作业关联方式见[配置与诊断](docs/engineering/api-configuration-diagnostics.md)。
+
+schema 67 为个人与组织任务提供状态版本，旧客户端可以继续使用原取消接口。读取、条件取消、幂等重试及升级行为见[作业状态与版本](docs/engineering/job-state-revisions.md)。
