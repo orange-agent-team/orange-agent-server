@@ -44,3 +44,9 @@ python3 scripts/check-storage-contract.py --section upgrade
 ```
 
 补充阅读：[持久通知与事务队列](../events-queue-implementation.md)。
+
+## 已提交分录和恢复
+
+迁移 0071 将交易头与所有分录的写入限定在同一个 PostgreSQL 事务。提交前核对平衡时，数据库也会移除本次写入的内部标识。其他连接在原事务提交前后都不能向该组添加分录。纠错使用独立业务键与新交易头。迁移前存在的组直接封账，原金额与流水 ID 保留。
+
+应用写入角色仅需既有业务表权限。内部 schema 与组装表由迁移角色持有，两个 schema 的权限应分别管理。写入交易头及明细后才可手动提前触发 deferred constraints，通常直接提交即可。恢复演练使用完整数据库归档，在空库执行 pg_restore，再核对原始分录与封账约束。运维命令为 `python3 scripts/check-ledger-sealing.py --environment <本地开发配置目录>`，内部使用两个独立的一次性本地数据库。
