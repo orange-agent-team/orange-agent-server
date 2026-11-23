@@ -15,6 +15,7 @@ import tarfile
 import tempfile
 import time
 from zipfile import ZipFile
+from urllib.parse import urlsplit
 
 from linux_platform_inputs import local_image_id
 
@@ -30,6 +31,10 @@ tar -xf -
 test "$(id -u)" = 65532
 test "$(rustc -V | cut -d' ' -f2)" = "$ORANGE_RUST"
 test "$(./protoc --version)" = "libprotoc 36.2"
+sysroot="$(rustc --print sysroot)"
+export LD_LIBRARY_PATH="$sysroot/lib"
+./rustfmt --edition 2024 --check domain.rs || { echo 'REJECT formatting differs' >&2; exit 18; }
+./clippy-driver --sysroot "$sysroot" --crate-type=lib --edition=2024 -D warnings domain.rs
 rustc --edition=2024 --test domain.rs -o domain-tests
 ./domain-tests --test-threads=1 > test-results
 cat test-results
@@ -58,18 +63,32 @@ def run(commit,policy,archive,inject):
     with ZipFile(archive) as bundle:
         compiler=bundle.read("bin/protoc")
         well_known={n:bundle.read(n) for n in bundle.namelist() if n.startswith("include/google/protobuf/") and n.endswith(".proto")}
+    tool_lock=json.loads(git("show",commit+":config/ci-linux-tools.lock.json"))
+    tools={}
+    for binary,ref in tool_lock["components"].items():
+        component=archive.parent/Path(urlsplit(ref["url"]).path).name
+        with component.open("rb") as stream:
+            if hashlib.file_digest(stream,"sha256").hexdigest()!=ref["sha256"]:
+                raise ValueError("Pinned component archive mismatch: "+binary)
+        with tarfile.open(component) as tar:
+            item,=[m for m in tar if m.isfile() and m.name.endswith("/"+ref["component"]+"/bin/"+binary)]
+            if item.size>64*1024*1024:
+                raise ValueError("Unexpected tool size")
+            tools[binary]=tar.extractfile(item).read()
     files={filename:git("show",commit+":"+src) for filename,src in zip(("domain.rs","worker.proto","host.proto"),TARGETS)}
     if inject=="wire":
         files["worker.proto"]+=b"\nmessage CiDriftExample { string version = 1; }\n"
     if inject=="rust":
-        files["domain.rs"]+=b'\n#[test] fn ci_expected_negative_fixture(){ assert_eq!(1_u32,2_u32); }\n'
+        files["domain.rs"]+=b'\n#[test]\nfn ci_expected_negative_fixture() {\n    assert_eq!(1_u32, 2_u32);\n}\n'
+    if inject=="format":
+        files["domain.rs"]+=b"\npub fn ci_format_fixture( ) { }\n"
     owner=secrets.token_hex(12)
     with tempfile.TemporaryFile() as payload:
         with tarfile.open(fileobj=payload,mode="w") as tar:
-            for name,data in {**files,**well_known,"protoc":compiler}.items():
+            for name,data in {**files,**tools,**well_known,"protoc":compiler}.items():
                 info=tarfile.TarInfo(name)
                 info.size=len(data)
-                info.mode=0o755 if name=="protoc" else 0o644
+                info.mode=0o755 if name=="protoc" or name in tools else 0o644
                 tar.addfile(info,io.BytesIO(data))
         payload.seek(0)
         raw=subprocess.check_output([*DOCKER,"create","-i","--pull","never","--label","org.orange-agent.ci="+owner,
@@ -115,6 +134,8 @@ def run(commit,policy,archive,inject):
             passed="PASS domain and wire" in transcript.splitlines()
             if inject is None:
                 ok=result==exit_code==0 and passed
+            elif inject=="format":
+                ok=result==exit_code==18 and not passed and "REJECT formatting differs" in transcript.splitlines()
             elif inject=="wire":
                 ok=result==exit_code==19 and not passed and "REJECT protocol descriptor differs" in transcript.splitlines()
             else:
@@ -134,7 +155,7 @@ def main():
     args=p.parse_args()
     commit=git("rev-parse","HEAD").decode().strip()
     policy=json.loads(git("show",commit+":config/linux-platform-arm64.lock.json"))
-    outcomes=[run(commit,policy,args.inputs/policy["protoc"]["name"],m) for m in ([None,"wire","rust"] if args.faults else [None])]
+    outcomes=[run(commit,policy,args.inputs/policy["protoc"]["name"],m) for m in ([None,"wire","rust","format"] if args.faults else [None])]
     print(json.dumps({"source":commit,"target":policy["target"],"build_image":policy["build_image"]["image"],"outcomes":outcomes}))
 
 
