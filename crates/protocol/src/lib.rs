@@ -177,3 +177,5 @@ mod tests {
         assert!(!valid_id("../other-owner"));
     }
 }
+
+pub mod device_enrollment;

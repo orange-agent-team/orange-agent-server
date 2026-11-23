@@ -2,6 +2,25 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args_os().skip(1);
     let command = args.next();
+    if command.as_deref() == Some(std::ffi::OsStr::new("prepare-enrollment")) {
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        {
+            let directory = args.next().ok_or("private enrollment directory required")?;
+            let id = args.next().ok_or("request UUID required")?;
+            if args.next().is_some() {
+                return Err("expected a private directory and a request UUID".into());
+            }
+            let csr = orange_worker::enrollment::prepare(
+                std::path::Path::new(&directory),
+                id.to_str().ok_or("invalid request UUID")?,
+            )?;
+            serde_json::to_writer(std::io::stdout().lock(), &csr)?;
+            println!();
+            return Ok(());
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        return Err("device key storage for this operating system is unavailable".into());
+    }
     if command.as_deref() == Some(std::ffi::OsStr::new("probe-wsl")) {
         if args.next().is_some() {
             return Err("usage: orange-worker probe-wsl".into());

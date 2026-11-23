@@ -13,3 +13,6 @@ pub mod execution_journal;
 pub mod cpu;
 #[cfg(unix)]
 pub mod host;
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub mod enrollment;
