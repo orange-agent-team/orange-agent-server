@@ -1082,8 +1082,7 @@ async fn rejected_capability_offers_do_not_rotate_the_current_device_session() {
     assert_eq!(
         control(&mut unregistered, hello(&d.node))
             .await
-            .err()
-            .expect("unregistered certificate")
+            .expect_err("unregistered certificate")
             .code(),
         Code::Unauthenticated
     );
@@ -1152,8 +1151,7 @@ async fn rejected_capability_offers_do_not_rotate_the_current_device_session() {
                 }
             )
             .await
-            .err()
-            .expect("unsupported offer")
+            .expect_err("unsupported offer")
             .code(),
             code
         );
