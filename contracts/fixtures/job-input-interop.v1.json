@@ -1,0 +1,386 @@
+[
+  {
+    "name": "text",
+    "wire": {
+      "kind": "text",
+      "source": {
+        "artifact_id": "input-1",
+        "version_id": "version-1",
+        "sha256": "fafff5ff2cff1599c3361ba58426e42a3fe1b6e6e68b5d20285a0cf3855969ad"
+      }
+    },
+    "accepted": true
+  },
+  {
+    "name": "text-wrong-artifact-type",
+    "wire": {
+      "kind": "text",
+      "source": {
+        "artifact_id": 4,
+        "version_id": "version-1",
+        "sha256": "fafff5ff2cff1599c3361ba58426e42a3fe1b6e6e68b5d20285a0cf3855969ad"
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "text-authority-field",
+    "wire": {
+      "kind": "text",
+      "source": {
+        "artifact_id": "input-1",
+        "version_id": "version-1",
+        "sha256": "fafff5ff2cff1599c3361ba58426e42a3fe1b6e6e68b5d20285a0cf3855969ad",
+        "owner_id": "other-owner"
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "text-unexpected-duration",
+    "wire": {
+      "kind": "text",
+      "source": {
+        "artifact_id": "input-1",
+        "version_id": "version-1",
+        "sha256": "fafff5ff2cff1599c3361ba58426e42a3fe1b6e6e68b5d20285a0cf3855969ad"
+      },
+      "duration_ms": "1"
+    },
+    "accepted": false
+  },
+  {
+    "name": "embedding",
+    "wire": {
+      "kind": "embedding",
+      "source": {
+        "artifact_id": "input-2",
+        "version_id": "version-2",
+        "sha256": "41d8719bdc750b2418c6646117c376c08a06b3828b3e470c153d95fd4887ac7b"
+      }
+    },
+    "accepted": true
+  },
+  {
+    "name": "embedding-wrong-artifact-type",
+    "wire": {
+      "kind": "embedding",
+      "source": {
+        "artifact_id": 4,
+        "version_id": "version-2",
+        "sha256": "41d8719bdc750b2418c6646117c376c08a06b3828b3e470c153d95fd4887ac7b"
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "embedding-authority-field",
+    "wire": {
+      "kind": "embedding",
+      "source": {
+        "artifact_id": "input-2",
+        "version_id": "version-2",
+        "sha256": "41d8719bdc750b2418c6646117c376c08a06b3828b3e470c153d95fd4887ac7b",
+        "owner_id": "other-owner"
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "embedding-unexpected-duration",
+    "wire": {
+      "kind": "embedding",
+      "source": {
+        "artifact_id": "input-2",
+        "version_id": "version-2",
+        "sha256": "41d8719bdc750b2418c6646117c376c08a06b3828b3e470c153d95fd4887ac7b"
+      },
+      "duration_ms": "1"
+    },
+    "accepted": false
+  },
+  {
+    "name": "image",
+    "wire": {
+      "kind": "image",
+      "source": {
+        "artifact_id": "input-3",
+        "version_id": "version-3",
+        "sha256": "89d25fee86e1334f4e83c1390e6ee8e31d3b4fa9ca76ad15f6bef1309d18978a"
+      }
+    },
+    "accepted": true
+  },
+  {
+    "name": "image-wrong-artifact-type",
+    "wire": {
+      "kind": "image",
+      "source": {
+        "artifact_id": 4,
+        "version_id": "version-3",
+        "sha256": "89d25fee86e1334f4e83c1390e6ee8e31d3b4fa9ca76ad15f6bef1309d18978a"
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "image-authority-field",
+    "wire": {
+      "kind": "image",
+      "source": {
+        "artifact_id": "input-3",
+        "version_id": "version-3",
+        "sha256": "89d25fee86e1334f4e83c1390e6ee8e31d3b4fa9ca76ad15f6bef1309d18978a",
+        "owner_id": "other-owner"
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "image-unexpected-duration",
+    "wire": {
+      "kind": "image",
+      "source": {
+        "artifact_id": "input-3",
+        "version_id": "version-3",
+        "sha256": "89d25fee86e1334f4e83c1390e6ee8e31d3b4fa9ca76ad15f6bef1309d18978a"
+      },
+      "duration_ms": "1"
+    },
+    "accepted": false
+  },
+  {
+    "name": "transcription",
+    "wire": {
+      "kind": "transcription",
+      "source": {
+        "artifact_id": "input-4",
+        "version_id": "version-4",
+        "sha256": "507d9b3142200266538e1836d205cdc3ca1f92a83708ad794eaf728646c22d7a"
+      },
+      "duration_ms": "1450"
+    },
+    "accepted": true
+  },
+  {
+    "name": "transcription-wrong-artifact-type",
+    "wire": {
+      "kind": "transcription",
+      "source": {
+        "artifact_id": 4,
+        "version_id": "version-4",
+        "sha256": "507d9b3142200266538e1836d205cdc3ca1f92a83708ad794eaf728646c22d7a"
+      },
+      "duration_ms": "1450"
+    },
+    "accepted": false
+  },
+  {
+    "name": "transcription-authority-field",
+    "wire": {
+      "kind": "transcription",
+      "source": {
+        "artifact_id": "input-4",
+        "version_id": "version-4",
+        "sha256": "507d9b3142200266538e1836d205cdc3ca1f92a83708ad794eaf728646c22d7a",
+        "owner_id": "other-owner"
+      },
+      "duration_ms": "1450"
+    },
+    "accepted": false
+  },
+  {
+    "name": "transcription-duration-0",
+    "wire": {
+      "kind": "transcription",
+      "source": {
+        "artifact_id": "input-4",
+        "version_id": "version-4",
+        "sha256": "507d9b3142200266538e1836d205cdc3ca1f92a83708ad794eaf728646c22d7a"
+      },
+      "duration_ms": "0"
+    },
+    "accepted": false
+  },
+  {
+    "name": "transcription-duration-01",
+    "wire": {
+      "kind": "transcription",
+      "source": {
+        "artifact_id": "input-4",
+        "version_id": "version-4",
+        "sha256": "507d9b3142200266538e1836d205cdc3ca1f92a83708ad794eaf728646c22d7a"
+      },
+      "duration_ms": "01"
+    },
+    "accepted": false
+  },
+  {
+    "name": "transcription-duration-1.1",
+    "wire": {
+      "kind": "transcription",
+      "source": {
+        "artifact_id": "input-4",
+        "version_id": "version-4",
+        "sha256": "507d9b3142200266538e1836d205cdc3ca1f92a83708ad794eaf728646c22d7a"
+      },
+      "duration_ms": "1.1"
+    },
+    "accepted": false
+  },
+  {
+    "name": "transcription-duration--1",
+    "wire": {
+      "kind": "transcription",
+      "source": {
+        "artifact_id": "input-4",
+        "version_id": "version-4",
+        "sha256": "507d9b3142200266538e1836d205cdc3ca1f92a83708ad794eaf728646c22d7a"
+      },
+      "duration_ms": "-1"
+    },
+    "accepted": false
+  },
+  {
+    "name": "transcription-duration-18446744073709551616",
+    "wire": {
+      "kind": "transcription",
+      "source": {
+        "artifact_id": "input-4",
+        "version_id": "version-4",
+        "sha256": "507d9b3142200266538e1836d205cdc3ca1f92a83708ad794eaf728646c22d7a"
+      },
+      "duration_ms": "18446744073709551616"
+    },
+    "accepted": false
+  },
+  {
+    "name": "transcription-duration-100",
+    "wire": {
+      "kind": "transcription",
+      "source": {
+        "artifact_id": "input-4",
+        "version_id": "version-4",
+        "sha256": "507d9b3142200266538e1836d205cdc3ca1f92a83708ad794eaf728646c22d7a"
+      },
+      "duration_ms": 100
+    },
+    "accepted": false
+  },
+  {
+    "name": "transcription-max-duration",
+    "wire": {
+      "kind": "transcription",
+      "source": {
+        "artifact_id": "input-4",
+        "version_id": "version-4",
+        "sha256": "507d9b3142200266538e1836d205cdc3ca1f92a83708ad794eaf728646c22d7a"
+      },
+      "duration_ms": "18446744073709551615"
+    },
+    "accepted": true
+  },
+  {
+    "name": "no-source",
+    "wire": {
+      "kind": "text"
+    },
+    "accepted": false
+  },
+  {
+    "name": "missing-kind",
+    "wire": {
+      "source": {
+        "artifact_id": "input-1",
+        "version_id": "version-1",
+        "sha256": "fafff5ff2cff1599c3361ba58426e42a3fe1b6e6e68b5d20285a0cf3855969ad"
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "unknown-kind",
+    "wire": {
+      "kind": "binary",
+      "source": {
+        "artifact_id": "input-1",
+        "version_id": "version-1",
+        "sha256": "fafff5ff2cff1599c3361ba58426e42a3fe1b6e6e68b5d20285a0cf3855969ad"
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "inline-bytes",
+    "wire": {
+      "kind": "text",
+      "source": {
+        "artifact_id": "input-1",
+        "version_id": "version-1",
+        "sha256": "fafff5ff2cff1599c3361ba58426e42a3fe1b6e6e68b5d20285a0cf3855969ad"
+      },
+      "bytes": "AA=="
+    },
+    "accepted": false
+  },
+  {
+    "name": "bad-digest",
+    "wire": {
+      "kind": "text",
+      "source": {
+        "artifact_id": "input-1",
+        "version_id": "version-1",
+        "sha256": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "long-id",
+    "wire": {
+      "kind": "text",
+      "source": {
+        "artifact_id": "input-1",
+        "version_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sha256": "fafff5ff2cff1599c3361ba58426e42a3fe1b6e6e68b5d20285a0cf3855969ad"
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "trailing-newline-id",
+    "wire": {
+      "kind": "text",
+      "source": {
+        "artifact_id": "id\n",
+        "version_id": "version-1",
+        "sha256": "fafff5ff2cff1599c3361ba58426e42a3fe1b6e6e68b5d20285a0cf3855969ad"
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "unknown-version-type",
+    "wire": {
+      "kind": "text",
+      "source": {
+        "artifact_id": "input-1",
+        "version_id": {
+          "v": 1
+        },
+        "sha256": "fafff5ff2cff1599c3361ba58426e42a3fe1b6e6e68b5d20285a0cf3855969ad"
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "array",
+    "wire": [],
+    "accepted": false
+  },
+  {
+    "name": "null",
+    "wire": null,
+    "accepted": false
+  }
+]
