@@ -351,3 +351,55 @@ async fn session_expiry_while_domain_operation_waits_rolls_back_the_entire_creat
         .expect("no partial organization");
     assert_eq!(count, 0);
 }
+
+#[tokio::test]
+async fn revoked_session_cannot_authenticate_and_owner_ledger_remains_balanced_and_immutable() {
+    let f = fixture().await;
+    let owner: String = sqlx::query_scalar("SELECT personal_owner_id FROM users WHERE user_id=$1")
+        .bind(&f.user)
+        .fetch_one(&f.pool)
+        .await
+        .expect("actor owner");
+    let id = Uuid::new_v4().to_string();
+    let mut tx = f.pool.begin().await.expect("fixture transaction");
+    sqlx::query(
+        "INSERT INTO ledger_transactions(transaction_id,business_key,owner_id) VALUES($1,$2,$3)",
+    )
+    .bind(&id)
+    .bind(format!("fixture-retention-{id}"))
+    .bind(&owner)
+    .execute(&mut *tx)
+    .await
+    .expect("retention fixture");
+    sqlx::query("INSERT INTO ledger_entries(transaction_id,account,amount) VALUES ($1,'retention_fixture_a',17),($1,'retention_fixture_b',-17)").bind(&id).execute(&mut *tx).await.expect("balanced development postings");
+    tx.commit().await.expect("commit");
+    assert!(f.identity.authenticate(&headers(&f)).await.is_ok());
+    f.identity.revoke_self(&headers(&f)).await.expect("logout");
+    assert!(matches!(
+        f.identity.authenticate(&headers(&f)).await,
+        Err(AuthError::Unauthenticated)
+    ));
+    let rows:Vec<(String,String,i64)>=sqlx::query_as("SELECT t.owner_id,e.account,e.amount FROM ledger_entries e JOIN ledger_transactions t USING(transaction_id) WHERE e.transaction_id=$1 ORDER BY e.account")
+        .bind(&id).fetch_all(&f.pool).await.expect("retained facts");
+    assert_eq!(
+        rows,
+        vec![
+            (owner.clone(), "retention_fixture_a".into(), 17),
+            (owner, "retention_fixture_b".into(), -17)
+        ]
+    );
+    assert!(
+        sqlx::query("DELETE FROM ledger_transactions WHERE transaction_id=$1")
+            .bind(&id)
+            .execute(&f.pool)
+            .await
+            .is_err()
+    );
+    assert!(
+        sqlx::query("UPDATE ledger_entries SET amount=0 WHERE transaction_id=$1")
+            .bind(&id)
+            .execute(&f.pool)
+            .await
+            .is_err()
+    );
+}
