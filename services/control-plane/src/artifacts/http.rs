@@ -338,25 +338,22 @@ fn private(mut r: Response) -> Response {
 }
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
-        private(
-            (
-                self.0,
-                Json(orange_protocol::ApiError {
-                    code: self.1.into(),
-                    message: self.1.into(),
-                    request_id: id(),
-                    retry_class: if self.0 == StatusCode::UNAUTHORIZED {
-                        "after_reauth"
-                    } else if self.0.is_server_error() || self.0 == StatusCode::REQUEST_TIMEOUT {
-                        "query_original"
-                    } else {
-                        "never"
-                    }
-                    .into(),
-                }),
-            )
-                .into_response(),
-        )
+        private(crate::diagnostics::typed_failure(
+            self.0,
+            orange_protocol::ApiError {
+                code: self.1.into(),
+                message: self.1.into(),
+                request_id: id(),
+                retry_class: if self.0 == StatusCode::UNAUTHORIZED {
+                    "after_reauth"
+                } else if self.0.is_server_error() || self.0 == StatusCode::REQUEST_TIMEOUT {
+                    "query_original"
+                } else {
+                    "never"
+                }
+                .into(),
+            },
+        ))
     }
 }
 fn original_key(headers: &HeaderMap, upload: &str) -> Result<(), Error> {
@@ -521,7 +518,11 @@ async fn submit_job(
             }
             _ => Error(StatusCode::CONFLICT, "JOB_SUBMISSION_REJECTED"),
         })?;
-    Ok(private(Json(job).into_response()))
+    let id = job.job_id.clone();
+    Ok(crate::diagnostics::job_response(
+        private(Json(job).into_response()),
+        &id,
+    ))
 }
 async fn bind_input(
     State(api): State<Api>,

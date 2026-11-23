@@ -349,6 +349,9 @@ impl WorkerSessionStore {
         sqlx::query("UPDATE worker_execution_attempts SET payload_digest=$2,assignment=$3 WHERE attempt_id=$1").bind(&attempt).bind(&a.payload_digest).bind(a.encode_to_vec()).execute(&mut *tx).await?;
         event(&mut tx, &attempt, "assignment.offered").await?;
         finish(tx, s).await?;
+        if let Some(lease) = &a.lease {
+            crate::diagnostics::assignment_committed(&lease.job_id, &lease.attempt_id, &a.node_id);
+        }
         Ok(Some(a))
     }
     pub(crate) async fn acknowledge_execution(

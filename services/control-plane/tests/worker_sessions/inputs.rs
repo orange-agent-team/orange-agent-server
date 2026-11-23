@@ -293,6 +293,12 @@ async fn setup_input_case(
         request_projection_digest: projection,
     };
     let app = orange_control_plane::artifacts::http::router(identity.clone(), objects.clone());
+    let diagnostic_test = std::env::var_os("ORANGE_DIAGNOSTIC_CORRELATION_TEST").is_some();
+    let app = orange_control_plane::diagnostics::observe(
+        app,
+        orange_control_plane::telemetry::ApiRole::User,
+        diagnostic_test,
+    );
     let mut http = axum::http::Request::builder()
         .method("POST")
         .uri(format!("/api/v1/owners/{owner}/jobs"))
@@ -304,7 +310,17 @@ async fn setup_input_case(
     *http.headers_mut() = headers.clone();
     http.headers_mut()
         .insert("content-type", "application/json".parse().expect("type"));
+    if diagnostic_test {
+        http.headers_mut().insert(
+            "x-orange-diagnostic-id",
+            "must-not-enter-log".parse().expect("test header"),
+        );
+    }
     let response = app.oneshot(http).await.expect("actual job HTTP router");
+    let diagnostic_id = response.headers()["x-orange-diagnostic-id"]
+        .to_str()
+        .expect("request reference")
+        .to_owned();
     assert_eq!(response.status(), 200);
     let job: orange_protocol::JobView = serde_json::from_slice(
         &axum::body::to_bytes(response.into_body(), 65536)
@@ -313,6 +329,13 @@ async fn setup_input_case(
     )
     .expect("job view");
     let job = job.job_id;
+    if diagnostic_test {
+        println!(
+            "expected_job_event {} {}",
+            diagnostic_id,
+            orange_control_plane::diagnostics::link("job", &job.job_id)
+        );
+    }
     InputFixture {
         d,
         objects,
@@ -499,6 +522,16 @@ async fn exact_customer_input_requires_start_and_rechecks_deletion_on_real_mtls(
     let server = Running::start_with_input(&f.d.store, Some(reader.clone())).await;
     let (mut connection, mut node, mut journal, record) = receiver(&f, &server).await;
     let a = assignment(&f).await;
+    if std::env::var_os("ORANGE_DIAGNOSTIC_CORRELATION_TEST").is_some() {
+        let lease = a.lease.as_ref().expect("lease");
+        use orange_control_plane::diagnostics::link;
+        println!(
+            "expected_assignment {} {} {}",
+            link("job", &lease.job_id),
+            link("attempt", &lease.attempt_id),
+            link("node", &a.node_id)
+        );
+    }
     assert_eq!(a.input_artifacts.len(), 1);
     let mut raw = server.client(Some(&f.d.certificate)).await.expect("mTLS");
     let read = worker::InputReadRequest {

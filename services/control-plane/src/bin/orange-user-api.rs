@@ -1,3 +1,4 @@
+use orange_control_plane::api_startup::{self, ApiSettings};
 use orange_control_plane::telemetry::{self, ApiRole};
 use orange_control_plane::{
     auth::{
@@ -8,16 +9,27 @@ use orange_control_plane::{
 };
 use std::{env, error::Error, net::SocketAddr};
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
-    if env::var("ORANGE_ENV").as_deref() != Ok("development") {
-        return Err("development deployment required".into());
+async fn main() -> std::process::ExitCode {
+    api_startup::exit(run().await)
+}
+
+async fn run() -> Result<(), Box<dyn Error>> {
+    let settings = ApiSettings::load(ApiRole::User)?;
+    let config: UserOidcConfig = settings.identity()?;
+    settings.validate_oidc(
+        &config.environment,
+        &config.client_id,
+        &config.client_secret,
+    )?;
+    if settings.describe() {
+        return Ok(());
     }
     let meter = if let Some(path) = env::var_os("ORANGE_METER_CONFIG") {
         Some(orange_control_plane::meter_bootstrap::load(std::path::Path::new(&path)).await?)
     } else {
         None
     };
-    let result = serve(meter.clone()).await;
+    let result = serve(meter.clone(), settings, config).await;
     if let Some(meter) = meter {
         meter.shutdown().await?;
     }
@@ -25,25 +37,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
 }
 async fn serve(
     meter: Option<orange_model_runtime::meter_service::TrustedMeter>,
+    settings: ApiSettings,
+    config: UserOidcConfig,
 ) -> Result<(), Box<dyn Error>> {
     if meter.is_some() && env::var_os("ORANGE_ARTIFACT_ROOT").is_none() {
         return Err("trusted pricing requires the private artifact writer".into());
     }
-    if env::var("ORANGE_ENV").as_deref() != Ok("development") {
-        return Err("This candidate currently permits development deployment only".into());
-    }
-    let address: SocketAddr = env::var("ORANGE_USER_BIND")
-        .unwrap_or_else(|_| "127.0.0.1:43103".into())
-        .parse()?;
-    if !address.ip().is_loopback() {
-        return Err("Development user API must remain loopback-only".into());
-    }
-    let config: UserOidcConfig =
-        serde_json::from_slice(&std::fs::read(env::var("ORANGE_USER_CONFIG_FILE")?)?)?;
-    if config.environment != "dev" {
-        return Err("Development binary cannot authenticate production environment".into());
-    }
-    let store = Store::connect(&env::var("DATABASE_URL")?).await?;
+    let address = settings.bind;
+    let store = Store::connect(&settings.database_url).await?;
     store.migrate().await?;
     let identity = UserIdentity::discover(store.pool().clone(), config).await?;
     #[cfg(unix)]
@@ -158,7 +159,10 @@ async fn serve(
             audio,
         ));
     }
-    let (app, _metrics) = telemetry::configure(app, ApiRole::User).await?;
+    let (app, _metrics) =
+        telemetry::configure_listener(app, ApiRole::User, settings.metrics_bind).await?;
+    let app =
+        orange_control_plane::diagnostics::observe(app, ApiRole::User, settings.diagnostic_log);
     let api_listener = tokio::net::TcpListener::bind(address).await?;
     let (stop, mut stopped) = tokio::sync::watch::channel(false);
     let mut http_stopped = stop.subscribe();

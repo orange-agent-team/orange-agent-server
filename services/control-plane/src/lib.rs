@@ -1,4 +1,5 @@
 pub mod admin;
+pub mod api_startup;
 pub mod artifacts;
 pub mod auth;
 pub mod cloud_host;
@@ -9,6 +10,7 @@ mod cloud_tools;
 pub mod confluence;
 mod connector_file;
 mod connector_release;
+pub mod diagnostics;
 mod document_handles;
 pub mod events;
 mod hosted_connectors;

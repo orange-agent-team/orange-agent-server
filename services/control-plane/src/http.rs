@@ -26,8 +26,8 @@ pub struct DevIdentity {
     pub owner_id: String,
     pub token: String,
 }
-impl ApiState {
-    pub fn development(store: Store, identities: Vec<DevIdentity>) -> Result<Self, &'static str> {
+impl DevIdentity {
+    pub fn validate_all(identities: &[Self]) -> Result<(), &'static str> {
         if identities.is_empty()
             || identities
                 .iter()
@@ -45,6 +45,13 @@ impl ApiState {
                 return Err("duplicate development identity");
             }
         }
+        Ok(())
+    }
+}
+
+impl ApiState {
+    pub fn development(store: Store, identities: Vec<DevIdentity>) -> Result<Self, &'static str> {
+        DevIdentity::validate_all(&identities)?;
         Ok(Self {
             store,
             identities: Arc::new(identities),
@@ -132,15 +139,20 @@ async fn submit_job(
     State(s): State<ApiState>,
     h: HeaderMap,
     body: Result<Json<SubmitJob>, JsonRejection>,
-) -> Result<Json<JobView>, HttpError> {
+) -> Result<Response, HttpError> {
     let owner = s.owner(&h)?;
     let key = idempotency(&h)?;
     let Json(req) = body.map_err(|_| HttpError::invalid(&h))?;
-    s.store
+    let job = s
+        .store
         .submit(&owner, &key, &req)
         .await
-        .map(Json)
-        .map_err(|e| HttpError::store(e, &h))
+        .map_err(|e| HttpError::store(e, &h))?;
+    let id = job.job_id.clone();
+    Ok(crate::diagnostics::job_response(
+        Json(job).into_response(),
+        &id,
+    ))
 }
 async fn get_job(
     State(s): State<ApiState>,
@@ -296,7 +308,7 @@ impl HttpError {
 }
 impl IntoResponse for HttpError {
     fn into_response(self) -> Response {
-        let mut r = (self.0, Json(self.1)).into_response();
+        let mut r = crate::diagnostics::typed_failure(self.0, self.1);
         r.headers_mut().insert(
             "cache-control",
             axum::http::HeaderValue::from_static("no-store"),

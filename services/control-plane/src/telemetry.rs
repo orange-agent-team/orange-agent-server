@@ -16,6 +16,7 @@ use prometheus::{Registry, TextEncoder};
 use std::{env, error::Error, net::SocketAddr, time::Instant};
 use tokio::{net::TcpListener, task::JoinHandle};
 
+#[derive(Clone, Copy)]
 pub enum ApiRole {
     User,
     Admin,
@@ -23,7 +24,7 @@ pub enum ApiRole {
 }
 
 impl ApiRole {
-    fn name(&self) -> &'static str {
+    pub(crate) fn name(&self) -> &'static str {
         match self {
             Self::User => "user",
             Self::Admin => "admin",
@@ -60,6 +61,17 @@ pub async fn configure(
         Ok(value) => value.parse::<SocketAddr>()?,
         Err(env::VarError::NotPresent) => return Ok((app, None)),
         Err(error) => return Err(error.into()),
+    };
+    configure_listener(app, role, Some(address)).await
+}
+
+pub async fn configure_listener(
+    app: Router,
+    role: ApiRole,
+    address: Option<SocketAddr>,
+) -> Result<(Router, Option<MetricsEndpoint>), Box<dyn Error>> {
+    let Some(address) = address else {
+        return Ok((app, None));
     };
     let (app, endpoint, _) = bind(app, role, address).await?;
     Ok((app, Some(endpoint)))

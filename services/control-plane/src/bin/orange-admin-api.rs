@@ -1,3 +1,4 @@
+use orange_control_plane::api_startup::{self, ApiSettings};
 use orange_control_plane::telemetry::{self, ApiRole};
 use orange_control_plane::{
     admin::{
@@ -6,25 +7,26 @@ use orange_control_plane::{
     },
     store::Store,
 };
-use std::{env, error::Error, net::SocketAddr};
+use std::{env, error::Error};
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
-    if env::var("ORANGE_ENV").as_deref() != Ok("development") {
-        return Err("This candidate currently permits development deployment only".into());
+async fn main() -> std::process::ExitCode {
+    api_startup::exit(run().await)
+}
+
+async fn run() -> Result<(), Box<dyn Error>> {
+    let settings = ApiSettings::load(ApiRole::Admin)?;
+    let config: OidcConfig = settings.identity()?;
+    settings.validate_oidc(
+        &config.environment,
+        &config.client_id,
+        &config.client_secret,
+    )?;
+    if settings.describe() {
+        return Ok(());
     }
-    let address: SocketAddr = env::var("ORANGE_ADMIN_BIND")
-        .unwrap_or_else(|_| "127.0.0.1:43102".into())
-        .parse()?;
-    if !address.ip().is_loopback() {
-        return Err("Development admin API must remain loopback-only".into());
-    }
-    let config_path = env::var("ORANGE_ADMIN_CONFIG_FILE")?;
-    let config: OidcConfig = serde_json::from_slice(&std::fs::read(config_path)?)?;
-    if config.environment != "dev" {
-        return Err("Development binary cannot authenticate production environment".into());
-    }
-    let store = Store::connect(&env::var("DATABASE_URL")?).await?;
+    let address = settings.bind;
+    let store = Store::connect(&settings.database_url).await?;
     store.migrate().await?;
     let mut identity = AdminIdentity::discover(store.pool().clone(), config).await?;
     if let Some(root) = env::var_os("ORANGE_ADMIN_SUPPORT_ROOT") {
@@ -35,7 +37,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .await?;
         identity = identity.with_support_reader(reader);
     }
-    let (app, _metrics) = telemetry::configure(routes::router(identity), ApiRole::Admin).await?;
+    let (app, _metrics) = telemetry::configure_listener(
+        routes::router(identity),
+        ApiRole::Admin,
+        settings.metrics_bind,
+    )
+    .await?;
+    let app =
+        orange_control_plane::diagnostics::observe(app, ApiRole::Admin, settings.diagnostic_log);
     let listener = tokio::net::TcpListener::bind(address).await?;
     eprintln!(
         "Development Admin API listening on {}; node intents/approvals enabled, device completion remains separate",

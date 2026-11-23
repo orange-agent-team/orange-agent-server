@@ -291,16 +291,15 @@ impl IntoResponse for UserApiError {
         } else {
             "never"
         };
-        (
+        crate::diagnostics::typed_failure(
             self.0,
-            Json(ApiError {
+            ApiError {
                 code: self.1.into(),
                 message: self.1.into(),
                 request_id: uuid::Uuid::new_v4().to_string(),
                 retry_class: retry.into(),
-            }),
+            },
         )
-            .into_response()
     }
 }
 async fn not_found() -> UserApiError {
