@@ -117,6 +117,8 @@ def verify(private,current,old,tool):
                 return json.loads(run(tool+["export",*root_args,"--database-url-file",urlpath,"--destination",dest,"--signing-key",key]))
             empty=export(source,work/"old-head")
             require(empty["facts"]==0 and export(source,work/"old-head")==empty,"export did not replay the same original snapshot")
+            (work/"old-head/manifest.sig").unlink()
+            require(export(source,work/"old-head")==empty,"interrupted publication did not resume")
             subprocess.run([executable("pg_dump"),"-w","--format=custom","--file",backup],env=denv,check=True)
             shutil.copytree(objects,copy)
             absent=create("newer than backup")

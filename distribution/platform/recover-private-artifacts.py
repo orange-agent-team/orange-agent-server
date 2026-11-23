@@ -110,19 +110,34 @@ def export(args):
         scratch=Path(temporary)
         stage=scratch/"sealed";stage.mkdir(mode=0o700)
         manifest,message=write_snapshot(stage,root,env,args.signing_key)
-        try:
-            stage.rename(target)
-        except OSError:
-            if not target.exists(): raise
-            check(target.is_dir() and not target.is_symlink() and target.stat().st_mode&0o077==0,
-                  "Existing destination is not a private journal")
-            check((target/"manifest.json").read_bytes()==message,"Source changed or destination belongs to a different checkpoint")
+        target.mkdir(mode=0o700,exist_ok=True)
+        check(target.is_dir() and not target.is_symlink() and target.stat().st_uid==os.getuid() and target.stat().st_mode&0o077==0,
+              "Existing destination is not a private journal")
+        fd=os.open(target/"publish.lock",os.O_RDWR|os.O_CREAT|os.O_NOFOLLOW,0o600)
+        with os.fdopen(fd,"rb") as lock:
+            fcntl.flock(lock,fcntl.LOCK_EX)
+            names={"publish.lock","deletions.jsonl","manifest.json","manifest.sig"}
+            check(all(f.name in names and not f.is_symlink() and f.is_file() for f in target.iterdir()),
+                  "Journal directory contains unrelated files")
+            # No member is ever overwritten. An interrupted unsigned publication
+            # may finish only when its original bytes still describe this source.
+            if (target/"manifest.sig").exists():
+                check((target/"deletions.jsonl").exists() and (target/"manifest.json").exists(),"Signed journal is incomplete")
+            if (target/"manifest.json").exists():
+                check((target/"manifest.json").read_bytes()==message,"Source changed or destination belongs to a different checkpoint")
+            if (target/"deletions.jsonl").exists():
+                with (target/"deletions.jsonl").open("rb") as records:
+                    check(scan(records)==(manifest["count"],manifest["sha256"]),"Original deletion archive differs")
+            for member in ("deletions.jsonl","manifest.json","manifest.sig"):
+                if not (target/member).exists():
+                    os.link(stage/member,target/member)
             public=scratch/"verification.pem"
             result=subprocess.run([binary("openssl"),"pkey","-in",args.signing_key,"-pubout","-out",public],capture_output=True)
             check(result.returncode==0,"Could not verify the original signing authority")
             tool_crypto(public,message,target/"manifest.sig",True)
-            with (target/"deletions.jsonl").open("rb") as records:
-                check(scan(records)==(manifest["count"],manifest["sha256"]),"Original deletion archive differs")
+            directory=os.open(target,os.O_RDONLY)
+            try: os.fsync(directory)
+            finally: os.close(directory)
         directory=os.open(target.parent,os.O_RDONLY)
         try: os.fsync(directory)
         finally: os.close(directory)
