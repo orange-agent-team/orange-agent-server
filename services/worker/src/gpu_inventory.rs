@@ -1,15 +1,13 @@
 //! One local, read-only NVIDIA management observation. Never produces a resource grant.
+use crate::probe_command::MAX_OUTPUT;
 use serde::Serialize;
 use std::{
     collections::BTreeSet,
     path::{Path, PathBuf},
-    process::Stdio,
     time::Duration,
 };
-use tokio::{io::AsyncReadExt, process::Command};
 use uuid::Uuid;
 
-const MAX_OUTPUT: usize = 65536;
 const MAX_DEVICES: usize = 64;
 const QUERY: &str = "--query-gpu=uuid,pci.bus_id,driver_version,memory.total,memory.free,name";
 
@@ -191,52 +189,16 @@ fn system_tools() -> Vec<PathBuf> {
 }
 
 async fn query(tool: &Path, timeout: Duration) -> Result<Vec<GpuObservation>, InventoryStatus> {
-    let mut child = Command::new(tool)
-        .args([QUERY, "--format=csv,noheader,nounits"])
-        .current_dir(tool.parent().ok_or(InventoryStatus::DriverQueryFailed)?)
-        .env_remove("LD_PRELOAD")
-        .env_remove("LD_LIBRARY_PATH")
-        .env("LC_ALL", "C")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|_| InventoryStatus::DriverQueryFailed)?;
-    let pipe = child
-        .stdout
-        .take()
-        .ok_or(InventoryStatus::DriverQueryFailed)?;
-    let run = async {
-        let mut output = Vec::new();
-        pipe.take((MAX_OUTPUT + 1) as u64)
-            .read_to_end(&mut output)
-            .await
-            .map_err(|_| InventoryStatus::DriverQueryFailed)?;
-        if output.len() > MAX_OUTPUT {
-            return Err(InventoryStatus::InvalidDriverOutput);
-        }
-        if !child
-            .wait()
-            .await
-            .map_err(|_| InventoryStatus::DriverQueryFailed)?
-            .success()
-        {
-            return Err(InventoryStatus::DriverQueryFailed);
-        }
-        decode(&output)
-    };
-    let result = tokio::time::timeout(timeout, run)
+    use crate::probe_command::{ProbeError, read};
+    let bytes = read(tool, &[QUERY, "--format=csv,noheader,nounits"], timeout)
         .await
-        .unwrap_or(Err(InventoryStatus::TimedOut));
-    if result.is_err() {
-        let _ = child.start_kill();
-        tokio::time::timeout(Duration::from_secs(2), child.wait())
-            .await
-            .map_err(|_| InventoryStatus::ProbeCleanupUnconfirmed)?
-            .map_err(|_| InventoryStatus::ProbeCleanupUnconfirmed)?;
-    }
-    result
+        .map_err(|e| match e {
+            ProbeError::Process => InventoryStatus::DriverQueryFailed,
+            ProbeError::Output => InventoryStatus::InvalidDriverOutput,
+            ProbeError::Timeout => InventoryStatus::TimedOut,
+            ProbeError::Cleanup => InventoryStatus::ProbeCleanupUnconfirmed,
+        })?;
+    decode(&bytes)
 }
 
 pub async fn observe() -> Inventory {

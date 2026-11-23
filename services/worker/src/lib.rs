@@ -4,6 +4,8 @@ pub mod broker;
 pub mod control;
 pub mod gpu_inventory;
 pub mod node_journal;
+mod probe_command;
+pub mod wsl_inventory;
 
 pub mod execution_journal;
 

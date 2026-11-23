@@ -1,8 +1,23 @@
 #requires -Version 5.1
 [CmdletBinding()]
-param()
+param(
+    [ValidateSet('Consume', 'Contribute')]
+    [string]$Mode = 'Contribute',
+    [UInt64]$RequiredPackageVolumeBytes = 0
+)
 
 $ErrorActionPreference = 'Stop'
+if ($Mode -eq 'Consume') {
+    [ordered]@{
+        evidence_version = 2
+        mode = 'consume'
+        observed_utc = [DateTime]::UtcNow.ToString('o')
+        local_worker_required = $false
+        wsl_required = $false
+    } | ConvertTo-Json
+    exit 0
+}
+
 if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
     throw 'Windows x64 is required for this target-machine check.'
 }
@@ -65,9 +80,22 @@ try {
 } catch {
     $observations.package_volume_free_bytes = $null
 }
+$observations.required_package_volume_bytes = $RequiredPackageVolumeBytes.ToString([CultureInfo]::InvariantCulture)
+$observations.package_volume_sufficient = if ($RequiredPackageVolumeBytes -eq 0 -or $null -eq $observations.package_volume_free_bytes) {
+    $null
+} else { [UInt64]$observations.package_volume_free_bytes -ge $RequiredPackageVolumeBytes }
 $observations.wsl_optional_feature = Get-OptionalFeatureObservation 'Microsoft-Windows-Subsystem-Linux'
 $observations.virtual_machine_platform_feature = Get-OptionalFeatureObservation 'VirtualMachinePlatform'
 
+$wslLines = & $exe probe-wsl
+$wslCode = $LASTEXITCODE
+$wsl = ($wslLines -join [Environment]::NewLine) | ConvertFrom-Json
+if ($wsl.version -ne 1 -or $wslCode -notin @(0, 2) -or
+    ($wslCode -eq 0 -and ($wsl.status -ne 'observed' -or $null -eq $wsl.distributions)) -or
+    ($wslCode -eq 2 -and ($wsl.status -eq 'observed' -or $null -ne $wsl.distributions))) {
+    throw 'Unexpected WSL observation.'
+}
+$observations.wsl_registrations = $wsl
 $outputLines = & $exe probe-gpu
 $status = $LASTEXITCODE
 $inventory = ($outputLines -join [Environment]::NewLine) | ConvertFrom-Json
@@ -81,7 +109,8 @@ if (($status -eq 0 -and ($inventory.status -ne 'observed' -or @($inventory.devic
 }
 
 [ordered]@{
-    evidence_version = 1
+    evidence_version = 2
+    mode = 'contribute'
     source = $manifest.source
     executable_sha256 = $actual
     observed_utc = [DateTime]::UtcNow.ToString('o')

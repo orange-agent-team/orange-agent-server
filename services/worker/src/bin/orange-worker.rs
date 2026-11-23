@@ -1,7 +1,23 @@
 //! Local development CPU Worker; never installs a background service implicitly.
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args_os().skip(1);
-    if args.next().as_deref() == Some(std::ffi::OsStr::new("probe-gpu")) {
+    let command = args.next();
+    if command.as_deref() == Some(std::ffi::OsStr::new("probe-wsl")) {
+        if args.next().is_some() {
+            return Err("usage: orange-worker probe-wsl".into());
+        }
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        let report = runtime.block_on(orange_worker::wsl_inventory::observe());
+        serde_json::to_writer(std::io::stdout().lock(), &report)?;
+        println!();
+        if report.status != orange_worker::wsl_inventory::WslStatus::Observed {
+            std::process::exit(2);
+        }
+        return Ok(());
+    }
+    if command.as_deref() == Some(std::ffi::OsStr::new("probe-gpu")) {
         if args.next().is_some() {
             return Err("usage: orange-worker probe-gpu".into());
         }

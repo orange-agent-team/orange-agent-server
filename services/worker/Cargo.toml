@@ -25,6 +25,9 @@ tonic.workspace = true
 prost.workspace = true
 tokio-stream.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+windows-registry = "=0.6.1"
+
 [target.'cfg(unix)'.dependencies]
 orange-model-runtime.workspace = true
 rustix.workspace = true
