@@ -70,7 +70,7 @@ async def verify(archive):
         await send(b"tool "+json.dumps(args).encode())
         listing = await observe("directory_result")
         if listing["permit_id"] != permit or listing["operation_id"] != operation or not any(
-                r["name"]=="input.txt" and r["bytes"]==len(body) for r in listing["entries"]):
+                r == {"name":"input.txt","kind":"file","bytes":str(len(body))} for r in listing["entries"]):
             raise RuntimeError("Real workspace operation did not survive original expiry")
         await send(b"stop")
         released = await observe("cleaned")
