@@ -112,6 +112,11 @@ def smoke(docker,package,lock):
             call(["exec","-w","/opt/orange-platform",cid,"sha256sum","--quiet","-c","SHA256SUMS"],capture_output=True)
             services.append(cid)
         migrated=check_running(user,admin,*configs,get_response,sql,len(list((package/"migrations").glob("*.sql"))))
+        from linux_device_enrollment_smoke import check as enrolled_device
+        helper=local_image_id(docker,lock["build_image"])
+        if not helper:raise ValueError("Missing locked arm64 HTTP/2 fixture tools")
+        device_check=enrolled_device(call,create,ready,group,package,helper,pg,namespace,"postgres://postgres:"+password+"@127.0.0.1:5432/orange_dev",
+            user,json.loads(configs[0].read_text())["user_origin"],sql)
         # Execute all remaining Ubuntu ELF entry points without credentials and require a controlled refusal.
         from local_distribution_profiles import PLATFORM_PROGRAMS
         for program in PLATFORM_PROGRAMS:
@@ -121,7 +126,7 @@ def smoke(docker,package,lock):
         for cid in services:
             call(["stop","--signal","SIGINT","--timeout","25",cid],stdout=subprocess.DEVNULL)
             if call(["inspect","--format","{{.State.ExitCode}}",cid],capture_output=True,text=True).stdout.strip()!="0":raise RuntimeError("Ungraceful API stop")
-        return {"ubuntu":runtime,"postgres":pg_image,"keycloak":IDENTITY,"linux_arm64":True,"private_network":"loopback only",
+        return {"device_enrollment":device_check,"ubuntu":runtime,"postgres":pg_image,"keycloak":IDENTITY,"linux_arm64":True,"private_network":"loopback only",
                 "actual_user_api":True,"actual_admin_api":True,"session_revocation":True,"independent_oidc_clients":True,
                 "migrations":migrated,"all_six_executables_loaded":True,"public_ports":0}
 

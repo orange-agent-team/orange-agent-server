@@ -42,3 +42,5 @@ python3.12 scripts/package-linux-platform.py
 构建镜像、Ubuntu 镜像、验收用 PostgreSQL 镜像及 Protobuf 压缩包均有独立摘要。Linux 验收使用项目已有的 Keycloak 26.8.1 固定镜像，在临时容器中登记两套开发客户端。该验收命令不向宿主机发布端口。[官方 Rust 镜像](https://hub.docker.com/_/rust) · [官方 Ubuntu 镜像](https://hub.docker.com/_/ubuntu) · [Protobuf 36.2 发布](https://github.com/protocolbuffers/protobuf/releases/tag/v36.2)
 
 licenses/inventory.json 列出 Cargo.lock 中所有登记的 registry 包、版本、声明的许可表达式和随包通知路径。清单覆盖可选及其他目标平台的依赖。部分 Rust crate 将许可证放在上游仓库根目录；这些补充文件按已发布 crate 的原始 Git 提交、Git blob 和 SHA-256 核对。r-efi 的许可及作者声明位于原包 AUTHORS 中。
+
+包验收还在仅有回环连接的 Linux ARM64 网络命名空间内测试设备注册。临时用户会话授权公开 CSR，独立签发容器准备客户端证书，设备容器兑换并从已确认回执恢复 PEM。真实 gRPC Welcome、数据库会话记录和撤销后的拒绝均分别检查。签发私钥、设备私钥与数据库凭据按进程角色隔离。这组记录覆盖已测试的 Linux CPU 身份流程。
