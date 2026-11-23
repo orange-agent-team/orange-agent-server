@@ -73,7 +73,9 @@ def check(directory,guest):
             # not execution of that model or acceptance of these values on the real CLI.
             image=scratch/"rootfs";image.mkdir(mode=0o700)
             for rel in (p.KEY,p.MODEL,p.ENGINE):(image/rel).parent.mkdir(mode=0o755,parents=True,exist_ok=True)
-            model=b"test weights";(image/p.MODEL).write_bytes(model)
+            for directory in image.rglob("*"):
+                if directory.is_dir(): directory.chmod(0o755)
+            model=b"test weights";weights=image/p.MODEL;weights.write_bytes(model);weights.chmod(0o644)
             eng=image/p.ENGINE;eng.write_bytes(b"\x7fELF\x02\x01"+bytes(12)+b"\x3e\0"+b"fixture");eng.chmod(0o555)
             secret=image/p.KEY
             def change_key(value):
