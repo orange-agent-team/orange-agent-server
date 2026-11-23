@@ -86,6 +86,11 @@ def run(commit,trusted,policy,archive,inject):
         if int(git("cat-file","-s",obj))>1048576:
             raise ValueError("Oversized contribution input")
         files[filename]=git("show",obj)
+    if git("ls-tree","--name-only",commit,"--","crates/domain/src/identity.rs").strip():
+        obj=commit+":crates/domain/src/identity.rs"
+        if int(git("cat-file","-s",obj))>1048576:
+            raise ValueError("Oversized identity module")
+        files["identity.rs"]=git("show",obj)
     if inject=="wire":
         files["worker.proto"]+=b"\nmessage CiDriftExample { string version = 1; }\n"
     if inject=="rust":

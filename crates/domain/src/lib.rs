@@ -1,4 +1,6 @@
 //! Pure, checked rules. Storage, authorization and concurrency belong to callers.
+pub mod identity;
+
 use std::{error::Error, fmt, str::FromStr};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

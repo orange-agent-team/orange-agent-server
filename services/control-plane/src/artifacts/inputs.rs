@@ -78,9 +78,16 @@ impl ArtifactStore {
         owner: &str,
         job: &str,
     ) -> Result<orange_protocol::JobView, ArtifactError> {
+        use orange_domain::identity::{JobId, OwnerId, SubmittedJob, UserId};
+        let owner = OwnerId::try_from(owner).map_err(|_| ArtifactError::Invalid)?;
         let mut tx = self.inner.pool.begin().await?;
-        authority::scope(&mut tx, actor, owner, false).await?;
-        let row=sqlx::query("SELECT * FROM jobs WHERE job_id=$1 AND owner_id=$2 AND submitting_user_id=$3 FOR SHARE").bind(job).bind(owner).bind(&actor.user).fetch_optional(&mut *tx).await?.ok_or(ArtifactError::NotFound)?;
+        authority::scope(&mut tx, actor, owner.as_str(), false).await?;
+        let resource = SubmittedJob {
+            owner,
+            job: JobId::try_from(job).map_err(|_| ArtifactError::Invalid)?,
+            submitter: UserId::try_from(actor.user.as_str()).map_err(|_| ArtifactError::Invalid)?,
+        };
+        let row=sqlx::query("SELECT * FROM jobs WHERE job_id=$1 AND owner_id=$2 AND submitting_user_id=$3 FOR SHARE").bind(resource.job.as_str()).bind(resource.owner.as_str()).bind(resource.submitter.as_str()).fetch_optional(&mut *tx).await?.ok_or(ArtifactError::NotFound)?;
         let result = crate::store::job_view(&row).map_err(|_| ArtifactError::Integrity)?;
         authority::finish(tx, actor).await?;
         Ok(result)

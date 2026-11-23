@@ -104,13 +104,7 @@ pub struct ApiError {
     pub retry_class: String,
 }
 
-pub fn valid_id(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 128
-        && value
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"_.:-".contains(&b))
-}
+pub use orange_domain::identity::valid_id;
 pub fn valid_digest(value: &str) -> bool {
     value.len() == 64
         && value

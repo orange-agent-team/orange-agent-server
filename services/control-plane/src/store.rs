@@ -381,9 +381,12 @@ impl Store {
         Ok(view)
     }
     pub async fn job(&self, owner: &str, id: &str) -> Result<JobView, StoreError> {
+        let owner =
+            orange_domain::identity::OwnerId::try_from(owner).map_err(|_| StoreError::Invalid)?;
         let mut tx = self.begin().await?;
-        authorize(&mut tx, owner).await?;
-        let view = job_in_tx(&mut tx, owner, id).await?;
+        authorize(&mut tx, owner.as_str()).await?;
+        let job = orange_domain::identity::JobId::try_from(id).map_err(|_| StoreError::Invalid)?;
+        let view = job_in_tx(&mut tx, owner.as_str(), job.as_str()).await?;
         tx.commit().await?;
         Ok(view)
     }
