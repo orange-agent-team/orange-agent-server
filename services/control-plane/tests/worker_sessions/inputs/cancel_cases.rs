@@ -27,6 +27,29 @@ async fn cancel(
         .expect("body");
     (status, serde_json::from_slice(&body).expect("JSON"))
 }
+async fn delete_input(f: &InputFixture) -> (axum::http::StatusCode, serde_json::Value) {
+    let app = orange_control_plane::artifacts::http::router(f.identity.clone(), f.objects.clone());
+    let mut req = axum::http::Request::delete(format!(
+        "/api/v1/owners/{}/uploads/{}",
+        f.owner, f.upload.upload_id
+    ))
+    .body(axum::body::Body::empty())
+    .expect("delete request");
+    *req.headers_mut() = f.headers.clone();
+    req.headers_mut().insert(
+        "idempotency-key",
+        f.upload.upload_id.parse().expect("original upload key"),
+    );
+    let response = app.oneshot(req).await.expect("actual delete route");
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), 65536)
+        .await
+        .expect("response bytes");
+    (
+        status,
+        serde_json::from_slice(&body).expect("typed deletion response"),
+    )
+}
 async fn balance(f: &InputFixture) -> (i64, i64) {
     sqlx::query_as("SELECT gift,reserved_gift FROM wallets WHERE owner_id=$1")
         .bind(&f.owner)
@@ -60,6 +83,11 @@ async fn queued_cancel_checks_current_actor_csrf_and_strict_body_then_releases_o
         422
     );
     assert_eq!(balance(&f).await, (900, 100));
+    bind(&f).await;
+    let (refused, issue) = delete_input(&f).await;
+    assert_eq!(refused, 409);
+    assert_eq!(issue["code"], "ARTIFACT_IN_USE");
+    assert_eq!(balance(&f).await, (900, 100));
     let (a, b) = tokio::join!(
         cancel(&f, "cancel-queued", f.headers.clone(), empty.clone()),
         cancel(&f, "cancel-queued", f.headers.clone(), empty.clone())
@@ -69,6 +97,9 @@ async fn queued_cancel_checks_current_actor_csrf_and_strict_body_then_releases_o
     assert_eq!(a.1["settlement_state"], "settled");
     assert_eq!(a.1["charge"], "0");
     assert_eq!(balance(&f).await, (1000, 0));
+    let (removed, metadata) = delete_input(&f).await;
+    assert_eq!(removed, 200);
+    assert_eq!(metadata["state"], "deleted");
     let count: i64 =
         sqlx::query_scalar("SELECT count(*) FROM ledger_transactions WHERE business_key=$1")
             .bind(format!("release:{}", f.job))

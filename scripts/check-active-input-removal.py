@@ -30,4 +30,6 @@ with database(private/"database-url","orange_active_source_") as (_,url):
                  "active_reference_survives_deletion_retention_and_cannot_be_added_after_delete"]:
         if "artifacts::tests::"+name+" ... ok" not in result.stdout:
             raise RuntimeError("Missing original or new deletion qualification")
+    scoped=dict(env,ORANGE_CANCEL_PROTOCOL_TESTS="1")
+    subprocess.run([sys.executable,ROOT/"scripts/check-worker-session.py"],cwd=ROOT,env=scoped,check=True)
 print("PASS user deletion refuses active references and retains immediate authorized revocation")
