@@ -58,7 +58,15 @@ def listening(binary, env, label):
 
 def check_running(user,admin,user_config,admin_config,request,sql,migration_count):
     """Exercise the same independent identities and accounting database on both binary targets."""
-    assert user!=admin and request(user,"/api/v1/session")[0]==401 and request(admin,"/admin/v1/session")[0]==401
+    assert user!=admin
+    diagnostic_ids=set()
+    for origin,route in [(user,"/api/v1/session"),(admin,"/admin/v1/session")]:
+        status,headers,body=request(origin,route)
+        normalized={k.lower():v for k,v in headers.items()}
+        assert status==401 and normalized["x-orange-error-class"]=="permission"
+        assert normalized["x-orange-retry-class"]==json.loads(body)["retry_class"]
+        diagnostic_ids.add(uuid.UUID(normalized["x-orange-diagnostic-id"]))
+    assert len(diagnostic_ids)==2
     assert request(user,"/admin/v1/session")[0]==404 and request(admin,"/api/v1/session")[0]==404
     clients=[]
     for origin,path,cfg in [(user,"/api/v1/auth/start",user_config),(admin,"/admin/v1/auth/start",admin_config)]:
@@ -108,4 +116,4 @@ def check(root, url_file, user_config, admin_config, scratch):
             admin=group.enter_context(listening(root/"bin/orange-admin-api",aenv,"Admin API"))
             migrated=check_running(user,admin,user_config,admin_config,request,sql,len(list((root/"migrations").glob("*.sql"))))
     return {"actual_user_api":True,"actual_admin_api":True,"oidc_clients_distinct":True,"session_fixture_revoked":True,
-            "anonymous_denied":True,"cross_surface_rejected":True,"successful_migrations":migrated,"graceful_stop":True}
+            "typed_auth_rejections":True,"server_assigned_diagnostic_ids":True,"anonymous_denied":True,"cross_surface_rejected":True,"successful_migrations":migrated,"graceful_stop":True}

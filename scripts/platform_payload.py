@@ -20,7 +20,7 @@ def service_files(repository,commit,readme,extra=()):
         for source in names(folder):put(source,"migrations/"+Path(source).name if folder.endswith("migrations") else source)
     for source in ("Cargo.lock","rust-toolchain.toml","config/worker-development.example.json","config/trusted-meter.example.json",
                    "config/connector-releases.v1.json","docs/worker-development-host.md","docs/development-cloud-host.md",
-                   "docs/cloud-isolation-development.md","docs/audio-artifact-preflight.md","docs/local-http-metrics.md",*extra):put(source)
+                   "docs/cloud-isolation-development.md","docs/audio-artifact-preflight.md","docs/local-http-metrics.md","docs/engineering/api-configuration-diagnostics.md",*extra):put(source)
     return files
 
 def write_archive(path,files,prefix="orange-platform"):

@@ -20,3 +20,5 @@
 包内 config/user-oidc.example.json 和 config/admin-oidc.example.json 给出独立的开发客户端、回调 origin 与 ACR。将示例复制到本机私有配置目录，分别填入对应客户端的私有 secret。config/worker-gateway.example.json 列出 Worker 网关需要的证书路径。
 
 用户 API 和 Admin API 可分别设置本机回环指标端口。指标字段、取消语义和启动示例见[本机 HTTP 指标](docs/local-http-metrics.md)。
+
+用户 API 和 Admin API 支持分层启动配置及 --describe-config。配置字段、错误分类、重试语义与作业关联方式见[配置与诊断](docs/engineering/api-configuration-diagnostics.md)。
