@@ -15,7 +15,8 @@ from owned_postgres import database
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def exercise(url_file, folder):
+def exercise(private_env, folder, section):
+    url_file = private_env / "database-url"
     with database(url_file, "orange_wallet_check_") as (_, url):
         parsed = urlsplit(url)
         private = folder / "database-url"
@@ -29,9 +30,6 @@ def exercise(url_file, folder):
         def sql(statement):
             return subprocess.check_output(base, input=statement, text=True, env=env).strip()
 
-        for migration in sorted((ROOT / "services/control-plane/migrations").glob("*.sql")):
-            subprocess.run([*base, "--single-transaction", "-f", migration], check=True,
-                           env=env, stdout=subprocess.DEVNULL)
         operator = [sys.executable, ROOT / "distribution/platform/reconcile-wallets.py",
                     "--database-url-file", private]
         def verify(code, owners, fields, missing=0):
@@ -44,6 +42,33 @@ def exercise(url_file, folder):
                 raise ValueError(f"Unexpected read-only report: {report}")
             return report
 
+        if section == "merchant":
+            rustup = shutil.which("rustup") or "/opt/homebrew/opt/rustup/bin/rustup"
+            cargo = Path(subprocess.check_output([rustup, "which", "--toolchain", "1.97.1", "cargo"], text=True).strip())
+            process = {k:v for k,v in os.environ.items() if not k.startswith(("ORANGE_","STRIPE_"))}
+            process.update(PATH=str(cargo.parent)+os.pathsep+process["PATH"], CARGO_NET_OFFLINE="true",
+                           ORANGE_TEST_DATABASE_URL=url,
+                           ORANGE_TEST_USER_CONFIG_FILE=str(private_env/"identity/user-config.json"),
+                           ORANGE_TEST_OIDC_CONFIG_FILE=str(private_env/"identity/admin-config.json"))
+            case = "checkout_unknown_concurrency_raw_signatures_and_authoritative_test_credit_fulfillment"
+            completed = subprocess.run([cargo, "test", "--offline", "--locked", "-p", "orange-control-plane",
+                "--features", "integration-tests", "--test", "test_checkout", case, "--", "--exact"],
+                cwd=ROOT, env=process, capture_output=True, text=True)
+            print(completed.stderr, completed.stdout, flush=True)
+            completed.check_returncode()
+            if "test " + case + " ... ok" not in completed.stdout.splitlines():
+                raise ValueError("Application test did not execute")
+            report = verify(0, 0, {})
+            if report["transactions_checked"] < 8 or report["wallets_checked"] < 3:
+                raise ValueError("Missing checkout, refund or personal/team wallet facts")
+            print(f"PASS wallet reconstruction after actual checkout/refund handlers, "
+                  f"{report['transactions_checked']} PostgreSQL transactions and "
+                  f"{report['wallets_checked']} wallets. Merchant protocol uses a loopback fixture.")
+            return
+
+        for migration in sorted((ROOT / "services/control-plane/migrations").glob("*.sql")):
+            subprocess.run([*base, "--single-transaction", "-f", migration], check=True,
+                           env=env, stdout=subprocess.DEVNULL)
         def change(key, entries, updates):
             # All caller values below are fixed acceptance fixtures in the disposable database.
             postings = ",".join(f"('{key}','{account}',{amount})" for account, amount in entries)
@@ -88,6 +113,7 @@ def exercise(url_file, folder):
 if __name__ == "__main__":
     cli = argparse.ArgumentParser()
     cli.add_argument("--environment",type=Path,default=ROOT/".local")
+    cli.add_argument("--section",choices=["examples","merchant"],default="examples")
     args = cli.parse_args()
     with tempfile.TemporaryDirectory() as folder:
-        exercise(args.environment.resolve()/"database-url", Path(folder))
+        exercise(args.environment.resolve(), Path(folder), args.section)
