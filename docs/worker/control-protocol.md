@@ -21,3 +21,16 @@
 | 流控 | 单控制流的发送队列限制为 8 帧，写入超时关闭流；数据库操作和首次 Hello 都有时限 | 慢接收方不能无限占用网关发送队列；断线不构成取消、完成或退款 |
 
 在服务端依次运行 `python3.12 scripts/check-worker-contract.py --section handshake`、execution、renewal、roundtrip。测试使用专属 PostgreSQL、临时 CA 和临时对象。renewal 还会启动本机已有的固定 CPU 模型，让真实续租权威暂时不可达，再验证子进程清理、无结果发布与账本保留。其他任务往返采用显式固定输出，GPU 驱动与生产设备资格另行验收。
+
+## 最低版本的线格式
+
+最低样本取自服务端提交 `5849d9678ffa701540964aa0333f9d7309373f27`，该提交包含通过 mTLS 建立控制会话的 Worker 客户端。样本同时固定了原始 schema 的 SHA-256、textproto 和实际十六进制编码。[样本与来源](../../contracts/fixtures/worker-v1-baseline/vectors.json)
+
+| 输入 | 当前接收方的行为 |
+|---|---|
+| 初代 v1 Hello，未声明执行能力 | 可申请控制会话，执行能力取零；是否建立会话仍由设备身份与授权决定。 |
+| 新 v1 Hello 或 Welcome | 最低版本读者可还原原字段，新读者还能读取新增能力。连接代次在超过 JavaScript 精确整数范围时仍保留原值。 |
+| 未支持的主版本 | 已登记的设备收到 gRPC FAILED_PRECONDITION，当前会话保持有效。 |
+| 仅声明续约，缺少所需输入能力 | 已登记的设备收到 gRPC INVALID_ARGUMENT，原会话可继续心跳。 |
+
+`python3 scripts/check-worker-wire-vectors.py` 对照两个 schema 编码并解码固定字节。`cargo test --locked --offline -p orange-protocol --features grpc --test worker_wire_vectors` 使用实际 Rust 生成类型，`python3 scripts/check-worker-contract.py --section handshake` 使用独立开发数据库和双向 TLS 测试拒绝原因及原会话状态。
