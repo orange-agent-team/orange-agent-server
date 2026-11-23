@@ -37,7 +37,7 @@ pub(crate) async fn user_scope(
     }
     Ok(Some(role))
 }
-pub(super) async fn resource(
+pub(crate) async fn resource(
     tx: &mut Tx<'_>,
     actor: &ArtifactActor,
     owner: &str,
