@@ -115,6 +115,7 @@ reqwest.workspace = true
 opendal = { workspace = true, features = ["services-s3"] }
 libc.workspace = true
 x509-parser = { version = "=0.18.1", features = ["verify"] }
+rcgen = { version = "=0.14.10", default-features = false, features = ["ring", "pem", "x509-parser"] }
 
 [target.'cfg(unix)'.dependencies]
 rustix.workspace = true

@@ -77,6 +77,8 @@ use serde::Deserialize;
 use std::sync::Arc;
 #[path = "worker_enrollments.rs"]
 mod worker_enrollments;
+#[path = "worker_redemption.rs"]
+mod worker_redemption;
 pub async fn prune_worker_enrollment_grants(pool: &sqlx::PgPool) -> Result<u64, sqlx::Error> {
     Ok(sqlx::query("WITH due AS (SELECT request_id FROM worker_enrollment_grants WHERE expires_at<=clock_timestamp()-interval '30 days'
         ORDER BY expires_at,request_id LIMIT 128 FOR UPDATE SKIP LOCKED) DELETE FROM worker_enrollment_grants g USING due WHERE g.request_id=due.request_id")
@@ -84,6 +86,10 @@ pub async fn prune_worker_enrollment_grants(pool: &sqlx::PgPool) -> Result<u64, 
 }
 pub fn router(identity: UserIdentity) -> Router {
     Router::new()
+        .route(
+            "/api/v1/worker-enrollments/{request}/redeem",
+            axum::routing::post(worker_redemption::redeem),
+        )
         .route(
             "/api/v1/owners/{owner}/worker-enrollments/{request}",
             get(worker_enrollments::inspect)

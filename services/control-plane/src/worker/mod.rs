@@ -12,4 +12,8 @@ mod renewals;
 mod transcription_observations;
 
 pub mod bootstrap;
+#[cfg(unix)]
+pub mod device_issuer;
 pub(crate) mod enrollment_csr;
+
+pub(crate) mod enrollment_permissions;

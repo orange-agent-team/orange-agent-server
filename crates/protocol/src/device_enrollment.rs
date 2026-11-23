@@ -31,3 +31,25 @@ pub struct WorkerEnrollmentView {
     pub state: String,
     pub expires_unix: String,
 }
+
+/// A retry supplies the original redemption UUID and still requires the original enrollment token.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RedeemWorkerCertificate {
+    pub version: u32,
+    pub redemption_id: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerCertificateReceipt {
+    pub version: u32,
+    pub request_id: String,
+    pub redemption_id: String,
+    pub node_id: String,
+    pub spki_sha256: String,
+    pub certificate_sha256: String,
+    pub issuer_sha256: String,
+    pub expires_unix: String,
+    pub certificate_pem: String,
+}

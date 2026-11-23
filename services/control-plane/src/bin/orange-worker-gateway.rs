@@ -8,6 +8,33 @@ async fn main() -> Result<(), Box<dyn Error>> {
     if env::var("ORANGE_ENV").as_deref() != Ok("development") {
         return Err("This candidate permits explicit development deployment only".into());
     }
+    if let Some(command) = env::args_os().nth(1) {
+        #[cfg(unix)]
+        if command == "issue-one" && env::args_os().count() == 3 {
+            let url = env::var("DATABASE_URL")?;
+            let db = reqwest::Url::parse(&url).map_err(|_| "Invalid local signer database")?;
+            if !matches!(db.scheme(), "postgres" | "postgresql")
+                || !matches!(db.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"))
+                || db.query().is_some()
+                || db.fragment().is_some()
+            {
+                return Err("Development signer requires a loopback database".into());
+            }
+            let path = env::args_os()
+                .nth(2)
+                .ok_or("private issuer configuration required")?;
+            let store = Store::connect(&url).await?;
+            store.migrate().await?;
+            let receipt = orange_control_plane::worker::device_issuer::issue_one(
+                store.pool(),
+                Path::new(&path),
+            )
+            .await?;
+            println!("{}", serde_json::json!({"prepared_request":receipt}));
+            return Ok(());
+        }
+        return Err("Unsupported Worker gateway operation".into());
+    }
     let address: SocketAddr = env::var("ORANGE_WORKER_GATEWAY_BIND")
         .unwrap_or_else(|_| "127.0.0.1:43104".into())
         .parse()?;

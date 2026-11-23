@@ -2239,6 +2239,7 @@ dependencies = [
  "prometheus",
  "prost",
  "prost-types",
+ "rcgen",
  "reqwest",
  "rusqlite",
  "rustix",
