@@ -826,3 +826,6 @@ async fn changed_projection_and_other_provider_cannot_inherit_input_authority() 
     server.stop().await;
     f.objects.drain().await.expect("drain");
 }
+
+#[path = "inputs/job_history.rs"]
+mod history_cases;

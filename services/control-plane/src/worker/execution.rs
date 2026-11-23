@@ -434,14 +434,29 @@ impl WorkerSessionStore {
                 .bind(&job)
                 .fetch_one(&mut *tx)
                 .await?;
-                crate::events::append(&mut tx, &owner, &job, "job.start_granted", &digest).await?;
+                crate::events::append_attempt(
+                    &mut tx,
+                    &owner,
+                    &job,
+                    "job.start_granted",
+                    &digest,
+                    &lease.attempt_id,
+                )
+                .await?;
             } else {
                 let owner: String = sqlx::query_scalar("SELECT owner_id FROM jobs WHERE job_id=$1")
                     .bind(&job)
                     .fetch_one(&mut *tx)
                     .await?;
-                crate::events::append(&mut tx, &owner, &job, "job.assignment_rejected", &digest)
-                    .await?;
+                crate::events::append_attempt(
+                    &mut tx,
+                    &owner,
+                    &job,
+                    "job.assignment_rejected",
+                    &digest,
+                    &lease.attempt_id,
+                )
+                .await?;
             }
             event(
                 &mut tx,

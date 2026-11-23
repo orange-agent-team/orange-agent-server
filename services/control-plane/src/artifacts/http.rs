@@ -96,6 +96,7 @@ pub fn build_router(
             get(job_list).post(submit_job),
         )
         .route("/api/v1/owners/{owner}/jobs/{job}", get(job_status))
+        .route("/api/v1/owners/{owner}/jobs/{job}/events", get(job_events))
         .route(
             "/api/v1/owners/{owner}/invocations/{invocation}/withdraw",
             axum::routing::post(withdraw_invocation),
@@ -548,6 +549,19 @@ async fn bind_input(
                 .await?,
         )
         .into_response(),
+    ))
+}
+
+async fn job_events(
+    State(api): State<Api>,
+    Path((owner, job)): Path<(String, String)>,
+    headers: HeaderMap,
+    query: Result<Query<super::job_events::HistoryQuery>, axum::extract::rejection::QueryRejection>,
+) -> Result<Response, Error> {
+    let actor = api.identity.artifact_actor(&headers, false).await?;
+    let Query(query) = query.map_err(|_| ArtifactError::Invalid)?;
+    Ok(private(
+        Json(api.store.job_history(&actor, &owner, &job, &query).await?).into_response(),
     ))
 }
 

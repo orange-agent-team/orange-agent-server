@@ -13,6 +13,7 @@ mod connector_proposal;
 mod delivery;
 pub mod http;
 pub(crate) mod inputs;
+mod job_events;
 mod maintenance;
 mod outputs;
 mod pricing;

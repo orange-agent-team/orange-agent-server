@@ -174,6 +174,28 @@ pub(crate) async fn append(
     kind: &str,
     payload: &str,
 ) -> Result<(), sqlx::Error> {
+    append_core(tx, owner, entity, kind, payload, None).await
+}
+
+pub(crate) async fn append_attempt(
+    tx: &mut Transaction<'_, Postgres>,
+    owner: &str,
+    job: &str,
+    kind: &str,
+    payload: &str,
+    attempt: &str,
+) -> Result<(), sqlx::Error> {
+    append_core(tx, owner, job, kind, payload, Some(attempt)).await
+}
+
+async fn append_core(
+    tx: &mut Transaction<'_, Postgres>,
+    owner: &str,
+    entity: &str,
+    kind: &str,
+    payload: &str,
+    attempt: Option<&str>,
+) -> Result<(), sqlx::Error> {
     let digest = hex::encode(Sha256::digest(payload.as_bytes()));
     let entity_kind = kind
         .split('.')
@@ -187,7 +209,7 @@ pub(crate) async fn append(
         sqlx::query_scalar("SELECT nextval(pg_get_serial_sequence('outbox','event_id'))")
             .fetch_one(&mut **tx)
             .await?;
-    let event:String=sqlx::query_scalar("INSERT INTO durable_events(stream_id,seq,event_type,payload_digest,correlation_id,occurred_at,source_outbox_id) VALUES($1,$2,$3,$4,$5,clock_timestamp(),$6) RETURNING event_id").bind(stream).bind(seq).bind(kind).bind(&digest).bind(entity).bind(outbox).fetch_one(&mut **tx).await?;
+    let event:String=sqlx::query_scalar("INSERT INTO durable_events(stream_id,seq,event_type,payload_digest,correlation_id,occurred_at,source_outbox_id,attempt_id) VALUES($1,$2,$3,$4,$5,clock_timestamp(),$6,$7) RETURNING event_id").bind(stream).bind(seq).bind(kind).bind(&digest).bind(entity).bind(outbox).bind(attempt).fetch_one(&mut **tx).await?;
     sqlx::query("INSERT INTO outbox(event_id,owner_id,entity_id,event_type,payload,domain_event_id) VALUES($1,$2,$3,$4,$5,$6)").bind(outbox).bind(owner).bind(entity).bind(kind).bind(payload).bind(event).execute(&mut **tx).await?;
     Ok(())
 }

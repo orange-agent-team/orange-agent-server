@@ -643,12 +643,17 @@ impl ArtifactStore {
             if changed != 1 {
                 return Err(ArtifactError::Conflict);
             }
-            crate::events::append(
+            crate::events::append_attempt(
                 &mut tx,
                 &scope.owner,
                 &scope.job,
                 "job.response_committed",
                 &h.response_digest,
+                &h.accepted
+                    .as_ref()
+                    .and_then(|ack| ack.lease.as_ref())
+                    .ok_or(ArtifactError::Invalid)?
+                    .attempt_id,
             )
             .await?;
             crate::events::append(
