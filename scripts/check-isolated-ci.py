@@ -24,6 +24,7 @@ DOCKER=[shutil.which("docker") or "/usr/local/bin/docker","--context","colima-or
 TARGETS=("crates/domain/src/lib.rs","contracts/proto/worker.proto","contracts/proto/host.proto")
 BOOT=r"""
 set -euo pipefail
+echo gate-start >&2
 umask 077
 cd /work
 mkdir home
@@ -33,13 +34,17 @@ test "$(rustc -V | cut -d' ' -f2)" = "$ORANGE_RUST"
 test "$(./protoc --version)" = "libprotoc 36.2"
 sysroot="$(rustc --print sysroot)"
 export LD_LIBRARY_PATH="$sysroot/lib"
+echo checking-format >&2
 ./rustfmt --edition 2024 --check domain.rs || { echo 'REJECT formatting differs' >&2; exit 18; }
+echo checking-clippy >&2
 ./clippy-driver --sysroot "$sysroot" --crate-type=lib --edition=2024 -D warnings domain.rs
+echo checking-domain >&2
 rustc --edition=2024 --test domain.rs -o domain-tests
 ./domain-tests --test-threads=1 > test-results
 cat test-results
 grep -q '^test tests::published_billing_examples_and_fee_conservation ... ok$' test-results
 grep -q '^test tests::cancel_wins_before_completion_and_old_authorities_fail ... ok$' test-results
+echo checking-wire >&2
 ./protoc --proto_path=. --proto_path=include --include_imports --descriptor_set_out=result.pb worker.proto host.proto
 actual="$(sha256sum result.pb | cut -d' ' -f1)"
 if [[ "$actual" != "$ORANGE_WIRE_SHA" ]]; then echo 'REJECT protocol descriptor differs' >&2; exit 19; fi
@@ -51,8 +56,8 @@ def git(*args):
     return subprocess.check_output(["git",*args],cwd=ROOT)
 
 
-def run(commit,policy,archive,inject):
-    wire=json.loads(git("show",commit+":crates/protocol/generation.lock.json"))
+def run(commit,trusted,policy,archive,inject):
+    wire=json.loads(git("show",trusted+":crates/protocol/generation.lock.json"))
     build=local_image_id(DOCKER,policy["build_image"])
     if not build:
         raise RuntimeError("Pinned local Linux build image required")
@@ -63,7 +68,7 @@ def run(commit,policy,archive,inject):
     with ZipFile(archive) as bundle:
         compiler=bundle.read("bin/protoc")
         well_known={n:bundle.read(n) for n in bundle.namelist() if n.startswith("include/google/protobuf/") and n.endswith(".proto")}
-    tool_lock=json.loads(git("show",commit+":config/ci-linux-tools.lock.json"))
+    tool_lock=json.loads(git("show",trusted+":config/ci-linux-tools.lock.json"))
     tools={}
     for binary,ref in tool_lock["components"].items():
         component=archive.parent/Path(urlsplit(ref["url"]).path).name
@@ -75,7 +80,12 @@ def run(commit,policy,archive,inject):
             if item.size>64*1024*1024:
                 raise ValueError("Unexpected tool size")
             tools[binary]=tar.extractfile(item).read()
-    files={filename:git("show",commit+":"+src) for filename,src in zip(("domain.rs","worker.proto","host.proto"),TARGETS)}
+    files={}
+    for filename,src in zip(("domain.rs","worker.proto","host.proto"),TARGETS):
+        obj=commit+":"+src
+        if int(git("cat-file","-s",obj))>1048576:
+            raise ValueError("Oversized contribution input")
+        files[filename]=git("show",obj)
     if inject=="wire":
         files["worker.proto"]+=b"\nmessage CiDriftExample { string version = 1; }\n"
     if inject=="rust":
@@ -130,7 +140,15 @@ def run(commit,policy,archive,inject):
                     child.wait()
                 child.stdout.close()
             transcript=data.decode(errors="replace")
-            exit_code=json.loads(subprocess.check_output([*DOCKER,"inspect",raw]))[0]["State"]["ExitCode"]
+            # docker start -ai can detach as stdin closes. docker wait and logs provide the final daemon verdict.
+            state=json.loads(subprocess.check_output([*DOCKER,"inspect",raw]))[0]["State"]
+            if state["Running"]:
+                subprocess.run([*DOCKER,"wait",raw],stdout=subprocess.DEVNULL,check=True,timeout=max(1,deadline-time.monotonic()))
+                state=json.loads(subprocess.check_output([*DOCKER,"inspect",raw]))[0]["State"]
+            exit_code=state["ExitCode"]
+            if not transcript:
+                messages=subprocess.check_output([*DOCKER,"logs","--tail","40",raw],stderr=subprocess.STDOUT,timeout=4)
+                transcript=messages[:65536].decode(errors="replace")
             passed="PASS domain and wire" in transcript.splitlines()
             if inject is None:
                 ok=result==exit_code==0 and passed
@@ -141,7 +159,7 @@ def run(commit,policy,archive,inject):
             else:
                 ok=result==exit_code!=0 and not passed and "ci_expected_negative_fixture ... FAILED" in transcript
             if not ok:
-                raise RuntimeError("Unexpected CI verdict: "+transcript[-2000:])
+                raise RuntimeError(f"Unexpected CI verdict, case={inject}, cli={result}, exit={exit_code}, oom={state['OOMKilled']}: {transcript[-2000:]!r}")
             return {"mutation":inject,"exit_code":exit_code,"quick_gate_passed":passed,
                     "successful_domain_cases":len(re.findall(r"^test \S+ \.\.\. ok$",transcript,re.M))}
         finally:
@@ -152,11 +170,15 @@ def main():
     p=argparse.ArgumentParser()
     p.add_argument("--inputs",type=Path,default=ROOT/".local/linux")
     p.add_argument("--faults",action="store_true")
+    p.add_argument("--candidate",help="Full local commit ID; runner, tools and approval lock come from the current trusted checkout")
     args=p.parse_args()
-    commit=git("rev-parse","HEAD").decode().strip()
-    policy=json.loads(git("show",commit+":config/linux-platform-arm64.lock.json"))
-    outcomes=[run(commit,policy,args.inputs/policy["protoc"]["name"],m) for m in ([None,"wire","rust","format"] if args.faults else [None])]
-    print(json.dumps({"source":commit,"target":policy["target"],"build_image":policy["build_image"]["image"],"outcomes":outcomes}))
+    trusted=git("rev-parse","HEAD").decode().strip()
+    commit=args.candidate or trusted
+    if not re.fullmatch("[0-9a-f]{40}",commit) or git("cat-file","-t",commit).strip()!=b"commit":
+        raise ValueError("A complete local commit is required")
+    policy=json.loads(git("show",trusted+":config/linux-platform-arm64.lock.json"))
+    outcomes=[run(commit,trusted,policy,args.inputs/policy["protoc"]["name"],m) for m in ([None,"wire","rust","format"] if args.faults else [None])]
+    print(json.dumps({"source":commit,"runner":trusted,"target":policy["target"],"build_image":policy["build_image"]["image"],"outcomes":outcomes}))
 
 
 if __name__=="__main__":
