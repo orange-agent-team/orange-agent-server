@@ -18,6 +18,14 @@ pub enum EventError {
     #[error("event database operation failed")]
     Database(#[from] sqlx::Error),
 }
+#[derive(Debug, PartialEq, Eq)]
+pub struct RetentionBatch {
+    pub removed: u16,
+    pub oldest_remaining: i64,
+    pub blocked_at: Option<i64>,
+    pub complete: bool,
+}
+
 #[derive(Clone)]
 pub struct EventStore {
     pool: PgPool,
@@ -107,45 +115,59 @@ impl EventStore {
             next_cursor: last.to_string(),
         })
     }
-    /// Trusted retention maintenance only; no public endpoint. Money/idempotency history is untouched.
-    pub async fn prune_delivered(&self, stream: &str, through: i64) -> Result<(), EventError> {
-        if !valid_id(stream) || through < 0 {
-            return Err(EventError::Invalid);
-        }
+    /// Perform a single bounded maintenance transaction. Repeated calls advance only the acknowledged prefix.
+    pub async fn prune_delivered_batch(
+        &self,
+        stream: &str,
+        through: i64,
+        limit: u16,
+    ) -> Result<RetentionBatch, EventError> {
         let mut tx = self.pool.begin().await?;
-        let row = sqlx::query(
-            "SELECT next_seq,oldest_seq FROM event_streams WHERE stream_id=$1 FOR UPDATE",
-        )
-        .bind(stream)
-        .fetch_optional(&mut *tx)
-        .await?
-        .ok_or(EventError::NotFound)?;
-        if through >= row.try_get::<i64, _>("next_seq")? {
-            return Err(EventError::Invalid);
+        let batch = prune_chunk(&mut tx, stream, through, limit).await?;
+        tx.commit().await?;
+        Ok(batch)
+    }
+
+    /// Preserve atomic all-or-nothing retention for existing callers.
+    pub async fn prune_delivered(&self, stream: &str, through: i64) -> Result<(), EventError> {
+        let mut tx = self.pool.begin().await?;
+        loop {
+            let batch = prune_chunk(&mut tx, stream, through, 256).await?;
+            if batch.blocked_at.is_some() {
+                return Err(EventError::Undelivered);
+            }
+            if batch.complete {
+                break;
+            }
         }
-        if through < row.try_get::<i64, _>("oldest_seq")? {
-            tx.commit().await?;
-            return Ok(());
-        }
-        let pending:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM outbox o JOIN durable_events e ON e.event_id=o.domain_event_id WHERE e.stream_id=$1 AND e.seq<=$2 AND o.delivered_at IS NULL)").bind(stream).bind(through).fetch_one(&mut *tx).await?;
-        if pending {
-            return Err(EventError::Undelivered);
-        }
-        sqlx::query("DELETE FROM outbox o USING durable_events e WHERE o.domain_event_id=e.event_id AND e.stream_id=$1 AND e.seq<=$2").bind(stream).bind(through).execute(&mut *tx).await?;
-        sqlx::query("DELETE FROM durable_events WHERE stream_id=$1 AND seq<=$2")
-            .bind(stream)
-            .bind(through)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query("UPDATE event_streams SET oldest_seq=$2+1 WHERE stream_id=$1")
-            .bind(stream)
-            .bind(through)
-            .execute(&mut *tx)
-            .await?;
         tx.commit().await?;
         Ok(())
     }
 }
+async fn prune_chunk(
+    tx: &mut Transaction<'_, Postgres>,
+    stream: &str,
+    through: i64,
+    limit: u16,
+) -> Result<RetentionBatch, EventError> {
+    if !valid_id(stream) || through < 0 || !(1..=256).contains(&limit) {
+        return Err(EventError::Invalid);
+    }
+    let row=sqlx::query("SELECT removed,oldest_remaining,blocked_at,complete FROM orange_prune_event_batch($1,$2,$3)")
+        .bind(stream).bind(through).bind(i32::from(limit)).fetch_one(&mut **tx).await.map_err(|e|{
+            match e.as_database_error().and_then(|db|db.code()).as_deref(){
+                Some("22023")=>EventError::Invalid,Some("P0002")=>EventError::NotFound,_=>EventError::Database(e)
+            }
+        })?;
+    Ok(RetentionBatch {
+        removed: u16::try_from(row.try_get::<i32, _>("removed")?)
+            .map_err(|_| EventError::Invalid)?,
+        oldest_remaining: row.try_get("oldest_remaining")?,
+        blocked_at: row.try_get("blocked_at")?,
+        complete: row.try_get("complete")?,
+    })
+}
+
 fn stream_view(row: &sqlx::postgres::PgRow) -> Result<EventStreamView, sqlx::Error> {
     Ok(EventStreamView {
         stream_id: row.try_get("stream_id")?,

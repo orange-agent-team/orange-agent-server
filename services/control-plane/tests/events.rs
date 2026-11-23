@@ -250,3 +250,166 @@ async fn actual_http_router_requires_identity_and_owner_for_event_replay() {
         }
     }
 }
+
+async fn retained_stream(store: &Store, owner: &str, length: i64, pending: i64) -> String {
+    let entity = Uuid::new_v4().to_string();
+    let mut tx = store.pool().begin().await.expect("fixture transaction");
+    let stream:String=sqlx::query_scalar("INSERT INTO event_streams(owner_id,entity_kind,entity_id,next_seq) VALUES($1,'retention_test',$2,$3) RETURNING stream_id")
+        .bind(owner).bind(&entity).bind(length+1).fetch_one(&mut *tx).await.expect("stream");
+    sqlx::query("WITH inserted AS (
+        INSERT INTO durable_events(stream_id,seq,event_type,payload_digest,correlation_id,occurred_at,source_outbox_id)
+        SELECT $1,seq,'retention_test.seed',repeat('a',64),$2,clock_timestamp(),nextval(pg_get_serial_sequence('outbox','event_id'))
+        FROM generate_series(1::bigint,$3::bigint) AS seq RETURNING event_id,seq,source_outbox_id)
+        INSERT INTO outbox(event_id,domain_event_id,owner_id,entity_id,event_type,payload,delivered_at)
+        SELECT source_outbox_id,event_id,$4,$2,'retention_test.seed','development seed',CASE WHEN seq=$5 THEN NULL ELSE clock_timestamp() END FROM inserted")
+        .bind(&stream).bind(&entity).bind(length).bind(owner).bind(pending).execute(&mut *tx).await.expect("linked outbox rows");
+    tx.commit().await.expect("seed commit");
+    stream
+}
+
+#[tokio::test]
+async fn batch_retention_is_bounded_contiguous_concurrent_and_preserves_legacy_atomicity() {
+    let (store, events, owner, _) = fixture().await;
+    let stream = retained_stream(&store, &owner, 260, 258).await;
+    assert!(matches!(
+        events.prune_delivered_batch(&stream, 260, 0).await,
+        Err(EventError::Invalid)
+    ));
+    assert!(matches!(
+        events.prune_delivered_batch(&stream, 260, 257).await,
+        Err(EventError::Invalid)
+    ));
+    assert!(matches!(
+        events.prune_delivered_batch(&stream, 261, 32).await,
+        Err(EventError::Invalid)
+    ));
+    assert!(matches!(
+        events.prune_delivered(&stream, 260).await,
+        Err(EventError::Undelivered)
+    ));
+    let count = || {
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM durable_events WHERE stream_id=$1")
+            .bind(&stream)
+            .fetch_one(store.pool())
+    };
+    assert_eq!(count().await.expect("legacy rollback across chunks"), 260);
+    let (left, right) = tokio::join!(
+        events.prune_delivered_batch(&stream, 260, 100),
+        events.prune_delivered_batch(&stream, 260, 100)
+    );
+    let (left, right) = (
+        left.expect("first transaction"),
+        right.expect("second transaction"),
+    );
+    assert_eq!((left.removed, right.removed), (100, 100));
+    let mut cutoffs = [left.oldest_remaining, right.oldest_remaining];
+    cutoffs.sort();
+    assert_eq!(cutoffs, [101, 201]);
+    let blocked = events
+        .prune_delivered_batch(&stream, 260, 100)
+        .await
+        .expect("up to first pending");
+    assert_eq!(
+        (
+            blocked.removed,
+            blocked.oldest_remaining,
+            blocked.blocked_at,
+            blocked.complete
+        ),
+        (57, 258, Some(258), false)
+    );
+    assert_eq!(
+        events
+            .prune_delivered_batch(&stream, 260, 100)
+            .await
+            .expect("recheck")
+            .removed,
+        0
+    );
+    assert_eq!(count().await.expect("pending and later rows retained"), 3);
+    sqlx::query("UPDATE outbox o SET delivered_at=clock_timestamp() FROM durable_events e WHERE e.stream_id=$1 AND e.seq=258 AND e.event_id=o.domain_event_id")
+        .bind(&stream).execute(store.pool()).await.expect("acknowledgment");
+    let final_batch = events
+        .prune_delivered_batch(&stream, 260, 100)
+        .await
+        .expect("finish");
+    assert_eq!(
+        (
+            final_batch.removed,
+            final_batch.oldest_remaining,
+            final_batch.complete
+        ),
+        (3, 261, true)
+    );
+    assert_eq!(
+        events
+            .prune_delivered_batch(&stream, 260, 100)
+            .await
+            .expect("repeat")
+            .removed,
+        0
+    );
+    assert!(matches!(
+        events.read(&owner, &stream, "259", 8).await,
+        Err(EventError::SnapshotRequired)
+    ));
+    assert!(
+        events
+            .read(&owner, &stream, "260", 8)
+            .await
+            .expect("head")
+            .events
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn retention_cannot_advance_over_a_missing_notification_or_change_ledger_postings() {
+    let (store, events, owner, _) = fixture().await;
+    let stream = retained_stream(&store, &owner, 3, 0).await;
+    let id = Uuid::new_v4().to_string();
+    let mut tx = store.pool().begin().await.expect("begin posting fixture");
+    sqlx::query(
+        "INSERT INTO ledger_transactions(transaction_id,business_key,owner_id) VALUES($1,$2,$3)",
+    )
+    .bind(&id)
+    .bind(format!("retention-fixture-{id}"))
+    .bind(&owner)
+    .execute(&mut *tx)
+    .await
+    .expect("transaction");
+    sqlx::query("INSERT INTO ledger_entries(transaction_id,account,amount) VALUES($1,'test_debit',-17),($1,'test_credit',17)")
+        .bind(&id).execute(&mut *tx).await.expect("balanced entries");
+    tx.commit().await.expect("commit");
+    sqlx::query("DELETE FROM outbox o USING durable_events e WHERE e.stream_id=$1 AND e.seq=2 AND e.event_id=o.domain_event_id")
+        .bind(&stream).execute(store.pool()).await.expect("explicit corruption fixture");
+    let err = events
+        .prune_delivered_batch(&stream, 3, 3)
+        .await
+        .expect_err("no proof of delivery");
+    assert!(
+        matches!(err,EventError::Database(ref sql) if sql.as_database_error().and_then(|db|db.code()).as_deref()==Some("XX001"))
+    );
+    let pruned = events
+        .prune_delivered_batch(&stream, 1, 1)
+        .await
+        .expect("unaffected prefix");
+    assert_eq!((pruned.removed, pruned.oldest_remaining), (1, 2));
+    let entries: Vec<i64> = sqlx::query_scalar(
+        "SELECT amount FROM ledger_entries WHERE transaction_id=$1 ORDER BY amount",
+    )
+    .bind(&id)
+    .fetch_all(store.pool())
+    .await
+    .expect("retained");
+    assert_eq!(entries, [-17, 17]);
+    assert_eq!(
+        events
+            .read(&owner, &stream, "1", 5)
+            .await
+            .expect("after safe prefix")
+            .events
+            .len(),
+        2
+    );
+}
