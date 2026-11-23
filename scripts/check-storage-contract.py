@@ -25,7 +25,7 @@ def run_case(cargo, environment, target, case):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--section", required=True, choices=["keys", "transactions", "retention", "upgrade"])
+    parser.add_argument("--section", required=True, choices=["keys", "transactions", "retention", "upgrade", "lifecycle"])
     parser.add_argument("--environment", type=Path, default=ROOT / ".local")
     args = parser.parse_args()
     private = args.environment.resolve()
@@ -38,7 +38,11 @@ def main():
     def exercise(script, *flags):
         subprocess.run([sys.executable, ROOT / "scripts" / script, *flags], cwd=ROOT, env=env, check=True)
 
-    if args.section == "retention":
+    if args.section == "lifecycle":
+        with database(url_file, "orange_privacy_class_") as (_, url):
+            run_case(cargo, dict(env, ORANGE_TEST_DATABASE_URL=url), "storage_contract",
+                     "lifecycle_catalogue_has_current_storage_and_ownership_anchors")
+    elif args.section == "retention":
         exercise("check-retention-batches.py", "--environment", private)
     elif args.section == "upgrade":
         with database(url_file, "orange_storage_upgrade_") as (_, url):
@@ -61,7 +65,8 @@ def main():
         exercise("check-worker-contract.py", "--section", "execution", "--environment", private)
         exercise("check-test-checkout.py", "--database-url-file", url_file,
                  "--identity-config", private / "identity/user-config.json")
-    print(f"PASS API-005 {args.section}", flush=True)
+    prefix = "SEC-004" if args.section == "lifecycle" else "API-005"
+    print(f"PASS {prefix} {args.section}", flush=True)
 
 
 if __name__ == "__main__":

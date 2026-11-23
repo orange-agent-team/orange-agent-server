@@ -217,3 +217,86 @@ async fn schema68_history_upgrades_in_place_and_duplicate_business_keys_still_ro
         .expect("original funds");
     assert_eq!(gift, 100);
 }
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LifecycleClass {
+    owner: String,
+    locations: Vec<String>,
+    deletion_controller: String,
+    postgres_columns: BTreeMap<String, Vec<String>>,
+    ownership_links: Vec<[String; 2]>,
+    implementation: Vec<String>,
+}
+
+#[tokio::test]
+async fn lifecycle_catalogue_has_current_storage_and_ownership_anchors() {
+    let store = Store::connect(
+        &std::env::var("ORANGE_TEST_DATABASE_URL").expect("isolated local database"),
+    )
+    .await
+    .expect("connect");
+    store.migrate().await.expect("migrate full schema");
+    let rows: BTreeMap<String, LifecycleClass> =
+        serde_json::from_str(include_str!("../../../docs/security/data-lifecycle.json"))
+            .expect("valid lifecycle catalogue");
+    let required = [
+        "credentials",
+        "events",
+        "input",
+        "ledger",
+        "output",
+        "sessions",
+        "telemetry",
+    ];
+    assert_eq!(
+        rows.keys().map(String::as_str).collect::<Vec<_>>(),
+        required
+    );
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for (name, policy) in rows {
+        assert!(
+            !policy.owner.trim().is_empty()
+                && !policy.deletion_controller.trim().is_empty()
+                && !policy.locations.is_empty()
+                && !policy.implementation.is_empty(),
+            "incomplete class {name}"
+        );
+        for relative in policy.implementation {
+            assert!(
+                std::path::Path::new(&relative)
+                    .components()
+                    .all(|c| matches!(c, std::path::Component::Normal(_)))
+                    && root.join(&relative).is_file(),
+                "missing implementation source for {name}: {relative}"
+            );
+        }
+        if name == "telemetry" {
+            assert!(policy.postgres_columns.is_empty() && policy.ownership_links.is_empty());
+        } else {
+            assert!(
+                !policy.postgres_columns.is_empty() && !policy.ownership_links.is_empty(),
+                "missing migrated anchor {name}"
+            );
+        }
+        for (table, columns) in policy.postgres_columns {
+            let actual: Vec<String> = sqlx::query_scalar("SELECT column_name::text FROM information_schema.columns WHERE table_schema=current_schema() AND table_name=$1")
+                .bind(&table).fetch_all(store.pool()).await.expect("read real table");
+            assert!(
+                !columns.is_empty() && columns.iter().all(|column| actual.contains(column)),
+                "invalid {name} storage columns on {table}"
+            );
+        }
+        for [from, to] in policy.ownership_links {
+            let (src, col) = from.split_once('.').expect("qualified source");
+            let (dst, key) = to.split_once('.').expect("qualified owner");
+            let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT FROM pg_constraint c
+                JOIN pg_attribute a ON a.attrelid=c.conrelid AND a.attnum=c.conkey[1]
+                JOIN pg_attribute b ON b.attrelid=c.confrelid AND b.attnum=c.confkey[1]
+                WHERE c.contype='f' AND c.convalidated AND cardinality(c.conkey)=1
+                AND c.conrelid=to_regclass($1) AND a.attname=$2 AND c.confrelid=to_regclass($3) AND b.attname=$4)")
+                .bind(src).bind(col).bind(dst).bind(key).fetch_one(store.pool()).await.expect("check persisted ownership link");
+            assert!(exists, "{name}: {from} must reference {to}");
+        }
+    }
+}

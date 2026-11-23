@@ -1,0 +1,258 @@
+{
+  "input": {
+    "owner": "input owner or task organization",
+    "locations": [
+      "desktop filesystem",
+      "platform object root",
+      "PostgreSQL",
+      "authorized executor memory"
+    ],
+    "deletion_controller": "account owner / E07 artifact maintenance",
+    "postgres_columns": {
+      "artifacts": [
+        "artifact_id",
+        "owner_id",
+        "creator_id",
+        "version_id",
+        "deleted_at"
+      ],
+      "artifact_pins": [
+        "artifact_id",
+        "reference_id"
+      ],
+      "artifact_transfers": [
+        "artifact_id",
+        "stage_key",
+        "published_key",
+        "reserved_bytes"
+      ]
+    },
+    "ownership_links": [
+      [
+        "artifacts.owner_id",
+        "owners.owner_id"
+      ],
+      [
+        "artifacts.creator_id",
+        "users.user_id"
+      ]
+    ],
+    "implementation": [
+      "services/control-plane/src/artifacts/mod.rs",
+      "services/control-plane/src/artifacts/maintenance.rs"
+    ]
+  },
+  "output": {
+    "owner": "immutable job owner",
+    "locations": [
+      "platform object root",
+      "PostgreSQL",
+      "authorized recipient copy"
+    ],
+    "deletion_controller": "E07 derivative cleanup / recipient",
+    "postgres_columns": {
+      "worker_output_uploads": [
+        "job_id",
+        "attempt_id",
+        "artifact_id"
+      ],
+      "artifacts": [
+        "artifact_id",
+        "owner_id",
+        "published_at",
+        "deleted_at"
+      ]
+    },
+    "ownership_links": [
+      [
+        "worker_output_uploads.job_id",
+        "jobs.job_id"
+      ],
+      [
+        "worker_output_uploads.artifact_id",
+        "artifacts.artifact_id"
+      ]
+    ],
+    "implementation": [
+      "services/control-plane/src/artifacts/outputs.rs",
+      "services/control-plane/src/artifacts/maintenance.rs"
+    ]
+  },
+  "sessions": {
+    "owner": "device user, cloud run owner, browser user or administrator",
+    "locations": [
+      "desktop private SQLite",
+      "cloud PostgreSQL",
+      "browser session cookie"
+    ],
+    "deletion_controller": "local user / E07 session service / cloud host",
+    "postgres_columns": {
+      "cloud_runs": [
+        "run_id",
+        "user_id",
+        "owner_id"
+      ],
+      "user_sessions": [
+        "user_id",
+        "session_id",
+        "revoked",
+        "absolute_expires_at"
+      ],
+      "admin_sessions": [
+        "principal_id",
+        "revoked",
+        "absolute_expires_at"
+      ]
+    },
+    "ownership_links": [
+      [
+        "cloud_runs.owner_id",
+        "owners.owner_id"
+      ],
+      [
+        "admin_sessions.principal_id",
+        "admin_principals.principal_id"
+      ],
+      [
+        "user_sessions.user_id",
+        "users.user_id"
+      ]
+    ],
+    "implementation": [
+      "crates/agent-runtime/src/lib.rs",
+      "services/control-plane/src/auth/users.rs",
+      "services/control-plane/src/admin/identity.rs"
+    ]
+  },
+  "events": {
+    "owner": "owner of the referenced entity",
+    "locations": [
+      "PostgreSQL event stream",
+      "outbox",
+      "consumer inbox"
+    ],
+    "deletion_controller": "E07 event retention operator",
+    "postgres_columns": {
+      "event_streams": [
+        "stream_id",
+        "owner_id",
+        "oldest_seq",
+        "next_seq"
+      ],
+      "durable_events": [
+        "stream_id",
+        "seq",
+        "event_type",
+        "payload_digest"
+      ],
+      "outbox": [
+        "owner_id",
+        "payload",
+        "delivered_at"
+      ]
+    },
+    "ownership_links": [
+      [
+        "event_streams.owner_id",
+        "owners.owner_id"
+      ],
+      [
+        "durable_events.stream_id",
+        "event_streams.stream_id"
+      ]
+    ],
+    "implementation": [
+      "services/control-plane/src/events.rs",
+      "services/control-plane/src/artifacts/job_events.rs"
+    ]
+  },
+  "telemetry": {
+    "owner": "platform operations",
+    "locations": [
+      "process metrics registry",
+      "deployment-selected private collector"
+    ],
+    "deletion_controller": "collector / deployment operator",
+    "postgres_columns": {},
+    "ownership_links": [],
+    "implementation": [
+      "services/control-plane/src/telemetry.rs",
+      "docs/local-http-metrics.md"
+    ]
+  },
+  "ledger": {
+    "owner": "immutable transaction owner",
+    "locations": [
+      "PostgreSQL ledger",
+      "restricted financial backup"
+    ],
+    "deletion_controller": "authorized finance / retention operator",
+    "postgres_columns": {
+      "ledger_transactions": [
+        "transaction_id",
+        "owner_id",
+        "business_key"
+      ],
+      "ledger_entries": [
+        "transaction_id",
+        "account",
+        "amount"
+      ]
+    },
+    "ownership_links": [
+      [
+        "ledger_transactions.owner_id",
+        "owners.owner_id"
+      ],
+      [
+        "ledger_entries.transaction_id",
+        "ledger_transactions.transaction_id"
+      ]
+    ],
+    "implementation": [
+      "distribution/platform/sql/reconcile-wallets.sql",
+      "services/control-plane/src/store.rs"
+    ]
+  },
+  "credentials": {
+    "owner": "personal user, enrollment authority or deployment operator",
+    "locations": [
+      "holder memory",
+      "private device key store or file",
+      "private deployment config",
+      "PostgreSQL verification records"
+    ],
+    "deletion_controller": "user / device authority / deployment security",
+    "postgres_columns": {
+      "personal_automation_keys": [
+        "user_id",
+        "key_id",
+        "owner_id",
+        "verifier",
+        "scope",
+        "expires_unix",
+        "revoked_unix"
+      ],
+      "worker_credentials": [
+        "certificate_sha256",
+        "node_id",
+        "enrollment_user_id",
+        "active"
+      ]
+    },
+    "ownership_links": [
+      [
+        "personal_automation_keys.owner_id",
+        "owners.owner_id"
+      ],
+      [
+        "worker_credentials.node_id",
+        "nodes.node_id"
+      ]
+    ],
+    "implementation": [
+      "services/control-plane/src/auth/personal_keys.rs",
+      "services/control-plane/src/worker/sessions.rs"
+    ]
+  }
+}
