@@ -421,3 +421,33 @@ async fn revoked_session_cannot_authenticate_and_owner_ledger_remains_balanced_a
 
 #[path = "user_identity/personal_keys.rs"]
 mod personal_key_cases;
+
+#[path = "fixtures/session_deadlines.rs"]
+mod session_deadlines;
+
+#[tokio::test]
+async fn session_refresh_after_idle_deadline_is_denied() {
+    let f = fixture().await;
+    let hash = hash_secret(&f.token);
+    let deadline: i64 = sqlx::query_scalar("UPDATE user_sessions SET idle_expires_at=floor(extract(epoch FROM clock_timestamp()))::bigint+4 WHERE token_hash=$1 RETURNING idle_expires_at")
+        .bind(&hash).fetch_one(&f.pool).await.expect("brief user session");
+    let mut blocker = f.pool.begin().await.expect("fixture transaction");
+    sqlx::query("SELECT 1 FROM user_sessions WHERE token_hash=$1 FOR UPDATE")
+        .bind(&hash)
+        .fetch_one(&mut *blocker)
+        .await
+        .expect("lock test session");
+    let (response, ()) = tokio::join!(
+        request(&f, "GET", "/api/v1/session", None, headers(&f)),
+        session_deadlines::release_at_deadline(&f.pool, blocker, deadline)
+    );
+    assert_eq!(response.0, StatusCode::UNAUTHORIZED);
+    assert!(response.1.get("csrf_token").is_none());
+    let stored: i64 =
+        sqlx::query_scalar("SELECT idle_expires_at FROM user_sessions WHERE token_hash=$1")
+            .bind(hash)
+            .fetch_one(&f.pool)
+            .await
+            .expect("read deadline");
+    assert_eq!(stored, deadline);
+}

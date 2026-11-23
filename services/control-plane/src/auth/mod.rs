@@ -103,3 +103,15 @@ pub fn check_write(headers: &HeaderMap, origin: &str, csrf: &str) -> Result<(), 
     }
     Ok(())
 }
+
+pub(crate) async fn database_time(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar("SELECT FLOOR(EXTRACT(EPOCH FROM clock_timestamp()))::bigint")
+        .fetch_one(&mut **tx)
+        .await
+}
+
+pub(crate) fn renewed_idle_deadline(now: i64, idle: i64, absolute: i64) -> Option<i64> {
+    (now < idle && now < absolute).then(|| now.saturating_add(900).min(absolute))
+}

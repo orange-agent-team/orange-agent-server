@@ -177,19 +177,27 @@ impl AdminIdentity {
         tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     ) -> Result<CurrentSession, AdminError> {
         let token_hash = hash_secret(&cookie(headers, SESSION_COOKIE)?);
-        let now: i64 =
-            sqlx::query_scalar("SELECT FLOOR(EXTRACT(EPOCH FROM clock_timestamp()))::bigint")
-                .fetch_one(&mut **tx)
-                .await?;
-        let row=sqlx::query("SELECT s.*,p.policy_version FROM admin_sessions s JOIN admin_principals p USING(principal_id) WHERE s.token_hash=$1 AND NOT s.revoked AND p.active AND s.idle_expires_at>$2 AND s.absolute_expires_at>$2 FOR UPDATE OF s FOR SHARE OF p")
-            .bind(&token_hash).bind(now).fetch_optional(&mut **tx).await?.ok_or(AdminError::Unauthenticated)?;
+        let row=sqlx::query("SELECT s.*,p.policy_version FROM admin_sessions s JOIN admin_principals p USING(principal_id) WHERE s.token_hash=$1 AND NOT s.revoked AND p.active FOR UPDATE OF s FOR SHARE OF p")
+            .bind(&token_hash).fetch_optional(&mut **tx).await?.ok_or(AdminError::Unauthenticated)?;
         let principal_id: String = row.try_get("principal_id")?;
-        let rows=sqlx::query("SELECT * FROM admin_grants WHERE principal_id=$1 AND environment=$2 AND NOT revoked AND expires_at>$3 FOR SHARE")
-            .bind(&principal_id).bind(&self.config.environment).bind(now).fetch_all(&mut **tx).await?;
+        let rows=sqlx::query("SELECT * FROM admin_grants WHERE principal_id=$1 AND environment=$2 AND NOT revoked AND expires_at>FLOOR(EXTRACT(EPOCH FROM clock_timestamp()))::bigint FOR SHARE")
+            .bind(&principal_id).bind(&self.config.environment).fetch_all(&mut **tx).await?;
+        // Both session and grant locks can wait. Use one subsequent database time for
+        // the authorization result, the idle extension, and the step-up view.
+        let now = crate::auth::database_time(tx).await?;
+        let expires = crate::auth::renewed_idle_deadline(
+            now,
+            row.try_get("idle_expires_at")?,
+            row.try_get("absolute_expires_at")?,
+        )
+        .ok_or(AdminError::Unauthenticated)?;
         let registry = role_permissions();
         let mut roles = BTreeSet::new();
         let mut grants: BTreeMap<Scope, BTreeSet<String>> = BTreeMap::new();
         for grant in rows {
+            if grant.try_get::<i64, _>("expires_at")? <= now {
+                continue;
+            }
             let role: String = grant.try_get("role")?;
             let Some(permissions) = registry.get(&role) else {
                 return Err(AdminError::Forbidden);
@@ -221,8 +229,6 @@ impl AdminIdentity {
         for permissions in grants.values() {
             common = common.intersection(permissions).cloned().collect();
         }
-        let absolute: i64 = row.try_get("absolute_expires_at")?;
-        let expires = (now + 900).min(absolute);
         sqlx::query("UPDATE admin_sessions SET idle_expires_at=$2 WHERE token_hash=$1")
             .bind(&token_hash)
             .bind(expires)

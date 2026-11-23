@@ -222,3 +222,56 @@ async fn wrong_origin_or_csrf_cannot_revoke_session() {
         assert!(f.identity.current(&headers(&f)).await.is_ok());
     }
 }
+
+#[path = "fixtures/session_deadlines.rs"]
+mod session_deadlines;
+
+#[tokio::test]
+async fn session_refresh_after_idle_deadline_is_denied() {
+    let f = fixture().await;
+    let hash = hash_secret(&f.token);
+    let deadline: i64 = sqlx::query_scalar("UPDATE admin_sessions SET idle_expires_at=floor(extract(epoch FROM clock_timestamp()))::bigint+4 WHERE token_hash=$1 RETURNING idle_expires_at")
+        .bind(&hash).fetch_one(&f.pool).await.expect("brief admin session");
+    let mut blocker = f.pool.begin().await.expect("fixture transaction");
+    sqlx::query("SELECT 1 FROM admin_sessions WHERE token_hash=$1 FOR UPDATE")
+        .bind(&hash)
+        .fetch_one(&mut *blocker)
+        .await
+        .expect("lock test session");
+    let (response, ()) = tokio::join!(
+        get(&f, "/admin/v1/session"),
+        session_deadlines::release_at_deadline(&f.pool, blocker, deadline)
+    );
+    assert_eq!(response.0, StatusCode::UNAUTHORIZED);
+    assert!(response.1.get("csrf_token").is_none());
+    let stored: i64 =
+        sqlx::query_scalar("SELECT idle_expires_at FROM admin_sessions WHERE token_hash=$1")
+            .bind(hash)
+            .fetch_one(&f.pool)
+            .await
+            .expect("read deadline");
+    assert_eq!(stored, deadline);
+}
+
+#[tokio::test]
+async fn session_refresh_keeps_only_grants_still_live_after_waiting() {
+    let f = fixture().await;
+    let deadline: i64 = sqlx::query_scalar("UPDATE admin_grants SET expires_at=floor(extract(epoch FROM clock_timestamp()))::bigint+4 WHERE principal_id=$1 AND role='finance_operator' RETURNING expires_at")
+        .bind(&f.principal).fetch_one(&f.pool).await.expect("brief finance grant");
+    let mut blocker = f.pool.begin().await.expect("fixture transaction");
+    sqlx::query(
+        "SELECT 1 FROM admin_grants WHERE principal_id=$1 AND role='finance_operator' FOR UPDATE",
+    )
+    .bind(&f.principal)
+    .fetch_one(&mut *blocker)
+    .await
+    .expect("lock test grant");
+    let (response, ()) = tokio::join!(
+        get(&f, "/admin/v1/session"),
+        session_deadlines::release_at_deadline(&f.pool, blocker, deadline)
+    );
+    assert_eq!(response.0, StatusCode::OK);
+    assert_eq!(response.1["roles"], json!(["compute_operator"]));
+    assert_eq!(response.1["scopes"].as_array().expect("scopes").len(), 1);
+    assert_eq!(response.1["scopes"][0]["scope_id"], f.a);
+}

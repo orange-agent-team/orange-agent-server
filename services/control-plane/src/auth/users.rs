@@ -201,13 +201,16 @@ impl UserIdentity {
     pub async fn authenticate(&self, headers: &HeaderMap) -> Result<UserSessionGuard, AuthError> {
         let token = hash_secret(&cookie(headers, USER_COOKIE)?);
         let mut tx = self.pool.begin().await?;
-        let now: i64 =
-            sqlx::query_scalar("SELECT FLOOR(EXTRACT(EPOCH FROM clock_timestamp()))::bigint")
-                .fetch_one(&mut *tx)
-                .await?;
-        let row=sqlx::query("SELECT s.*,u.personal_owner_id FROM user_sessions s JOIN users u USING(user_id) JOIN owners w ON w.owner_id=u.personal_owner_id WHERE s.token_hash=$1 AND NOT s.revoked AND s.idle_expires_at>$2 AND s.absolute_expires_at>$2 AND u.active AND w.state='active' FOR UPDATE OF s FOR SHARE OF u,w")
-            .bind(&token).bind(now).fetch_optional(&mut *tx).await?.ok_or(AuthError::Unauthenticated)?;
-        let expires = (now + 900).min(row.try_get::<i64, _>("absolute_expires_at")?);
+        let row=sqlx::query("SELECT s.*,u.personal_owner_id FROM user_sessions s JOIN users u USING(user_id) JOIN owners w ON w.owner_id=u.personal_owner_id WHERE s.token_hash=$1 AND NOT s.revoked AND u.active AND w.state='active' FOR UPDATE OF s FOR SHARE OF u,w")
+            .bind(&token).fetch_optional(&mut *tx).await?.ok_or(AuthError::Unauthenticated)?;
+        // A request queued behind another transaction cannot renew an expired session.
+        let now = super::database_time(&mut tx).await?;
+        let expires = super::renewed_idle_deadline(
+            now,
+            row.try_get("idle_expires_at")?,
+            row.try_get("absolute_expires_at")?,
+        )
+        .ok_or(AuthError::Unauthenticated)?;
         sqlx::query("UPDATE user_sessions SET idle_expires_at=$2 WHERE token_hash=$1")
             .bind(token)
             .bind(expires)
