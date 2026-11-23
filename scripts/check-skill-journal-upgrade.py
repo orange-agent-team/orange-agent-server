@@ -33,9 +33,16 @@ env["PATH"] = str(cargo.parent) + os.pathsep + env["PATH"]
 
 
 def build(root, out):
-    subprocess.run([cargo, "build", "--locked", "--offline", "-p", "orange-agent-runtime", "--example", "local-agent"],
-                   cwd=root, env=env, check=True)
-    shutil.copy2(target / "debug/examples/local-agent", out)
+    def compile_in(build_target):
+        child_env=dict(env, CARGO_TARGET_DIR=str(build_target))
+        subprocess.run([cargo, "build", "--locked", "--offline", "-p", "orange-agent-runtime", "--example", "local-agent"],
+                       cwd=root, env=child_env, check=True)
+        shutil.copy2(build_target / "debug/examples/local-agent", out)
+    if root == ROOT:
+        compile_in(target)
+    else:
+        with tempfile.TemporaryDirectory(prefix="legacy-compile-",dir=out.parent) as scratch:
+            compile_in(Path(scratch))
 
 
 def verify(base, prior, old, new):
