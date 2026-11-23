@@ -51,5 +51,11 @@ else:
                         # Per-test races are explicit. Limit unrelated fixture transactions in this shared test cluster.
                         db_env.setdefault('RUST_TEST_THREADS','2')
                         run(*command,env=db_env)
+                elif name=='events':
+                    # Fault cases deliberately damage their own notifications. Keep the
+                    # full-suite invariant check independent of earlier runs and other builds.
+                    from owned_postgres import database_at
+                    with database_at(environment['ORANGE_TEST_DATABASE_URL'],'orange_event_suite_') as (_,events_url):
+                        run(*command,env=dict(environment,ORANGE_TEST_DATABASE_URL=events_url))
                 else:
                     run(*command)
