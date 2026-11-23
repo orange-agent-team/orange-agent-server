@@ -333,7 +333,7 @@ async fn setup_input_case(
         println!(
             "expected_job_event {} {}",
             diagnostic_id,
-            orange_control_plane::diagnostics::link("job", &job.job_id)
+            orange_control_plane::diagnostics::link("job", &job)
         );
     }
     InputFixture {
