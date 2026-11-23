@@ -11,7 +11,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-from check_environment_tools import doctor
+from check_environment_tools import doctor,ToolIssue
 
 ROOT=Path(__file__).resolve().parents[1]
 
@@ -40,7 +40,7 @@ def rehearse(tooling,environment):
     tree=staging/"source"
     tree.mkdir()
     env={k:v for k,v in os.environ.items() if k in {"PATH","HOME","USER","LOGNAME","LANG","LC_ALL","TMPDIR","SDKROOT","DEVELOPER_DIR",
-                                                    "ORANGE_POSTGRES_BIN","CARGO_HOME","RUSTUP_HOME"}}
+                                                    "ORANGE_POSTGRES_BIN","PROTOC","CARGO_HOME","RUSTUP_HOME"}}
     with socket.socket() as left,socket.socket() as right:
         left.bind(("127.0.0.1",0))
         right.bind(("127.0.0.1",0))
@@ -91,7 +91,11 @@ def main():
     else:
         if args.environment not in ("test","development") or (args.action=="verify" and args.environment!="test"):
             cli.error("This operation only qualifies local development and disposable test resources")
-        tooling=doctor(ROOT)
+        try:
+            tooling=doctor(ROOT)
+        except ToolIssue as problem:
+            print(json.dumps({"code":"LOCAL_PREREQUISITE","component":problem.tool,"recovery":problem.remedy}),file=sys.stderr)
+            sys.exit(2)
         report=tooling if args.action=="doctor" else rehearse(tooling,args.environment)
     print(json.dumps(report,ensure_ascii=False),flush=True)
 
