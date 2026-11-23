@@ -50,9 +50,6 @@ pub(super) async fn list(
         None
     };
     let region = (scope.kind == "region").then_some(scope.scope_id.as_str());
-    let at: i64 = sqlx::query_scalar("SELECT floor(extract(epoch FROM clock_timestamp()))::bigint")
-        .fetch_one(&mut *tx)
-        .await?;
     let rows=sqlx::query(r"
         WITH page AS MATERIALIZED (
             SELECT e.issuer_sha256 FROM worker_enrollment_certificates e
@@ -60,23 +57,31 @@ pub(super) async fn list(
             GROUP BY e.issuer_sha256 ORDER BY e.issuer_sha256 LIMIT $3
         ), facts AS (
             SELECT e.issuer_sha256, e.expires_at, e.prepared_at,
-                (e.redeemed_at IS NULL AND g.state='authorized' AND g.expires_at>to_timestamp($4::bigint)
-                 AND e.not_before<=to_timestamp($4::bigint) AND e.expires_at>to_timestamp($4::bigint)) AS waiting,
+                (e.redeemed_at IS NULL AND g.state='authorized' AND g.expires_at>statement_timestamp()
+                 AND e.not_before<=statement_timestamp() AND e.expires_at>statement_timestamp()) AS waiting,
                 (e.redeemed_at IS NOT NULL AND g.state='authorized' AND c.active AND c.node_id=e.node_id
-                 AND n.state!='revoked' AND e.not_before<=to_timestamp($4::bigint) AND e.expires_at>to_timestamp($4::bigint) AND c.not_before<=to_timestamp($4::bigint) AND c.expires_at>to_timestamp($4::bigint)) AS live,
+                 AND n.state!='revoked' AND e.not_before<=statement_timestamp() AND e.expires_at>statement_timestamp() AND c.not_before<=statement_timestamp() AND c.expires_at>statement_timestamp()) AS live,
                 LEAST(e.expires_at,c.expires_at) AS valid_until
             FROM page JOIN worker_enrollment_certificates e USING(issuer_sha256)
             JOIN worker_enrollment_grants g USING(request_id)
             LEFT JOIN worker_credentials c USING(certificate_sha256) LEFT JOIN nodes n ON n.node_id=c.node_id
             WHERE ($1::text IS NULL OR e.region_id=$1)
         )
-        SELECT f.issuer_sha256,k.spki_sha256,count(*) AS retained,count(*) FILTER(WHERE waiting) AS prepared,
-            count(*) FILTER(WHERE live) AS active,count(*) FILTER(WHERE live AND valid_until<=to_timestamp($4::bigint)+interval '1 hour') AS expiring,
+        SELECT floor(extract(epoch FROM statement_timestamp()))::bigint AS observed,f.issuer_sha256,k.spki_sha256,count(*) AS retained,count(*) FILTER(WHERE waiting) AS prepared,
+            count(*) FILTER(WHERE live) AS active,count(*) FILTER(WHERE live AND valid_until<=statement_timestamp()+interval '1 hour') AS expiring,
             floor(extract(epoch FROM min(valid_until) FILTER(WHERE live)))::bigint AS next_expiry,
             floor(extract(epoch FROM max(prepared_at)))::bigint AS last_prepared
         FROM facts f LEFT JOIN worker_issuer_public_keys k USING(issuer_sha256)
         GROUP BY f.issuer_sha256,k.spki_sha256 ORDER BY f.issuer_sha256
-    ").bind(region).bind(after).bind(i64::from(limit)+1).bind(at).fetch_all(&mut *tx).await?;
+    ").bind(region).bind(after).bind(i64::from(limit)+1).fetch_all(&mut *tx).await?;
+    let at: i64 = match rows.first() {
+        Some(row) => row.try_get("observed")?,
+        None => {
+            sqlx::query_scalar("SELECT floor(extract(epoch FROM clock_timestamp()))::bigint")
+                .fetch_one(&mut *tx)
+                .await?
+        }
+    };
     let mut data = Vec::new();
     for row in rows.iter().take(usize::from(limit)) {
         data.push(json!({
