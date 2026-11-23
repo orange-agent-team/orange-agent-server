@@ -53,17 +53,17 @@ async fn issued_terms_stay_immutable_and_only_new_effects_require_an_unexpired_q
         .root_budget_id;
 
     let req = quote(&db, &owner, &budget, 4).await;
-    for change in [
-        "max_amount=18",
-        "price_version='another-price'",
-        "expires_at=expires_at+interval '1 day'",
-        "invocation_id='another-invocation'",
-        "projection_digest=repeat('f',64)",
-        "owner_id='another-owner'",
-        "root_budget_id='another-root'",
-        "quote_id='another-quote'",
+    for statement in [
+        "UPDATE quotes SET max_amount=18 WHERE quote_id=$1",
+        "UPDATE quotes SET price_version='another-price' WHERE quote_id=$1",
+        "UPDATE quotes SET expires_at=expires_at+interval '1 day' WHERE quote_id=$1",
+        "UPDATE quotes SET invocation_id='another-invocation' WHERE quote_id=$1",
+        "UPDATE quotes SET projection_digest=repeat('f',64) WHERE quote_id=$1",
+        "UPDATE quotes SET owner_id='another-owner' WHERE quote_id=$1",
+        "UPDATE quotes SET root_budget_id='another-root' WHERE quote_id=$1",
+        "UPDATE quotes SET quote_id='another-quote' WHERE quote_id=$1",
     ] {
-        let failure = sqlx::query(&format!("UPDATE quotes SET {change} WHERE quote_id=$1"))
+        let failure = sqlx::query(statement)
             .bind(&req.quote_id)
             .execute(db.pool())
             .await
