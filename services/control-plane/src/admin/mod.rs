@@ -5,7 +5,6 @@ pub mod routes;
 
 pub use crate::auth::{hash_secret, random_secret};
 use axum::{
-    Json,
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
@@ -72,7 +71,16 @@ impl IntoResponse for AdminError {
         } else {
             "never"
         };
-        let mut response=(status,Json(serde_json::json!({"code":self.to_string(),"message":self.to_string(),"request_id":uuid::Uuid::new_v4().to_string(),"retry_class":retry}))).into_response();
+        let code = self.to_string();
+        let mut response = crate::diagnostics::typed_failure(
+            status,
+            orange_protocol::ApiError {
+                message: code.clone(),
+                code,
+                request_id: uuid::Uuid::new_v4().to_string(),
+                retry_class: retry.into(),
+            },
+        );
         response.headers_mut().insert(
             "cache-control",
             axum::http::HeaderValue::from_static("no-store"),

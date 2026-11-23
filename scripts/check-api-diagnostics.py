@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise all three actual native configuration entry points and correlate an authorized Job with its leased Worker attempt."""
 import argparse
+import http.client
 import json
 import os
 from pathlib import Path
@@ -8,6 +9,8 @@ import re
 import secrets
 import shutil
 import subprocess
+import signal
+import time
 import sys
 import tempfile
 import uuid
@@ -81,6 +84,68 @@ def settings(area,output,private,section,env):
         print("PASS actual",role,section,flush=True)
 
 
+def malformed_http(output,private,env):
+    with database(private/"database-url","orange_redaction_") as (_,url), tempfile.TemporaryDirectory() as folder:
+        area=Path(folder)
+        marker="sensitive-"+secrets.token_hex(16)
+        identity=area/"identities.json"
+        identity.write_text(json.dumps([{"owner_id":"diagnostic-owner","token":marker}]))
+        database_file=area/"url"
+        database_file.write_text(url)
+        database_file.chmod(0o600)
+        settings=area/"settings.json"
+        settings.write_text(json.dumps({"environment":"development","identity_file":identity.name,"database_url_file":database_file.name,
+                                        "bind":"127.0.0.1:0","diagnostic_log":"on"}))
+        safe={k:v for k,v in env.items() if not k.startswith("ORANGE_") and k!="DATABASE_URL"}
+        log=area/"stderr"
+        with log.open("wb") as stream:
+            child=subprocess.Popen([output/"orange-api","--config",settings],env=safe,cwd=area,stdout=subprocess.DEVNULL,stderr=stream)
+            try:
+                end=time.monotonic()+30
+                while time.monotonic()<end and child.poll() is None:
+                    match=re.search(r"Orange development API listening on 127\.0\.0\.1:(\d+)",log.read_text())
+                    if match:
+                        break
+                    time.sleep(.03)
+                else:
+                    raise RuntimeError("Configured test API did not become ready")
+                port=int(match[1])
+                observed=set()
+                for supplied,expected,classification in [(marker+"-denied",401,"permission"),(marker,400,"input")]:
+                    conn=http.client.HTTPConnection("127.0.0.1",port,timeout=4)
+                    try:
+                        headers={"Authorization":"Bearer "+supplied,"Content-Type":"application/json","x-orange-diagnostic-id":marker,
+                                 "Idempotency-Key":"local-redaction-example"}
+                        conn.request("POST","/api/v1/budgets?secret="+marker,json.dumps({"unexpected":{"secret":marker}}),headers)
+                        response=conn.getresponse()
+                        require(response.status==expected and response.getheader("x-orange-error-class")==classification,"Wrong HTTP rejection")
+                        body=json.loads(response.read())
+                        require(response.getheader("x-orange-retry-class")==body["retry_class"],"HTTP retry disagrees with body")
+                        observed.add(str(uuid.UUID(response.getheader("x-orange-diagnostic-id"))))
+                    finally:
+                        conn.close()
+                require(len(observed)==2,"Diagnostic ID reused")
+                end=time.monotonic()+3
+                while time.monotonic()<end:
+                    diagnostics={json.loads(l)["request_id"] for l in log.read_text().splitlines() if l.startswith('{"event":"http_completed"')}
+                    if observed<=diagnostics:
+                        break
+                    time.sleep(.02)
+                else:
+                    raise ValueError("Completed rejections did not produce correlated diagnostics")
+            finally:
+                if child.poll() is None:
+                    child.send_signal(signal.SIGINT)
+                try:
+                    child.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    child.kill()
+                    child.wait()
+                    raise RuntimeError("Configured development API failed to drain")
+        require(marker not in log.read_text() and url not in log.read_text(),"HTTP diagnostics exposed a private value")
+        print("PASS native file-configured API: structured authentication and input errors, distinct correlation IDs, redacted nested data")
+
+
 def correlation(private,env):
     with database(private/"database-url","orange_correlation_") as (_,url):
         child={k:v for k,v in env.items() if not k.startswith("ORANGE_")}
@@ -125,6 +190,8 @@ def main():
         target=json.loads(subprocess.check_output([cargo,"metadata","--format-version","1","--no-deps","--locked","--offline"],cwd=ROOT,env=env))["target_directory"]
         with tempfile.TemporaryDirectory() as tmp:
             settings(Path(tmp),Path(target)/"debug",private,args.section,env)
+        if args.section=="invalid":
+            malformed_http(Path(target)/"debug",private,env)
     print("PASS API diagnostics",args.section,flush=True)
 
 

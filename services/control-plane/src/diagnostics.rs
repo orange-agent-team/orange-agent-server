@@ -26,7 +26,7 @@ static LOST: AtomicU64 = AtomicU64::new(0);
 struct Event {
     event: &'static str,
     role: &'static str,
-    request_id: UuidText,
+    request_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     status: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -37,10 +37,6 @@ struct Event {
     node: Option<String>,
     dropped_before: u64,
 }
-
-#[derive(Serialize)]
-#[serde(transparent)]
-struct UuidText(String);
 
 pub fn link(kind: &'static str, id: &str) -> String {
     let mut hash = Sha256::new();
@@ -91,7 +87,7 @@ pub(crate) fn assignment_committed(job: &str, attempt: &str, node: &str) {
         emit(Event {
             event: "assignment_committed",
             role: "worker_gateway",
-            request_id: UuidText(Uuid::new_v4().to_string()),
+            request_id: Uuid::new_v4().to_string(),
             status: None,
             job: Some(link("job", job)),
             attempt: Some(link("attempt", attempt)),
@@ -177,7 +173,7 @@ async fn completed(
         emit(Event {
             event: "http_completed",
             role: role.name(),
-            request_id: UuidText(id),
+            request_id: id,
             status: Some(status),
             job: response
                 .extensions()
