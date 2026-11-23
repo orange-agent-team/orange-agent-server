@@ -54,3 +54,9 @@ unsafe_code = "forbid"
 
 [workspace.lints.clippy]
 unwrap_used = "warn"
+
+# Development Worker and API runs verify every byte of the pinned model before
+# launching the process. Compile the same SHA-256 implementation with its
+# optimized compression path even when the application itself is unoptimized.
+[profile.dev.package.sha2]
+opt-level = 3
