@@ -379,6 +379,21 @@ async fn revoked_session_cannot_authenticate_and_owner_ledger_remains_balanced_a
         f.identity.authenticate(&headers(&f)).await,
         Err(AuthError::Unauthenticated)
     ));
+    // Physically expire only this test user's revoked session before looking up the financial facts.
+    let removed = sqlx::query("DELETE FROM user_sessions WHERE user_id=$1 AND revoked")
+        .bind(&f.user)
+        .execute(&f.pool)
+        .await
+        .expect("remove revoked fixture session");
+    assert_eq!(removed.rows_affected(), 1);
+    let audit: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM user_auth_audit WHERE user_id=$1 AND event_type='session.revoked'",
+    )
+    .bind(&f.user)
+    .fetch_one(&f.pool)
+    .await
+    .expect("retained audit");
+    assert_eq!(audit, 1);
     let rows:Vec<(String,String,i64)>=sqlx::query_as("SELECT t.owner_id,e.account,e.amount FROM ledger_entries e JOIN ledger_transactions t USING(transaction_id) WHERE e.transaction_id=$1 ORDER BY e.account")
         .bind(&id).fetch_all(&f.pool).await.expect("retained facts");
     assert_eq!(
