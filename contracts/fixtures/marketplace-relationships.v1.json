@@ -1,0 +1,283 @@
+[
+  {
+    "user": {
+      "id": "user-1",
+      "personal_owner": "account-1"
+    },
+    "organization": null,
+    "job": {
+      "id": "job-1",
+      "owner": "account-1",
+      "submitter": "user-1",
+      "model": {
+        "id": "model-text.v1",
+        "sha256": "3fe76e6058e0588b429db538f7b12d0376a53170d74be0a489b8e23633be5dd8"
+      },
+      "reserved": "100",
+      "duration_limit_ms": "60000"
+    },
+    "nodes": [
+      {
+        "id": "node-1-a",
+        "owner": "supplier-1"
+      }
+    ],
+    "artifact": {
+      "owner": "account-1",
+      "reference": {
+        "artifact_id": "input-1",
+        "version_id": "version-1",
+        "sha256": "fafff5ff2cff1599c3361ba58426e42a3fe1b6e6e68b5d20285a0cf3855969ad"
+      }
+    },
+    "input": {
+      "kind": "text",
+      "source": {
+        "artifact_id": "input-1",
+        "version_id": "version-1",
+        "sha256": "fafff5ff2cff1599c3361ba58426e42a3fe1b6e6e68b5d20285a0cf3855969ad"
+      }
+    },
+    "attempts": [
+      {
+        "id": "attempt-1-a",
+        "job": "job-1",
+        "node": "node-1-a",
+        "model": {
+          "id": "model-text.v1",
+          "sha256": "3fe76e6058e0588b429db538f7b12d0376a53170d74be0a489b8e23633be5dd8"
+        },
+        "outcome": "delivered"
+      }
+    ],
+    "ledger": {
+      "id": "transaction-1",
+      "owner": "account-1",
+      "job": "job-1",
+      "winning_attempt": "attempt-1-a",
+      "charged": "30",
+      "entries": [
+        -30,
+        24,
+        6
+      ]
+    }
+  },
+  {
+    "user": {
+      "id": "user-2",
+      "personal_owner": "account-2"
+    },
+    "organization": {
+      "id": "team-alpha",
+      "members": [
+        "user-2"
+      ]
+    },
+    "job": {
+      "id": "job-2",
+      "owner": "team-alpha",
+      "submitter": "user-2",
+      "model": {
+        "id": "model-embedding.v1",
+        "sha256": "f249e5399775a48712aad90b7bf4eec8c57be4c516fa7ab541ffaf01dedb6e51"
+      },
+      "reserved": "100",
+      "duration_limit_ms": "60000"
+    },
+    "nodes": [
+      {
+        "id": "node-2-a",
+        "owner": "supplier-2"
+      },
+      {
+        "id": "node-2-b",
+        "owner": "supplier-2b"
+      }
+    ],
+    "artifact": {
+      "owner": "team-alpha",
+      "reference": {
+        "artifact_id": "input-2",
+        "version_id": "version-2",
+        "sha256": "41d8719bdc750b2418c6646117c376c08a06b3828b3e470c153d95fd4887ac7b"
+      }
+    },
+    "input": {
+      "kind": "embedding",
+      "source": {
+        "artifact_id": "input-2",
+        "version_id": "version-2",
+        "sha256": "41d8719bdc750b2418c6646117c376c08a06b3828b3e470c153d95fd4887ac7b"
+      }
+    },
+    "attempts": [
+      {
+        "id": "attempt-2-a",
+        "job": "job-2",
+        "node": "node-2-a",
+        "model": {
+          "id": "model-embedding.v1",
+          "sha256": "f249e5399775a48712aad90b7bf4eec8c57be4c516fa7ab541ffaf01dedb6e51"
+        },
+        "outcome": "confirmed_prestart_rejection"
+      },
+      {
+        "id": "attempt-2-b",
+        "job": "job-2",
+        "node": "node-2-b",
+        "model": {
+          "id": "model-embedding.v1",
+          "sha256": "f249e5399775a48712aad90b7bf4eec8c57be4c516fa7ab541ffaf01dedb6e51"
+        },
+        "outcome": "delivered"
+      }
+    ],
+    "ledger": {
+      "id": "transaction-2",
+      "owner": "team-alpha",
+      "job": "job-2",
+      "winning_attempt": "attempt-2-b",
+      "charged": "30",
+      "entries": [
+        -30,
+        24,
+        6
+      ]
+    }
+  },
+  {
+    "user": {
+      "id": "user-3",
+      "personal_owner": "account-3"
+    },
+    "organization": null,
+    "job": {
+      "id": "job-3",
+      "owner": "account-3",
+      "submitter": "user-3",
+      "model": {
+        "id": "model-image.v1",
+        "sha256": "278ff350504e3a299516c42e0063c5bb18e24017dab06cffab53251cbd7a79d2"
+      },
+      "reserved": "100",
+      "duration_limit_ms": "60000"
+    },
+    "nodes": [
+      {
+        "id": "node-3-a",
+        "owner": "supplier-3"
+      }
+    ],
+    "artifact": {
+      "owner": "account-3",
+      "reference": {
+        "artifact_id": "input-3",
+        "version_id": "version-3",
+        "sha256": "89d25fee86e1334f4e83c1390e6ee8e31d3b4fa9ca76ad15f6bef1309d18978a"
+      }
+    },
+    "input": {
+      "kind": "image",
+      "source": {
+        "artifact_id": "input-3",
+        "version_id": "version-3",
+        "sha256": "89d25fee86e1334f4e83c1390e6ee8e31d3b4fa9ca76ad15f6bef1309d18978a"
+      }
+    },
+    "attempts": [
+      {
+        "id": "attempt-3-a",
+        "job": "job-3",
+        "node": "node-3-a",
+        "model": {
+          "id": "model-image.v1",
+          "sha256": "278ff350504e3a299516c42e0063c5bb18e24017dab06cffab53251cbd7a79d2"
+        },
+        "outcome": "delivered"
+      }
+    ],
+    "ledger": {
+      "id": "transaction-3",
+      "owner": "account-3",
+      "job": "job-3",
+      "winning_attempt": "attempt-3-a",
+      "charged": "30",
+      "entries": [
+        -30,
+        24,
+        6
+      ]
+    }
+  },
+  {
+    "user": {
+      "id": "user-4",
+      "personal_owner": "account-4"
+    },
+    "organization": {
+      "id": "team-alpha",
+      "members": [
+        "user-4"
+      ]
+    },
+    "job": {
+      "id": "job-4",
+      "owner": "team-alpha",
+      "submitter": "user-4",
+      "model": {
+        "id": "model-transcription.v1",
+        "sha256": "42193c0d7224f37d2a319c891fb973a0f5ab170c19c8bccf607f749d8d13684b"
+      },
+      "reserved": "100",
+      "duration_limit_ms": "60000"
+    },
+    "nodes": [
+      {
+        "id": "node-4-a",
+        "owner": "supplier-4"
+      }
+    ],
+    "artifact": {
+      "owner": "team-alpha",
+      "reference": {
+        "artifact_id": "input-4",
+        "version_id": "version-4",
+        "sha256": "507d9b3142200266538e1836d205cdc3ca1f92a83708ad794eaf728646c22d7a"
+      }
+    },
+    "input": {
+      "kind": "transcription",
+      "source": {
+        "artifact_id": "input-4",
+        "version_id": "version-4",
+        "sha256": "507d9b3142200266538e1836d205cdc3ca1f92a83708ad794eaf728646c22d7a"
+      },
+      "duration_ms": "1450"
+    },
+    "attempts": [
+      {
+        "id": "attempt-4-a",
+        "job": "job-4",
+        "node": "node-4-a",
+        "model": {
+          "id": "model-transcription.v1",
+          "sha256": "42193c0d7224f37d2a319c891fb973a0f5ab170c19c8bccf607f749d8d13684b"
+        },
+        "outcome": "delivered"
+      }
+    ],
+    "ledger": {
+      "id": "transaction-4",
+      "owner": "team-alpha",
+      "job": "job-4",
+      "winning_attempt": "attempt-4-a",
+      "charged": "30",
+      "entries": [
+        -30,
+        24,
+        6
+      ]
+    }
+  }
+]

@@ -7,6 +7,7 @@ pub mod events;
 #[cfg(feature = "grpc")]
 pub mod execution;
 pub mod local_model;
+pub mod marketplace;
 pub mod model;
 pub mod node_control;
 pub mod pricing;
@@ -104,13 +105,8 @@ pub struct ApiError {
     pub retry_class: String,
 }
 
+pub use orange_domain::identity::valid_digest;
 pub use orange_domain::identity::valid_id;
-pub fn valid_digest(value: &str) -> bool {
-    value.len() == 64
-        && value
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-}
 
 /// Stable object-key ordering; only typed Orange DTOs (not arbitrary JSON numbers)
 /// enter business idempotency. This is versioned Orange JSON, not a claim of JCS.

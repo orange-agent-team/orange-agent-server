@@ -12,3 +12,11 @@
 | 身份与连接器凭据 | 身份服务、控制面会话及受控凭据存储 | 登出和凭据撤销停止访问。财务记录仍以原账户为主体；令牌和连接串不得写入领域样例。 |
 
 同一 ModelVersion 由版本标识与权重摘要共同引用，对应的 execution_profile_id 还绑定执行配置摘要。模型是否可调度取决于平台审核与当前设备资格。已有数据的数字、UUID 与历史 ASCII ID 均使用相同的线格式。
+
+## 样例与实现边界
+
+[四种模态与实体关系](../../contracts/fixtures/marketplace-relationships.v1.json)包含文本、向量、图像和转写输入。每个输入引用固定 artifact_id、version_id 和 SHA-256，转写还需要正整数毫秒。时间和非负积分在 JSON 中使用规范十进制字符串。分录保留正负方向，整组之和为零。实体 ID 的类型在 Rust 中不同，公开字符串拼写保持兼容。
+
+组织样例给出第一次执行在开始前确认拒绝、第二次执行完成的关系。该样例验证领域引用与尝试上限。现行公共 Worker 表仍约束每个 Job 一条执行尝试；投递不确定或回收未知的场景不得自动重跑。这里的图像、向量和多次尝试样例不作为实际公共 GPU 调度能力的证明。
+
+运行 `python3.12 scripts/check-marketplace-entities.py --section catalogue` 可在专属 PostgreSQL 中核对主键、非空引用和已验证外键。types 检查领域及传输类型、HTTP 金额负例和空 owner 的零副作用；lifecycle 检查真实登出、平衡分录和不可变约束；examples 检查四份合法关系和逐项破坏后的拒绝结果。预置开发配置可通过 --environment 指定。

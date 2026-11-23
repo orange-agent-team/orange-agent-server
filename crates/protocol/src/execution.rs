@@ -119,7 +119,7 @@ pub fn transcription_observation_digest(r: &worker::TranscriptionObservation) ->
 pub fn assignment_digest(a: &worker::Assignment) -> Option<String> {
     let l = a.lease.as_ref()?;
     use orange_domain::identity::{
-        ArtifactId, ArtifactVersionId, AssignedExecution, AttemptId, JobId, ModelVersionId, NodeId,
+        ArtifactPin, AssignedExecution, AttemptId, JobId, ModelVersionId, NodeId,
     };
     let identity = AssignedExecution {
         node: NodeId::try_from(a.node_id.as_str()).ok()?,
@@ -164,9 +164,7 @@ pub fn assignment_digest(a: &worker::Assignment) -> Option<String> {
         }
         let input = &a.input_artifacts[0];
         if a.input_artifact_ids[0] != input.artifact_id
-            || ArtifactId::try_from(input.artifact_id.as_str()).is_err()
-            || ArtifactVersionId::try_from(input.version_id.as_str()).is_err()
-            || !valid_digest(&input.sha256)
+            || ArtifactPin::new(&input.artifact_id, &input.version_id, &input.sha256).is_err()
             || input.size_bytes == 0
             || input.size_bytes > 256 * 1024
             || input.media_type != "application/json"

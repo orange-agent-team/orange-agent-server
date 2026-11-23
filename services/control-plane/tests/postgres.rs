@@ -566,3 +566,53 @@ async fn domain_entity_references_match_owned_primary_keys_and_validated_foreign
         }
     }
 }
+
+#[tokio::test]
+async fn missing_owner_and_invalid_wire_amounts_create_no_budget_or_postings() {
+    let store = db().await;
+    let payer = owner(&store, 100, 0, 0).await;
+    let secret = Uuid::new_v4().simple().to_string();
+    let app = http::router(
+        ApiState::development(
+            store.clone(),
+            vec![DevIdentity {
+                owner_id: payer.clone(),
+                token: secret.clone(),
+            }],
+        )
+        .expect("development identity"),
+    );
+    let req = CreateBudget {
+        scope_id: "scope".into(),
+        limit: money(10),
+    };
+    assert!(matches!(
+        store.create_budget("", "missing-owner", &req).await,
+        Err(StoreError::Invalid)
+    ));
+    for amount in [
+        serde_json::json!("-1"),
+        serde_json::json!("0.7"),
+        serde_json::json!("07"),
+        serde_json::json!(7),
+    ] {
+        let payload = serde_json::json!({"scope_id":"scope","limit":amount});
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/budgets")
+                    .header("content-type", "application/json")
+                    .header("authorization", format!("Bearer {secret}"))
+                    .header("idempotency-key", "bad-money")
+                    .body(Body::from(payload.to_string()))
+                    .expect("HTTP request"),
+            )
+            .await
+            .expect("real router");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+    let counts:(i64,i64)=sqlx::query_as("SELECT (SELECT COUNT(*) FROM budget_roots WHERE owner_id=$1),(SELECT COUNT(*) FROM ledger_transactions WHERE owner_id=$1)").bind(&payer).fetch_one(store.pool()).await.expect("no invalid writes");
+    assert_eq!(counts, (0, 0));
+}

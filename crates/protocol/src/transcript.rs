@@ -51,10 +51,14 @@ impl TranscriptionResult {
         {
             return false;
         }
-        let Ok(duration) = measured.duration_ms.parse::<u64>() else {
+        let Ok(duration) = measured
+            .duration_ms
+            .parse::<orange_domain::identity::Milliseconds>()
+        else {
             return false;
         };
-        if !(1..=600000).contains(&duration) || duration.to_string() != measured.duration_ms {
+        let duration = duration.get();
+        if !(1..=600000).contains(&duration) {
             return false;
         }
         let Ok(pin) = serde_json::from_slice::<serde_json::Value>(include_bytes!(

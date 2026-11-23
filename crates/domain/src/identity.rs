@@ -139,3 +139,69 @@ mod tests {
         }
     }
 }
+
+/// A version key without a verified content digest is not a pinned artifact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ArtifactPin<'a> {
+    artifact: ArtifactId<'a>,
+    version: ArtifactVersionId<'a>,
+    digest: &'a str,
+}
+pub fn valid_digest(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+impl<'a> ArtifactPin<'a> {
+    pub fn new(artifact: &'a str, version: &'a str, sha256: &'a str) -> Result<Self, InvalidId> {
+        if !valid_digest(sha256) {
+            return Err(InvalidId);
+        }
+        Ok(Self {
+            artifact: ArtifactId::try_from(artifact)?,
+            version: ArtifactVersionId::try_from(version)?,
+            digest: sha256,
+        })
+    }
+    pub fn artifact(self) -> ArtifactId<'a> {
+        self.artifact
+    }
+    pub fn version(self) -> ArtifactVersionId<'a> {
+        self.version
+    }
+    pub fn digest(self) -> &'a str {
+        self.digest
+    }
+}
+
+/// Nonnegative millisecond counts use the project's canonical decimal-string wire format.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Milliseconds(u64);
+#[derive(Debug, PartialEq, Eq)]
+pub struct InvalidMilliseconds;
+impl fmt::Display for InvalidMilliseconds {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("invalid millisecond count")
+    }
+}
+impl std::error::Error for InvalidMilliseconds {}
+impl std::str::FromStr for Milliseconds {
+    type Err = InvalidMilliseconds;
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        if text.is_empty()
+            || (text.len() > 1 && text.starts_with('0'))
+            || !text.bytes().all(|b| b.is_ascii_digit())
+        {
+            return Err(InvalidMilliseconds);
+        }
+        text.parse::<u64>()
+            .map(Self)
+            .map_err(|_| InvalidMilliseconds)
+    }
+}
+impl Milliseconds {
+    pub fn get(self) -> u64 {
+        self.0
+    }
+}
