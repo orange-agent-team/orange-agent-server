@@ -11,7 +11,7 @@ from urllib.parse import quote
 
 ROOT = Path(__file__).resolve().parents[1]
 LOCAL = ROOT / '.local/postgres'
-PORT = 55432
+from development_profile import POSTGRES_PORT as PORT
 
 
 def main():

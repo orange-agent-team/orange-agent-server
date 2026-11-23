@@ -13,7 +13,7 @@ import urllib.parse
 
 ROOT=Path(__file__).resolve().parents[1]
 PRIVATE=ROOT/'.local/identity'
-BASE='http://127.0.0.1:44180'
+from development_profile import IDENTITY_BASE as BASE
 ORIGIN='https://127.0.0.1:43122'
 def private_json(path,value):
     fd,temp=tempfile.mkstemp(dir=path.parent,prefix='.identity-')

@@ -13,21 +13,28 @@ import secrets
 import subprocess
 import tarfile
 import time
+import tempfile
 import urllib.request
 import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 PRIVATE = ROOT / '.local/identity'
 IMAGE = 'quay.io/keycloak/keycloak@sha256:3f3c5f8e03c614774b4bd9173b88391fefa4153bfc010d8012d59ad825377332'
-NAME = 'orange-agent-identity-dev'
-ISSUER = 'http://127.0.0.1:44180/realms/orange-dev'
+from development_profile import IDENTITY_BASE, IDENTITY_NAME as NAME, IDENTITY_PORT, INSTANCE
+ISSUER = IDENTITY_BASE+'/realms/orange-dev'
 ORIGIN = 'https://127.0.0.1:43112'
 DOCKER = ['docker', '--host', 'unix://' + str(Path.home()/'.colima/orange-agent/docker.sock')]
 
 def private_json(name, value):
     path = PRIVATE/name
-    with open(path, 'w', opener=lambda p, f: os.open(p, f, 0o600)) as file:
-        json.dump(value, file, indent=2)
+    with tempfile.NamedTemporaryFile(mode="w",dir=PRIVATE,delete=False) as file:
+        try:
+            json.dump(value,file,indent=2)
+            file.flush()
+            os.fsync(file.fileno())
+            os.replace(file.name,path)
+        finally:
+            Path(file.name).unlink(missing_ok=True)
     return path
 
 def fixture():
@@ -86,33 +93,56 @@ def realm(value):
                                                          'counter': 0, 'period': 30, 'algorithm': 'HmacSHA1'})}]}
                       for u in value['users']]}
 
+def owned_container():
+    result=subprocess.check_output(DOCKER+["ps","-aq","--no-trunc","--filter","name=^/"+NAME+"$"],text=True).strip()
+    if not result:
+        return None
+    info=json.loads(subprocess.check_output(DOCKER+["inspect",result]))[0]
+    cfg=info["Config"]
+    binding=info["HostConfig"]["PortBindings"].get("8080/tcp")
+    expected={"HostIp":"127.0.0.1","HostPort":str(IDENTITY_PORT)}
+    proof=PRIVATE/"fixture.json"
+    if (info["Name"]!="/"+NAME or cfg["Labels"].get("org.orange-agent.purpose")!="local-identity" or
+        cfg["Image"]!=IMAGE or binding!=[expected] or not proof.is_file() or proof.is_symlink()):
+        raise SystemExit("Container identity or owning fixture mismatch")
+    secret=json.loads(proof.read_bytes())["bootstrap_password"]
+    if not any(secrets.compare_digest(v,"KC_BOOTSTRAP_ADMIN_PASSWORD="+secret) for v in cfg["Env"]):
+        raise SystemExit("Container is owned by a different development fixture")
+    return info
+
+
 def main():
     action = argparse.ArgumentParser()
-    action.add_argument('action', choices=['start', 'stop', 'status'])
+    action.add_argument('action', choices=['start', 'stop', 'status', 'remove'])
     args = action.parse_args()
     PRIVATE.mkdir(parents=True, exist_ok=True, mode=0o700)
-    if args.action == 'stop':
-        subprocess.run(DOCKER+['stop', NAME], check=True, stdout=subprocess.DEVNULL)
-        print('Stopped dedicated local identity container')
+    existing=owned_container()
+    if args.action in ("stop","remove"):
+        if args.action=="remove" and INSTANCE=="default":
+            raise SystemExit("Removal requires an explicitly named development fixture")
+        if existing:
+            command=["stop",existing["Id"]] if args.action=="stop" else ["rm","-f",existing["Id"]]
+            subprocess.run(DOCKER+command,check=True,stdout=subprocess.DEVNULL)
+        print("Dedicated identity fixture "+args.action+" complete")
         return
-    exists = subprocess.run(DOCKER+['inspect', '--format', '{{.State.Running}}', NAME],
-                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
-    if args.action == 'status':
-        print('running' if exists.stdout.strip() == 'true' else 'not running')
+    if args.action=="status":
+        print("running" if existing and existing["State"]["Running"] else "not running")
         return
     value = fixture()
     private_json('admin-config.json', {'issuer': ISSUER, 'client_id': 'orange-admin',
                                      'client_secret': value['client_secret'], 'admin_origin': ORIGIN,
                                      'required_acr': '2', 'environment': 'dev'})
-    if exists.returncode != 0:
+    if not existing:
         envfile = PRIVATE/'container.env'
         with open(envfile, 'w', opener=lambda p, f: os.open(p, f, 0o600)) as file:
             file.write('KC_BOOTSTRAP_ADMIN_USERNAME=local-bootstrap\nKC_BOOTSTRAP_ADMIN_PASSWORD='+value['bootstrap_password']+'\n')
         subprocess.run(DOCKER+['create', '--name', NAME, '--label', 'org.orange-agent.purpose=local-identity',
                               '--cpus', '1', '--memory', '1536m', '--pids-limit', '512',
-                              '--publish', '127.0.0.1:44180:8080', '--env-file', str(envfile),
-                              IMAGE, 'start-dev', '--import-realm', '--hostname', 'http://127.0.0.1:44180'],
+                              '--publish', f"127.0.0.1:{IDENTITY_PORT}:8080", '--env-file', str(envfile),
+                              IMAGE, 'start-dev', '--import-realm', '--hostname', IDENTITY_BASE],
                        check=True, stdout=subprocess.DEVNULL)
+        existing=owned_container()
+    if existing["State"]["Status"]=="created":
         # Copy a private archive into the dedicated container; never mount the workspace.
         payload = json.dumps(realm(value)).encode()
         archive = io.BytesIO()
@@ -120,9 +150,9 @@ def main():
             entry = tarfile.TarInfo('import/orange-dev-realm.json')
             entry.size, entry.uid, entry.gid, entry.mode = len(payload), 1000, 0, 0o600
             tar.addfile(entry, io.BytesIO(payload))
-        subprocess.run(DOCKER+['cp', '-', NAME+':/opt/keycloak/data/'], input=archive.getvalue(), check=True)
-    if exists.stdout.strip() != 'true':
-        subprocess.run(DOCKER+['start', NAME], check=True, stdout=subprocess.DEVNULL)
+        subprocess.run(DOCKER+['cp', '-', existing['Id']+':/opt/keycloak/data/'], input=archive.getvalue(), check=True)
+    if not existing['State']['Running']:
+        subprocess.run(DOCKER+['start', existing['Id']], check=True, stdout=subprocess.DEVNULL)
     for _ in range(90):
         try:
             with urllib.request.urlopen(ISSUER+'/.well-known/openid-configuration', timeout=2) as response:
