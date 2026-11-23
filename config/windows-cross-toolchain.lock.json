@@ -1,0 +1,12 @@
+{
+  "host": "macos-universal",
+  "target": "x86_64-pc-windows-gnullvm",
+  "rust": "1.97.1",
+  "runtime": "ucrt",
+  "release": "20261117",
+  "source": "https://github.com/mstorsjo/llvm-mingw/releases/tag/20261117",
+  "archive": "llvm-mingw-20261117-ucrt-macos-universal.tar.xz",
+  "url": "https://github.com/mstorsjo/llvm-mingw/releases/download/20261117/llvm-mingw-20261117-ucrt-macos-universal.tar.xz",
+  "sha256": "98d340bbb8d46b09ad6886ffba88bd9d5415e131c316de48e6bd7647377446aa",
+  "bytes": 125197636
+}

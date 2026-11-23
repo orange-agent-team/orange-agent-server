@@ -30,3 +30,5 @@ schema 67 为个人与组织任务提供状态版本，旧客户端可以继续�
 数据库维护随包提供[关键表与事务说明](docs/database/transactions-and-retention.md)和[业务键字典](docs/database/transaction-keys.json)。升级前请核对迁移版本与目标数据库。
 
 用 `python3 reconcile-wallets.py --database-url-file <本地数据库连接文件>` 可从复式分录重新汇总钱包的七个余额字段。购买来源的作业预留与退款预留都计入 reserved_purchased，供应者待释放收益按分录中的供应者匹配。一个 PostgreSQL 快照同时读取账本与钱包。输出按字段报告差异数量；退出码 0 表示本次读取一致，2 表示存在差异，1 表示检查未完成。历史直接拨入的夹具余额会显示为差异，应先查清来源。此命令只读，不生成调账分录。
+
+`bin/orange-worker probe-gpu` 在本机生成 NVIDIA 设备身份与显存读数。支持的字段、缺失读数和退出码见[设备预检](docs/worker/nvidia-inventory.md)。
