@@ -24,17 +24,24 @@ parser.add_argument("--database-url-file",type=Path,default=ROOT/".local/databas
 parser.add_argument("--user-config",type=Path,default=ROOT/".local/identity/user-config.json")
 parser.add_argument("--admin-config",type=Path,default=ROOT/".local/identity/admin-config.json")
 parser.add_argument("--reuse-native",action="store_true",help="Use the separately verified two-build result for this same Git commit")
+parser.add_argument("--native-source",help="Verified native commit when only this packaging script changed")
 parser.add_argument("--vendor",type=Path,help="Verified versioned Cargo vendor cache matching the release lock")
 args=parser.parse_args()
 if not __debug__ or sys.version_info[:2]!=(3,12) or (platform.system(),platform.machine())!=("Darwin","arm64"):
     raise SystemExit("Python 3.12 with assertions on macOS arm64 required")
 git=lambda *args:subprocess.check_output(["git",*args],cwd=ROOT)
 commit=git("rev-parse","HEAD").decode().strip()
-native=ROOT/".local/platform-release"/commit
+native_commit=args.native_source or commit
+if native_commit!=commit:
+    if len(native_commit)!=40 or any(c not in "0123456789abcdef" for c in native_commit):raise ValueError("Full native commit required")
+    git("merge-base","--is-ancestor",native_commit,commit)
+    if git("diff","--name-only",native_commit,commit).decode().splitlines()!=["scripts/check-platform-distribution.py"]:
+        raise ValueError("Only the release receipt writer may differ from the native source")
+native=ROOT/".local/platform-release"/native_commit
 if not args.reuse_native:
-    subprocess.run([sys.executable,ROOT/"scripts/build-embedding-release.py","--profile","platform","--commit",commit],cwd=ROOT,check=True)
+    subprocess.run([sys.executable,ROOT/"scripts/build-embedding-release.py","--profile","platform","--commit",native_commit],cwd=ROOT,check=True)
 report=json.loads((native/"native-build.json").read_bytes())
-if (report["profile"]!="platform" or report["source_commit"]!=commit or report["target"]!="aarch64-apple-darwin" or not report["reproducible"]
+if (report["profile"]!="platform" or report["source_commit"]!=native_commit or report["target"]!="aarch64-apple-darwin" or not report["reproducible"]
     or len(report["builds"])!=2 or report["builds"][0]!=report["builds"][1] or set(report["builds"][0])!=set(PLATFORM_PROGRAMS)):
     raise ValueError("Two matching builds from this commit required")
 sha=lambda data:hashlib.sha256(data).hexdigest()
@@ -54,8 +61,8 @@ with tempfile.TemporaryDirectory(prefix="orange-native-notices-") as work:
         vendor=Path(work)/"vendor"
         subprocess.run([cargo,"vendor","--locked","--offline","--versioned-dirs",vendor],cwd=ROOT,
             env=dict(os.environ,PATH=str(cargo.parent)+os.pathsep+os.environ["PATH"]),check=True,stdout=subprocess.DEVNULL)
-    locked,missing=notices(files,vendor,files["Cargo.lock"],lambda path:git("show",commit+":"+path))
-    if missing:raise ValueError("Missing Cargo source notices in macOS release")
+    locked,missing_notices=notices(files,vendor,files["Cargo.lock"],lambda path:git("show",commit+":"+path))
+    if missing_notices:raise ValueError("Missing Cargo source notices in macOS release")
 manifest={"source":commit,"target":report["target"],"build_macos":report["macos"],"programs":list(PLATFORM_PROGRAMS),
           "sha256":{n:sha(d) for n,d in sorted(files.items())}}
 release=json.loads(files["config/worker-isolation-release.v1.json"])
@@ -77,14 +84,16 @@ with tempfile.TemporaryDirectory(dir=dest,prefix=".verify-") as tmp:
     from http_metrics_smoke import check_programs, ROLES
     smoke["private_http_metrics"]=check_programs(unpacked/"bin",args.database_url_file,args.user_config,args.admin_config,ROLES[1:])
     for program in (p for p in PLATFORM_PROGRAMS if p not in ("orange-user-api","orange-admin-api")):
-        missing=subprocess.run([unpacked/"bin"/program],cwd=scratch,env={"PATH":"/usr/bin:/bin"},capture_output=True,timeout=12)
-        if missing.returncode==0:raise ValueError("Unconfigured process started: "+program)
+        unconfigured=subprocess.run([unpacked/"bin"/program],cwd=scratch,env={"PATH":"/usr/bin:/bin"},capture_output=True,timeout=12)
+        if unconfigured.returncode==0:raise ValueError("Unconfigured process started: "+program)
     target=dest/("orange-platform-macos-arm64-"+digest[:16]+".tar.gz")
+    record={"archive":target.name,"sha256":digest,"bytes":target.stat().st_size,"source":commit,"target":report["target"],
+            "locked_crates":locked,"without_packaged_notice":missing_notices,"native_source":native_commit,"two_native_builds":report["builds"],"identical_archives":2,"verified_files":verified["verified_files"],"smoke":smoke,
+            "limits":"Real loopback user/admin services; Worker and cloud binaries compiled and checked for refusal without configuration. No production deployment or signing."}
+    receipt=scratch/"validated-receipt.json"
+    receipt.write_text(json.dumps(record,indent=2)+"\n")
     if target.exists():
         with target.open("rb") as f:assert hashlib.file_digest(f,"sha256").hexdigest()==digest
     else:os.link(first,target)
-    record={"archive":target.name,"sha256":digest,"bytes":target.stat().st_size,"source":commit,"target":report["target"],
-            "locked_crates":locked,"without_packaged_notice":missing,"two_native_builds":report["builds"],"identical_archives":2,"verified_files":verified["verified_files"],"smoke":smoke,
-            "limits":"Real loopback user/admin services; Worker and cloud binaries compiled and checked for refusal without configuration. No production deployment or signing."}
-    target.with_suffix(".json").write_text(json.dumps(record,indent=2)+"\n")
+    os.replace(receipt,target.with_suffix(".json"))
     print(json.dumps(record))
