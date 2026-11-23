@@ -87,7 +87,7 @@ with tempfile.TemporaryDirectory(dir=dest,prefix=".verify-") as tmp:
         unconfigured=subprocess.run([unpacked/"bin"/program],cwd=scratch,env={"PATH":"/usr/bin:/bin"},capture_output=True,timeout=12)
         if unconfigured.returncode==0:raise ValueError("Unconfigured process started: "+program)
     target=dest/("orange-platform-macos-arm64-"+digest[:16]+".tar.gz")
-    record={"archive":target.name,"sha256":digest,"bytes":target.stat().st_size,"source":commit,"target":report["target"],
+    record={"archive":target.name,"sha256":digest,"bytes":first.stat().st_size,"source":commit,"target":report["target"],
             "locked_crates":locked,"without_packaged_notice":missing_notices,"native_source":native_commit,"two_native_builds":report["builds"],"identical_archives":2,"verified_files":verified["verified_files"],"smoke":smoke,
             "limits":"Real loopback user/admin services; Worker and cloud binaries compiled and checked for refusal without configuration. No production deployment or signing."}
     receipt=scratch/"validated-receipt.json"
