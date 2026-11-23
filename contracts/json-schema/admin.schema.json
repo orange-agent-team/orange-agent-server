@@ -1484,6 +1484,75 @@
             "payload"
           ],
           "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "scope": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "platform"
+                },
+                "scope_id": {
+                  "const": "platform"
+                },
+                "environment": {
+                  "const": "dev"
+                }
+              },
+              "required": [
+                "kind",
+                "scope_id",
+                "environment"
+              ],
+              "additionalProperties": false
+            },
+            "target_version": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            "ticket_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 5,
+              "maxLength": 1000
+            },
+            "action_type": {
+              "const": "device_issuer.withdraw"
+            },
+            "payload": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "signing_key_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$",
+                  "minLength": 64,
+                  "maxLength": 64
+                }
+              },
+              "required": [
+                "signing_key_sha256"
+              ]
+            }
+          },
+          "required": [
+            "scope",
+            "target_version",
+            "ticket_id",
+            "reason",
+            "action_type",
+            "payload"
+          ],
+          "additionalProperties": false
         }
       ]
     },
@@ -5001,6 +5070,72 @@
           ]
         }
       }
+    },
+    "DeviceIssuerKeyReview": {
+      "type": "object",
+      "properties": {
+        "signing_key_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "minLength": 64,
+          "maxLength": 64
+        },
+        "target_version": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "minLength": 64,
+          "maxLength": 64
+        },
+        "state": {
+          "enum": [
+            "observed",
+            "withdrawn"
+          ]
+        },
+        "withdrawal_action_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observed_ca_certificates": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18})$",
+          "maxLength": 19
+        },
+        "valid_issued_credentials": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18})$",
+          "maxLength": 19
+        },
+        "live_verified_sessions": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18})$",
+          "maxLength": 19
+        },
+        "live_unattributed_sessions": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18})$",
+          "maxLength": 19
+        }
+      },
+      "required": [
+        "signing_key_sha256",
+        "target_version",
+        "state",
+        "withdrawal_action_id",
+        "observed_ca_certificates",
+        "valid_issued_credentials",
+        "live_verified_sessions",
+        "live_unattributed_sessions"
+      ],
+      "additionalProperties": false
     }
   },
   "$ref": "#/$defs/AdminActionCreate"

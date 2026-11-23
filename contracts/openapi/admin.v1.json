@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Orange Admin API",
-    "version": "0.1.17",
+    "version": "0.1.18",
     "description": "Candidate contract for the independent Admin origin. Development implementation includes OIDC sessions, scoped reads, selected node and reconciliation case actions, and development text and transcription price governance. Availability of each other action depends on its backend implementation."
   },
   "servers": [
@@ -4304,6 +4304,12 @@
             "permission": "admins.revoke",
             "approval": "maker_checker",
             "approval_permission": "admins.revoke.approve"
+          },
+          {
+            "action_type": "device_issuer.withdraw",
+            "permission": "device_issuers.withdraw",
+            "approval": "maker_checker",
+            "approval_permission": "device_issuers.withdraw.approve"
           }
         ],
         "x-implementation-status": "partial-development-candidate"
@@ -8248,6 +8254,159 @@
           "device_issuers.read"
         ]
       }
+    },
+    "/admin/v1/device-issuer-keys/{key}": {
+      "get": {
+        "operationId": "reviewWorkerIssuerSigningKey",
+        "summary": "Review a development issuer signing key before platform-wide withdrawal",
+        "x-permission": "device_issuers.read",
+        "security": [
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "required": true,
+            "name": "key",
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$",
+              "minLength": 64,
+              "maxLength": 64
+            }
+          },
+          {
+            "$ref": "#/components/parameters/RequestId"
+          },
+          {
+            "name": "environment",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "const": "dev"
+            }
+          },
+          {
+            "name": "scope_kind",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "const": "platform"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/ScopeId"
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Signing-key identity, current state and live impact observations",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceIssuerKeyReview"
+                }
+              }
+            }
+          }
+        },
+        "x-implementation-status": "local-development",
+        "x-required-permissions": [
+          "device_issuers.read"
+        ]
+      }
     }
   },
   "components": {
@@ -9823,6 +9982,75 @@
                   "role"
                 ],
                 "additionalProperties": false
+              }
+            },
+            "required": [
+              "scope",
+              "target_version",
+              "ticket_id",
+              "reason",
+              "action_type",
+              "payload"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "scope": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "platform"
+                  },
+                  "scope_id": {
+                    "const": "platform"
+                  },
+                  "environment": {
+                    "const": "dev"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "scope_id",
+                  "environment"
+                ],
+                "additionalProperties": false
+              },
+              "target_version": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$",
+                "minLength": 64,
+                "maxLength": 64
+              },
+              "ticket_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 5,
+                "maxLength": 1000
+              },
+              "action_type": {
+                "const": "device_issuer.withdraw"
+              },
+              "payload": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "signing_key_sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$",
+                    "minLength": 64,
+                    "maxLength": 64
+                  }
+                },
+                "required": [
+                  "signing_key_sha256"
+                ]
               }
             },
             "required": [
@@ -13351,6 +13579,72 @@
             ]
           }
         }
+      },
+      "DeviceIssuerKeyReview": {
+        "type": "object",
+        "properties": {
+          "signing_key_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "minLength": 64,
+            "maxLength": 64
+          },
+          "target_version": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "minLength": 64,
+            "maxLength": 64
+          },
+          "state": {
+            "enum": [
+              "observed",
+              "withdrawn"
+            ]
+          },
+          "withdrawal_action_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "observed_ca_certificates": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]{0,18})$",
+            "maxLength": 19
+          },
+          "valid_issued_credentials": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]{0,18})$",
+            "maxLength": 19
+          },
+          "live_verified_sessions": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]{0,18})$",
+            "maxLength": 19
+          },
+          "live_unattributed_sessions": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]{0,18})$",
+            "maxLength": 19
+          }
+        },
+        "required": [
+          "signing_key_sha256",
+          "target_version",
+          "state",
+          "withdrawal_action_id",
+          "observed_ca_certificates",
+          "valid_issued_credentials",
+          "live_verified_sessions",
+          "live_unattributed_sessions"
+        ],
+        "additionalProperties": false
       }
     }
   },
@@ -13373,7 +13667,9 @@
       "admins.roles.read",
       "admins.revoke",
       "admins.revoke.approve",
-      "device_issuers.read"
+      "device_issuers.read",
+      "device_issuers.withdraw",
+      "device_issuers.withdraw.approve"
     ],
     "support_operator": [
       "session.read",
@@ -13466,7 +13762,8 @@
       "support.revoke",
       "admins.roles.read",
       "admins.revoke.approve",
-      "device_issuers.read"
+      "device_issuers.read",
+      "device_issuers.withdraw.approve"
     ],
     "release_operator": [
       "session.read",
