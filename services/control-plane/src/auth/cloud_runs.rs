@@ -235,7 +235,7 @@ pub(super) async fn create(
         let budget=sqlx::query("SELECT root_budget_id FROM budget_roots WHERE root_budget_id=$1 AND owner_id=$2 AND state='active' FOR SHARE")
             .bind(&c.root_budget_id).bind(&owner).fetch_optional(&mut **tx).await.map_err(db)?;
         let file=sqlx::query("SELECT artifact_id FROM artifacts WHERE artifact_id=$1 AND version_id=$2 AND owner_id=$3 AND creator_id=$4
-            AND resource_id IS NULL AND state='available' AND media_type=$5 AND size_bytes BETWEEN 1 AND 262144 FOR SHARE")
+            AND resource_id IS NULL AND state='available' AND orange_artifact_content_live(artifact_id) AND media_type=$5 AND size_bytes BETWEEN 1 AND 262144 FOR SHARE")
             .bind(&c.input_artifact_id).bind(&c.input_version_id).bind(&owner).bind(&user).bind(if c.model.is_some(){"application/json"}else{"text/plain"}).fetch_optional(&mut **tx).await.map_err(db)?;
         if budget.is_none() || file.is_none() {
             return Err(missing());

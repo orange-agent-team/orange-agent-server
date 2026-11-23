@@ -515,7 +515,7 @@ impl ArtifactStore {
     ) -> Result<Option<orange_model_runtime::meter_service::MeasuredOutput>, ArtifactError> {
         let mut tx = self.inner.pool.begin().await?;
         let scope = self.output_scope(&mut tx, sessions, s, h, false).await?;
-        let key:String=sqlx::query_scalar("SELECT t.published_key FROM artifacts a JOIN artifact_transfers t ON a.published_transfer_id=t.transfer_id WHERE a.artifact_id=$1 AND a.root_id=$2 AND a.state='available' AND t.state='attached' AND NOT t.published_deleted").bind(&scope.input.artifact_id).bind(&self.inner.objects.root_id).fetch_optional(&mut *tx).await?.ok_or(ArtifactError::Integrity)?;
+        let key:String=sqlx::query_scalar("SELECT t.published_key FROM artifacts a JOIN artifact_transfers t ON a.published_transfer_id=t.transfer_id WHERE a.artifact_id=$1 AND a.root_id=$2 AND a.state='available' AND orange_artifact_content_live(a.artifact_id) AND t.state='attached' AND NOT t.published_deleted").bind(&scope.input.artifact_id).bind(&self.inner.objects.root_id).fetch_optional(&mut *tx).await?.ok_or(ArtifactError::Integrity)?;
         self.finish_output_scope(tx, s, h, false).await?;
         let request = self
             .inner

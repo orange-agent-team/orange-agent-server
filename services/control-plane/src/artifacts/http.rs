@@ -330,6 +330,7 @@ impl From<ArtifactError> for Error {
             }
             ArtifactError::Conflict => Self(StatusCode::CONFLICT, "IDEMPOTENCY_CONFLICT"),
             ArtifactError::NotReady => Self(StatusCode::CONFLICT, "ARTIFACT_NOT_READY"),
+            ArtifactError::RetentionExpired => Self(StatusCode::GONE, "ARTIFACT_RETENTION_EXPIRED"),
             ArtifactError::InUse => Self(StatusCode::CONFLICT, "ARTIFACT_IN_USE"),
             ArtifactError::Busy => Self(StatusCode::CONFLICT, "TRANSFER_BUSY"),
             ArtifactError::Capacity => Self(StatusCode::INSUFFICIENT_STORAGE, "STORAGE_CAPACITY"),

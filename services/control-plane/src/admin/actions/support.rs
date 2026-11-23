@@ -85,7 +85,7 @@ async fn consent(tx: &mut Tx<'_>, auth: &str, scope: &Scope) -> Result<PgRow, Ad
     let list = row.try_get::<Value, _>("resource_versions")?;
     for item in list.as_array().ok_or(AdminError::Unavailable)? {
         let found=sqlx::query("SELECT artifact_id FROM artifacts WHERE artifact_id=$1 AND version_id=$2 AND owner_id=$3 AND creator_id=$4
-            AND state='available' AND media_type='text/plain' AND resource_id IS NULL FOR SHARE")
+            AND state='available' AND orange_artifact_content_live(artifact_id) AND media_type='text/plain' AND resource_id IS NULL FOR SHARE")
             .bind(text(item,"artifact_id")?).bind(text(item,"version_id")?).bind(&scope.scope_id)
             .bind(row.try_get::<String,_>("user_id")?).fetch_optional(&mut **tx).await?;
         if found.is_none() {
@@ -424,7 +424,7 @@ async fn authorize_read(tx: &mut Tx<'_>, r: &Read, who: &str) -> Result<(Object,
         .ok_or(AdminError::Forbidden)?;
     let version = text(v, "version_id")?;
     let object=sqlx::query("SELECT a.root_id,a.size_bytes,a.sha256,t.published_key FROM artifacts a JOIN artifact_transfers t ON a.published_transfer_id=t.transfer_id
-        WHERE a.artifact_id=$1 AND a.version_id=$2 AND a.owner_id=$3 AND a.creator_id=$4 AND a.state='available' AND a.resource_id IS NULL
+        WHERE a.artifact_id=$1 AND a.version_id=$2 AND a.owner_id=$3 AND a.creator_id=$4 AND a.state='available' AND orange_artifact_content_live(a.artifact_id) AND a.resource_id IS NULL
           AND a.media_type='text/plain' AND t.artifact_id=a.artifact_id AND t.state='attached' AND NOT t.published_deleted FOR SHARE OF a,t")
         .bind(&r.resource_id).bind(version).bind(&scope.scope_id).bind(consent.try_get::<String,_>("user_id")?)
         .fetch_optional(&mut **tx).await?.ok_or(AdminError::NotFound)?;

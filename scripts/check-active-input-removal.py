@@ -25,7 +25,8 @@ with database(private/"database-url","orange_active_source_") as (_,url):
                             cwd=ROOT,env=env,text=True,stdout=subprocess.PIPE)
     print(result.stdout,flush=True)
     result.check_returncode()
-    for name in ["user_deletion_preserves_active_input_until_reference_release",
+    for name in ["due_input_denies_read_and_repin_then_collects_bytes_and_accounting_once",
+                 "user_deletion_preserves_active_input_until_reference_release",
                  "real_http_enforces_cookie_csrf_streaming_integrity_and_revocation",
                  "active_reference_survives_deletion_retention_and_cannot_be_added_after_delete"]:
         if "artifacts::tests::"+name+" ... ok" not in result.stdout:

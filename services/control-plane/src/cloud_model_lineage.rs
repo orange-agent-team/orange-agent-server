@@ -23,7 +23,7 @@ pub(crate) async fn continuation_lineage(
         WHERE r.run_id=$1 AND r.owner_id=$2 AND r.user_id=$3 AND opt.authorized_by=r.user_id AND d.user_id=r.user_id
         AND d.decision='approve' AND d.approval_digest=i.approval_digest AND s.state='succeeded' AND o.state='succeeded' AND o.result IS NOT NULL
         AND c.response_digest=t.response_digest AND NOT EXISTS(SELECT 1 FROM cloud_directory_revocations v WHERE v.run_id=r.run_id)
-        AND source.state='available' AND response.state='available' AND st.state='attached' AND rt.state='attached' AND NOT st.published_deleted AND NOT rt.published_deleted
+        AND source.state='available' AND orange_artifact_content_live(source.artifact_id) AND response.state='available' AND orange_artifact_content_live(response.artifact_id) AND st.state='attached' AND rt.state='attached' AND NOT st.published_deleted AND NOT rt.published_deleted
         FOR SHARE OF r,source,response,st,rt,s")
         .bind(run).bind(owner).bind(user).fetch_optional(&mut **tx).await?.ok_or(ArtifactError::NotReady)
 }
@@ -53,7 +53,7 @@ pub(crate) async fn turn_context(
         a.sha256,a.size_bytes,t.parent_operation FROM cloud_model_turns t JOIN cloud_runs r USING(run_id,owner_id)
         JOIN cloud_model_plans p USING(run_id,owner_id) JOIN cloud_model_proposals m USING(run_id)
         JOIN artifacts a ON a.artifact_id=t.artifact_id AND a.version_id=t.version_id AND a.owner_id=t.owner_id
-        WHERE t.run_id=$1 AND t.owner_id=$2 AND r.user_id=$3 AND a.state='available' AND a.creator_id=r.user_id
+        WHERE t.run_id=$1 AND t.owner_id=$2 AND r.user_id=$3 AND a.state='available' AND orange_artifact_content_live(a.artifact_id) AND a.creator_id=r.user_id
           AND a.resource_id IS NULL AND a.media_type='application/json' AND a.size_bytes BETWEEN 1 AND 262144
           AND t.ordinal=(SELECT max(ordinal) FROM cloud_model_turns WHERE run_id=$1)
           AND ($4::text IS NULL OR t.version_id=$4) FOR SHARE OF a")

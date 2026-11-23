@@ -282,7 +282,7 @@ pub(crate) async fn check_input_in(
     )
     .await
     .map_err(|_| ArtifactError::Forbidden)?;
-    let row=sqlx::query("SELECT a.*,i.artifact_sha256 AS bound_sha,i.version_id AS bound_version,i.size_bytes AS bound_size,i.organization_policy,i.acl_version AS bound_acl,i.authorizing_user_id,i.projection_digest FROM job_inputs i JOIN artifacts a USING(artifact_id) WHERE i.job_id=$1 AND i.owner_id=$2 AND a.owner_id=$2 AND a.state='available' FOR SHARE OF a").bind(job).bind(&owner).fetch_optional(&mut **tx).await?.ok_or(ArtifactError::NotReady)?;
+    let row=sqlx::query("SELECT a.*,i.artifact_sha256 AS bound_sha,i.version_id AS bound_version,i.size_bytes AS bound_size,i.organization_policy,i.acl_version AS bound_acl,i.authorizing_user_id,i.projection_digest FROM job_inputs i JOIN artifacts a USING(artifact_id) WHERE i.job_id=$1 AND i.owner_id=$2 AND a.owner_id=$2 AND a.state='available' AND orange_artifact_content_live(a.artifact_id) FOR SHARE OF a").bind(job).bind(&owner).fetch_optional(&mut **tx).await?.ok_or(ArtifactError::NotReady)?;
     if row.try_get::<String, _>("authorizing_user_id")? != user
         || row.try_get::<String, _>("sha256")? != row.try_get::<String, _>("bound_sha")?
         || row.try_get::<String, _>("version_id")? != row.try_get::<String, _>("bound_version")?
@@ -348,7 +348,7 @@ pub(crate) async fn source_read_in(
     job: &str,
     user: &str,
 ) -> Result<orange_protocol::grpc::worker::InputArtifact, ArtifactError> {
-    let row=sqlx::query("SELECT a.*,i.owner_id AS bound_owner FROM result_source_bindings i JOIN artifacts a USING(artifact_id) WHERE i.job_id=$1 AND a.owner_id=i.owner_id AND a.version_id=i.version_id AND a.sha256=i.artifact_sha256 AND a.size_bytes=i.size_bytes AND a.state='available' FOR SHARE OF a").bind(job).fetch_optional(&mut **tx).await?.ok_or(ArtifactError::Forbidden)?;
+    let row=sqlx::query("SELECT a.*,i.owner_id AS bound_owner FROM result_source_bindings i JOIN artifacts a USING(artifact_id) WHERE i.job_id=$1 AND a.owner_id=i.owner_id AND a.version_id=i.version_id AND a.sha256=i.artifact_sha256 AND a.size_bytes=i.size_bytes AND a.state='available' AND orange_artifact_content_live(a.artifact_id) FOR SHARE OF a").bind(job).fetch_optional(&mut **tx).await?.ok_or(ArtifactError::Forbidden)?;
     let owner: String = row.try_get("bound_owner")?;
     let role = authority::user_scope(tx, user, &owner, false).await?;
     match (role, row.try_get::<Option<String>, _>("resource_id")?) {

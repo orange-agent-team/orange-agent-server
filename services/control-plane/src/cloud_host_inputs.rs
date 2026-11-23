@@ -54,7 +54,7 @@ async fn binding(
     let source=sqlx::query("SELECT a.root_id,t.published_key,a.size_bytes,a.sha256,h.attestation_digest FROM cloud_workspace_claims c
         JOIN cloud_pool_hosts h USING(host_instance_id) CROSS JOIN artifacts a JOIN artifact_transfers t ON t.transfer_id=a.published_transfer_id
         WHERE c.allocation_id=$1 AND c.workspace_id=$2 AND c.host_instance_id=$3 AND c.epoch=$4 AND h.input_protocol_version=1
-          AND a.artifact_id=$5 AND a.version_id=$6 AND t.artifact_id=a.artifact_id AND t.state='attached' AND NOT t.published_deleted
+          AND a.artifact_id=$5 AND a.version_id=$6 AND orange_artifact_content_live(a.artifact_id) AND t.artifact_id=a.artifact_id AND t.state='attached' AND NOT t.published_deleted
         FOR SHARE OF a,t,h").bind(&lease.allocation_id).bind(&lease.workspace_id).bind(&lease.host_instance_id).bind(i64::try_from(lease.epoch).map_err(|_|changed())?)
         .bind(&artifact).bind(&version).fetch_optional(&mut **tx).await.map_err(db_error)?.ok_or_else(changed)?;
     let plan = crate::cloud_model::selection(tx, &lease.run_id)

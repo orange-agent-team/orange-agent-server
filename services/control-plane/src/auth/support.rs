@@ -60,7 +60,7 @@ macro_rules! consent_query { ($where:literal) => { concat!("SELECT c.authorizati
       WHEN EXISTS (SELECT 1 FROM jsonb_array_elements(c.resource_versions) v
                    WHERE NOT EXISTS(SELECT 1 FROM artifacts a WHERE a.artifact_id=v->>'artifact_id'
                      AND a.version_id=v->>'version_id' AND a.owner_id=c.owner_id AND a.creator_id=c.user_id
-                     AND a.resource_id IS NULL AND a.state='available' AND a.media_type='text/plain'))
+                     AND a.resource_id IS NULL AND a.state='available' AND orange_artifact_content_live(a.artifact_id) AND a.media_type='text/plain'))
            THEN 'unavailable' ELSE 'active' END AS status
  FROM personal_support_consents c LEFT JOIN personal_support_revocations r USING(authorization_id)
  WHERE c.user_id=$1 AND c.owner_id=$2", $where) }; }
@@ -140,7 +140,7 @@ pub(super) async fn create(
     } else {
         for resource in &terms.resources {
             let found=sqlx::query("SELECT artifact_id FROM artifacts WHERE artifact_id=$1 AND version_id=$2 AND owner_id=$3
-                AND creator_id=$4 AND resource_id IS NULL AND state='available' AND media_type='text/plain' FOR SHARE")
+                AND creator_id=$4 AND resource_id IS NULL AND state='available' AND orange_artifact_content_live(artifact_id) AND media_type='text/plain' FOR SHARE")
                 .bind(&resource.artifact_id).bind(&resource.version_id).bind(&owner).bind(&user)
                 .fetch_optional(&mut **tx).await.map_err(db)?;
             if found.is_none() {
@@ -252,7 +252,7 @@ pub(super) async fn resources(
     let user = guard.view().user_id.clone();
     let owner = guard.view().personal_owner_id.clone();
     let rows=sqlx::query("SELECT artifact_id,version_id,sha256,size_bytes FROM artifacts
-        WHERE owner_id=$1 AND creator_id=$2 AND resource_id IS NULL AND state='available' AND media_type='text/plain'
+        WHERE owner_id=$1 AND creator_id=$2 AND resource_id IS NULL AND state='available' AND orange_artifact_content_live(artifact_id) AND media_type='text/plain'
           AND ($3::text IS NULL OR artifact_id<$3) ORDER BY artifact_id DESC LIMIT $4")
         .bind(&owner).bind(&user).bind(q.before).bind(i64::from(limit)+1)
         .fetch_all(&mut **guard.transaction()).await.map_err(db)?;

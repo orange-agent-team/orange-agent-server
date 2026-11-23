@@ -160,7 +160,7 @@ impl ArtifactReader {
         {
             return Err(ArtifactError::Forbidden);
         }
-        let row=sqlx::query("SELECT a.root_id,t.published_key FROM artifacts a JOIN artifact_transfers t ON a.published_transfer_id=t.transfer_id WHERE a.artifact_id=$1 AND a.state='available' AND t.state='attached' AND NOT t.published_deleted").bind(&input.artifact_id).fetch_one(&mut **tx).await?;
+        let row=sqlx::query("SELECT a.root_id,t.published_key FROM artifacts a JOIN artifact_transfers t ON a.published_transfer_id=t.transfer_id WHERE a.artifact_id=$1 AND a.state='available' AND orange_artifact_content_live(a.artifact_id) AND t.state='attached' AND NOT t.published_deleted").bind(&input.artifact_id).fetch_one(&mut **tx).await?;
         if row.try_get::<String, _>("root_id")? != self.store.inner.objects.root_id {
             return Err(ArtifactError::StoragePolicy);
         }

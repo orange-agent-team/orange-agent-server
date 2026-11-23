@@ -87,7 +87,7 @@ fn conflict() -> UserApiError {
 async fn proposal(api: &Api, headers: &HeaderMap, run: &str) -> Result<Proposal, UserApiError> {
     let (mut g, _) = guard(&api.identity, headers, run, false, false).await?;
     let owner = g.view().personal_owner_id.clone();
-    let row=sqlx::query("SELECT m.job_id,m.commit_id,m.artifact_id,m.version_id,p.tool_name,p.connector_kind,p.execution_digest FROM cloud_connector_model_commits m JOIN cloud_connector_plans p USING(run_id) JOIN job_response_commits c ON c.job_id=m.job_id AND c.commit_id=m.commit_id AND c.artifact_id=m.artifact_id AND c.version_id=m.version_id AND c.response_digest=m.response_digest JOIN job_settlements s ON s.job_id=m.job_id JOIN cloud_runs r USING(run_id) JOIN artifacts src ON src.artifact_id=r.input_artifact_id AND src.version_id=r.input_version_id WHERE m.run_id=$1 AND src.state='available' AND r.status<>'cancelled' FOR SHARE OF src").bind(run).fetch_optional(&mut **g.transaction()).await.map_err(db)?.ok_or_else(conflict)?;
+    let row=sqlx::query("SELECT m.job_id,m.commit_id,m.artifact_id,m.version_id,p.tool_name,p.connector_kind,p.execution_digest FROM cloud_connector_model_commits m JOIN cloud_connector_plans p USING(run_id) JOIN job_response_commits c ON c.job_id=m.job_id AND c.commit_id=m.commit_id AND c.artifact_id=m.artifact_id AND c.version_id=m.version_id AND c.response_digest=m.response_digest JOIN job_settlements s ON s.job_id=m.job_id JOIN cloud_runs r USING(run_id) JOIN artifacts src ON src.artifact_id=r.input_artifact_id AND src.version_id=r.input_version_id WHERE m.run_id=$1 AND src.state='available' AND orange_artifact_content_live(src.artifact_id) AND r.status<>'cancelled' FOR SHARE OF src").bind(run).fetch_optional(&mut **g.transaction()).await.map_err(db)?.ok_or_else(conflict)?;
     g.finish().await?;
     let actor = api.identity.artifact_actor(headers, false).await?;
     let job: String = row.get("job_id");
@@ -243,7 +243,7 @@ impl ReadPermit<'_> {
             WHERE d.run_id=$1 AND d.grant_id=$2 AND d.operation_id=$3 AND d.argument_digest=$4 AND d.decision='approve' AND d.expires_at>clock_timestamp()
               AND m.commit_id=$5 AND plan.execution_digest=$6 AND r.status='waiting_approval' AND w.status='ready' AND w.expires_at>clock_timestamp()
               AND w.lease_until>clock_timestamp() AND h.enabled AND h.live_until>clock_timestamp() AND h.credential_expires_at>clock_timestamp()
-              AND b.state='active' AND src.state='available' AND model_response.state='available' AND NOT EXISTS(SELECT FROM cloud_connector_effect_receipts out WHERE out.run_id=d.run_id)
+              AND b.state='active' AND src.state='available' AND orange_artifact_content_live(src.artifact_id) AND model_response.state='available' AND orange_artifact_content_live(model_response.artifact_id) AND NOT EXISTS(SELECT FROM cloud_connector_effect_receipts out WHERE out.run_id=d.run_id)
             FOR SHARE OF h,w,model_response,src,b")
             .bind(run).bind(grant).bind(&p.operation).bind(&p.arg_digest).bind(&p.commit).bind(&p.pin)
             .fetch_optional(&mut **g.transaction()).await.map_err(db)?.ok_or_else(conflict)?;

@@ -90,6 +90,15 @@ pub(super) async fn resource_role(
         }
         _ => Err(ArtifactError::Integrity),
     }?;
+    if !deleted_metadata && row.try_get::<&str, _>("state")? == "available" {
+        let live: bool = sqlx::query_scalar("SELECT orange_artifact_content_live($1)")
+            .bind(row.try_get::<&str, _>("artifact_id")?)
+            .fetch_one(&mut **tx)
+            .await?;
+        if !live {
+            return Err(ArtifactError::RetentionExpired);
+        }
+    }
     if !write {
         let job: Option<String> =
             sqlx::query_scalar("SELECT job_id FROM worker_output_uploads WHERE artifact_id=$1")

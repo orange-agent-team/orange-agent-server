@@ -28,7 +28,7 @@ async fn source(tx: &mut Tx<'_>, run: &str) -> Result<Option<Source>, Status> {
         JOIN cloud_model_plans p USING(run_id) JOIN cloud_directory_capabilities cap USING(run_id)
         JOIN artifacts a ON a.artifact_id=t.artifact_id AND a.version_id=t.version_id AND a.owner_id=p.owner_id
         JOIN artifact_transfers x ON x.transfer_id=a.published_transfer_id AND x.artifact_id=a.artifact_id
-        WHERE t.run_id=$1 AND NOT EXISTS(SELECT 1 FROM cloud_directory_revocations v WHERE v.run_id=t.run_id) AND a.state='available' AND x.state='attached' AND NOT x.published_deleted FOR SHARE OF a,x")
+        WHERE t.run_id=$1 AND NOT EXISTS(SELECT 1 FROM cloud_directory_revocations v WHERE v.run_id=t.run_id) AND a.state='available' AND orange_artifact_content_live(a.artifact_id) AND x.state='attached' AND NOT x.published_deleted FOR SHARE OF a,x")
         .bind(run).fetch_optional(&mut **tx).await.map_err(db_error)?;
     let Some(row) = row else {
         let expected: bool =

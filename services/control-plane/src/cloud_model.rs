@@ -192,7 +192,7 @@ pub(crate) async fn workspace_context(
         WHERE r.run_id=$1 AND r.owner_id=$2 AND r.user_id=$3 AND r.status IN ('queued','running','waiting_approval') AND w.status='ready'
         AND w.lease_until>clock_timestamp() AND w.expires_at>clock_timestamp() AND h.enabled AND h.live_until>clock_timestamp()
         AND h.credential_expires_at>clock_timestamp() AND h.input_protocol_version=1 AND u.active AND u.personal_owner_id=r.owner_id
-        AND o.state='active' AND b.state='active' AND a.state='available' AND a.creator_id=r.user_id AND a.resource_id IS NULL
+        AND o.state='active' AND b.state='active' AND a.state='available' AND orange_artifact_content_live(a.artifact_id) AND a.creator_id=r.user_id AND a.resource_id IS NULL
         AND a.media_type='application/json' FOR SHARE OF r,w,h,u,o,b,a").bind(run).bind(owner).bind(user)
         .fetch_optional(&mut **tx).await?.ok_or(ArtifactError::NotReady)
 }
@@ -352,8 +352,8 @@ pub(crate) async fn output_access(tx: &mut Tx<'_>, artifact: &str) -> Result<(),
             JOIN cloud_job_turns jt ON jt.job_id=f.job_id JOIN cloud_model_turns t ON t.turn_id=jt.turn_id
             JOIN artifacts a ON a.artifact_id=r.input_artifact_id AND a.version_id=r.input_version_id AND a.owner_id=r.owner_id
             JOIN artifacts model_input ON model_input.artifact_id=t.artifact_id AND model_input.version_id=t.version_id
-            WHERE f.job_id=$1 AND f.artifact_id=$2 AND r.status='completed' AND a.state='available' AND a.creator_id=r.user_id
-              AND model_input.state='available' AND model_input.owner_id=r.owner_id FOR SHARE OF r,a,model_input")
+            WHERE f.job_id=$1 AND f.artifact_id=$2 AND r.status='completed' AND a.state='available' AND orange_artifact_content_live(a.artifact_id) AND a.creator_id=r.user_id
+              AND model_input.state='available' AND orange_artifact_content_live(model_input.artifact_id) AND model_input.owner_id=r.owner_id FOR SHARE OF r,a,model_input")
             .bind(job).bind(artifact).fetch_optional(&mut **tx).await?.ok_or(ArtifactError::NotReady)?;
         if row.try_get::<i32, _>("ordinal")? == 2 {
             continuation_lineage(
@@ -401,8 +401,8 @@ pub(crate) async fn reconcile_one(pool: &sqlx::PgPool) -> Result<bool, sqlx::Err
             JOIN artifacts src ON src.artifact_id=r.input_artifact_id AND src.version_id=r.input_version_id
             JOIN artifacts dst ON dst.artifact_id=c.artifact_id AND dst.version_id=c.version_id
             JOIN owners o ON o.owner_id=r.owner_id JOIN users person ON person.user_id=r.user_id AND person.personal_owner_id=r.owner_id
-            WHERE r.run_id=$1 AND m.job_id=$2 AND src.owner_id=r.owner_id AND src.state='available' AND dst.owner_id=r.owner_id AND dst.state='available'
-              AND u.response_digest=c.response_digest AND u.request_projection_digest=turn.projection_digest AND model_input.state='available' AND model_input.owner_id=r.owner_id
+            WHERE r.run_id=$1 AND m.job_id=$2 AND src.owner_id=r.owner_id AND src.state='available' AND orange_artifact_content_live(src.artifact_id) AND dst.owner_id=r.owner_id AND dst.state='available' AND orange_artifact_content_live(dst.artifact_id)
+              AND u.response_digest=c.response_digest AND u.request_projection_digest=turn.projection_digest AND model_input.state='available' AND orange_artifact_content_live(model_input.artifact_id) AND model_input.owner_id=r.owner_id
               AND (plan.execution_protocol=0 OR EXISTS(SELECT 1 FROM cloud_run_leases lease WHERE lease.run_id=r.run_id AND lease.allocation_id=p.allocation_id
                   AND lease.lease_until>FLOOR(EXTRACT(EPOCH FROM clock_timestamp()))::bigint))
               AND h.enabled AND h.credential_expires_at>clock_timestamp() AND h.live_until>clock_timestamp()
@@ -515,7 +515,7 @@ pub(crate) async fn bind_submitted_input(
           AND j.input_required AND j.execution_state='queued' AND j.settlement_state='pending' AND j.invocation_id=t.invocation_id AND q.invocation_id=j.invocation_id
           AND q.owner_id=r.owner_id AND q.root_budget_id=r.root_budget_id AND q.max_amount=j.reserved AND q.projection_digest=t.projection_digest
           AND ep.request_projection_digest=t.projection_digest AND ep.job_deadline>clock_timestamp() AND m.requester_id=r.user_id AND m.input_artifact_id=a.artifact_id
-          AND m.input_version_id=a.version_id AND a.owner_id=r.owner_id AND a.creator_id=r.user_id AND a.resource_id IS NULL AND a.state='available' AND a.media_type='application/json'
+          AND m.input_version_id=a.version_id AND a.owner_id=r.owner_id AND a.creator_id=r.user_id AND a.resource_id IS NULL AND a.state='available' AND orange_artifact_content_live(a.artifact_id) AND a.media_type='application/json'
           AND a.size_bytes BETWEEN 1 AND 262144 RETURNING owner_id,artifact_id,projection_digest")
         .bind(run).bind(job).fetch_optional(&mut **tx).await?.ok_or(StoreError::Conflict)?;
     crate::artifacts::inputs::record_input_bound(

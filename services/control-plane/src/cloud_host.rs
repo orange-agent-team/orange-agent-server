@@ -108,7 +108,7 @@ impl PlatformHostPool for Pool {
             JOIN budget_roots b ON b.root_budget_id=r.root_budget_id AND b.owner_id=r.owner_id
             JOIN artifacts a ON a.artifact_id=r.input_artifact_id AND a.version_id=r.input_version_id AND a.owner_id=r.owner_id
             WHERE w.host_instance_id=$1 AND w.status='requested' AND w.epoch=0 AND w.expires_at>clock_timestamp()
-              AND r.status='queued' AND o.state='active' AND u.active AND u.personal_owner_id=r.owner_id AND b.state='active' AND a.state='available'
+              AND r.status='queued' AND o.state='active' AND u.active AND u.personal_owner_id=r.owner_id AND b.state='active' AND a.state='available' AND orange_artifact_content_live(a.artifact_id)
             ORDER BY r.sequence LIMIT 1")
             .bind(r.host_instance_id).fetch_optional(&mut *tx).await.map_err(db_error)?;
         let assignment = if let Some(row) = row {

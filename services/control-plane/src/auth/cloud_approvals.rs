@@ -145,7 +145,7 @@ pub(super) async fn decide(
         let inserted=sqlx::query("INSERT INTO cloud_operation_decisions(operation_id,user_id,decision,approval_digest,expires_at,request_key,reviewed_version)
             SELECT $1,$2,$3,$4,FLOOR(EXTRACT(EPOCH FROM LEAST(w.expires_at,clock_timestamp()+interval '5 minutes')))::bigint,$5,$6
             FROM cloud_workspaces w JOIN cloud_tool_responses t USING(run_id) JOIN artifacts a ON a.artifact_id=t.artifact_id AND a.version_id=t.version_id
-            WHERE w.run_id=$7 AND a.state='available' AND NOT EXISTS(SELECT 1 FROM cloud_directory_revocations WHERE run_id=w.run_id) FOR SHARE OF a")
+            WHERE w.run_id=$7 AND a.state='available' AND orange_artifact_content_live(a.artifact_id) AND NOT EXISTS(SELECT 1 FROM cloud_directory_revocations WHERE run_id=w.run_id) FOR SHARE OF a")
             .bind(&op).bind(&user).bind(&r.decision).bind(&r.review_digest).bind(key).bind(version).bind(&run).execute(&mut **tx).await.map_err(db)?;
         if inserted.rows_affected() != 1 {
             return Err(conflict());

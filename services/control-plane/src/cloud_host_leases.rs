@@ -36,7 +36,7 @@ pub(super) async fn input_live(tx: &mut Tx<'_>, row: &PgRow) -> Result<(), Statu
     let ok=sqlx::query("SELECT a.artifact_id FROM artifacts a JOIN users u ON u.user_id=a.creator_id AND u.personal_owner_id=a.owner_id
         JOIN owners o ON o.owner_id=a.owner_id JOIN budget_roots b ON b.owner_id=a.owner_id
         WHERE a.artifact_id=$1 AND a.version_id=$2 AND a.owner_id=$3 AND a.creator_id=$4 AND b.root_budget_id=$5
-          AND a.resource_id IS NULL AND a.state='available' AND (a.media_type='text/plain' OR
+          AND a.resource_id IS NULL AND a.state='available' AND orange_artifact_content_live(a.artifact_id) AND (a.media_type='text/plain' OR
             (a.media_type='application/json' AND EXISTS(SELECT 1 FROM cloud_model_plans p WHERE p.run_id=$6 AND p.input_version_id=a.version_id AND p.owner_id=a.owner_id))) AND u.active AND o.state='active' AND b.state='active'
         FOR SHARE OF a,u,o,b").bind(row.try_get::<String,_>("input_artifact_id").map_err(db_error)?)
         .bind(row.try_get::<String,_>("input_version_id").map_err(db_error)?).bind(row.try_get::<String,_>("owner_id").map_err(db_error)?)

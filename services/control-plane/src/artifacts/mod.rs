@@ -19,6 +19,7 @@ mod outputs;
 mod pricing;
 mod quarantine;
 mod quote_funding;
+mod retention;
 pub(crate) use quarantine::QuarantineRequest;
 mod metering_retry;
 mod settlement;
@@ -56,6 +57,8 @@ pub enum ArtifactError {
     Conflict,
     #[error("artifact is not available")]
     NotReady,
+    #[error("artifact content retention deadline elapsed")]
+    RetentionExpired,
     #[error("artifact was deleted")]
     Deleted,
     #[error("an active job or workspace still uses the input")]

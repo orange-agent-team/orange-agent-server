@@ -26,7 +26,7 @@ impl ArtifactStore {
                 JOIN artifacts dst ON dst.artifact_id=c.artifact_id AND dst.version_id=c.version_id AND dst.owner_id=r.owner_id
                 JOIN artifact_transfers x ON x.transfer_id=dst.published_transfer_id AND x.artifact_id=dst.artifact_id
                 WHERE r.run_id=$1 AND r.user_id=$2 AND r.owner_id=$3 AND m.job_id=$4 AND m.commit_id=$5 AND r.status<>'cancelled'
-                  AND src.state='available' AND dst.state='available' AND x.state='attached' AND NOT x.published_deleted
+                  AND src.state='available' AND orange_artifact_content_live(src.artifact_id) AND dst.state='available' AND orange_artifact_content_live(dst.artifact_id) AND x.state='attached' AND NOT x.published_deleted
                 FOR SHARE OF r,src,dst,x").bind(run).bind(&actor.user).bind(owner).bind(job).bind(commit).fetch_optional(&mut *tx).await?.ok_or(ArtifactError::NotReady)?;
             let root: String = row.try_get("root_id")?;
             let size: i64 = row.try_get("size_bytes")?;

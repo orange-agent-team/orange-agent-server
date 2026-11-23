@@ -41,6 +41,8 @@ impl ArtifactStore {
             )
             .await?;
         }
+        let elapsed =
+            super::retention::expire_available(&mut tx, &self.inner.objects.root_id, limit).await?;
         let derived=sqlx::query("SELECT a.*,i.artifact_id AS source_id FROM worker_output_uploads w JOIN result_source_bindings i USING(job_id) JOIN artifacts source ON source.artifact_id=i.artifact_id JOIN artifacts a ON a.artifact_id=w.artifact_id WHERE a.root_id=$1 AND a.state!='deleted' AND source.state='deleted' ORDER BY a.created_at LIMIT $2 FOR UPDATE OF a SKIP LOCKED").bind(&self.inner.objects.root_id).bind(i64::from(limit)).fetch_all(&mut *tx).await?;
         for row in &derived {
             let artifact: String = row.try_get("artifact_id")?;
@@ -60,7 +62,7 @@ impl ArtifactStore {
         }
         sqlx::query("UPDATE artifact_capacity SET records=records-$2 WHERE root_id=$1")
             .bind(&self.inner.objects.root_id)
-            .bind((expired.len() + derived.len()) as i64)
+            .bind((expired.len() + derived.len()) as i64 + elapsed)
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;
@@ -68,7 +70,7 @@ impl ArtifactStore {
         // while physical orphan retention remains one hour from creation.
         sqlx::query("UPDATE artifact_transfers t SET state='orphan',finished_at=clock_timestamp() FROM artifacts a WHERE t.artifact_id=a.artifact_id AND a.root_id=$1 AND t.state='writing' AND t.expires_at<=clock_timestamp()")
             .bind(&self.inner.objects.root_id).execute(&self.inner.pool).await?;
-        let candidates:Vec<String>=sqlx::query_scalar("SELECT t.transfer_id FROM artifact_transfers t JOIN artifacts a USING(artifact_id) WHERE a.root_id=$1 AND t.state!='purged' AND ((t.state='attached' AND NOT t.stage_deleted) OR t.state='purging' OR (t.state IN('writing','orphan') AND t.created_at<clock_timestamp()-interval '1 hour' AND t.expires_at<clock_timestamp()) OR (a.state='deleted' AND a.deleted_at<clock_timestamp()-interval '24 hours')) ORDER BY t.created_at LIMIT $2").bind(&self.inner.objects.root_id).bind(i64::from(limit)).fetch_all(&self.inner.pool).await?;
+        let candidates:Vec<String>=sqlx::query_scalar("SELECT t.transfer_id FROM artifact_transfers t JOIN artifacts a USING(artifact_id) WHERE a.root_id=$1 AND t.state!='purged' AND ((t.state='attached' AND NOT t.stage_deleted) OR t.state='purging' OR (t.state IN('writing','orphan') AND t.created_at<clock_timestamp()-interval '1 hour' AND t.expires_at<clock_timestamp()) OR (a.state='deleted' AND orange_deleted_version_due(a.artifact_id))) ORDER BY t.created_at LIMIT $2").bind(&self.inner.objects.root_id).bind(i64::from(limit)).fetch_all(&self.inner.pool).await?;
         let mut cleaned = 0;
         for id in candidates {
             let mut tx = self.inner.pool.begin().await?;
@@ -82,7 +84,7 @@ impl ArtifactStore {
             .bind(&id)
             .fetch_one(&mut *tx)
             .await?;
-            let row=sqlx::query("SELECT *,state='deleted' AND deleted_at<clock_timestamp()-interval '24 hours' AS delete_ready FROM artifacts WHERE artifact_id=$1 FOR UPDATE").bind(&artifact).fetch_one(&mut *tx).await?;
+            let row=sqlx::query("SELECT a.*,state='deleted' AND orange_deleted_version_due(a.artifact_id) AS delete_ready FROM artifacts a WHERE artifact_id=$1 FOR UPDATE").bind(&artifact).fetch_one(&mut *tx).await?;
             let transfer=sqlx::query("SELECT *,created_at<clock_timestamp()-interval '1 hour' AND expires_at<clock_timestamp() AS orphan_ready FROM artifact_transfers WHERE transfer_id=$1 FOR UPDATE").bind(&id).fetch_one(&mut *tx).await?;
             let state: String = transfer.try_get("state")?;
             let pins: bool = sqlx::query_scalar(

@@ -908,6 +908,40 @@ async fn real_http_enforces_cookie_csrf_streaming_integrity_and_revocation() {
                 .expect("seconds"),
         86400
     );
+    let expired_req = request(b"expired HTTP content");
+    f.store
+        .begin_upload(&f.actor, &f.owner, &expired_req)
+        .await
+        .expect("stage second version");
+    let expired = f
+        .store
+        .put(
+            f.actor.clone(),
+            f.owner.clone(),
+            expired_req.upload_id.clone(),
+            input(b"expired HTTP content"),
+        )
+        .await
+        .expect("publish second version");
+    sqlx::query("UPDATE artifact_retention_clocks SET anchor_at=clock_timestamp()-interval '25 hours' WHERE artifact_id=$1")
+        .bind(&expired.artifact_id).execute(&f.store.inner.pool).await.expect("past policy deadline");
+    let refused = client
+        .get(format!(
+            "{collection}/{}/content?version_id={}",
+            expired_req.upload_id, expired.version_id
+        ))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .expect("expired HTTP read");
+    assert_eq!(refused.status(), 410);
+    assert_eq!(
+        refused
+            .json::<serde_json::Value>()
+            .await
+            .expect("metadata-only rejection")["code"],
+        "ARTIFACT_RETENTION_EXPIRED"
+    );
     sqlx::query("UPDATE user_sessions SET revoked=TRUE WHERE session_id=$1")
         .bind(&f.actor.session)
         .execute(&f.store.inner.pool)
@@ -1385,4 +1419,115 @@ async fn user_deletion_preserves_active_input_until_reference_release() {
             .expect("count committed tombstones");
     assert_eq!(tombstones, 1);
     f.store.drain().await.expect("drain");
+}
+
+#[tokio::test]
+async fn due_input_denies_read_and_repin_then_collects_bytes_and_accounting_once() {
+    let f = fixture().await;
+    let bytes = b"retention fixture";
+    let req = request(bytes);
+    f.store
+        .begin_upload(&f.actor, &f.owner, &req)
+        .await
+        .expect("stage");
+    let v = f
+        .store
+        .put(
+            f.actor.clone(),
+            f.owner.clone(),
+            req.upload_id.clone(),
+            input(bytes),
+        )
+        .await
+        .expect("publish");
+    assert_eq!(
+        f.store.collect(100).await.expect("release temporary copy"),
+        1
+    );
+    let pool = &f.store.inner.pool;
+    let pin = || {
+        sqlx::query("INSERT INTO artifact_pins(artifact_id,reference_id) VALUES($1,'known-fixture-reference')")
+        .bind(&v.artifact_id).execute(pool)
+    };
+    let make_due = || {
+        sqlx::query("UPDATE artifact_retention_clocks SET anchor_at=clock_timestamp()-interval '25 hours' WHERE artifact_id=$1")
+        .bind(&v.artifact_id).execute(pool)
+    };
+    pin().await.expect("valid reference before deadline");
+    make_due().await.expect("advance fixture time");
+    assert_eq!(
+        f.store
+            .collect(100)
+            .await
+            .expect("active input holds content"),
+        0
+    );
+    assert!(
+        f.store
+            .read(&f.actor, &f.owner, &req.upload_id, &v.version_id)
+            .await
+            .is_ok()
+    );
+    sqlx::query("DELETE FROM artifact_pins WHERE artifact_id=$1")
+        .bind(&v.artifact_id)
+        .execute(pool)
+        .await
+        .expect("release last reference");
+    assert!(
+        f.store
+            .read(&f.actor, &f.owner, &req.upload_id, &v.version_id)
+            .await
+            .is_ok(),
+        "release starts a new day"
+    );
+    make_due().await.expect("pass the new deadline");
+    assert!(matches!(
+        f.store
+            .read(&f.actor, &f.owner, &req.upload_id, &v.version_id)
+            .await,
+        Err(ArtifactError::RetentionExpired)
+    ));
+    let denied = pin()
+        .await
+        .expect_err("overdue content cannot acquire another pin");
+    assert_eq!(
+        denied.as_database_error().and_then(|e| e.constraint()),
+        Some("original_artifact_retention")
+    );
+    let (one, two) = tokio::join!(f.store.collect(10), f.store.collect(10));
+    assert_eq!(
+        one.expect("first collector") + two.expect("second collector"),
+        1
+    );
+    let facts:(i64,i64,i64,i64)=sqlx::query_as("SELECT used_bytes,records,
+        (SELECT count(*) FROM artifact_retention_expirations WHERE artifact_id=$2 AND version_id=$3 AND basis='last_reference_released'),
+        (SELECT count(*) FROM artifact_tombstones WHERE artifact_id=$2) FROM artifact_capacity WHERE root_id=$1")
+        .bind(&f.store.inner.objects.root_id).bind(&v.artifact_id).bind(&v.version_id).fetch_one(pool).await.expect("expiry and quota");
+    assert_eq!(
+        facts,
+        (0, 0, 1, 0),
+        "policy expiration cannot masquerade as a user delete"
+    );
+    let (key,purged):(String,bool)=sqlx::query_as("SELECT published_key,published_deleted AND state='purged' FROM artifact_transfers WHERE artifact_id=$1")
+        .bind(&v.artifact_id).fetch_one(pool).await.expect("exact version");
+    assert!(
+        purged
+            && f.store
+                .inner
+                .objects
+                .read(&key, bytes.len() as u64)
+                .await
+                .is_err(),
+        "published bytes must actually be gone"
+    );
+    let count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM durable_events e JOIN event_streams s USING(stream_id)
+        WHERE s.entity_id=$1 AND e.event_type='artifact.retention_expired'",
+    )
+    .bind(&v.artifact_id)
+    .fetch_one(pool)
+    .await
+    .expect("expiry event");
+    assert_eq!(count, 1);
+    f.store.drain().await.expect("stop writer");
 }

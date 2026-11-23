@@ -40,6 +40,11 @@ impl std::fmt::Display for StoreError {
 impl std::error::Error for StoreError {}
 impl From<sqlx::Error> for StoreError {
     fn from(e: sqlx::Error) -> Self {
+        if e.as_database_error().and_then(|error| error.constraint())
+            == Some("original_artifact_retention")
+        {
+            return Self::Forbidden;
+        }
         match e
             .as_database_error()
             .and_then(|error| error.code())
@@ -305,7 +310,7 @@ impl Store {
         if priced_requester.is_some() {
             let source=sqlx::query("SELECT a.* FROM quote_metering m JOIN artifacts a
                 ON a.artifact_id=m.input_artifact_id AND a.version_id=m.input_version_id AND a.owner_id=m.owner_id
-                WHERE m.quote_id=$1 AND m.owner_id=$2 AND a.state='available' FOR SHARE OF a")
+                WHERE m.quote_id=$1 AND m.owner_id=$2 AND a.state='available' AND orange_artifact_content_live(a.artifact_id) FOR SHARE OF a")
                 .bind(&req.quote_id).bind(owner).fetch_optional(&mut *tx).await?.ok_or(StoreError::Forbidden)?;
             crate::artifacts::authority::resource(
                 &mut tx,

@@ -29,7 +29,7 @@ pub(super) async fn guard(
     }
     let owner = g.view().personal_owner_id.clone();
     let user = g.view().user_id.clone();
-    let live:bool=sqlx::query_scalar("SELECT r.status IN ('running','paused','waiting_approval') AND a.state='available' FROM cloud_runs r JOIN artifacts a ON a.artifact_id=r.input_artifact_id AND a.version_id=r.input_version_id WHERE r.run_id=$1 AND r.owner_id=$2 AND r.user_id=$3 FOR UPDATE OF r FOR SHARE OF a")
+    let live:bool=sqlx::query_scalar("SELECT r.status IN ('running','paused','waiting_approval') AND a.state='available' AND orange_artifact_content_live(a.artifact_id) FROM cloud_runs r JOIN artifacts a ON a.artifact_id=r.input_artifact_id AND a.version_id=r.input_version_id WHERE r.run_id=$1 AND r.owner_id=$2 AND r.user_id=$3 FOR UPDATE OF r FOR SHARE OF a")
         .bind(run).bind(owner).bind(user).fetch_optional(&mut **g.transaction()).await.map_err(db)?.ok_or_else(missing)?;
     if active && !live {
         return Err(denied());

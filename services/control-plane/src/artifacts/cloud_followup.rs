@@ -244,7 +244,7 @@ impl ArtifactStore {
         }
         let inserted=sqlx::query("INSERT INTO cloud_model_turns(turn_id,run_id,ordinal,owner_id,invocation_id,upload_id,artifact_id,version_id,projection_digest,parent_operation)
             SELECT $1,$2,2,$3,$4,$5,a.artifact_id,a.version_id,$6,$7 FROM artifacts a WHERE a.artifact_id=$8 AND a.version_id=$9 AND a.owner_id=$3
-              AND a.creator_id=$10 AND a.state='available' AND a.sha256=$11 AND a.resource_id IS NULL AND a.media_type='application/json'
+              AND a.creator_id=$10 AND a.state='available' AND orange_artifact_content_live(a.artifact_id) AND a.sha256=$11 AND a.resource_id IS NULL AND a.media_type='application/json'
             ON CONFLICT(turn_id) DO NOTHING").bind(&source.turn).bind(run).bind(&source.owner).bind(&source.invocation).bind(&source.upload)
             .bind(projection).bind(&source.operation).bind(&artifact.artifact_id).bind(&artifact.version_id).bind(&actor.user).bind(&artifact.sha256)
             .execute(&mut *tx).await?;
