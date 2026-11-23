@@ -14,13 +14,24 @@ ROOT = Path(__file__).resolve().parents[1]
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--environment", type=Path, default=ROOT / ".local")
-    private = parser.parse_args().environment.resolve()
+    parser.add_argument("--rollover", action="store_true", help="Verify signing-key changes with the test issuer")
+    parser.add_argument("--node", default=shutil.which("node"))
+    args = parser.parse_args()
+    private = args.environment.resolve()
     rustup = shutil.which("rustup") or "/opt/homebrew/opt/rustup/bin/rustup"
     cargo = Path(subprocess.check_output([rustup, "which", "cargo"], cwd=ROOT, text=True).strip())
     env = {k: v for k, v in os.environ.items() if not k.startswith("ORANGE_")}
     env.update(PATH=str(cargo.parent) + os.pathsep + env["PATH"], CARGO_NET_OFFLINE="true",
                ORANGE_TEST_USER_CONFIG_FILE=str(private / "identity/user-config.json"),
                ORANGE_TEST_OIDC_CONFIG_FILE=str(private / "identity/admin-config.json"))
+    if args.rollover:
+        if subprocess.check_output([args.node, "--version"], text=True).strip() != "v22.23.2":
+            raise ValueError("Node 22.23.2 required")
+        env["ORANGE_TEST_NODE"] = str(Path(args.node).resolve(strict=True))
+        subprocess.run([cargo, "test", "--locked", "--offline", "-p", "orange-control-plane",
+                        "--features", "oidc-rollover-tests", "--test", "oidc_rollover"],check=True,cwd=ROOT,env=env)
+        print("PASS signing-key rollover and recovery across nine one-time code exchanges")
+        return
     cases = {"user_identity": ["session_refresh_after_idle_deadline_is_denied"],
              "admin_identity": ["session_refresh_after_idle_deadline_is_denied",
                                 "session_refresh_keeps_only_grants_still_live_after_waiting"]}

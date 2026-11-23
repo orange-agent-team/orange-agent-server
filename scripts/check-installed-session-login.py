@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 """Exercise two real API binaries with the existing private development IdP and Chrome."""
 import argparse
+from contextlib import contextmanager
+import hashlib
 import json
 from pathlib import Path
 import shutil
 import subprocess
+import sys
+import tarfile
+import tempfile
 from urllib.parse import unquote, urlsplit
 
 from acceptance_origins import reserve_origins
@@ -14,11 +19,35 @@ from platform_package_smoke import listening
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@contextmanager
+def binaries(directory):
+    if directory is not None:
+        yield directory.resolve(strict=True)
+        return
+    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+    releases = ROOT / ".local/platform-distributions"
+    records = (json.loads(f.read_bytes()) for f in releases.glob("*.tar.json"))
+    record, = [r for r in records if r["source"] == commit and r["identical_archives"] == 2]
+    archive = releases / record["archive"]
+    if archive.parent != releases or archive.is_symlink():
+        raise ValueError("Unexpected package path")
+    with archive.open("rb") as f:
+        if hashlib.file_digest(f, "sha256").hexdigest() != record["sha256"]:
+            raise ValueError("Package SHA-256 differs from receipt")
+    with tempfile.TemporaryDirectory() as tmp:
+        with tarfile.open(archive) as bundle:
+            bundle.extractall(tmp,filter="data")
+        unpacked = Path(tmp) / "orange-platform"
+        subprocess.run([sys.executable, "-I", unpacked/"verify.py"], cwd=tmp,check=True)
+        print("Extracted platform", commit, record["sha256"], flush=True)
+        yield unpacked / "bin"
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--environment", type=Path, default=ROOT / ".local")
     parser.add_argument("--web-repo", type=Path, required=True)
-    parser.add_argument("--bin-dir", type=Path, required=True)
+    parser.add_argument("--bin-dir", type=Path, help="Development binaries; default extracts this commit’s verified platform archive")
     parser.add_argument("--node", default=shutil.which("node"))
     args = parser.parse_args()
     private = args.environment.resolve(strict=True)
@@ -35,12 +64,11 @@ def main():
                 or cfg[role+"_origin"] != f"https://127.0.0.1:{port}" or cfg["client_id"] != "orange-"+role):
             raise ValueError("Dedicated local realm and clients required")
     reserve_origins(43112,43122)
-    with database(private / "database-url", "orange_session_login_") as (_, url):
+    with binaries(args.bin_dir) as bindir, database(private / "database-url", "orange_session_login_") as (_, url):
         p = urlsplit(url)
         connection = dict(PATH="/usr/bin:/bin", PGHOST=p.hostname, PGPORT=str(p.port), PGUSER=unquote(p.username),
                           PGPASSWORD=unquote(p.password), PGDATABASE=p.path[1:])
         runtime = dict(PATH="/usr/bin:/bin", DATABASE_URL=url, ORANGE_ENV="development")
-        bindir = args.bin_dir.resolve(strict=True)
         with listening(bindir/"orange-user-api", dict(runtime, ORANGE_USER_BIND="127.0.0.1:0",
                        ORANGE_USER_CONFIG_FILE=str(api_configs[0])), "User API") as user, \
              listening(bindir/"orange-admin-api", dict(runtime, ORANGE_ADMIN_BIND="127.0.0.1:0",
