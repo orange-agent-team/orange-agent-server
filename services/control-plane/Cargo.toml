@@ -6,6 +6,7 @@ rust-version.workspace = true
 publish.workspace = true
 
 [features]
+oidc-rollover-tests = []
 personal-key-browser-tests=["integration-tests"]
 job-revision-browser-tests=["integration-tests"]
 integration-tests = []
@@ -149,3 +150,7 @@ required-features = ["integration-tests"]
 [[test]]
 name = "quote_admission"
 required-features = ["integration-tests"]
+
+[[test]]
+name = "oidc_rollover"
+required-features = ["oidc-rollover-tests"]

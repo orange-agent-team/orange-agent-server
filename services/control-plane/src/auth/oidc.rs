@@ -1,9 +1,13 @@
 use super::AuthError;
 use openidconnect::{
     AccessTokenHash, AsyncHttpClient, AuthenticationContextClass, AuthorizationCode, ClientId,
-    ClientSecret, CsrfToken, EndpointMaybeSet, EndpointNotSet, EndpointSet, IssuerUrl, Nonce,
-    OAuth2TokenResponse, PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, TokenResponse,
-    core::{CoreAuthenticationFlow, CoreClient, CoreProviderMetadata},
+    ClientSecret, CsrfToken, EndpointMaybeSet, EndpointNotSet, EndpointSet, IssuerUrl,
+    JsonWebKeySetUrl, Nonce, OAuth2TokenResponse, PkceCodeChallenge, PkceCodeVerifier, RedirectUrl,
+    TokenResponse,
+    core::{
+        CoreAuthenticationFlow, CoreClient, CoreIdTokenVerifier, CoreJsonWebKeySet,
+        CoreJwsSigningAlgorithm, CoreProviderMetadata,
+    },
     reqwest,
     url::Url,
 };
@@ -59,7 +63,10 @@ impl VerifiedIdentity {
 pub struct OidcProvider {
     client: ConfiguredClient,
     http: ScopedHttp,
-    issuer: String,
+    issuer: IssuerUrl,
+    client_secret: ClientSecret,
+    jwks_url: JsonWebKeySetUrl,
+    allowed_algorithms: Vec<CoreJwsSigningAlgorithm>,
 }
 pub fn checked_url(value: &str, development: bool) -> Result<Url, AuthError> {
     let url = Url::parse(value).map_err(|_| AuthError::Invalid)?;
@@ -171,16 +178,23 @@ impl OidcProvider {
             config.origin.trim_end_matches('/'),
             config.callback_path
         );
+        let jwks_url = metadata.jwks_uri().clone();
+        let allowed_algorithms = metadata.id_token_signing_alg_values_supported().clone();
+        let issuer = metadata.issuer().clone();
+        let client_secret = ClientSecret::new(config.client_secret);
         let client = CoreClient::from_provider_metadata(
             metadata,
             ClientId::new(config.client_id),
-            Some(ClientSecret::new(config.client_secret)),
+            Some(client_secret.clone()),
         )
         .set_redirect_uri(RedirectUrl::new(redirect).map_err(|_| AuthError::Invalid)?);
         Ok(Self {
             client,
             http,
-            issuer: config.issuer,
+            issuer,
+            client_secret,
+            jwks_url,
+            allowed_algorithms,
         })
     }
     pub fn start(&self, acr: &str) -> Result<AuthorizationFlow, AuthError> {
@@ -224,7 +238,18 @@ impl OidcProvider {
             .await
             .map_err(|_| AuthError::Unauthenticated)?;
         let token = response.id_token().ok_or(AuthError::Unauthenticated)?;
-        let verifier = self.client.id_token_verifier();
+        // An authorization code is exchanged once. Fetch the issuer's current key set
+        // from its fixed discovery URL before accepting the resulting ID token.
+        let keys = CoreJsonWebKeySet::fetch_async(&self.jwks_url, &self.http)
+            .await
+            .map_err(|_| AuthError::Unavailable)?;
+        let verifier = CoreIdTokenVerifier::new_confidential_client(
+            self.client.client_id().clone(),
+            self.client_secret.clone(),
+            self.issuer.clone(),
+            keys,
+        )
+        .set_allowed_algs(self.allowed_algorithms.iter().cloned());
         let claims = token
             .claims(&verifier, &Nonce::new(nonce))
             .map_err(|_| AuthError::Unauthenticated)?;
@@ -247,7 +272,7 @@ impl OidcProvider {
             return Err(AuthError::Unauthenticated);
         }
         Ok(VerifiedIdentity {
-            issuer: self.issuer.clone(),
+            issuer: self.issuer.as_str().to_owned(),
             subject: claims.subject().as_str().into(),
             acr: claims.auth_context_ref().map(|s| s.as_str().into()),
             auth_time: claims.auth_time().map(|t| t.timestamp()),
