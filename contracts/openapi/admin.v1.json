@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Orange Admin API",
-    "version": "0.1.16",
+    "version": "0.1.17",
     "description": "Candidate contract for the independent Admin origin. Development implementation includes OIDC sessions, scoped reads, selected node and reconciliation case actions, and development text and transcription price governance. Availability of each other action depends on its backend implementation."
   },
   "servers": [
@@ -8083,6 +8083,171 @@
           "cases.read"
         ]
       }
+    },
+    "/admin/v1/device-issuers": {
+      "get": {
+        "operationId": "listWorkerDeviceIssuers",
+        "summary": "Read scoped device issuer and credential validity counts",
+        "x-permission": "device_issuers.read",
+        "security": [
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RequestId"
+          },
+          {
+            "name": "environment",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "const": "dev"
+            }
+          },
+          {
+            "name": "scope_kind",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "enum": [
+                "region",
+                "platform"
+              ]
+            }
+          },
+          {
+            "$ref": "#/components/parameters/ScopeId"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}\\.[0-9a-f]{64}$",
+              "minLength": 129,
+              "maxLength": 129
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Current issuer certificate metadata for the authorized scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceIssuerPage"
+                }
+              }
+            }
+          }
+        },
+        "x-implementation-status": "local-development",
+        "x-required-permissions": [
+          "device_issuers.read"
+        ]
+      }
     }
   },
   "components": {
@@ -13074,6 +13239,118 @@
           "data",
           "next_cursor"
         ]
+      },
+      "DeviceIssuer": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "issuer_sha256",
+          "signing_key_sha256",
+          "retained_certificates",
+          "awaiting_exchange",
+          "active_credentials",
+          "expiring_within_hour",
+          "next_expiry_unix",
+          "last_prepared_unix"
+        ],
+        "properties": {
+          "issuer_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "minLength": 64,
+            "maxLength": 64
+          },
+          "signing_key_sha256": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$",
+                "minLength": 64,
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "retained_certificates": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]{0,18})$",
+            "maxLength": 19
+          },
+          "awaiting_exchange": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]{0,18})$",
+            "maxLength": 19
+          },
+          "active_credentials": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]{0,18})$",
+            "maxLength": 19
+          },
+          "expiring_within_hour": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]{0,18})$",
+            "maxLength": 19
+          },
+          "next_expiry_unix": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^(0|[1-9][0-9]{0,18})$",
+                "maxLength": 19
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "last_prepared_unix": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]{0,18})$",
+            "maxLength": 19
+          }
+        }
+      },
+      "DeviceIssuerPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "scope",
+          "observed_unix",
+          "data",
+          "next_cursor"
+        ],
+        "properties": {
+          "scope": {
+            "$ref": "#/components/schemas/Scope"
+          },
+          "observed_unix": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]{0,18})$",
+            "maxLength": 19
+          },
+          "data": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "$ref": "#/components/schemas/DeviceIssuer"
+            }
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}\\.[0-9a-f]{64}$",
+                "minLength": 129,
+                "maxLength": 129
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
       }
     }
   },
@@ -13095,7 +13372,8 @@
       "admins.grant.approve",
       "admins.roles.read",
       "admins.revoke",
-      "admins.revoke.approve"
+      "admins.revoke.approve",
+      "device_issuers.read"
     ],
     "support_operator": [
       "session.read",
@@ -13187,7 +13465,8 @@
       "admins.grant.approve",
       "support.revoke",
       "admins.roles.read",
-      "admins.revoke.approve"
+      "admins.revoke.approve",
+      "device_issuers.read"
     ],
     "release_operator": [
       "session.read",
@@ -13222,7 +13501,8 @@
       "risk.read",
       "releases.read",
       "features.read",
-      "pricing.read"
+      "pricing.read",
+      "device_issuers.read"
     ]
   }
 }

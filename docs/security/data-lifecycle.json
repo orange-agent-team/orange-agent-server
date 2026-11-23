@@ -136,6 +136,11 @@
         "prepared_at",
         "expires_at",
         "redeemed_at"
+      ],
+      "worker_issuer_public_keys": [
+        "issuer_sha256",
+        "spki_sha256",
+        "observed_at"
       ]
     },
     "ownership_links": [
@@ -187,7 +192,8 @@
       "services/control-plane/src/worker/isolation_observations.rs",
       "services/control-plane/migrations/0079_execution_certificate_purposes.sql",
       "services/control-plane/src/auth/worker_enrollments.rs",
-      "services/control-plane/src/worker/device_issuer.rs"
+      "services/control-plane/src/worker/device_issuer.rs",
+      "services/control-plane/src/admin/routes/device_issuers.rs"
     ]
   },
   "events": {

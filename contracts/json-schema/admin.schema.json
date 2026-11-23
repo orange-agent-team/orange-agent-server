@@ -4889,6 +4889,118 @@
         "data",
         "next_cursor"
       ]
+    },
+    "DeviceIssuer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "issuer_sha256",
+        "signing_key_sha256",
+        "retained_certificates",
+        "awaiting_exchange",
+        "active_credentials",
+        "expiring_within_hour",
+        "next_expiry_unix",
+        "last_prepared_unix"
+      ],
+      "properties": {
+        "issuer_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "minLength": 64,
+          "maxLength": 64
+        },
+        "signing_key_sha256": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$",
+              "minLength": 64,
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "retained_certificates": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18})$",
+          "maxLength": 19
+        },
+        "awaiting_exchange": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18})$",
+          "maxLength": 19
+        },
+        "active_credentials": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18})$",
+          "maxLength": 19
+        },
+        "expiring_within_hour": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18})$",
+          "maxLength": 19
+        },
+        "next_expiry_unix": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]{0,18})$",
+              "maxLength": 19
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "last_prepared_unix": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18})$",
+          "maxLength": 19
+        }
+      }
+    },
+    "DeviceIssuerPage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scope",
+        "observed_unix",
+        "data",
+        "next_cursor"
+      ],
+      "properties": {
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "observed_unix": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18})$",
+          "maxLength": 19
+        },
+        "data": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "$ref": "#/$defs/DeviceIssuer"
+          }
+        },
+        "next_cursor": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}\\.[0-9a-f]{64}$",
+              "minLength": 129,
+              "maxLength": 129
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
     }
   },
   "$ref": "#/$defs/AdminActionCreate"

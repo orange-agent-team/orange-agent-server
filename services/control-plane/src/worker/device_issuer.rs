@@ -42,6 +42,7 @@ struct Signer {
     start: i64,
     end: i64,
     root: String,
+    public_key_digest: String,
     region: String,
 }
 #[cfg(unix)]
@@ -104,6 +105,7 @@ impl Signer {
             start: ca.validity().not_before.timestamp(),
             end: ca.validity().not_after.timestamp(),
             root: c.ca_certificate_sha256,
+            public_key_digest: hex::encode(Sha256::digest(ca.public_key().raw)),
             region: c.region_id,
         })
     }
@@ -146,6 +148,25 @@ impl Signer {
 #[cfg(unix)]
 pub async fn issue_one(pool: &PgPool, path: &Path) -> Result<Option<String>, Error> {
     let signer = Signer::load(path)?;
+    // The configured CA and its private key were matched locally. The database receives only public digests.
+    let mut registration = pool.begin().await?;
+    let valid:bool=sqlx::query_scalar("SELECT clock_timestamp()>=to_timestamp($1::bigint) AND clock_timestamp()<to_timestamp($2::bigint)")
+        .bind(signer.start).bind(signer.end).fetch_one(&mut *registration).await?;
+    if !valid {
+        return Err(Error::Issuer);
+    }
+    sqlx::query("INSERT INTO worker_issuer_public_keys(issuer_sha256,spki_sha256) VALUES($1,$2) ON CONFLICT(issuer_sha256) DO NOTHING")
+        .bind(&signer.root).bind(&signer.public_key_digest).execute(&mut *registration).await?;
+    let observed: String = sqlx::query_scalar(
+        "SELECT spki_sha256 FROM worker_issuer_public_keys WHERE issuer_sha256=$1",
+    )
+    .bind(&signer.root)
+    .fetch_one(&mut *registration)
+    .await?;
+    if observed != signer.public_key_digest {
+        return Err(Error::Issuer);
+    }
+    registration.commit().await?;
     let mut tx = pool.begin().await?;
     let candidate=sqlx::query("SELECT g.request_id::text,g.owner_id,g.requested_by FROM worker_enrollment_grants g
         JOIN users u ON u.user_id=g.requested_by AND u.active JOIN owners personal ON personal.owner_id=u.personal_owner_id AND personal.state='active' JOIN owners o ON o.owner_id=g.owner_id AND o.state='active'

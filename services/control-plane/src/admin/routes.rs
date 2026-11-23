@@ -14,10 +14,12 @@ use std::sync::Arc;
 
 pub(super) mod audit;
 mod cases;
+mod device_issuers;
 mod statements;
 
 pub fn router(identity: AdminIdentity) -> Router {
     Router::new()
+        .route("/admin/v1/device-issuers", get(device_issuers::list))
         .route(
             "/admin/v1/support-authorizations/{id}",
             get(super::actions::support::review),

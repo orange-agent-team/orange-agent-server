@@ -144,10 +144,15 @@ def main():
             require(bad.returncode!=0 and not bad.stdout and sql("SELECT count(*) FROM worker_enrollment_certificates")=="0","Unpinned CA signed a grant")
             wrong_key=issue(config(ca/"wrong-key.json",dict(cfg,ca_key_file=str(gw/"server.key"))))
             require(wrong_key.returncode!=0 and not wrong_key.stdout and sql("SELECT count(*) FROM worker_enrollment_certificates")=="0","Unrelated private key signed a grant")
+            require(sql("SELECT count(*) FROM worker_issuer_public_keys")=="0","Unverified issuer created public identity metadata")
             with ThreadPoolExecutor(max_workers=2) as parallel:
                 answers=list(parallel.map(lambda _:issue(),range(2)))
             for result in answers:result.check_returncode()
             require({json.loads(r.stdout)["prepared_request"] for r in answers}=={None,rid},"Duplicate certificate issuance")
+            public_key=ca/"public-spki.pem";public_key.write_bytes(crypto("x509","-in",ca/"ca.pem","-pubkey","-noout"))
+            spki_digest=hashlib.sha256(crypto("pkey","-pubin","-in",public_key,"-outform","DER")).hexdigest()
+            require(sql(f"SELECT spki_sha256 FROM worker_issuer_public_keys WHERE issuer_sha256='{issuer_hash}'")==spki_digest,
+                    "Issuer directory public key differs from the actual CA")
             require(sql("SELECT count(*) FROM worker_credentials")=="0" and http(origin,"GET",path,headers)[1]["state"]=="certificate_prepared","Preparation activated a credential")
             require(http(origin,"POST",redeem,dict(auth,Authorization="Orange-Enrollment "+secrets.token_urlsafe(32)),rb)[0]==401,"Foreign commitment redeemed")
             require(http(origin,"POST",redeem,dict(auth,Cookie=headers["Cookie"]),rb)[0]==401,"Mixed browser authority redeemed")

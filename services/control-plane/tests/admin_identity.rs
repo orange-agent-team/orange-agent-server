@@ -275,3 +275,7 @@ async fn session_refresh_keeps_only_grants_still_live_after_waiting() {
     assert_eq!(response.1["scopes"].as_array().expect("scopes").len(), 1);
     assert_eq!(response.1["scopes"][0]["scope_id"], f.a);
 }
+
+#[cfg(feature = "issuer-directory-tests")]
+#[path = "admin_identity/issuer_directory.rs"]
+mod issuer_directory;
