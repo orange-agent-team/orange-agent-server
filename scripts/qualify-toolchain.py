@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import tomllib
@@ -135,6 +136,32 @@ def clean_sources(root, dest, archive, commit):
         source.extractall(dest,filter="data")
 
 
+def upgrade(desktop):
+    commit=output(["git","rev-parse","HEAD"],desktop)
+    with tempfile.TemporaryDirectory(prefix="orange-client-upgrade-") as work:
+        tree=Path(work)/"desktop"
+        clean_sources(desktop,tree,Path(work)/"desktop.tar",commit)
+        local=tree/".local"
+        local.mkdir()
+        # Provision the same installations and dependency cache used by desktop CI.
+        for name in ("tools","toolchains","pub-cache"):
+            (local/name).symlink_to((desktop/".local"/name).resolve(strict=True),target_is_directory=True)
+        lock=tree/"config/generated-bridge.lock.json"
+        pinned=load(lock)
+        f=load(tree/"config/flutter.lock.json")
+        flutter=local/"toolchains"/("flutter-"+f["version"])/"flutter/bin/flutter"
+        env=dict(os.environ,CARGO_NET_OFFLINE="true",CARGO_INCREMENTAL="0",CARGO_TARGET_DIR=str(tree/"target"),
+                 PUB_CACHE=str(local/"pub-cache"),FLUTTER_SUPPRESS_ANALYTICS="true",DASH__SUPPRESS_ANALYTICS="true",
+                 XDG_CONFIG_HOME=str(local/"flutter-config"),CARGO_PROFILE_DEV_DEBUG="0")
+        subprocess.run([flutter,"pub","get","--offline","--enforce-lockfile"],cwd=tree/"apps/desktop",env=env,check=True)
+        subprocess.run([sys.executable,tree/"scripts/generate-bridge.py"],cwd=tree,env=env,check=True)
+        require(load(lock)==pinned,"Regenerated desktop API or generator input differs from the committed lock")
+        subprocess.run([sys.executable,tree/"scripts/check-bridge-surface.py"],cwd=tree,env=env,check=True)
+    subprocess.run([sys.executable,ROOT/"scripts/check-wire-reproducibility.py"],cwd=ROOT,check=True)
+    return {"desktop_source":commit,"content_hash":pinned["content_hash"],"generator_inputs":len(pinned["source_sha256"]),
+            "generated_files":len(pinned["generated_sha256"]),"wire_generation_rechecked":True}
+
+
 def reproduce(roots,node):
     sources={k:output(["git","rev-parse","HEAD"],v) for k,v in roots.items()}
     outcomes={}
@@ -176,13 +203,16 @@ def reproduce(roots,node):
 
 def main():
     parser=argparse.ArgumentParser()
-    parser.add_argument("--section",required=True,choices=["inventory","pins","reproduce"])
+    parser.add_argument("--section",required=True,choices=["inventory","pins","upgrade","reproduce"])
     for key in ("desktop","web","admin"):
         parser.add_argument("--"+key,type=Path)
     parser.add_argument("--node",type=Path,default=Path.home()/".nvm/versions/node/v22.23.2/bin/node")
     args=parser.parse_args()
     if args.section=="pins":
         report=pins()
+    elif args.section=="upgrade":
+        require(args.desktop is not None,"Supply a desktop checkout")
+        report=upgrade(args.desktop.resolve())
     else:
         roots={"server":ROOT}
         for kind in ("desktop","web","admin"):

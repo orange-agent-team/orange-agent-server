@@ -4,6 +4,7 @@
 
 ```sh
 python3.12 scripts/qualify-toolchain.py --section inventory --desktop ../orange-agent-desktop --web ../orange-agent-web --admin ../orange-agent-admin
+python3.12 scripts/qualify-toolchain.py --section upgrade --desktop ../orange-agent-desktop
 python3.12 scripts/qualify-toolchain.py --section pins
 python3.12 scripts/qualify-toolchain.py --section reproduce --desktop ../orange-agent-desktop --web ../orange-agent-web --admin ../orange-agent-admin
 ```
@@ -19,6 +20,6 @@ python3.12 scripts/qualify-toolchain.py --section reproduce --desktop ../orange-
 ## 升级与回退
 
 1. 从已记录的提交创建候选分支，先归档旧的版本清单、模型或镜像摘要，以及当前协议和客户端包的凭据。
-2. 在负责该组件的仓库修改版本和锁文件。生成器升级同时检查描述符、Rust 绑定和 FRB 接口变化。旧客户端对新增字段、未知枚举和撤权行为需要重跑兼容测试。[Worker 和云 Host 协议回归](protocol-upgrades.md)
+2. 在负责该组件的仓库修改版本和锁文件。生成器升级同时检查描述符、Rust 绑定和 FRB 接口变化。upgrade 从干净的桌面源码重新生成 Rust 与 Dart 绑定，逐项比较输入和输出摘要，再运行跨版本协议检验。旧客户端对新增字段、未知枚举和撤权行为需要重跑兼容测试。[Worker 和云 Host 协议回归](protocol-upgrades.md)
 3. 在干净源码目录运行上述资格命令，并保留 git 提交和产物摘要。涉及驱动或引擎的修改另跑对应 GPU 上的准入、推理和回收测试，缺设备时保留待验证状态。
 4. 出现 ABI、协议或模型结果回归时，恢复成套的编译器、生成器、依赖锁与模型摘要，重新验证旧提交。涉及数据库迁移时依照升级兼容证据处置数据，避免对已有用户数据直接降级。
