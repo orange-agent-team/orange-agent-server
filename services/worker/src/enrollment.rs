@@ -73,47 +73,85 @@ fn lock(root: &File) -> Result<(), Error> {
         }
     }
 }
+/// OpenSSL 3.0 expects RFC 5208 without the optional RFC 5958 public-key field.
+/// Keep the provider-generated seed and independently compare the resulting public identity.
+fn portable(key: &KeyPair) -> Result<Option<KeyPair>, Error> {
+    use pkcs8::{
+        PrivateKeyInfoRef,
+        der::{Decode, Encode},
+    };
+    let encoded = key.serialize_der();
+    let mut info = PrivateKeyInfoRef::from_der(&encoded).map_err(|_| Error::Format)?;
+    if info.public_key.take().is_none() {
+        return Ok(None);
+    }
+    let normalized =
+        KeyPair::try_from(info.to_der().map_err(|_| Error::Format)?).map_err(|_| Error::Format)?;
+    if normalized.algorithm() != &PKCS_ED25519
+        || normalized.subject_public_key_info() != key.subject_public_key_info()
+    {
+        return Err(Error::Format);
+    }
+    Ok(Some(normalized))
+}
 fn durable_key(root: &File, id: &str) -> Result<KeyPair, Error> {
     let name = format!("{id}.key.pem");
     let flags = OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK;
-    match fs::openat(root, name.as_str(), OFlags::RDONLY | flags, Mode::empty()) {
+    let existing = match fs::openat(root, name.as_str(), OFlags::RDONLY | flags, Mode::empty()) {
         Ok(fd) => {
-            let key = read_key(&File::from(fd))?;
-            root.sync_all()?;
-            return Ok(key);
+            let original = File::from(fd);
+            let key = read_key(&original)?;
+            let Some(normalized) = portable(&key)? else {
+                root.sync_all()?;
+                return Ok(key);
+            };
+            Some((original, normalized))
         }
-        Err(rustix::io::Errno::NOENT) => {}
+        Err(rustix::io::Errno::NOENT) => None,
         Err(e) => return Err(e.into()),
-    }
+    };
     let pending = format!(".{id}.key.pending");
-    // The reserved staging file never has a visible CSR. An interrupted write can be replaced
-    // under the directory lock, without opening or changing a published key.
-    let mut file = File::from(fs::openat(
+    let mut stage = File::from(fs::openat(
         root,
         pending.as_str(),
         OFlags::RDWR | OFlags::CREATE | flags,
         Mode::RUSR | Mode::WUSR,
     )?);
-    checked_file(&file)?;
-    let key = match read_key(&file) {
-        Ok(key) => key,
-        Err(Error::Format) => {
-            let key = KeyPair::generate_for(&PKCS_ED25519).map_err(|_| Error::Format)?;
-            file.rewind()?;
-            file.set_len(0)?;
-            file.write_all(key.serialize_pem().as_bytes())?;
-            key
+    checked_file(&stage)?;
+    let (key, legacy) = match existing {
+        Some((old, key)) => (key, Some(old)),
+        None => {
+            let key = match read_key(&stage) {
+                Ok(key) => key,
+                Err(Error::Format) => {
+                    KeyPair::generate_for(&PKCS_ED25519).map_err(|_| Error::Format)?
+                }
+                Err(e) => return Err(e),
+            };
+            (portable(&key)?.unwrap_or(key), None)
         }
-        Err(e) => return Err(e),
     };
-    file.sync_all()?;
-    fs::renameat_with(
-        root,
-        pending.as_str(),
-        root,
-        name.as_str(),
-        RenameFlags::NOREPLACE,
-    )?;
+    stage.rewind()?;
+    stage.set_len(0)?;
+    stage.write_all(key.serialize_pem().as_bytes())?;
+    stage.sync_all()?;
+    if let Some(old) = legacy {
+        checked_file(&old)?;
+        let prior = fs::fstat(&old)?;
+        let named = fs::statat(root, name.as_str(), fs::AtFlags::SYMLINK_NOFOLLOW)?;
+        if named.st_dev != prior.st_dev || named.st_ino != prior.st_ino {
+            return Err(Error::PrivateKey);
+        }
+        fs::renameat(root, pending.as_str(), root, name.as_str())?;
+    } else {
+        fs::renameat_with(
+            root,
+            pending.as_str(),
+            root,
+            name.as_str(),
+            RenameFlags::NOREPLACE,
+        )?;
+    }
     root.sync_all()?;
     Ok(key)
 }

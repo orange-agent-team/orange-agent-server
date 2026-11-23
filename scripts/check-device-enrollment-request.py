@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Verify the ordinary Worker command, real PKCS#10 signature, crash recovery and concurrent first use."""
 import argparse
+import base64
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 import hashlib
@@ -29,6 +30,7 @@ def main():
     parser.add_argument("--installed", action="store_true")
     parser.add_argument("--native-worker",type=Path,help="Exercise a binary from a verified native build receipt")
     parser.add_argument("--expected-worker-sha256")
+    parser.add_argument("--legacy-worker",type=Path,help="Original Worker executable for a cross-version key migration")
     args=parser.parse_args()
     if bool(args.native_worker)!=bool(args.expected_worker_sha256) or args.installed and args.native_worker:
         parser.error("Select either the packaged binary or one digest-pinned native binary")
@@ -78,6 +80,23 @@ def main():
                 and "CA:TRUE" not in text and "TLS Web Server Authentication" not in text,"Wrong requested leaf usages")
         spki=crypto("pkey","-pubin","-outform","DER",data=crypto("req","-in",csr,"-pubkey","-noout"))
         require(spki==crypto("pkey","-in",key,"-pubout","-outform","DER") and hashlib.sha256(spki).hexdigest()==receipt["spki_sha256"],"Wrong public key")
+        # Exercise the original RFC 5958 ring encoding even when the historical binary is unavailable.
+        v1=base64.b64decode("".join(key.read_text().splitlines()[1:-1]),validate=True)
+        require(len(v1)==48 and v1[:5]==bytes.fromhex("302e020100"),"Device did not publish PKCS8 v1")
+        v2=bytes.fromhex("3051020101")+v1[5:]+bytes.fromhex("812100")+spki[-32:]
+        wrapped=base64.b64encode(v2).decode()
+        key.write_text("-----BEGIN PRIVATE KEY-----\n"+"\n".join(wrapped[i:i+64] for i in range(0,len(wrapped),64))+"\n-----END PRIVATE KEY-----\n")
+        require(run(rid)==receipt,"Older encoding changed CSR identity")
+        require(crypto("pkey","-in",key,"-pubout","-outform","DER")==spki,"Migrated key not loadable by target OpenSSL")
+        if args.legacy_worker:
+            legacy_id=uuid.uuid4()
+            previous=json.loads(subprocess.check_output([args.legacy_worker,"prepare-enrollment",root,str(legacy_id)]))
+            old_file=root/(str(legacy_id)+".key.pem")
+            old_encoding=base64.b64decode("".join(old_file.read_text().splitlines()[1:-1]),validate=True)
+            require(len(old_encoding)==83 and old_encoding[4]==1,"Historical producer did not write the original v2 format")
+            require(run(legacy_id)==previous and run(legacy_id)==previous,"Historical binary's CSR was replaced")
+            actual=crypto("pkey","-in",old_file,"-pubout","-outform","DER")
+            require(hashlib.sha256(actual).hexdigest()==previous["spki_sha256"],"Historical device identity changed")
         csr_der=crypto("req","-in",csr,"-outform","DER")
         require(hashlib.sha256(csr_der).hexdigest()==receipt["csr_sha256"],"Wrong PKCS#10 digest")
         # Independently verify proof of possession, including a damaged signature control.
@@ -132,7 +151,7 @@ def main():
         bad.write_bytes(b"damaged published key");bad.chmod(0o600);run(guard,success=False)
         require(bad.read_bytes()==b"damaged published key" and run(rid)==receipt,"Published identity was altered")
         print(json.dumps({"installed_worker":args.installed,"receipt_pinned_native_worker":bool(args.native_worker),"concurrent_processes":8,"independent_pkcs10_verification":True,
-                          "same_key_after_restart":True,"partial_staging_recovered":True,"fixture_client_leaf_mtls":True,"platform_issuer_verified":False}),flush=True)
+                          "same_key_after_restart":True,"partial_staging_recovered":True,"fixture_client_leaf_mtls":True,"preserved_v2_identity":True,"original_binary_upgrade":bool(args.legacy_worker),"platform_issuer_verified":False}),flush=True)
     print("PASS durable on-device key and real PKCS10 possession, bound to an independently checked public request")
 
 

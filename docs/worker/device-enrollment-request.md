@@ -13,3 +13,5 @@ orange-worker prepare-enrollment "$private_key_directory" "$request_uuid" > "$pu
 本机回归分别运行八个 Worker 进程和独立 OpenSSL 验证器。测试签发方仅使用公开 CSR 签发一张临时客户端叶证书，通过真实 TLS 双向握手核对服务端收到的证书 DER，同时验证同一证书不能作为 TLS 服务端。平台登记服务另行验收。
 
 Rust 依赖 rcgen 0.14.10 调用 ring 生成设备密钥并制作 CSR，依赖版本及制品校验和保存在 Cargo.lock。签发方需独立验证请求签名和叶证书用途。[rcgen 证书请求接口](https://docs.rs/rcgen/0.14.10/rcgen/struct.CertificateParams.html#method.serialize_request)
+
+私钥使用兼容 OpenSSL 3.0 的 PKCS#8 v1 编码。重开旧版 v2 文件时，Worker 在目录锁内核对原公钥和新编码的公钥，只有一致才同步临时文件并原子替换编码。相同请求继续产生相同 CSR。
