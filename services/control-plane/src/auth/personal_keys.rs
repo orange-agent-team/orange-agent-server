@@ -221,11 +221,17 @@ impl KeyRead {
     }
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct WalletQuery {}
+
 pub(super) async fn wallet(
     State(identity): State<Arc<UserIdentity>>,
     headers: HeaderMap,
+    query: Result<Query<WalletQuery>, QueryRejection>,
 ) -> Result<Json<WalletView>, UserApiError> {
     let mut key = KeyRead::authorize(&identity, &headers, ReadScope::Wallet).await?;
+    query.map_err(|_| AuthError::Invalid)?;
     let result = Store::wallet_for_owner(&mut key.tx, &key.user, &key.owner).await?;
     key.finish().await?;
     Ok(Json(result))

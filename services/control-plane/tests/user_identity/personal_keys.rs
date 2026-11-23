@@ -302,17 +302,31 @@ async fn real_personal_key_browser_management() {
         tokio::process::Command::new(std::env::var("ORANGE_TEST_KEY_NODE").expect("node"))
             .arg(driver)
             .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
             .kill_on_drop(true)
             .spawn()
             .expect("browser");
     let mut input = child.stdin.take().expect("fixture pipe");
     input.write_all(&serde_json::to_vec(&json!({"api":format!("http://{addr}"),"origin":f.identity.config.user_origin,"user":f.user,"token":f.token})).expect("session fixture")).await.expect("deliver");
     drop(input);
-    let status = tokio::time::timeout(std::time::Duration::from_secs(90), child.wait())
+    let status = tokio::time::timeout(std::time::Duration::from_secs(90), child.wait_with_output())
         .await
         .expect("browser deadline")
         .expect("browser status");
     let _ = stop.send(());
     service.await.expect("server stopped");
-    assert!(status.success());
+    assert!(status.status.success(), "browser process");
+    let report: Value = serde_json::from_slice(&status.stdout).expect("bounded fixture result");
+    for mark in [
+        "real_browser",
+        "lost_response_same_key",
+        "budget_read",
+        "wallet_scope_denied",
+        "no_secret_in_web_storage",
+        "reopening_hides_secret",
+        "revoke_denied_future_reads",
+        "withdraw_before_create",
+    ] {
+        assert_eq!(report[mark], true, "missing browser observation {mark}");
+    }
 }
