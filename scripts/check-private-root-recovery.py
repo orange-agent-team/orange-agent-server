@@ -116,7 +116,7 @@ def verify(private,current,old,tool):
             def export(urlpath,dest):
                 return json.loads(run(tool+["export",*root_args,"--database-url-file",urlpath,"--destination",dest,"--signing-key",key]))
             empty=export(source,work/"old-head")
-            require(empty["facts"]==0,"unexpected existing tombstone")
+            require(empty["facts"]==0 and export(source,work/"old-head")==empty,"export did not replay the same original snapshot")
             subprocess.run([executable("pg_dump"),"-w","--format=custom","--file",backup],env=denv,check=True)
             shutil.copytree(objects,copy)
             absent=create("newer than backup")
@@ -125,6 +125,7 @@ def verify(private,current,old,tool):
                 require(api(origin,"DELETE",base+"/"+uid,token,csrf,site,uid)[0]==200,"original user delete")
             journal=work/"current-head";head=export(source,journal)
             require(head["facts"]==2,"missing independent deletion facts")
+            run(tool+["export",*root_args,"--database-url-file",source,"--destination",work/"old-head","--signing-key",key],False)
         with backup.open("rb") as stream:dump_hash=hashlib.file_digest(stream,"sha256").hexdigest()
         restore=tool+["restore",*root_args,"--database-url-file",source,"--destination",out,"--dump",backup,"--dump-sha256",dump_hash,
                      "--manifest-sha256",head["manifest_sha256"],"--user-api",current]

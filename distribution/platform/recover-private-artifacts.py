@@ -106,7 +106,30 @@ def export(args):
     env["PGOPTIONS"]+=" -c default_transaction_read_only=on"
     check(not args.signing_key.is_symlink() and stat.S_ISREG(args.signing_key.stat().st_mode) and args.signing_key.stat().st_mode & 0o077==0,"Private recovery signing key required")
     target=args.destination
-    target.mkdir(mode=0o700)
+    with tempfile.TemporaryDirectory(prefix=".orange-deletion-export-",dir=target.parent) as temporary:
+        scratch=Path(temporary)
+        stage=scratch/"sealed";stage.mkdir(mode=0o700)
+        manifest,message=write_snapshot(stage,root,env,args.signing_key)
+        try:
+            stage.rename(target)
+        except OSError:
+            if not target.exists(): raise
+            check(target.is_dir() and not target.is_symlink() and target.stat().st_mode&0o077==0,
+                  "Existing destination is not a private journal")
+            check((target/"manifest.json").read_bytes()==message,"Source changed or destination belongs to a different checkpoint")
+            public=scratch/"verification.pem"
+            result=subprocess.run([binary("openssl"),"pkey","-in",args.signing_key,"-pubout","-out",public],capture_output=True)
+            check(result.returncode==0,"Could not verify the original signing authority")
+            tool_crypto(public,message,target/"manifest.sig",True)
+            with (target/"deletions.jsonl").open("rb") as records:
+                check(scan(records)==(manifest["count"],manifest["sha256"]),"Original deletion archive differs")
+        directory=os.open(target.parent,os.O_RDONLY)
+        try: os.fsync(directory)
+        finally: os.close(directory)
+        print(json.dumps({"manifest_sha256":hashlib.sha256(message).hexdigest(),"facts":manifest["count"],"root_id":root}))
+
+
+def write_snapshot(target,root,env,key):
     data=target/"deletions.jsonl"
     # Check existence even when the signed snapshot contains zero deleted versions.
     check(sql(env,f"SELECT count(*) FROM artifact_capacity WHERE root_id='{root}'").strip()==b"1","Unknown source object root")
@@ -125,8 +148,13 @@ def export(args):
     manifest={"format":FORMAT,"root_id":root,"count":count,"sha256":digest}
     message=(json.dumps(manifest,sort_keys=True,separators=(",",":"))+"\n").encode()
     (target/"manifest.json").write_bytes(message)
-    tool_crypto(args.signing_key,message,target/"manifest.sig",False)
-    print(json.dumps({"manifest_sha256":hashlib.sha256(message).hexdigest(),"facts":count,"root_id":root}))
+    tool_crypto(key,message,target/"manifest.sig",False)
+    for path in ("manifest.json","manifest.sig"):
+        with (target/path).open("rb") as f:os.fsync(f.fileno())
+    fd=os.open(target,os.O_RDONLY)
+    try: os.fsync(fd)
+    finally: os.close(fd)
+    return manifest,message
 
 
 def restore(args):
@@ -211,6 +239,7 @@ def restore_locked(args,admin,root,dump,command_file,migrator):
         completed=json.loads(receipt_file.read_bytes())
         check(info and not info["open"] and info["owner"] and info["oid"]==completed["database_oid"] and info["marker"]==marker and
               completed["database"]==name and all(completed.get(k)==v for k,v in request.items()),"Completed restore identity or quarantine changed")
+        check(url_file(folder/"database-url")==admin._replace(path="/"+name),"Published restore locator differs from the completed candidate")
         return completed
     if info and info["owner"] and not info["open"] and info["marker"] is None and "database_oid" not in intent:
         # CREATE DATABASE cannot share a transaction with COMMENT. After an
