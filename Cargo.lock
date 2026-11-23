@@ -2317,6 +2317,8 @@ dependencies = [
 name = "orange-worker"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
+ "getrandom 0.4.3",
  "hex",
  "libc",
  "orange-domain",
@@ -2326,8 +2328,11 @@ dependencies = [
  "prost",
  "prost-types",
  "rcgen",
+ "reqwest",
  "rusqlite",
  "rustix",
+ "rustls-pki-types",
+ "rustls-webpki",
  "serde",
  "serde_json",
  "sha2 0.11.1",
@@ -2338,6 +2343,7 @@ dependencies = [
  "tonic",
  "uuid",
  "windows-registry",
+ "x509-parser",
 ]
 
 [[package]]

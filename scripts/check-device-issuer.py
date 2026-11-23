@@ -65,6 +65,7 @@ def main():
     cli=argparse.ArgumentParser()
     cli.add_argument("--environment",type=Path,default=ROOT/".local")
     cli.add_argument("--installed",action="store_true")
+    cli.add_argument("--device-client",action="store_true",help="Run the real Worker CLI through ambiguous and corrupted redemption responses")
     args=cli.parse_args();private=args.environment.resolve()
     rustup=shutil.which("rustup") or "/opt/homebrew/opt/rustup/bin/rustup"
     cargo=Path(subprocess.check_output([rustup,"which","cargo"],cwd=ROOT,text=True).strip())
@@ -113,7 +114,17 @@ def main():
         user_config=private/"identity/user-config.json";site=json.loads(user_config.read_bytes())["user_origin"]
         rid=str(uuid.uuid4());owner=str(uuid.uuid4());receipt_id=str(uuid.uuid4())
         req=json.loads(subprocess.check_output([programs/"orange-worker","prepare-enrollment",device,rid]))
-        secret=secrets.token_urlsafe(32);session=secrets.token_hex(32);csrf=secrets.token_hex(32)
+        secret=secrets.token_urlsafe(32)
+        if args.device_client:
+            def get_handoff(_):
+                return json.loads(subprocess.check_output([programs/"orange-worker","prepare-enrollment-handoff",device,rid]))
+            with ThreadPoolExecutor(max_workers=2) as pool:handoffs=list(pool.map(get_handoff,range(2)))
+            handoff=handoffs[0];secret=(device/(rid+".exchange-token")).read_text()
+            require(handoff==handoffs[1] and handoff["request"]==req and
+                    handoff["exchange_token_sha256"]==hashlib.sha256(secret.encode()).hexdigest() and secret not in json.dumps(handoff),
+                    "Handoff identity, commitment or privacy changed")
+        else:handoff={"request":req,"exchange_token_sha256":hashlib.sha256(secret.encode()).hexdigest()}
+        session=secrets.token_hex(32);csrf=secrets.token_hex(32)
         path=f"/api/v1/owners/{owner}/worker-enrollments/{rid}"
         headers={"Cookie":"__Host-orange-user="+session,"X-CSRF-Token":csrf,"Origin":site,"Idempotency-Key":rid}
         redeem="/api/v1/worker-enrollments/"+rid+"/redeem"
@@ -126,7 +137,7 @@ def main():
             INSERT INTO users(user_id,issuer,subject,personal_owner_id) VALUES('{owner}','issuer-fixture','{owner}','{owner}');
             INSERT INTO user_sessions(token_hash,session_id,user_id,csrf_token,auth_time,idle_expires_at,absolute_expires_at)
             SELECT '{hashlib.sha256(session.encode()).hexdigest()}','{uuid.uuid4()}','{owner}','{csrf}',t,t+600,t+1200 FROM (SELECT extract(epoch FROM now())::bigint t) clock;""")
-            code,view=http(origin,"PUT",path,headers,{"request":req,"exchange_token_sha256":hashlib.sha256(secret.encode()).hexdigest()})
+            code,view=http(origin,"PUT",path,headers,handoff)
             require(code==200 and view["state"]=="authorized","Grant failed")
             require(http(origin,"POST",redeem,auth,rb)[0]==409,"Unsigned grant redeemed")
             bad=issue(config(ca/"wrong.json",dict(cfg,ca_certificate_sha256="0"*64)))
@@ -140,12 +151,20 @@ def main():
             require(sql("SELECT count(*) FROM worker_credentials")=="0" and http(origin,"GET",path,headers)[1]["state"]=="certificate_prepared","Preparation activated a credential")
             require(http(origin,"POST",redeem,dict(auth,Authorization="Orange-Enrollment "+secrets.token_urlsafe(32)),rb)[0]==401,"Foreign commitment redeemed")
             require(http(origin,"POST",redeem,dict(auth,Cookie=headers["Cookie"]),rb)[0]==401,"Mixed browser authority redeemed")
+            if args.device_client:
+                from device_certificate_client_acceptance import check
+                installed_receipt,installed_pem=check(programs/"orange-worker",origin,root,device,ca,gw,issuer_hash,secret,rid,sql)
+                receipt_id=installed_receipt["redemption_id"];rb["redemption_id"]=receipt_id;auth["Idempotency-Key"]=receipt_id
             with ThreadPoolExecutor(max_workers=2) as parallel:
                 replies=list(parallel.map(lambda _:http(origin,"POST",redeem,auth,rb),range(2)))
             require(replies[0]==replies[1] and replies[0][0]==200,"Expected one stable redemption")
             issued=replies[0][1];node=str(uuid.UUID(issued["node_id"]))
             require(issued["issuer_sha256"]==issuer_hash and issued["spki_sha256"]==req["spki_sha256"] and issued["request_id"]==rid,"Wrong receipt")
-            leaf=device/"leaf.pem";leaf.write_text(issued["certificate_pem"]);leaf.chmod(0o600)
+            if args.device_client:
+                require(issued==installed_receipt and installed_pem.read_text()==issued["certificate_pem"],"Installed files differ from backend history")
+                leaf=installed_pem
+            else:
+                leaf=device/"leaf.pem";leaf.write_text(issued["certificate_pem"]);leaf.chmod(0o600)
             require(hashlib.sha256(crypto("x509","-in",leaf,"-outform","DER")).hexdigest()==issued["certificate_sha256"],"Wrong leaf bytes")
             crypto("verify","-purpose","sslclient","-CAfile",ca/"ca.pem",leaf)
             require(sql("SELECT expires_at>clock_timestamp() AND expires_at<=clock_timestamp()+interval '24 hours' FROM worker_enrollment_certificates")=="t","Certificate lifetime outside development policy")
@@ -176,6 +195,7 @@ def main():
             require(sql("SELECT count(*) FROM worker_session_audit WHERE kind='session.claimed'")=="1" and sql("SELECT count(*) FROM jobs")=="0","Unexpected control or job effects")
         print(json.dumps({"installed":args.installed,"real_device_csr":True,"prepared_certificates":2,"team_grant_permanently_withdrawn":True,"worker_credentials":1,"active_after_revoke":0,
                           "real_mtls_welcome":True,"live_heartbeat_refused":True,"jobs":0,"production_signer":False}),flush=True)
+    if args.device_client:print("PASS device CLI recovered the original redemption and its installed leaf authenticated the live Worker")
     print("PASS dedicated short certificate issuer, one-time enrollment and immediate live device revocation")
 
 if __name__=="__main__":main()

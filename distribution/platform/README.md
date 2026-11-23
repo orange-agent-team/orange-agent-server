@@ -36,3 +36,5 @@ schema 67 为个人与组织任务提供状态版本，旧客户端可以继续�
 私有对象根的备份恢复使用随包提供的 `recover-private-artifacts.py`。它在新建的隔离数据库离线迁移并重放签名删除清单，完成后关闭数据库连接。恢复回执仅覆盖指定对象根。[操作说明与开放流量前的核对范围](docs/security/quarantined-private-root-recovery.md)
 
 开发设备签发方可从独立进程调用 `bin/orange-worker-gateway issue-one`。包内提供 `config/worker-device-issuer.example.json`。该进程只准备已经获用户或团队管理员授权的证书，设备还需完成一次性兑换。[签发、激活与撤销](docs/worker/development-device-issuer.md)
+
+设备端可运行 `bin/orange-worker redeem-enrollment`。包内的 `config/worker-redemption.example.json` 列出私有配置字段。[设备证书安装](docs/worker/device-certificate-install.md)

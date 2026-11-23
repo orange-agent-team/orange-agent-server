@@ -1,4 +1,5 @@
 //! Keep one device key in a caller-owned directory. Only public PKCS#10 evidence leaves this module.
+pub mod redemption;
 use orange_protocol::device_enrollment::WorkerCertificateRequest;
 use rcgen::{
     CertificateParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose, KeyPair,
@@ -94,7 +95,7 @@ fn portable(key: &KeyPair) -> Result<Option<KeyPair>, Error> {
     }
     Ok(Some(normalized))
 }
-fn durable_key(root: &File, id: &str) -> Result<KeyPair, Error> {
+fn durable_key(root: &File, id: &str, create: bool) -> Result<KeyPair, Error> {
     let name = format!("{id}.key.pem");
     let flags = OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK;
     let existing = match fs::openat(root, name.as_str(), OFlags::RDONLY | flags, Mode::empty()) {
@@ -107,7 +108,7 @@ fn durable_key(root: &File, id: &str) -> Result<KeyPair, Error> {
             };
             Some((original, normalized))
         }
-        Err(rustix::io::Errno::NOENT) => None,
+        Err(rustix::io::Errno::NOENT) if create => None,
         Err(e) => return Err(e.into()),
     };
     let pending = format!(".{id}.key.pending");
@@ -155,13 +156,8 @@ fn durable_key(root: &File, id: &str) -> Result<KeyPair, Error> {
     root.sync_all()?;
     Ok(key)
 }
-pub fn prepare(root: &Path, id: &str) -> Result<WorkerCertificateRequest, Error> {
-    let request = Uuid::parse_str(id).map_err(|_| Error::Invalid)?;
-    if !root.is_absolute()
-        || request.get_variant() != uuid::Variant::RFC4122
-        || request.get_version_num() != 4
-        || request.to_string() != id
-    {
+fn open_directory(root: &Path) -> Result<File, Error> {
+    if !root.is_absolute() {
         return Err(Error::Invalid);
     }
     let directory = File::from(fs::open(
@@ -173,8 +169,25 @@ pub fn prepare(root: &Path, id: &str) -> Result<WorkerCertificateRequest, Error>
     if m.uid() != rustix::process::geteuid().as_raw() || m.mode() & 0o777 != 0o700 {
         return Err(Error::Invalid);
     }
+    Ok(directory)
+}
+fn validate_id(id: &str) -> Result<(), Error> {
+    let request = Uuid::parse_str(id).map_err(|_| Error::Invalid)?;
+    if request.get_variant() != uuid::Variant::RFC4122
+        || request.get_version_num() != 4
+        || request.to_string() != id
+    {
+        return Err(Error::Invalid);
+    }
+    Ok(())
+}
+pub fn prepare(root: &Path, id: &str) -> Result<WorkerCertificateRequest, Error> {
+    validate_id(id)?;
+    let directory = open_directory(root)?;
     lock(&directory)?;
-    let key = durable_key(&directory, id)?;
+    request(&durable_key(&directory, id, true)?, id)
+}
+fn request(key: &KeyPair, id: &str) -> Result<WorkerCertificateRequest, Error> {
     let mut params = CertificateParams::new(Vec::<String>::new()).map_err(|_| Error::Format)?;
     params.distinguished_name = DistinguishedName::new();
     params
@@ -182,7 +195,7 @@ pub fn prepare(root: &Path, id: &str) -> Result<WorkerCertificateRequest, Error>
         .push(DnType::CommonName, format!("orange-worker-{id}"));
     params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
     params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ClientAuth];
-    let csr = params.serialize_request(&key).map_err(|_| Error::Format)?;
+    let csr = params.serialize_request(key).map_err(|_| Error::Format)?;
     Ok(WorkerCertificateRequest {
         version: 1,
         request_id: id.into(),

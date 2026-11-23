@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "environment": "development",
+  "api_origin": "https://localhost:4443",
+  "api_tls_ca_file": "/replace-with-device-private-directory/api-ca.pem",
+  "device_directory": "/replace-with-device-private-directory",
+  "request_id": "replace-with-original-request-uuid",
+  "exchange_token_file": "/replace-with-device-private-directory/replace-with-request-uuid.exchange-token",
+  "issuer_certificate": "/replace-with-device-private-directory/public-device-ca.pem",
+  "issuer_sha256": "replace-with-independently-verified-device-ca-der-sha256"
+}
