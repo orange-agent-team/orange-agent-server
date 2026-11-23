@@ -313,8 +313,7 @@ async fn absent_foreign_and_unregistered_certificates_never_claim_session() {
         .expect("valid TLS transport");
     let error = control(&mut platform, hello(&d.node))
         .await
-        .err()
-        .expect("platform leaf has no Worker admission");
+        .expect_err("platform leaf has no Worker admission");
     assert_eq!(error.code(), tonic::Code::Unauthenticated);
     for certificate in [None, Some("wrong-ca"), Some("unregistered")] {
         if let Ok(mut client) = server.client(certificate).await {
