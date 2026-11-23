@@ -14,6 +14,48 @@ async fn main() -> std::process::ExitCode {
 }
 
 async fn run() -> Result<(), Box<dyn Error>> {
+    if env::args_os()
+        .skip(1)
+        .eq([std::ffi::OsString::from("--migrate-private-restore")])
+    {
+        // Offline mode is usable only in a new, private recovery database. It starts
+        // no listener, provider, scheduler, payment adapter, Worker or maintenance loop.
+        let database_url =
+            env::var("DATABASE_URL").map_err(|_| "Private restore database required")?;
+        let url =
+            reqwest::Url::parse(&database_url).map_err(|_| "Invalid private restore database")?;
+        let database = url
+            .path()
+            .strip_prefix('/')
+            .ok_or("Private database name required")?;
+        let suffix = database
+            .strip_prefix("orange_recovered_")
+            .ok_or("Recovery database required")?;
+        if !matches!(url.scheme(), "postgres" | "postgresql")
+            || !matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"))
+            || url.query().is_some()
+            || url.fragment().is_some()
+            || suffix.len() != 32
+            || !suffix
+                .bytes()
+                .all(|v| v.is_ascii_digit() || (b'a'..=b'f').contains(&v))
+        {
+            return Err("Dedicated loopback recovery database required".into());
+        }
+        let store = Store::connect(&database_url).await?;
+        let private:bool=sqlx::query_scalar("SELECT datname=$1 AND pg_get_userbyid(datdba)=current_user AND NOT EXISTS(
+            SELECT FROM aclexplode(coalesce(datacl,acldefault('d',datdba))) g WHERE g.grantee=0 AND g.privilege_type='CONNECT')
+            FROM pg_database WHERE datname=current_database()")
+            .bind(database).fetch_one(store.pool()).await?;
+        if !private {
+            return Err(
+                "Restore database must be private and owned by the migration account".into(),
+            );
+        }
+        store.migrate().await?;
+        println!("Migrated private restore database offline");
+        return Ok(());
+    }
     let settings = ApiSettings::load(ApiRole::User)?;
     let config: UserOidcConfig = settings.identity()?;
     settings.validate_oidc(

@@ -15,6 +15,8 @@ def service_files(repository,commit,readme,extra=()):
         files[name]=git("show",commit+":"+source)
     put("distribution/platform/verify.py","verify.py")
     put("distribution/platform/reconcile-wallets.py","reconcile-wallets.py")
+    put("distribution/platform/recover-private-artifacts.py","recover-private-artifacts.py")
+    put("distribution/platform/sql/replay-artifact-redactions.sql","sql/replay-artifact-redactions.sql")
     put("distribution/platform/sql/reconcile-wallets.sql","sql/reconcile-wallets.sql")
     if readme:put(readme,"README.md")
     for source in names("distribution/platform/config"):put(source,"config/"+Path(source).name)
@@ -24,7 +26,7 @@ def service_files(repository,commit,readme,extra=()):
                    "config/connector-releases.v1.json","docs/worker-development-host.md","docs/development-cloud-host.md",
                    "docs/cloud-isolation-development.md","docs/audio-artifact-preflight.md","docs/local-http-metrics.md","docs/engineering/api-configuration-diagnostics.md","docs/engineering/job-state-revisions.md","docs/engineering/owned-job-events.md",
                    "docs/events-queue-implementation.md","docs/worker/nvidia-inventory.md",
-                   "docs/security/data-lifecycle.md","docs/security/data-lifecycle.json","docs/engineering/identity-deadlines.md","docs/database/transaction-keys.json","docs/database/transactions-and-retention.md",*extra):put(source)
+                   "docs/security/data-lifecycle.md","docs/security/quarantined-private-root-recovery.md","docs/security/data-lifecycle.json","docs/engineering/identity-deadlines.md","docs/database/transaction-keys.json","docs/database/transactions-and-retention.md",*extra):put(source)
     return files
 
 def write_archive(path,files,prefix="orange-platform"):
