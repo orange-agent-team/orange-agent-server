@@ -1232,3 +1232,51 @@ async fn rejected_capability_offers_do_not_rotate_the_current_device_session() {
     drop(sender);
     server.stop().await;
 }
+
+#[cfg(feature = "worker-enrollment-tests")]
+#[tokio::test]
+async fn newly_redeemed_leaf_authenticates_the_real_worker_then_live_revocation_fences_it() {
+    use orange_worker::control::{ControlConfig, ControlConnection};
+    let config: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(std::env::var("ORANGE_TEST_ENROLLED_DEVICE").expect("test context"))
+            .expect("read fixture"),
+    )
+    .expect("JSON");
+    let field = |name: &str| config[name].as_str().expect("field");
+    let input = || ControlConfig {
+        endpoint: field("gateway").into(),
+        server_name: "localhost".into(),
+        server_ca_pem: std::fs::read(field("gateway_ca")).expect("server CA"),
+        certificate_pem: std::fs::read(field("leaf")).expect("issued leaf"),
+        private_key_pem: std::fs::read(field("private_key")).expect("owner key"),
+        node_id: field("node").into(),
+        capabilities_digest: "a".repeat(64),
+    };
+    let mut control = ControlConnection::connect(input())
+        .await
+        .expect("redeemed identity, genuine server and issuer");
+    assert_eq!(control.identity().node_id, field("node"));
+    control
+        .heartbeat("certificate-qualification")
+        .await
+        .expect("session acknowledged");
+    let result = reqwest::Client::new()
+        .delete(field("revoke_url"))
+        .header("Cookie", field("cookie"))
+        .header("Origin", field("origin"))
+        .header("X-CSRF-Token", field("csrf"))
+        .header("Idempotency-Key", field("request"))
+        .send()
+        .await
+        .expect("real owner revocation");
+    assert_eq!(result.status(), 200);
+    let receipt: serde_json::Value = result.json().await.expect("receipt");
+    assert_eq!(receipt["state"], "revoked");
+    assert!(
+        control
+            .heartbeat("after-credential-revocation")
+            .await
+            .is_err()
+    );
+    assert!(ControlConnection::connect(input()).await.is_err());
+}

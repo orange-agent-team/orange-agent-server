@@ -9,8 +9,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         return Err("This candidate permits explicit development deployment only".into());
     }
     if let Some(command) = env::args_os().nth(1) {
+        if command != "issue-one" {
+            return Err("Unsupported Worker gateway operation".into());
+        }
         #[cfg(unix)]
-        if command == "issue-one" && env::args_os().count() == 3 {
+        if env::args_os().count() == 3 {
             let url = env::var("DATABASE_URL")?;
             let db = reqwest::Url::parse(&url).map_err(|_| "Invalid local signer database")?;
             if !matches!(db.scheme(), "postgres" | "postgresql")

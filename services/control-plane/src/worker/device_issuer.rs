@@ -46,7 +46,14 @@ struct Signer {
 }
 #[cfg(unix)]
 fn read_private(path: &Path) -> Result<Vec<u8>, Error> {
-    if !path.is_absolute() {
+    use std::os::unix::fs::MetadataExt;
+    let parent = std::fs::symlink_metadata(path.parent().ok_or(Error::Configuration)?)
+        .map_err(|_| Error::Configuration)?;
+    if !path.is_absolute()
+        || !parent.is_dir()
+        || parent.uid() != rustix::process::geteuid().as_raw()
+        || parent.mode() & 0o077 != 0
+    {
         return Err(Error::Configuration);
     }
     crate::connector_file::read_private(path).map_err(|_| Error::Configuration)
@@ -141,7 +148,7 @@ pub async fn issue_one(pool: &PgPool, path: &Path) -> Result<Option<String>, Err
     let signer = Signer::load(path)?;
     let mut tx = pool.begin().await?;
     let candidate=sqlx::query("SELECT g.request_id::text,g.owner_id,g.requested_by FROM worker_enrollment_grants g
-        JOIN users u ON u.user_id=g.requested_by AND u.active JOIN owners o ON o.owner_id=g.owner_id AND o.state='active'
+        JOIN users u ON u.user_id=g.requested_by AND u.active JOIN owners personal ON personal.owner_id=u.personal_owner_id AND personal.state='active' JOIN owners o ON o.owner_id=g.owner_id AND o.state='active'
         WHERE g.state='authorized' AND g.expires_at>clock_timestamp() AND NOT EXISTS(SELECT FROM worker_enrollment_certificates c WHERE c.request_id=g.request_id)
         AND (u.personal_owner_id=g.owner_id OR EXISTS(SELECT FROM memberships m WHERE m.organization_id=g.owner_id AND m.user_id=u.user_id AND m.active AND m.role IN ('owner','admin')))
         ORDER BY g.created_at,g.request_id LIMIT 1").fetch_optional(&mut *tx).await?;

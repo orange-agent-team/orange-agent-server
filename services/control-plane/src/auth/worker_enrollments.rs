@@ -147,9 +147,6 @@ pub(super) async fn revoke(
     serialize(tx, &owner).await?;
     sqlx::query("UPDATE worker_enrollment_grants SET state='revoked',revoked_at=clock_timestamp() WHERE owner_id=$1 AND request_id=$2::text::uuid AND state='authorized'")
         .bind(&owner).bind(&id).execute(&mut **tx).await?;
-    sqlx::query("UPDATE worker_credentials c SET active=false FROM worker_enrollment_certificates e JOIN worker_enrollment_grants g USING(request_id)
-        WHERE g.request_id=$1::text::uuid AND g.owner_id=$2 AND g.state='revoked' AND e.redeemed_at IS NOT NULL
-        AND e.certificate_sha256=c.certificate_sha256 AND e.node_id=c.node_id AND c.active").bind(&id).bind(&owner).execute(&mut **tx).await?;
     let result = view(
         &read(tx, &owner, &id)
             .await?

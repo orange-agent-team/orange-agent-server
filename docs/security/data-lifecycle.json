@@ -127,6 +127,15 @@
         "created_at",
         "expires_at",
         "revoked_at"
+      ],
+      "worker_enrollment_certificates": [
+        "request_id",
+        "node_id",
+        "certificate_sha256",
+        "issuer_sha256",
+        "prepared_at",
+        "expires_at",
+        "redeemed_at"
       ]
     },
     "ownership_links": [
@@ -165,6 +174,10 @@
       [
         "worker_enrollment_grants.requested_by",
         "users.user_id"
+      ],
+      [
+        "worker_enrollment_certificates.request_id",
+        "worker_enrollment_grants.request_id"
       ]
     ],
     "implementation": [
@@ -173,7 +186,8 @@
       "services/control-plane/src/admin/identity.rs",
       "services/control-plane/src/worker/isolation_observations.rs",
       "services/control-plane/migrations/0079_execution_certificate_purposes.sql",
-      "services/control-plane/src/auth/worker_enrollments.rs"
+      "services/control-plane/src/auth/worker_enrollments.rs",
+      "services/control-plane/src/worker/device_issuer.rs"
     ]
   },
   "events": {

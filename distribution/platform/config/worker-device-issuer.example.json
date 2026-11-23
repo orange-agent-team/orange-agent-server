@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "environment": "development",
+  "region_id": "local-development",
+  "ca_certificate_file": "/replace-with-private-signer-directory/worker-ca.pem",
+  "ca_key_file": "/replace-with-private-signer-directory/worker-ca.key",
+  "ca_certificate_sha256": "replace-with-independently-verified-der-digest"
+}

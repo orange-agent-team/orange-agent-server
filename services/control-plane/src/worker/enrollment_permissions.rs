@@ -6,8 +6,8 @@ pub(crate) async fn current_manager(
     user: &str,
 ) -> Result<bool, sqlx::Error> {
     let personal: Option<String> = sqlx::query_scalar(
-        "SELECT u.personal_owner_id FROM users u JOIN owners o ON o.owner_id=$1
-        WHERE u.user_id=$2 AND u.active AND o.state='active' FOR SHARE OF u,o",
+        "SELECT u.personal_owner_id FROM users u JOIN owners o ON o.owner_id=$1 JOIN owners personal ON personal.owner_id=u.personal_owner_id AND personal.state='active'
+        WHERE u.user_id=$2 AND u.active AND o.state='active' FOR SHARE OF u,o,personal",
     )
     .bind(owner)
     .bind(user)

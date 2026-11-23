@@ -26,7 +26,7 @@ def service_files(repository,commit,readme,extra=()):
     for source in ("Cargo.lock","rust-toolchain.toml","crates/protocol/generation.lock.json","config/worker-development.example.json","config/trusted-meter.example.json",
                    "config/worker-isolation-release.v1.json","config/connector-releases.v1.json","docs/worker-development-host.md","docs/development-cloud-host.md",
                    "docs/cloud-isolation-development.md","docs/audio-artifact-preflight.md","docs/local-http-metrics.md","docs/engineering/api-configuration-diagnostics.md","docs/engineering/job-state-revisions.md","docs/engineering/owned-job-events.md",
-                   "docs/events-queue-implementation.md","docs/worker/nvidia-inventory.md","docs/worker/isolation-report.md","docs/worker/device-enrollment-request.md","docs/worker/enrollment-authorization.md","docs/security/credential-purposes.md",
+                   "docs/events-queue-implementation.md","docs/worker/nvidia-inventory.md","docs/worker/isolation-report.md","docs/worker/device-enrollment-request.md","docs/worker/enrollment-authorization.md","docs/worker/development-device-issuer.md","docs/security/credential-purposes.md",
                    "docs/security/data-lifecycle.md","docs/security/quarantined-private-root-recovery.md","docs/security/data-lifecycle.json","docs/engineering/identity-deadlines.md","docs/database/transaction-keys.json","docs/database/transactions-and-retention.md",*extra):put(source)
     return files
 

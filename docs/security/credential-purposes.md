@@ -32,3 +32,5 @@ python3.12 -I verify-candidate-signature.py \
   --public-key "$release_public_key" --key-sha256 "$trusted_release_key_digest" \
   --repository orange-agent-server --source "$expected_commit" --target "$expected_target"
 ```
+
+开发设备签发器已可在独立进程中处理用户授权。签发前核对根证书摘要、CA 约束、用途及私钥匹配，结束后设备须持独立的兑换令牌激活凭据。[签发操作与范围](../worker/development-device-issuer.md)

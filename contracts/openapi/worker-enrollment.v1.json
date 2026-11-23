@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Worker enrollment authorization",
-    "version": "0.1.0",
-    "description": "Current personal owner or organization owner/admin authorizes one proven client-only key. Replays cannot restore revoked or expired grants. This operation does not issue a certificate or register compute."
+    "version": "0.2.0",
+    "description": "Manager authorizes a public Worker key. The dedicated development issuer prepares a short client certificate. The original independent token redeems one node identity."
   },
   "security": [
     {
@@ -199,6 +199,82 @@
           }
         ]
       }
+    },
+    "/api/v1/worker-enrollments/{request}/redeem": {
+      "post": {
+        "operationId": "redeemPublicWorkerCertificate",
+        "summary": "Activate the prepared client certificate once under current owner authority",
+        "security": [
+          {
+            "enrollmentSecret": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "request",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "version",
+                  "redemption_id"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "version": {
+                    "const": 1
+                  },
+                  "redemption_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Original public client certificate",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CertificateReceipt"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Incorrect, revoked, expired or mixed authority"
+          },
+          "409": {
+            "description": "Certificate unavailable or previously redeemed with another key"
+          },
+          "422": {
+            "description": "Invalid request or idempotency key"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -207,6 +283,12 @@
         "type": "apiKey",
         "in": "cookie",
         "name": "__Host-orange-user"
+      },
+      "enrollmentSecret": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "Authorization",
+        "description": "Orange-Enrollment followed by a space and a canonical unpadded base64url 32-byte secret. No Cookie or Origin header."
       }
     },
     "schemas": {
@@ -244,13 +326,67 @@
           "state": {
             "enum": [
               "authorized",
-              "revoked",
-              "expired"
+              "certificate_prepared",
+              "redeemed",
+              "expired",
+              "revoked"
             ]
           },
           "expires_unix": {
             "type": "string",
             "pattern": "^[0-9]+$"
+          }
+        }
+      },
+      "CertificateReceipt": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "version",
+          "request_id",
+          "redemption_id",
+          "node_id",
+          "spki_sha256",
+          "certificate_sha256",
+          "issuer_sha256",
+          "expires_unix",
+          "certificate_pem"
+        ],
+        "properties": {
+          "version": {
+            "const": 1
+          },
+          "request_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "redemption_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "node_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "spki_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "certificate_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "issuer_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "expires_unix": {
+            "type": "string",
+            "pattern": "^[0-9]+$"
+          },
+          "certificate_pem": {
+            "type": "string",
+            "maxLength": 16384
           }
         }
       }
