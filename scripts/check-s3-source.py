@@ -22,6 +22,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--database-url-file", type=Path)
 parser.add_argument("--identity-config", type=Path)
 parser.add_argument("--web-repo", type=Path)
+parser.add_argument("--weed-binary", type=Path, help="Already installed executable matching the pinned fixture SHA-256")
 parser.add_argument("--model-run", action="store_true")
 parser.add_argument("--model-runtime-root", type=Path)
 args = parser.parse_args()
@@ -35,7 +36,7 @@ os.umask(0o077)
 root = Path(__file__).resolve().parents[1]
 browser_env=prepare_browser(args.web_repo,root,"CN06")
 pin = json.loads((root / "config/s3-fixture.lock.json").read_text())
-weed = root / ".local/seaweedfs/weed"
+weed = (args.weed_binary or root / ".local/seaweedfs/weed").resolve()
 if (
     not weed.is_file()
     or hashlib.sha256(weed.read_bytes()).hexdigest() != pin["weed_sha256"]

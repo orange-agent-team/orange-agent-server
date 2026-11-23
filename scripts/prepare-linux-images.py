@@ -133,8 +133,10 @@ if __name__=="__main__":
     parser=argparse.ArgumentParser()
     parser.add_argument("--context",default="colima-orange-agent")
     parser.add_argument("--cache",type=Path,default=ROOT/".local/linux/oci")
-    parser.add_argument("--image",choices=["build_image","runtime_image","test_database"],action="append")
+    parser.add_argument("--image",choices=["build_image","runtime_image","test_database","development_cache"],action="append")
     args=parser.parse_args();lock=json.loads(LOCK.read_bytes())
+    if "development_cache" in (args.image or []):
+        lock["development_cache"]=json.loads((ROOT/"config/development-cache.lock.json").read_bytes())
     args.cache.mkdir(mode=0o700,parents=True,exist_ok=True)
     with (args.cache/".import.lock").open("a") as lockfile:
         fcntl.flock(lockfile,fcntl.LOCK_EX)
