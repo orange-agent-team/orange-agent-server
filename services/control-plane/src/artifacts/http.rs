@@ -18,7 +18,7 @@ struct Api {
     identity: UserIdentity,
     store: ArtifactStore,
     downloads: Arc<Semaphore>,
-    event_connections: Arc<Semaphore>,
+    event_connections: socket::Admissions,
     #[cfg(unix)]
     audio: Option<AudioMeter>,
 }
@@ -126,7 +126,7 @@ pub fn build_router(
             identity,
             store,
             downloads: Arc::new(Semaphore::new(2)),
-            event_connections: Arc::new(Semaphore::new(64)),
+            event_connections: socket::Admissions::new(),
             #[cfg(unix)]
             audio,
         })

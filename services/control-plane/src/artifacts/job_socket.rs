@@ -12,6 +12,58 @@ const CLIENT_BYTES: usize = 2048;
 const ACK_TIME: Duration = Duration::from_secs(5);
 const POLL_TIME: Duration = Duration::from_millis(750);
 
+#[derive(Clone)]
+pub(super) struct Admissions {
+    total: Arc<Semaphore>,
+    users: Arc<std::sync::Mutex<std::collections::HashMap<String, u8>>>,
+}
+struct Slot {
+    _global: tokio::sync::OwnedSemaphorePermit,
+    users: Arc<std::sync::Mutex<std::collections::HashMap<String, u8>>>,
+    user: String,
+}
+impl Drop for Slot {
+    fn drop(&mut self) {
+        let mut users = self.users.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(count) = users.get_mut(&self.user) {
+            *count -= 1;
+            if *count == 0 {
+                users.remove(&self.user);
+            }
+        }
+    }
+}
+impl Admissions {
+    pub(super) fn new() -> Self {
+        Self {
+            total: Arc::new(Semaphore::new(64)),
+            users: Default::default(),
+        }
+    }
+    fn acquire(&self, user: &str) -> Result<Slot, Error> {
+        let capacity = || Error(StatusCode::TOO_MANY_REQUESTS, "EVENT_STREAM_CAPACITY");
+        let permit = self
+            .total
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| capacity())?;
+        let mut users = self
+            .users
+            .lock()
+            .map_err(|_| Error(StatusCode::SERVICE_UNAVAILABLE, "EVENT_STREAM_UNAVAILABLE"))?;
+        let count = users.entry(user.to_owned()).or_default();
+        if *count >= 4 {
+            return Err(capacity());
+        }
+        *count += 1;
+        Ok(Slot {
+            _global: permit,
+            users: self.users.clone(),
+            user: user.to_owned(),
+        })
+    }
+}
+
 pub(super) async fn upgrade(
     State(api): State<Api>,
     Path((owner, job)): Path<(String, String)>,
@@ -37,11 +89,7 @@ pub(super) async fn upgrade(
     }
     let Query(query) = query.map_err(|_| ArtifactError::Invalid)?;
     let ws = ws.map_err(|_| ArtifactError::Invalid)?;
-    let permit = api
-        .event_connections
-        .clone()
-        .try_acquire_owned()
-        .map_err(|_| Error(StatusCode::TOO_MANY_REQUESTS, "EVENT_STREAM_CAPACITY"))?;
+    let permit = api.event_connections.acquire(&actor.user)?;
     api.store.job_history(&actor, &owner, &job, &query).await?;
     Ok(ws
         .protocols([PROTOCOL])

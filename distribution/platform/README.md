@@ -24,3 +24,5 @@
 用户 API 和 Admin API 支持分层启动配置及 --describe-config。配置字段、错误分类、重试语义与作业关联方式见[配置与诊断](docs/engineering/api-configuration-diagnostics.md)。
 
 schema 67 为个人与组织任务提供状态版本，旧客户端可以继续使用原取消接口。读取、条件取消、幂等重试及升级行为见[作业状态与版本](docs/engineering/job-state-revisions.md)。
+
+用户作业的持久事件支持 HTTP 快照和只读 WebSocket。反向代理需将 /api/v1/owners/*/jobs/*/events/ws 的升级请求传给同一个用户 API，并保留浏览器 Origin。确认、游标和关闭语义见[作业事件](docs/engineering/owned-job-events.md)。

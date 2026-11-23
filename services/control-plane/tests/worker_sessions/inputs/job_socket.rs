@@ -115,6 +115,35 @@ async fn socket_checks_origin_ack_credit_cursor_generation_and_current_session_w
         .err(),
         Some(422)
     );
+    let mut held = Vec::new();
+    for _ in 0..4 {
+        let mut c = open(&url, Some(cookie), Some(origin), P)
+            .await
+            .expect("within per-user quota");
+        frame(&mut c).await;
+        held.push(c);
+    }
+    assert_eq!(
+        open(&url, Some(cookie), Some(origin), P).await.err(),
+        Some(429)
+    );
+    for mut c in held {
+        c.close(None).await.expect("release held connection");
+    }
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            match open(&url, Some(cookie), Some(origin), P).await {
+                Ok(mut c) => {
+                    c.close(None).await.expect("probe close");
+                    break;
+                }
+                Err(429) => tokio::time::sleep(Duration::from_millis(30)).await,
+                Err(s) => panic!("unexpected quota probe status {s}"),
+            }
+        }
+    })
+    .await
+    .expect("socket slots recovered");
     let mut first = open(&url, Some(cookie), Some(origin), P)
         .await
         .expect("current origin");
