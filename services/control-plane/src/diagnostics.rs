@@ -107,7 +107,7 @@ fn classification(status: u16, read: bool) -> Option<(&'static str, &'static str
         401 | 403 => Some(("permission", "never")),
         402 | 507 => Some(("quota", "never")),
         429 => Some(("quota", retry)),
-        409 => Some(("conflict", "query_original")),
+        409 | 412 => Some(("conflict", "query_original")),
         408 | 502 | 503 | 504 => Some(("unavailable", retry)),
         400..=499 => Some(("input", "never")),
         500..=599 => Some(("internal", "never")),

@@ -158,12 +158,12 @@ async fn get_job(
     State(s): State<ApiState>,
     h: HeaderMap,
     Path(id): Path<String>,
-) -> Result<Json<JobView>, HttpError> {
+) -> Result<Response, HttpError> {
     let owner = s.owner(&h)?;
     s.store
-        .job(&owner, &id)
+        .job_with_revision(&owner, &id)
         .await
-        .map(Json)
+        .map(IntoResponse::into_response)
         .map_err(|e| HttpError::store(e, &h))
 }
 async fn cancel_job(
@@ -174,7 +174,13 @@ async fn cancel_job(
     let owner = s.owner(&h)?;
     let key = idempotency(&h)?;
     s.store
-        .cancel_queued(&owner, &id, &key)
+        .cancel_as(
+            None,
+            &owner,
+            &id,
+            &key,
+            crate::job_revision::Expected::from_headers(&h).map_err(|_| HttpError::invalid(&h))?,
+        )
         .await
         .map(Json)
         .map_err(|e| HttpError::store(e, &h))
@@ -290,6 +296,11 @@ impl HttpError {
             StoreError::InvocationWithdrawn => {
                 (StatusCode::CONFLICT, "INVOCATION_WITHDRAWN", "never")
             }
+            StoreError::StaleJobVersion => (
+                StatusCode::PRECONDITION_FAILED,
+                "STALE_JOB_VERSION",
+                "query_original",
+            ),
             StoreError::Budget => (StatusCode::CONFLICT, "BUDGET_EXCEEDED", "never"),
             StoreError::Balance => (StatusCode::CONFLICT, "INSUFFICIENT_BALANCE", "never"),
             StoreError::QuoteExpired => (StatusCode::CONFLICT, "QUOTE_EXPIRED", "never"),

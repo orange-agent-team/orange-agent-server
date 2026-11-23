@@ -346,7 +346,12 @@ impl IntoResponse for Error {
                 request_id: id(),
                 retry_class: if self.0 == StatusCode::UNAUTHORIZED {
                     "after_reauth"
-                } else if self.0.is_server_error() || self.0 == StatusCode::REQUEST_TIMEOUT {
+                } else if self.0.is_server_error()
+                    || matches!(
+                        self.0,
+                        StatusCode::REQUEST_TIMEOUT | StatusCode::PRECONDITION_FAILED
+                    )
+                {
                     "query_original"
                 } else {
                     "never"
@@ -556,7 +561,10 @@ async fn job_status(
     let owner = OwnerId::try_from(owner.as_str()).map_err(|_| ArtifactError::Invalid)?;
     let job = JobId::try_from(job.as_str()).map_err(|_| ArtifactError::Invalid)?;
     Ok(private(
-        Json(api.store.submitted_job(&actor, owner, job).await?).into_response(),
+        api.store
+            .submitted_job(&actor, owner, job)
+            .await?
+            .into_response(),
     ))
 }
 
@@ -578,9 +586,19 @@ async fn cancel_job(
         .and_then(|v| v.to_str().ok())
         .ok_or(ArtifactError::Invalid)?;
     let view = crate::store::Store::from_pool(api.store.inner.pool.clone())
-        .cancel_for_user(&actor, &owner, &job, key)
+        .cancel_as(
+            Some(&actor),
+            &owner,
+            &job,
+            key,
+            crate::job_revision::Expected::from_headers(&headers)
+                .map_err(|_| ArtifactError::Invalid)?,
+        )
         .await
         .map_err(|e| match e {
+            crate::store::StoreError::StaleJobVersion => {
+                Error(StatusCode::PRECONDITION_FAILED, "STALE_JOB_VERSION")
+            }
             crate::store::StoreError::Forbidden => Error(StatusCode::FORBIDDEN, "FORBIDDEN"),
             crate::store::StoreError::NotFound => Error(StatusCode::NOT_FOUND, "NOT_FOUND"),
             crate::store::StoreError::Invalid => {

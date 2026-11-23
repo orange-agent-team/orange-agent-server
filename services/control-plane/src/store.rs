@@ -21,6 +21,7 @@ pub enum StoreError {
     QuoteMismatch,
     SpendingPaused,
     InvalidTransition,
+    StaleJobVersion,
     InvocationWithdrawn,
     Database(sqlx::Error),
     Migration(sqlx::migrate::MigrateError),
@@ -381,14 +382,30 @@ impl Store {
         Ok(view)
     }
     pub async fn job(&self, owner: &str, id: &str) -> Result<JobView, StoreError> {
+        Ok(self.job_with_revision(owner, id).await?.view)
+    }
+    pub(crate) async fn job_with_revision(
+        &self,
+        owner: &str,
+        id: &str,
+    ) -> Result<crate::job_revision::Status, StoreError> {
         let owner =
             orange_domain::identity::OwnerId::try_from(owner).map_err(|_| StoreError::Invalid)?;
         let mut tx = self.begin().await?;
         authorize(&mut tx, owner.as_str()).await?;
         let job = orange_domain::identity::JobId::try_from(id).map_err(|_| StoreError::Invalid)?;
-        let view = job_in_tx(&mut tx, owner.as_str(), job.as_str()).await?;
+        let row = sqlx::query("SELECT * FROM jobs WHERE owner_id=$1 AND job_id=$2")
+            .bind(owner.as_str())
+            .bind(job.as_str())
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or(StoreError::NotFound)?;
+        let status = crate::job_revision::Status {
+            view: job_view(&row)?,
+            revision: row.try_get("state_revision")?,
+        };
         tx.commit().await?;
-        Ok(view)
+        Ok(status)
     }
     /// Development bearer entry remains queue-only. Current user sessions use
     /// cancel_for_user, which requests running cancellation without releasing funds.
@@ -398,7 +415,7 @@ impl Store {
         id: &str,
         key: &str,
     ) -> Result<JobView, StoreError> {
-        self.cancel_as(None, owner, id, key).await
+        self.cancel_as(None, owner, id, key, None).await
     }
     pub async fn cancel_for_user(
         &self,
@@ -410,20 +427,24 @@ impl Store {
         if !actor.write {
             return Err(StoreError::Forbidden);
         }
-        self.cancel_as(Some(actor), owner, id, key).await
+        self.cancel_as(Some(actor), owner, id, key, None).await
     }
-    async fn cancel_as(
+    pub(crate) async fn cancel_as(
         &self,
         actor: Option<&crate::artifacts::ArtifactActor>,
         owner: &str,
         id: &str,
         key: &str,
+        expected: Option<crate::job_revision::Expected>,
     ) -> Result<JobView, StoreError> {
+        if actor.is_some_and(|actor| !actor.write) {
+            return Err(StoreError::Forbidden);
+        }
         if ![owner, id, key].iter().all(|s| valid_id(s)) {
             return Err(StoreError::Invalid);
         }
         for attempt in 0..3 {
-            match self.cancel_once(owner, id, key, actor).await {
+            match self.cancel_once(owner, id, key, actor, expected).await {
                 Err(e) if e.retryable() && attempt < 2 => retry_backoff(attempt).await,
                 result => return result,
             }
@@ -436,6 +457,7 @@ impl Store {
         id: &str,
         key: &str,
         actor: Option<&crate::artifacts::ArtifactActor>,
+        expected: Option<crate::job_revision::Expected>,
     ) -> Result<JobView, StoreError> {
         let (operation, digest) = if let Some(actor) = actor {
             (
@@ -444,6 +466,11 @@ impl Store {
             )
         } else {
             ("cancel_job".into(), request_digest("cancel_job", &id))
+        };
+        let digest = if let Some(check) = expected {
+            request_digest("job.cancel.precondition.v1", &(&operation, id, check.get()))
+        } else {
+            digest
         };
         let digest = digest.map_err(|_| StoreError::Invalid)?;
         let mut tx = self.begin().await?;
@@ -491,6 +518,10 @@ impl Store {
         {
             finish_submit(tx, actor).await?;
             return Ok(current);
+        }
+        let revision: i64 = row.try_get("state_revision")?;
+        if expected.is_some_and(|value| value.get() != revision) {
+            return Err(StoreError::StaleJobVersion);
         }
         if current.execution_state == "cancelled" && current.settlement_state == "settled" {
             record_key(&mut tx, owner, &operation, key, &digest, id).await?;

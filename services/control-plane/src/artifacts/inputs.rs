@@ -79,12 +79,14 @@ impl ArtifactStore {
         job: &str,
     ) -> Result<orange_protocol::JobView, ArtifactError> {
         use orange_domain::identity::{JobId, OwnerId};
-        self.submitted_job(
-            actor,
-            OwnerId::try_from(owner).map_err(|_| ArtifactError::Invalid)?,
-            JobId::try_from(job).map_err(|_| ArtifactError::Invalid)?,
-        )
-        .await
+        Ok(self
+            .submitted_job(
+                actor,
+                OwnerId::try_from(owner).map_err(|_| ArtifactError::Invalid)?,
+                JobId::try_from(job).map_err(|_| ArtifactError::Invalid)?,
+            )
+            .await?
+            .view)
     }
 
     pub(super) async fn submitted_job(
@@ -92,7 +94,7 @@ impl ArtifactStore {
         actor: &ArtifactActor,
         owner: orange_domain::identity::OwnerId<'_>,
         job: orange_domain::identity::JobId<'_>,
-    ) -> Result<orange_protocol::JobView, ArtifactError> {
+    ) -> Result<crate::job_revision::Status, ArtifactError> {
         use orange_domain::identity::{SubmittedJob, UserId};
         let mut tx = self.inner.pool.begin().await?;
         authority::scope(&mut tx, actor, owner.as_str(), false).await?;
@@ -103,8 +105,12 @@ impl ArtifactStore {
         };
         let row=sqlx::query("SELECT * FROM jobs WHERE job_id=$1 AND owner_id=$2 AND submitting_user_id=$3 FOR SHARE").bind(resource.job.as_str()).bind(resource.owner.as_str()).bind(resource.submitter.as_str()).fetch_optional(&mut *tx).await?.ok_or(ArtifactError::NotFound)?;
         let result = crate::store::job_view(&row).map_err(|_| ArtifactError::Integrity)?;
+        let revision = row.try_get("state_revision")?;
         authority::finish(tx, actor).await?;
-        Ok(result)
+        Ok(crate::job_revision::Status {
+            view: result,
+            revision,
+        })
     }
     pub async fn bind_job_input(
         &self,

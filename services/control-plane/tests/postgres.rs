@@ -616,3 +616,67 @@ async fn missing_owner_and_invalid_wire_amounts_create_no_budget_or_postings() {
     let counts:(i64,i64)=sqlx::query_as("SELECT (SELECT COUNT(*) FROM budget_roots WHERE owner_id=$1),(SELECT COUNT(*) FROM ledger_transactions WHERE owner_id=$1)").bind(&payer).fetch_one(store.pool()).await.expect("no invalid writes");
     assert_eq!(counts, (0, 0));
 }
+
+#[tokio::test]
+async fn only_one_concurrent_terminal_revision_wins_and_an_old_attempt_cannot_rewind_it() {
+    let store = db().await;
+    let owner = owner(&store, 0, 0, 20000).await;
+    let root = store
+        .create_budget(
+            &owner,
+            "revision-budget",
+            &CreateBudget {
+                scope_id: "revision-race".into(),
+                limit: money(8000),
+            },
+        )
+        .await
+        .expect("budget");
+    let req = request(&store, &owner, &root.root_budget_id, 3000).await;
+    let job = store
+        .submit(&owner, "revision-job", &req)
+        .await
+        .expect("job")
+        .job_id;
+    assert_eq!(sqlx::query_scalar::<_,i64>("UPDATE jobs SET execution_state=execution_state WHERE job_id=$1 RETURNING state_revision").bind(&job).fetch_one(store.pool()).await.expect("unchanged"),1);
+    let running:i64=sqlx::query_scalar("UPDATE jobs SET execution_state='running' WHERE job_id=$1 AND state_revision=1 RETURNING state_revision").bind(&job).fetch_one(store.pool()).await.expect("start");
+    assert_eq!(running, 2);
+    async fn terminal(pool: &sqlx::PgPool, job: &str, version: i64, state: &str) -> u64 {
+        sqlx::query("UPDATE jobs SET execution_state=$3 WHERE job_id=$1 AND state_revision=$2 AND execution_state='running'")
+          .bind(job).bind(version).bind(state).execute(pool).await.expect("competing finalization").rows_affected()
+    }
+    let (a, b) = tokio::join!(
+        terminal(store.pool(), &job, running, "cancelled"),
+        terminal(store.pool(), &job, running, "succeeded")
+    );
+    assert_eq!(a + b, 1);
+    let (state, version): (String, i64) =
+        sqlx::query_as("SELECT execution_state,state_revision FROM jobs WHERE job_id=$1")
+            .bind(&job)
+            .fetch_one(store.pool())
+            .await
+            .expect("result");
+    assert_eq!(state, if a == 1 { "cancelled" } else { "succeeded" });
+    assert_eq!(version, 3);
+    for sql in [
+        "UPDATE jobs SET execution_state='queued' WHERE job_id=$1",
+        "UPDATE jobs SET state_revision=1 WHERE job_id=$1",
+    ] {
+        let err = sqlx::query(sql)
+            .bind(&job)
+            .execute(store.pool())
+            .await
+            .expect_err("state fence");
+        assert_eq!(
+            err.as_database_error().and_then(|x| x.code()).as_deref(),
+            Some("23514")
+        );
+    }
+    let current: (String, i64) =
+        sqlx::query_as("SELECT execution_state,state_revision FROM jobs WHERE job_id=$1")
+            .bind(&job)
+            .fetch_one(store.pool())
+            .await
+            .expect("terminal fact");
+    assert_eq!(current, (state, version));
+}

@@ -228,3 +228,103 @@ async fn team_role_does_not_allow_cancelling_another_submitter_and_stop_survives
     f.objects.drain().await.expect("drain");
     other.objects.drain().await.expect("drain");
 }
+
+#[tokio::test]
+async fn conditional_cancellation_replays_the_original_precondition_but_rejects_new_stale_commands()
+{
+    let f = setup("client-ay").await;
+    async fn read(f: &InputFixture) -> (i64, serde_json::Value) {
+        let app =
+            orange_control_plane::artifacts::http::router(f.identity.clone(), f.objects.clone());
+        let mut req = axum::http::Request::builder()
+            .uri(format!("/api/v1/owners/{}/jobs/{}", f.owner, f.job))
+            .body(axum::body::Body::empty())
+            .expect("request");
+        *req.headers_mut() = f.headers.clone();
+        let resp = app.oneshot(req).await.expect("GET");
+        assert_eq!(resp.status(), 200);
+        let version = resp.headers()["x-orange-job-version"]
+            .to_str()
+            .expect("ASCII")
+            .parse()
+            .expect("version");
+        let bytes = axum::body::to_bytes(resp.into_body(), 65536)
+            .await
+            .expect("body");
+        (version, serde_json::from_slice(&bytes).expect("view"))
+    }
+    let (initial, queued) = read(&f).await;
+    assert_eq!(initial, 1);
+    assert_eq!(queued["execution_state"], "queued");
+    let header = |v: &str| {
+        let mut headers = f.headers.clone();
+        headers.insert("x-orange-expected-job-version", v.parse().expect("header"));
+        headers
+    };
+    let counts = || {
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM ledger_transactions WHERE owner_id=$1")
+            .bind(&f.owner)
+            .fetch_one(f.d.store.pool())
+    };
+    let prior = counts().await.expect("baseline");
+    for bad in ["0", "01", "+1", "9223372036854775808"] {
+        assert_eq!(
+            cancel(&f, "conditional", header(bad), serde_json::json!({}))
+                .await
+                .0,
+            422
+        );
+    }
+    let mut duplicates = header("1");
+    duplicates.append(
+        "x-orange-expected-job-version",
+        "1".parse().expect("header"),
+    );
+    assert_eq!(
+        cancel(&f, "conditional", duplicates, serde_json::json!({}))
+            .await
+            .0,
+        422
+    );
+    let (stale, body) = cancel(&f, "conditional", header("2"), serde_json::json!({})).await;
+    assert_eq!(stale, 412);
+    assert_eq!(body["code"], "STALE_JOB_VERSION");
+    assert_eq!(body["retry_class"], "query_original");
+    assert_eq!(counts().await.expect("no money effect"), prior);
+    assert_eq!(read(&f).await, (initial, queued));
+    let (status, first) = cancel(&f, "conditional", header("1"), serde_json::json!({})).await;
+    assert_eq!(status, 200);
+    assert_eq!(first["execution_state"], "cancelled");
+    let (after, view) = read(&f).await;
+    assert!(after > initial);
+    assert_eq!(view, first);
+    let settled = counts().await.expect("refund postings");
+    assert!(settled > prior);
+    assert_eq!(
+        cancel(&f, "conditional", header("1"), serde_json::json!({})).await,
+        (200, first.clone())
+    );
+    assert_eq!(
+        cancel(&f, "new-stale-key", header("1"), serde_json::json!({}))
+            .await
+            .0,
+        412
+    );
+    assert_eq!(
+        cancel(
+            &f,
+            "conditional",
+            header(&after.to_string()),
+            serde_json::json!({})
+        )
+        .await
+        .0,
+        409
+    );
+    assert_eq!(
+        cancel(&f, "old-app", f.headers.clone(), serde_json::json!({})).await,
+        (200, first)
+    );
+    assert_eq!(read(&f).await.0, after);
+    assert_eq!(counts().await.expect("no duplicate refund"), settled);
+}
