@@ -327,3 +327,40 @@ async fn membership_changes_and_owner_restriction_preserve_original_job_and_ledg
     f.objects.drain().await.expect("objects");
     coowner.objects.drain().await.expect("objects");
 }
+
+#[tokio::test]
+async fn typed_job_status_requires_the_original_owner_job_and_authenticated_submitter() {
+    let f = setup("client-ay").await;
+    let app = orange_control_plane::artifacts::http::router(f.identity.clone(), f.objects.clone());
+    async fn status(
+        app: axum::Router,
+        headers: &axum::http::HeaderMap,
+        owner: &str,
+        job: &str,
+    ) -> (u16, serde_json::Value) {
+        let mut request = axum::http::Request::builder()
+            .uri(format!("/api/v1/owners/{owner}/jobs/{job}"))
+            .body(axum::body::Body::empty())
+            .expect("request");
+        *request.headers_mut() = headers.clone();
+        let response = app.oneshot(request).await.expect("HTTP route");
+        let status = response.status().as_u16();
+        let bytes = axum::body::to_bytes(response.into_body(), 65536)
+            .await
+            .expect("body");
+        (status, serde_json::from_slice(&bytes).expect("wire JSON"))
+    }
+    let (ok, view) = status(app.clone(), &f.headers, &f.owner, &f.job).await;
+    assert_eq!(ok, 200);
+    assert_eq!(view["job_id"], f.job);
+    let (missing, body) = status(app.clone(), &f.headers, &f.owner, &f.user).await;
+    assert_eq!(missing, 404);
+    assert!(body.get("job_id").is_none());
+    let (invalid, body) = status(app.clone(), &f.headers, &f.owner, "bad%20job").await;
+    assert_eq!(invalid, 400);
+    assert!(body.get("job_id").is_none());
+    assert_eq!(
+        status(app, &Default::default(), &f.owner, &f.job).await.0,
+        401
+    );
+}

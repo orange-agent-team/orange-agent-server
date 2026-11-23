@@ -552,8 +552,11 @@ async fn job_status(
     headers: HeaderMap,
 ) -> Result<Response, Error> {
     let actor = api.identity.artifact_actor(&headers, false).await?;
+    use orange_domain::identity::{JobId, OwnerId};
+    let owner = OwnerId::try_from(owner.as_str()).map_err(|_| ArtifactError::Invalid)?;
+    let job = JobId::try_from(job.as_str()).map_err(|_| ArtifactError::Invalid)?;
     Ok(private(
-        Json(api.store.job_for_user(&actor, &owner, &job).await?).into_response(),
+        Json(api.store.submitted_job(&actor, owner, job).await?).into_response(),
     ))
 }
 

@@ -78,13 +78,27 @@ impl ArtifactStore {
         owner: &str,
         job: &str,
     ) -> Result<orange_protocol::JobView, ArtifactError> {
-        use orange_domain::identity::{JobId, OwnerId, SubmittedJob, UserId};
-        let owner = OwnerId::try_from(owner).map_err(|_| ArtifactError::Invalid)?;
+        use orange_domain::identity::{JobId, OwnerId};
+        self.submitted_job(
+            actor,
+            OwnerId::try_from(owner).map_err(|_| ArtifactError::Invalid)?,
+            JobId::try_from(job).map_err(|_| ArtifactError::Invalid)?,
+        )
+        .await
+    }
+
+    pub(super) async fn submitted_job(
+        &self,
+        actor: &ArtifactActor,
+        owner: orange_domain::identity::OwnerId<'_>,
+        job: orange_domain::identity::JobId<'_>,
+    ) -> Result<orange_protocol::JobView, ArtifactError> {
+        use orange_domain::identity::{SubmittedJob, UserId};
         let mut tx = self.inner.pool.begin().await?;
         authority::scope(&mut tx, actor, owner.as_str(), false).await?;
         let resource = SubmittedJob {
             owner,
-            job: JobId::try_from(job).map_err(|_| ArtifactError::Invalid)?,
+            job,
             submitter: UserId::try_from(actor.user.as_str()).map_err(|_| ArtifactError::Invalid)?,
         };
         let row=sqlx::query("SELECT * FROM jobs WHERE job_id=$1 AND owner_id=$2 AND submitting_user_id=$3 FOR SHARE").bind(resource.job.as_str()).bind(resource.owner.as_str()).bind(resource.submitter.as_str()).fetch_optional(&mut *tx).await?.ok_or(ArtifactError::NotFound)?;
