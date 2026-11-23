@@ -14,6 +14,8 @@ def service_files(repository,commit,readme,extra=()):
         if name in files:raise ValueError("Duplicate release path: "+name)
         files[name]=git("show",commit+":"+source)
     put("distribution/platform/verify.py","verify.py")
+    put("distribution/platform/reconcile-wallets.py","reconcile-wallets.py")
+    put("distribution/platform/sql/reconcile-wallets.sql","sql/reconcile-wallets.sql")
     if readme:put(readme,"README.md")
     for source in names("distribution/platform/config"):put(source,"config/"+Path(source).name)
     for folder in ("contracts/openapi","contracts/json-schema","contracts/proto","services/control-plane/migrations"):
