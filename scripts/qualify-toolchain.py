@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Local/CI qualification of the four source checkouts using the same locked, offline build commands."""
 import argparse
+import ctypes
+from email.parser import BytesParser
 import hashlib
 import json
 import os
@@ -12,8 +14,11 @@ import sys
 import tarfile
 import tempfile
 import tomllib
+from urllib.parse import urlsplit
+from zipfile import ZipFile
 
 from linux_platform_inputs import local_image_id
+from http_metrics_smoke import check_programs, ROLES
 
 ROOT=Path(__file__).resolve().parents[1]
 TARGET="aarch64-apple-darwin"
@@ -157,7 +162,25 @@ def installed_inputs(cache):
     binary=cache/"model-runtime/build/bin/llama-server"
     require(receipt["backend_commit"]==locks["llama_cpp"] and sha(binary)==receipt["executable_sha256"],
             "Cached llama.cpp executable differs from its qualified build")
-    return {"images":images,"model_files":assets,"llama_server_sha256":receipt["executable_sha256"]}
+    wheels={}
+    for component,group,lockfile in [("diffusers","image","environments/sdxl-macos/uv.lock"),
+                                     ("faster-whisper","transcription","uv.lock"),("onnxruntime","embedding","uv.lock")]:
+        packages=tomllib.loads((ROOT/"backends"/lockfile).read_text())["package"]
+        (package,)= [p for p in packages if p["name"]==component]
+        entries={Path(urlsplit(w["url"]).path).name:w for w in package["wheels"]}
+        wheel_dir=cache/(group+"-wheelhouse")
+        (path,)=[f for f in wheel_dir.glob("*.whl") if f.name in entries]
+        entry=entries[path.name]
+        require(path.stat().st_size==entry["size"] and "sha256:"+sha(path)==entry["hash"],"Unqualified wheel: "+component)
+        with ZipFile(path) as wheel:
+            (meta,)=[n for n in wheel.namelist() if n.endswith(".dist-info/METADATA")]
+            info=BytesParser().parsebytes(wheel.read(meta),headersonly=True)
+        require(info["Version"]==package["version"],"Wheel version mismatch")
+        licenses=[x for x in info.get_all("Classifier",[]) if x.startswith("License :: ")]
+        license_name=info.get("License-Expression") or info.get("License") or ", ".join(licenses)
+        require(bool(license_name),"Missing Python package license: "+component)
+        wheels[component]={"artifact":path.name,"version":package["version"],"sha256":entry["hash"],"license":license_name}
+    return {"images":images,"model_files":assets,"llama_server_sha256":receipt["executable_sha256"],"backend_wheels":wheels}
 
 
 def clean_sources(root, dest, archive, commit):
@@ -193,7 +216,7 @@ def upgrade(desktop):
             "generated_files":len(pinned["generated_sha256"]),"wire_generation_rechecked":True}
 
 
-def reproduce(roots,node):
+def reproduce(roots,node,private):
     sources={k:output(["git","rev-parse","HEAD"],v) for k,v in roots.items()}
     outcomes={}
     with tempfile.TemporaryDirectory(prefix="orange-offline-ci-") as work:
@@ -205,12 +228,23 @@ def reproduce(roots,node):
                 version=(tomllib.loads((tree/"rust-toolchain.toml").read_text())["toolchain"]["channel"] if name=="server"
                          else load(tree/"config/bridge-tools.lock.json")["rust"])
                 cargo,env=rust(tree,version)
-                env.update(CARGO_TARGET_DIR=str(tree/"target"),CARGO_INCREMENTAL="0",CARGO_PROFILE_DEV_DEBUG="0")
+                env.update(CARGO_TARGET_DIR=str(tree/"target"),CARGO_INCREMENTAL="0",CARGO_PROFILE_DEV_DEBUG="0",CARGO_PROFILE_DEV_STRIP="none")
                 args=["--bin","orange-user-api"] if name=="server" else ["-p","orange-desktop-bridge","--lib"]
                 subprocess.run([cargo,"build","--locked","--offline",*args],cwd=tree,env=env,check=True)
                 binary=tree/"target/debug"/("orange-user-api" if name=="server" else "liborange_desktop_bridge.dylib")
                 outcomes[name]={"artifact":binary.name,"sha256":sha(binary),"bytes":binary.stat().st_size,"cargo_lock_sha256":sha(tree/"Cargo.lock")}
+                if name=="server":
+                    roles=[item for item in ROLES if item[0]=="user"]
+                    outcomes[name]["private_api_smoke"]=check_programs(binary.parent,private/"database-url",private/"identity/user-config.json",
+                                                                        private/"identity/admin-config.json",roles)
                 if name=="desktop":
+                    library=ctypes.CDLL(str(binary))
+                    function=library.frb_get_rust_content_hash
+                    function.argtypes=[]
+                    function.restype=ctypes.c_int32
+                    actual=function()
+                    require(str(actual)==str(load(tree/"config/generated-bridge.lock.json")["content_hash"]),"Native bridge ABI mismatch")
+                    outcomes[name]["loaded_bridge_hash"]=actual
                     f=load(tree/"config/flutter.lock.json")
                     tool=root/".local/toolchains"/("flutter-"+f["version"])/"flutter/bin/flutter"
                     env.update(PUB_CACHE=str(root/".local/pub-cache"),FLUTTER_SUPPRESS_ANALYTICS="true",DASH__SUPPRESS_ANALYTICS="true")
@@ -255,7 +289,7 @@ def main():
             roots[kind]=path.resolve()
         node=args.node.resolve()
         stack=inventory(roots,node)
-        report=stack if args.section=="inventory" else {"stack":stack,"clean_build":reproduce(roots,node)}
+        report=stack if args.section=="inventory" else {"stack":stack,"clean_build":reproduce(roots,node,args.asset_cache.resolve())}
     print(json.dumps(report,sort_keys=True),flush=True)
 
 
