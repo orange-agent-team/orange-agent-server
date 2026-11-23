@@ -27,11 +27,20 @@ def require(condition, message):
 def main():
     parser=argparse.ArgumentParser()
     parser.add_argument("--installed", action="store_true")
+    parser.add_argument("--native-worker",type=Path,help="Exercise a binary from a verified native build receipt")
+    parser.add_argument("--expected-worker-sha256")
     args=parser.parse_args()
+    if bool(args.native_worker)!=bool(args.expected_worker_sha256) or args.installed and args.native_worker:
+        parser.error("Select either the packaged binary or one digest-pinned native binary")
     openssl="/opt/homebrew/opt/openssl@3/bin/openssl"
     if not Path(openssl).is_file():openssl=shutil.which("openssl")
     require(openssl,"OpenSSL required")
-    if args.installed:
+    if args.native_worker:
+        program=args.native_worker
+        require(program.is_absolute() and program.name=="orange-worker" and not program.is_symlink() and program.is_file(),"Invalid native program")
+        with program.open("rb") as stream:require(hashlib.file_digest(stream,"sha256").hexdigest()==args.expected_worker_sha256,"Native build digest differs")
+        context=nullcontext(program.parent)
+    elif args.installed:
         context=binaries(None)
     else:
         rustup=shutil.which("rustup") or "/opt/homebrew/opt/rustup/bin/rustup"
@@ -122,7 +131,7 @@ def main():
         guard=uuid.uuid4();bad=root/(str(guard)+".key.pem")
         bad.write_bytes(b"damaged published key");bad.chmod(0o600);run(guard,success=False)
         require(bad.read_bytes()==b"damaged published key" and run(rid)==receipt,"Published identity was altered")
-        print(json.dumps({"installed_worker":args.installed,"concurrent_processes":8,"independent_pkcs10_verification":True,
+        print(json.dumps({"installed_worker":args.installed,"receipt_pinned_native_worker":bool(args.native_worker),"concurrent_processes":8,"independent_pkcs10_verification":True,
                           "same_key_after_restart":True,"partial_staging_recovered":True,"fixture_client_leaf_mtls":True,"platform_issuer_verified":False}),flush=True)
     print("PASS durable on-device key and real PKCS10 possession, bound to an independently checked public request")
 

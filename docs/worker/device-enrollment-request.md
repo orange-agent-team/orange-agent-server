@@ -11,3 +11,5 @@ orange-worker prepare-enrollment "$private_key_directory" "$request_uuid" > "$pu
 请求主题为 `CN=orange-worker-<request_uuid>`，请求数字签名和 TLS 客户端用途。设备注册权、个人或团队归属、地区、证书期限、轮换和撤销均需由登记服务单独核验。这个本机命令只准备请求。原生 Windows 密钥存储和目标平台验证仍各自记录。[公共请求契约](../../contracts/json-schema/worker-certificate-request.v1.json)
 
 本机回归分别运行八个 Worker 进程和独立 OpenSSL 验证器。测试签发方仅使用公开 CSR 签发一张临时客户端叶证书，通过真实 TLS 双向握手核对服务端收到的证书 DER，同时验证同一证书不能作为 TLS 服务端。平台登记服务另行验收。
+
+Rust 依赖 rcgen 0.14.10 调用 ring 生成设备密钥并制作 CSR，依赖版本及制品校验和保存在 Cargo.lock。签发方需独立验证请求签名和叶证书用途。[rcgen 证书请求接口](https://docs.rs/rcgen/0.14.10/rcgen/struct.CertificateParams.html#method.serialize_request)
