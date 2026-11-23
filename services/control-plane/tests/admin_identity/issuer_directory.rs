@@ -203,3 +203,97 @@ async fn issuer_read_does_not_publish_or_audit_after_role_expires_behind_a_lock(
         .fetch_one(&f.pool).await.expect("no successful read");
     assert_eq!(count, 0);
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn historical_issuer_mapping_requires_verified_pinned_ca_after_schema81_upgrade() {
+    let connection = std::env::var("ORANGE_TEST_ISSUER_UPGRADE_URL")
+        .expect("owned empty schema-upgrade fixture");
+    let store = Store::connect(&connection).await.expect("pool");
+    let pool = store.pool();
+    let old = tempfile::tempdir().expect("old migrations");
+    for entry in
+        std::fs::read_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations"))
+            .expect("migrations")
+    {
+        let entry = entry.expect("file");
+        let file = entry.file_name();
+        let name = file.to_str().expect("filename");
+        if name.ends_with(".sql")
+            && name
+                .split_once('_')
+                .and_then(|(n, _)| n.parse::<u32>().ok())
+                .is_some_and(|n| n <= 81)
+        {
+            std::fs::copy(entry.path(), old.path().join(name)).expect("schema81 migration input");
+        }
+    }
+    sqlx::migrate::Migrator::new(old.path())
+        .await
+        .expect("historical version")
+        .run(pool)
+        .await
+        .expect("migrate through 81");
+    let max: i64 = sqlx::query_scalar("SELECT max(version) FROM _sqlx_migrations WHERE success")
+        .fetch_one(pool)
+        .await
+        .expect("baseline");
+    assert_eq!(max, 81);
+    let owner = Uuid::new_v4().to_string();
+    sqlx::query("INSERT INTO owners(owner_id) VALUES($1)")
+        .bind(&owner)
+        .execute(pool)
+        .await
+        .expect("owner");
+    sqlx::query(
+        "INSERT INTO users(user_id,issuer,subject,personal_owner_id) VALUES($1,'upgrade',$1,$1)",
+    )
+    .bind(&owner)
+    .execute(pool)
+    .await
+    .expect("fixture");
+    let issuer = std::env::var("ORANGE_TEST_ISSUER_SHA").expect("actual DER pin");
+    seed(
+        pool,
+        &owner,
+        "legacy-region",
+        &issuer,
+        600,
+        true,
+        false,
+        false,
+    )
+    .await;
+    let meta = || {
+        sqlx::query_as::<_,(String,String,String,String)>("SELECT e.request_id::text,e.node_id,e.certificate_sha256,e.issuer_sha256 FROM worker_enrollment_certificates e")
+        .fetch_one(pool)
+    };
+    let before = meta().await.expect("original receipt");
+    store.migrate().await.expect("current migration");
+    let observed = || {
+        sqlx::query_scalar::<_, String>(
+            "SELECT spki_sha256 FROM worker_issuer_public_keys WHERE issuer_sha256=$1",
+        )
+        .bind(&issuer)
+        .fetch_optional(pool)
+    };
+    assert!(observed().await.expect("unknown").is_none());
+    let cfg = std::env::var("ORANGE_TEST_ISSUER_FILE").expect("private issuer config");
+    let path = std::path::Path::new(&cfg);
+    let (a, b) = tokio::join!(
+        orange_control_plane::worker::device_issuer::issue_one(pool, path),
+        orange_control_plane::worker::device_issuer::issue_one(pool, path)
+    );
+    assert_eq!(a.expect("idle issuer"), None);
+    assert_eq!(b.expect("idle issuer retry"), None);
+    assert_eq!(
+        observed().await.expect("proven SPKI"),
+        Some(std::env::var("ORANGE_TEST_ISSUER_SPKI").expect("independent public key digest"))
+    );
+    assert_eq!(meta().await.expect("preserved receipt"), before);
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM worker_credentials WHERE active")
+        .fetch_one(pool)
+        .await
+        .expect("intact active credential");
+    assert_eq!(count, 1);
+}
