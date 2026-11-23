@@ -90,7 +90,7 @@ orange-domain.workspace = true
 orange-protocol = { workspace = true, features = ["grpc"] }
 serde.workspace = true
 serde_json.workspace = true
-axum.workspace = true
+axum = { workspace = true, features = ["ws"] }
 tokio.workspace = true
 sqlx.workspace = true
 uuid.workspace = true
@@ -116,6 +116,8 @@ libc.workspace = true
 rustix.workspace = true
 
 [dev-dependencies]
+tokio-tungstenite = "=0.29.0"
+futures-util = { version = "=0.3.34", features = ["sink"] }
 jsonschema.workspace = true
 orange-model-runtime.workspace = true
 tempfile.workspace = true

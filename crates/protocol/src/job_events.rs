@@ -2,7 +2,7 @@
 use crate::JobView;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct JobEventCursor {
     pub stream_id: String,
@@ -37,5 +37,22 @@ pub enum JobHistory {
         job_id: String,
         cursor: JobEventCursor,
         events: Vec<JobEvent>,
+    },
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct JobStreamFrame {
+    pub protocol_version: u8,
+    pub connection_generation: String,
+    pub history: JobHistory,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum JobStreamControl {
+    Ack {
+        connection_generation: String,
+        cursor: Option<JobEventCursor>,
     },
 }

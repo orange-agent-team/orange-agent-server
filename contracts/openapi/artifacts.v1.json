@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Orange private artifact API",
-    "version": "0.1.11",
+    "version": "0.1.12",
     "description": "Current user sessions and independent artifact/source content ACLs. Includes committed Worker response references. Model execution success does not imply settlement or resource cleanup. Native usage is never a billing grant."
   },
   "paths": {
@@ -1648,6 +1648,112 @@
           }
         }
       }
+    },
+    "/api/v1/owners/{owner}/jobs/{job}/events/ws": {
+      "get": {
+        "operationId": "streamOwnedJobHistory",
+        "description": "Read-only WebSocket transport. Requires the configured user Origin and orange.job-events.v1. One text frame must be acknowledged before delivery of another. Disconnect does not cancel the underlying Job.",
+        "security": [
+          {
+            "UserSession": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "owner",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            }
+          },
+          {
+            "name": "job",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            }
+          },
+          {
+            "name": "stream_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]{0,18})$"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 64,
+              "default": 32
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Sec-WebSocket-Protocol",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "const": "orange.job-events.v1"
+            }
+          }
+        ],
+        "responses": {
+          "101": {
+            "description": "Upgraded. Server sends JobStreamFrame, client acknowledges with JobStreamAck."
+          },
+          "default": {
+            "description": "Current authorized metadata, not execution authority.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-orange-websocket": {
+          "protocol": "orange.job-events.v1",
+          "delivery": "JobStreamFrame",
+          "ack": "JobStreamAck",
+          "ack_timeout_ms": 5000,
+          "max_inbound_message_bytes": 2048,
+          "max_batch_bytes": 65536,
+          "max_concurrent_sockets_per_router": 64
+        }
+      }
     }
   },
   "components": {
@@ -3252,6 +3358,55 @@
           {
             "$ref": "#/components/schemas/JobEventPage"
           }
+        ]
+      },
+      "JobStreamFrame": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "protocol_version": {
+            "const": 1
+          },
+          "connection_generation": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "history": {
+            "$ref": "#/components/schemas/JobHistory"
+          }
+        },
+        "required": [
+          "protocol_version",
+          "connection_generation",
+          "history"
+        ]
+      },
+      "JobStreamAck": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "ack"
+          },
+          "connection_generation": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JobEventCursor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "connection_generation",
+          "cursor"
         ]
       }
     }

@@ -1596,6 +1596,55 @@
           "$ref": "#/$defs/JobEventPage"
         }
       ]
+    },
+    "JobStreamFrame": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "protocol_version": {
+          "const": 1
+        },
+        "connection_generation": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "history": {
+          "$ref": "#/$defs/JobHistory"
+        }
+      },
+      "required": [
+        "protocol_version",
+        "connection_generation",
+        "history"
+      ]
+    },
+    "JobStreamAck": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "ack"
+        },
+        "connection_generation": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "cursor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JobEventCursor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "connection_generation",
+        "cursor"
+      ]
     }
   }
 }

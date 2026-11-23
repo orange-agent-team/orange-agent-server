@@ -829,3 +829,6 @@ async fn changed_projection_and_other_provider_cannot_inherit_input_authority() 
 
 #[path = "inputs/job_history.rs"]
 mod history_cases;
+
+#[path = "inputs/job_socket.rs"]
+mod socket_cases;

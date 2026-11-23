@@ -1,5 +1,7 @@
 //! Optional authenticated user object endpoints. No development owner-ID header
 //! or Worker credential can replace the current UserIdentity/CSRF boundary.
+#[path = "job_socket.rs"]
+mod socket;
 use super::*;
 use crate::auth::{AuthError, users::UserIdentity};
 use axum::{
@@ -16,6 +18,7 @@ struct Api {
     identity: UserIdentity,
     store: ArtifactStore,
     downloads: Arc<Semaphore>,
+    event_connections: Arc<Semaphore>,
     #[cfg(unix)]
     audio: Option<AudioMeter>,
 }
@@ -95,6 +98,10 @@ pub fn build_router(
             "/api/v1/owners/{owner}/jobs",
             get(job_list).post(submit_job),
         )
+        .route(
+            "/api/v1/owners/{owner}/jobs/{job}/events/ws",
+            get(socket::upgrade),
+        )
         .route("/api/v1/owners/{owner}/jobs/{job}", get(job_status))
         .route("/api/v1/owners/{owner}/jobs/{job}/events", get(job_events))
         .route(
@@ -119,6 +126,7 @@ pub fn build_router(
             identity,
             store,
             downloads: Arc::new(Semaphore::new(2)),
+            event_connections: Arc::new(Semaphore::new(64)),
             #[cfg(unix)]
             audio,
         })
