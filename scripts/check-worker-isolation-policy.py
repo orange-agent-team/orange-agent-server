@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Validate the exact contributor bundle policy and perform read-only observations inside the dedicated local Linux VM."""
 import argparse
+from contextlib import ExitStack
 import hashlib
 import importlib.util
 import io
@@ -12,6 +13,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import zipfile
 
 ROOT=Path(__file__).resolve().parents[1]
 ASSETS=ROOT/"distribution/windows-worker/isolation"
@@ -103,18 +105,50 @@ def check(directory,guest):
                           "artificial_inputs_for_positive_template":True}),flush=True)
 
 
+def installed_sources(destination):
+    source=subprocess.check_output(["git","rev-parse","HEAD"],cwd=ROOT,text=True).strip()
+    dist=ROOT/".local/windows-worker-distributions"
+    records=(json.loads(f.read_bytes()) for f in dist.glob("*.json"))
+    record,=[r for r in records if r["source"]==source]
+    assert record["identical_archives"]==2 and not record["windows_runtime_verified"] and not record["physical_gpu_verified"]
+    archive=dist/record["archive"]
+    assert archive.parent==dist and not archive.is_symlink()
+    with archive.open("rb") as f:
+        assert hashlib.file_digest(f,"sha256").hexdigest()==record["sha256"]
+    with zipfile.ZipFile(archive) as z:
+        assert z.testzip() is None and len(z.namelist())==len(set(z.namelist()))
+        manifest=json.loads(z.read("orange-worker/manifest.json"))
+        assert manifest["source"]==source
+        for name in ("README.md","wsl.conf","oci-base.json","prepare-inference-policy.py","inspect-target.py","orange-isolation-probe"):
+            payload=z.read("orange-worker/isolation/"+name)
+            assert hashlib.sha256(payload).hexdigest()==manifest["sha256"]["isolation/"+name]
+            (destination/name).write_bytes(payload)
+    builder=module("probe_builder",ROOT/"scripts/build-worker-isolation-probe.py")
+    builder.verify_image(destination/"orange-isolation-probe","x86_64-unknown-linux-musl")
+    result=json.loads(subprocess.check_output([sys.executable,destination/"prepare-inference-policy.py","describe"],text=True))
+    assert result["profile"]=="wsl2-reviewed-text-v1" and not result["supply_authorized"]
+    print("PASS installed Windows package and x86_64 Linux static diagnostic",record["sha256"],flush=True)
+    return destination
+
+
 def main():
     parser=argparse.ArgumentParser();parser.add_argument("--linux",action="store_true")
-    parser.add_argument("--inside",type=Path);args=parser.parse_args()
+    parser.add_argument("--installed",action="store_true");parser.add_argument("--inside",type=Path);args=parser.parse_args()
     if args.inside:
         check(args.inside,True);return
-    check(ASSETS,False)
-    if args.linux:
-        data=io.BytesIO()
-        with tarfile.open(fileobj=data,mode="w") as tar:
-            for path in [ASSETS/n for n in ("prepare-inference-policy.py","inspect-target.py","oci-base.json","wsl.conf")]+[Path(__file__)]:
-                tar.add(path,arcname=path.name,recursive=False)
-        script="""import io,sys,subprocess,tarfile,tempfile
+    with ExitStack() as stack:
+        directory=installed_sources(Path(stack.enter_context(tempfile.TemporaryDirectory()))) if args.installed else ASSETS
+        check(directory,False)
+        if args.linux:guest_check(directory)
+    print("PASS reviewed WSL/OCI configuration, strict device rules and closed admission; Windows/GPU isolation and inference require target verification")
+
+
+def guest_check(directory):
+    data=io.BytesIO()
+    with tarfile.open(fileobj=data,mode="w") as tar:
+        for path in [directory/n for n in ("prepare-inference-policy.py","inspect-target.py","oci-base.json","wsl.conf")]+[Path(__file__)]:
+            tar.add(path,arcname=path.name,recursive=False)
+    script="""import io,sys,subprocess,tarfile,tempfile
 from pathlib import Path
 with tempfile.TemporaryDirectory(prefix='orange-policy-') as work:
  with tarfile.open(fileobj=io.BytesIO(sys.stdin.buffer.read()),mode='r:') as archive:
@@ -122,9 +156,8 @@ with tempfile.TemporaryDirectory(prefix='orange-policy-') as work:
   archive.extractall(work,filter='data')
  subprocess.run([sys.executable,'-B','check-worker-isolation-policy.py','--inside',work],cwd=work,check=True)
 """
-        result=subprocess.run(["colima","ssh","--profile","orange-agent","--","python3","-c",script],input=data.getvalue(),timeout=90)
-        result.check_returncode()
-    print("PASS reviewed WSL/OCI configuration, strict device rules and closed admission; Windows/GPU isolation and inference require target verification")
+    result=subprocess.run(["colima","ssh","--profile","orange-agent","--","python3","-c",script],input=data.getvalue(),timeout=90)
+    result.check_returncode()
 
 
 if __name__=="__main__":

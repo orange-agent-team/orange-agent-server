@@ -25,6 +25,10 @@ def build(source,dest,target):
     subprocess.run([rustc,"--edition","2024","--crate-name","orange_isolation_probe","--target",target,
                     "--remap-path-prefix",str(source.parent)+"=/orange/worker-isolation","-C","opt-level=s","-C","panic=abort",
                     "-C","strip=symbols","-C",f"linker={linker}","-C","linker-flavor=ld.lld",source,"-o",dest],check=True)
+    verify_image(dest,target)
+
+
+def verify_image(dest,target):
     image=dest.read_bytes();header=image[:20]
     if header[:6]!=b"\x7fELF\x02\x01" or int.from_bytes(header[18:20],"little")!=TARGETS[target]:
         raise ValueError("Wrong probe architecture")
