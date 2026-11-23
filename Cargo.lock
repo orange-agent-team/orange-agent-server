@@ -2321,6 +2321,7 @@ dependencies = [
  "orange-domain",
  "orange-model-runtime",
  "orange-protocol",
+ "pkcs8 0.11.0",
  "prost",
  "prost-types",
  "rcgen",
