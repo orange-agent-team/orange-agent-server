@@ -74,7 +74,7 @@ def bounded_packet(stream):
         staged.write(chunk);length-=len(chunk)
     staged.seek(0);return staged
 
-def execute_directory(command, expires, child):
+def execute_directory(command, control, child):
     required={'operation_id','permit_id','argument_digest','allocation_id','workspace_epoch','run_epoch','expires_at','limit'}
     if set(command)!=required or command['allocation_id']!=allocation or command['workspace_epoch']!=journal['epoch']:
         raise ValueError('Tool permit binding differs')
@@ -82,16 +82,17 @@ def execute_directory(command, expires, child):
     if not isinstance(op,str) or len(op)!=64 or any(v not in '0123456789abcdef' for v in op) or str(uuid.UUID(permit))!=permit:
         raise ValueError('Invalid one-shot operation identity')
     until=command['expires_at'];limit=command['limit']
-    if not isinstance(limit,int) or not 1<=limit<=16 or not 0<until-time.time()<=11 or until>expires or command['run_epoch']<1:
+    if not isinstance(limit,int) or not 1<=limit<=16 or not 0<until-time.time()<=11 or not control.authorizes(until) or command['run_epoch']<1:
         raise ValueError('Expired or invalid tool permit')
     facts={'allocation_id':allocation,'operation_id':op,'permit_id':permit,'argument_digest':command['argument_digest'],'run_epoch':command['run_epoch']}
     if 'tool_dispatch' in journal:
         print(json.dumps(dict(facts,phase='operation_unknown')),flush=True);return
     journal['tool_dispatch']=facts
     save_receipt(receipt_path,journal)
-    if time.time()>=until:
-        print(json.dumps(dict(facts,phase='operation_unknown')),flush=True);return
-    child.stdin.write(('list '+str(limit)+'\n').encode());child.stdin.flush()
+    with control.changed:
+        if not control.authorizes(until):
+            print(json.dumps(dict(facts,phase='operation_unknown')),flush=True);return
+        child.stdin.write(('list '+str(limit)+'\n').encode());child.stdin.flush()
     with selectors.DefaultSelector() as watcher:
         watcher.register(child.stdout,selectors.EVENT_READ)
         if not watcher.select(timeout=min(3,max(0,until-time.time()))):raise RuntimeError('directory operation unresolved')
@@ -105,11 +106,13 @@ def execute_directory(command, expires, child):
         if kind!='FILE' or not amount.isdigit() or len(filename)>128:raise RuntimeError('Invalid file metadata')
         entries.append({'name':filename,'kind':'file','bytes':amount})
     if child.stdout.readline(100)!=b'END_DIRECTORY\n':raise RuntimeError('Directory result not complete')
-    if time.time()>=until:print(json.dumps(dict(facts,phase='operation_unknown')),flush=True)
-    else:
-        journal['tool_observation_sha256']=hashlib.sha256(json.dumps(entries,sort_keys=True,separators=(',',':')).encode()).hexdigest()
-        save_receipt(receipt_path,journal)
-        print(json.dumps(dict(facts,phase='directory_result',entries=entries,omitted=header[2]=='1')),flush=True)
+    journal['tool_observation_sha256']=hashlib.sha256(json.dumps(entries,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+    save_receipt(receipt_path,journal)
+    with control.changed:
+        if control.authorizes(until):
+            print(json.dumps(dict(facts,phase='directory_result',entries=entries,omitted=header[2]=='1')),flush=True)
+        else:
+            print(json.dumps(dict(facts,phase='operation_unknown')),flush=True)
 
 class GuestLease:
     """Read the trusted controller stream while OCI setup is still in progress."""
@@ -170,6 +173,10 @@ class GuestLease:
                 self.tool = None
                 self.changed.notify_all()
 
+    def authorizes(self, until):
+        with self.changed:
+            return self.ready and self._live() and time.time() < until <= self.expires
+
     def mark_ready(self):
         with self.changed:
             self.require_live()
@@ -183,7 +190,7 @@ class GuestLease:
                 return None
             command = self.tool
             self.tool = None
-            return command, self.expires
+            return command
 
 if __name__ == '__main__':
     if os.geteuid()!=0 or platform.machine()!='aarch64' or platform.system()!='Linux':
@@ -372,8 +379,7 @@ if __name__ == '__main__':
                     while True:
                         pending=control.next_tool()
                         if pending is None:break
-                        command,expires=pending
-                        execute_directory(command,expires,child)
+                        execute_directory(pending,control,child)
                 output,_=child.communicate(input=b'continue\n',timeout=40)
                 if child.returncode!=0 or output.strip()!=b'ORANGE_WORKSPACE_PROBE_OK':
                     raise RuntimeError('Workload failed: '+str(child.returncode)+' '+stderr.read_text(errors='replace')[-1800:])

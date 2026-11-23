@@ -41,11 +41,11 @@ with channel() as (lease, writer, original):
     time.sleep(max(0, original - time.time()) + 0.05)
     lease.mark_ready()
     writer.write(b'tool {"operation_id":"fixture"}\n')
-    if lease.next_tool() != ({"operation_id":"fixture"}, original + 6):
+    if lease.next_tool() != {"operation_id":"fixture"} or not lease.authorizes(original+5):
         raise RuntimeError("Current tool or extended expiry was lost")
     writer.write(b"stop\n")
     observed(lease, lambda: lease.stopped)
-    if lease.next_tool() is not None:
+    if lease.next_tool() is not None or lease.authorizes(original+5):
         raise RuntimeError("Unexpected command after stop")
 
 with channel(2) as (lease, writer, original):
