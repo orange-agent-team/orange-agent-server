@@ -507,3 +507,62 @@ async fn resource_catalogue_resolves_each_business_owner_on_the_migrated_databas
         }
     }
 }
+
+#[tokio::test]
+async fn domain_entity_references_match_owned_primary_keys_and_validated_foreign_keys() {
+    use serde::Deserialize;
+    use std::collections::{BTreeMap, BTreeSet};
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Entity {
+        table: String,
+        primary_key: Vec<String>,
+        reference: Vec<String>,
+        authority: String,
+        relations: BTreeMap<String, String>,
+        lifetime: String,
+    }
+    #[derive(Deserialize)]
+    struct Catalog {
+        entities: BTreeMap<String, Entity>,
+    }
+    let catalogue: Catalog =
+        serde_json::from_slice(include_bytes!("../../../docs/entities/catalogue.json"))
+            .expect("typed catalogue");
+    assert_eq!(
+        catalogue
+            .entities
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            "User",
+            "Organization",
+            "Node",
+            "ModelVersion",
+            "Job",
+            "Attempt",
+            "Artifact",
+            "Ledger"
+        ])
+    );
+    let store = db().await;
+    for (name, entity) in catalogue.entities {
+        assert!(
+            !entity.authority.is_empty()
+                && !entity.lifetime.is_empty()
+                && !entity.reference.is_empty()
+        );
+        let primary:Vec<String>=sqlx::query_scalar("SELECT a.attname::text FROM pg_index i CROSS JOIN LATERAL unnest(i.indkey) WITH ORDINALITY k(attnum,pos) JOIN pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=k.attnum WHERE i.indisprimary AND i.indrelid=to_regclass($1) ORDER BY k.pos").bind(&entity.table).fetch_all(store.pool()).await.expect("primary key");
+        assert_eq!(primary, entity.primary_key, "{name}");
+        for column in &entity.reference {
+            let required:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid=to_regclass($1) AND attname=$2 AND NOT attisdropped AND attnotnull)").bind(&entity.table).bind(column).fetch_one(store.pool()).await.expect("reference column");
+            assert!(required, "{name}.{column} must exist and be required");
+        }
+        for (column, parent) in entity.relations {
+            let (parent_table, parent_column) = parent.split_once('.').expect("qualified target");
+            let validated:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_constraint fk JOIN pg_attribute a ON a.attrelid=fk.conrelid AND a.attnum=fk.conkey[1] JOIN pg_attribute b ON b.attrelid=fk.confrelid AND b.attnum=fk.confkey[1] WHERE fk.contype='f' AND fk.convalidated AND cardinality(fk.conkey)=1 AND fk.conrelid=to_regclass($1) AND a.attname=$2 AND fk.confrelid=to_regclass($3) AND b.attname=$4)").bind(&entity.table).bind(&column).bind(parent_table).bind(parent_column).fetch_one(store.pool()).await.expect("ownership FK");
+            assert!(validated, "{name}.{column} -> {parent}");
+        }
+    }
+}
