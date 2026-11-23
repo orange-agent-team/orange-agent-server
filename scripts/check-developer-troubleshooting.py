@@ -12,7 +12,6 @@ import subprocess
 import sys
 import tempfile
 from urllib.parse import urlsplit
-from check_environment_tools import doctor
 from owned_postgres import database
 from platform_package_smoke import listening
 from importlib.util import module_from_spec,spec_from_file_location

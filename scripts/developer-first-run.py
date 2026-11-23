@@ -20,10 +20,10 @@ def mapping():
     values=json.loads((ROOT/"config/environment-names.json").read_bytes())
     if set(values)!={"development","test","staging","production"}:
         raise ValueError("Incomplete environment catalogue")
-    if len({v["object_prefix"] for v in values.values()})!=4 or len({v["account"] for v in values.values()})!=4:
+    if len({v["object_prefix"] for v in values.values()})!=4 or len({v["account_scope"] for v in values.values()})!=4:
         raise ValueError("Overlapping test and deployment namespaces")
     for stage in ("development","test"):
-        if values[stage]["domain"]!="127.0.0.1" or values[stage]["database"]!="orange_dev":
+        if values[stage]["domain"]!="127.0.0.1" or values[stage]["database"]!="orange_dev" or values[stage]["database_role"]!="orange_local":
             raise ValueError("Local application fixture points outside its isolated environment")
     for stage in ("staging","production"):
         if values[stage]["provision"]!="external" or not values[stage]["domain"].endswith(".invalid"):

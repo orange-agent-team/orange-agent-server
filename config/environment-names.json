@@ -1,6 +1,46 @@
 {
-  "development": {"stage":"dev","account":"orange-dev-local","identity":"orange-dev","database":"orange_dev","object_prefix":"dev/local/","domain":"127.0.0.1","provision":"local"},
-  "test": {"stage":"test","account":"orange-test-{run}","identity":"orange-dev","database":"orange_dev","object_prefix":"test/{run}/","domain":"127.0.0.1","provision":"disposable isolated cluster and identity service per run"},
-  "staging": {"stage":"staging","account":"orange-staging-{region}","identity":"orange-staging-{region}","database":"orange_staging_{region}","object_prefix":"staging/{region}/","domain":"api.staging.{region}.orange.invalid","provision":"external"},
-  "production": {"stage":"prod","account":"orange-prod-{region}","identity":"orange-prod-{region}","database":"orange_prod_{region}","object_prefix":"production/{region}/","domain":"api.prod.{region}.orange.invalid","provision":"external"}
+  "development": {
+    "stage": "dev",
+    "identity": "orange-dev",
+    "database": "orange_dev",
+    "object_prefix": "dev/local/",
+    "domain": "127.0.0.1",
+    "provision": "local",
+    "database_role": "orange_local",
+    "identity_container": "orange-agent-identity-dev",
+    "account_scope": "orange-dev-local"
+  },
+  "test": {
+    "stage": "test",
+    "identity": "orange-dev",
+    "database": "orange_dev",
+    "object_prefix": "test/{run}/",
+    "domain": "127.0.0.1",
+    "provision": "disposable isolated cluster and identity service per run",
+    "database_role": "orange_local",
+    "identity_container": "orange-agent-identity-dev-{run}",
+    "account_scope": "orange-test-{run}"
+  },
+  "staging": {
+    "stage": "staging",
+    "identity": "orange-staging-{region}",
+    "database": "orange_staging_{region}",
+    "object_prefix": "staging/{region}/",
+    "domain": "api.staging.{region}.orange.invalid",
+    "provision": "external",
+    "database_role": "orange_staging_{region}_service",
+    "identity_container": null,
+    "account_scope": "orange-staging-{region}"
+  },
+  "production": {
+    "stage": "prod",
+    "identity": "orange-prod-{region}",
+    "database": "orange_prod_{region}",
+    "object_prefix": "production/{region}/",
+    "domain": "api.prod.{region}.orange.invalid",
+    "provision": "external",
+    "database_role": "orange_prod_{region}_service",
+    "identity_container": null,
+    "account_scope": "orange-prod-{region}"
+  }
 }
