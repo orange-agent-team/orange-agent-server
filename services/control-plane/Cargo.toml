@@ -154,3 +154,7 @@ required-features = ["integration-tests"]
 [[test]]
 name = "oidc_rollover"
 required-features = ["oidc-rollover-tests"]
+
+[[test]]
+name = "operational_retention"
+required-features = ["integration-tests"]

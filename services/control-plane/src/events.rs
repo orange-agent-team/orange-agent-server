@@ -26,6 +26,25 @@ pub struct RetentionBatch {
     pub complete: bool,
 }
 
+/// One bounded maintenance pass. A damaged stream is retained and reported separately.
+pub async fn prune_old_notifications(
+    pool: &PgPool,
+    streams: u16,
+    events: u16,
+) -> Result<(i64, i64), EventError> {
+    if !(1..=32).contains(&streams) || !(1..=256).contains(&events) {
+        return Err(EventError::Invalid);
+    }
+    Ok(sqlx::query_as(
+        "SELECT coalesce(sum(removed),0)::bigint,count(*) FILTER(WHERE integrity_blocked)
+        FROM orange_prune_old_notifications($1,$2)",
+    )
+    .bind(i32::from(streams))
+    .bind(i32::from(events))
+    .fetch_one(pool)
+    .await?)
+}
+
 #[derive(Clone)]
 pub struct EventStore {
     pool: PgPool,
