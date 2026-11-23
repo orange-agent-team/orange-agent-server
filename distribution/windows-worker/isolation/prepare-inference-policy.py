@@ -41,12 +41,19 @@ def pairs(entries):
     return result
 
 
-def json_file(path,limit=65536):
-    require(path.is_file() and not path.is_symlink() and path.stat().st_size<=limit,"invalid_policy_file")
-    with path.open("rb") as stream:
+def config_bytes(path,limit=65536):
+    fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+    with os.fdopen(fd,"rb") as stream:
+        before=os.fstat(fd)
+        require(stat.S_ISREG(before.st_mode) and before.st_size<=limit,"invalid_policy_file")
         data=stream.read(limit+1)
-    require(len(data)<=limit,"invalid_policy_file")
-    return json.loads(data,object_pairs_hook=pairs)
+        after=os.fstat(fd)
+        require(len(data)<=limit and before.st_ctime_ns==after.st_ctime_ns,"invalid_policy_file")
+    return data
+
+
+def json_file(path):
+    return json.loads(config_bytes(path),object_pairs_hook=pairs)
 
 
 def reviewed_file(name,expected):
@@ -109,11 +116,25 @@ def trusted_text(path,limit):
     return data.decode("utf-8",errors="strict")
 
 
+def no_drive_mounts(text):
+    for line in text.splitlines():
+        left,sep,right=line.partition(" - ")
+        fields=left.split();fs=right.split()
+        require(sep and len(fields)>=6 and len(fs)>=3,"invalid_mountinfo")
+        require(fs[0].lower() not in ("9p","drvfs") and not re.match(r"^/mnt/[a-zA-Z](?:/|$)",fields[4]),"windows_drive_mount_observed")
+
+
 def target_binding():
     require(platform.system()=="Linux" and platform.machine()=="x86_64","windows_wsl2_guest_required")
     require("microsoft-standard-wsl2" in trusted_text("/proc/sys/kernel/osrelease",512).lower(),"wsl2_kernel_unverified")
     require(wsl_config(trusted_text("/etc/wsl.conf",8192))==wsl_config(reviewed_file("wsl.conf",WSL_SHA).decode()),"distribution_policy_differs")
-    dev=os.lstat("/dev/dxg")
+    with open("/proc/self/mountinfo","rb") as f:
+        observed=f.read(1024*1024+1)
+    require(len(observed)<=1024*1024,"oversized_mountinfo")
+    no_drive_mounts(observed.decode("utf-8"))
+    try: dev=os.lstat("/dev/dxg")
+    except FileNotFoundError:raise PolicyError("gpu_bridge_absent") from None
+    except PermissionError:raise PolicyError("gpu_bridge_observation_denied") from None
     require(stat.S_ISCHR(dev.st_mode),"gpu_bridge_not_character_device")
     major,minor=os.major(dev.st_rdev),os.minor(dev.st_rdev)
     lines=trusted_text(f"/sys/dev/char/{major}:{minor}/uevent",8192).splitlines()
@@ -233,7 +254,7 @@ def main():
     else:
         require(args.trusted_rootfs_sha256 and re.fullmatch(r"[0-9a-f]{64}",args.trusted_rootfs_sha256),"trusted_release_digest_required")
     binding=target_binding()
-    require(args.bundle.is_dir() and not args.bundle.is_symlink() and args.bundle.stat().st_uid==os.geteuid() and args.bundle.stat().st_mode&0o077==0,"private_bundle_required")
+    require(args.bundle.is_dir() and not args.bundle.is_symlink() and (args.bundle.stat().st_uid,args.bundle.stat().st_gid)==binding[2:] and args.bundle.stat().st_mode&0o077==0,"private_bundle_required")
     bundle=args.bundle.resolve(strict=True)
     reviewed=base_policy()["annotations"]["org.orange-agent.weights.sha256"]
     owners={"image":(binding[2],binding[3]),"key":(binding[2]+65532,binding[3]+65532)}
@@ -245,8 +266,9 @@ def main():
     expected=policy(binding,measured)
     target=bundle/"config.json"
     if args.action=="render":publish_config(target,expected)
-    require(canonical(json_file(target))==canonical(expected),"oci_policy_differs")
-    print(json.dumps({"profile":PROFILE,"rootfs_sha256":measured,"config_sha256":sha(target.read_bytes()),"runtime_verified":False,"supply_authorized":False}))
+    config=config_bytes(target)
+    require(canonical(json.loads(config,object_pairs_hook=pairs))==canonical(expected),"oci_policy_differs")
+    print(json.dumps({"profile":PROFILE,"rootfs_sha256":measured,"config_sha256":sha(config),"runtime_verified":False,"supply_authorized":False}))
 
 
 if __name__=="__main__":

@@ -122,11 +122,15 @@ def main():
                      "windows-cross-toolchain.lock.json":source("config/windows-cross-toolchain.lock.json")}
             for name in ("README.md","wsl.conf","oci-base.json","prepare-inference-policy.py","inspect-target.py"):
                 payload["isolation/"+name]=source("distribution/windows-worker/isolation/"+name)
+            diagnostic=tree/"target/orange-isolation-probe"
+            subprocess.run([sys.executable,tree/"scripts/build-worker-isolation-probe.py","--target","x86_64-unknown-linux-musl","--output",diagnostic],
+                           cwd=tree,check=True)
+            payload["isolation/orange-isolation-probe"]=diagnostic.read_bytes()
             payload.update(licenses)
             for name in runtime:
                 payload["bin/"+name]=(tools.parent/"x86_64-w64-mingw32/bin"/name).read_bytes()
             manifest={"source":commit,"target":TARGET,"rust":lock["rust"],"toolchain_sha256":lock["sha256"],
-                      "imported_system_dlls":system_imports,"bundled_runtime_imports":runtime,"windows_runtime_verified":False,
+                      "imported_system_dlls":system_imports,"bundled_runtime_imports":runtime,"isolation_probe_target":"x86_64-unknown-linux-musl","windows_runtime_verified":False,
                       "sha256":{k:hashlib.sha256(v).hexdigest() for k,v in payload.items()}}
             payload["manifest.json"]=(json.dumps(manifest,sort_keys=True,indent=2)+"\n").encode()
             output=scratch/f"worker-{n}.zip"
@@ -134,7 +138,7 @@ def main():
                 for name,value in sorted(payload.items()):
                     item=zipfile.ZipInfo("orange-worker/"+name,(1980,1,1,0,0,0))
                     item.create_system=3
-                    item.external_attr=(0o100755 if name.endswith(".exe") else 0o100644)<<16
+                    item.external_attr=(0o100755 if name.endswith(".exe") or name=="isolation/orange-isolation-probe" else 0o100644)<<16
                     bundle.writestr(item,value,compress_type=zipfile.ZIP_DEFLATED,compresslevel=9)
             results.append((output,manifest))
         checksum=digest(results[0][0])
@@ -151,7 +155,7 @@ def main():
         report={"archive":final.name,"sha256":checksum,"bytes":final.stat().st_size,"source":commit,"target":TARGET,
                 "identical_archives":2,"imported_system_dlls":results[0][1]["imported_system_dlls"],
                 "bundled_runtime":sorted(results[0][1]["bundled_runtime_imports"]),
-                "windows_runtime_verified":False,"physical_gpu_verified":False}
+                "isolation_probe_target":"x86_64-unknown-linux-musl","windows_runtime_verified":False,"physical_gpu_verified":False}
         final.with_suffix(".json").write_text(json.dumps(report,indent=2)+"\n")
         print(json.dumps(report),flush=True)
 

@@ -39,6 +39,9 @@ def check(directory,guest):
     assert p.subordinate_range("someone:65536:65536\norange-worker:131072:65536")==131072
     for ranges in ("orange-worker:0:65536","orange-worker:131072:65535","other:130000:10000\norange-worker:131072:65536"):
         expect_error(lambda r=ranges:p.subordinate_range(r))
+    p.no_drive_mounts("1 0 8:1 / / ro - ext4 root ro")
+    for entry in ("2 1 0:1 / /mnt/c rw - ext4 root rw","2 1 0:1 / /other rw - 9p drvfs rw"):
+        expect_error(lambda x=entry:p.no_drive_mounts(x))
     rendered=p.policy((245,7,131072,196608),"a"*64)
     assert rendered["root"]=={"path":"rootfs","readonly":True} and "hooks" not in rendered
     proc=rendered["process"]

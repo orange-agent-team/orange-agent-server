@@ -25,8 +25,17 @@ def path_state(path):
     except OSError:return "unobserved"
 
 
+def device_leaf(dest,source,kind):
+    numbers={"/dev/null":(1,3),"/dev/zero":(1,5),"/dev/full":(1,7),"/dev/random":(1,8),
+             "/dev/urandom":(1,9),"/dev/tty":(5,0)}
+    if (dest not in numbers and dest!="/dev/dxg") or source!="/"+dest.rsplit("/",1)[1] or kind not in ("tmpfs","devtmpfs"):return False
+    try: metadata=os.lstat(dest)
+    except OSError:return False
+    return stat.S_ISCHR(metadata.st_mode) and (dest=="/dev/dxg" or (os.major(metadata.st_rdev),os.minor(metadata.st_rdev))==numbers[dest])
+
+
 def mount_facts(text):
-    root=None;windows_drives=0;unexpected=0;private_tmp=set()
+    root=None;windows_drives=0;unexpected=0;devices=0;private_tmp=set()
     allowed={"/proc":"proc","/dev":"tmpfs","/tmp":"tmpfs","/run/orange":"tmpfs"}
     masked={"/proc/acpi","/proc/asound","/proc/kcore","/proc/keys","/proc/latency_stats","/proc/scsi",
             "/proc/timer_list","/proc/sysrq-trigger","/proc/sys/fs/binfmt_misc"}
@@ -49,10 +58,11 @@ def mount_facts(text):
             if fs[0]!="proc" or "ro" not in flags:unexpected+=1
         elif dest in masked:
             if fs[0] not in ("tmpfs","devtmpfs"):unexpected+=1
+        elif device_leaf(dest,fields[3],fs[0]):devices+=1
         else:
             unexpected+=1
     if root is None:raise ValueError("missing root")
-    return {"root_readonly":root,"host_mount_entries":windows_drives,"unexpected_mount_entries":unexpected,
+    return {"root_readonly":root,"host_mount_entries":windows_drives,"unexpected_mount_entries":unexpected,"device_leaf_mounts":devices,
             "private_scratch":private_tmp=={"/tmp","/run/orange"}}
 
 

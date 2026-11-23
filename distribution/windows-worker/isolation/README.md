@@ -8,7 +8,7 @@ OCI 基础配置使用只读根、非 root 用户、空 capability 集合、独�
 
 `prepare-inference-policy.py describe` 可在开发机打印版本和模板摘要。其余命令需在专用 Linux x86_64 WSL2 发行版内使用 Python 3.12。准备程序只读取发行版配置、专用 orange-worker 的 subordinate UID/GID 分配，以及 GPU 桥的内核设备记录。它不会安装驱动或修改发行版配置。
 
-控制器准备 0700 的私有 bundle，内含独立的 `rootfs/`。镜像文件属于容器映射后的 root，禁止可写组、特殊文件、不受控链接、set-id 和扩展属性。审核的 Linux x86_64 引擎位于 `/opt/orange/bin/llama-server`；模型须匹配配置中的完整权重摘要。控制器为每次运行准备全新密钥文件 `/opt/orange/session/api.key`，包含 64 个小写十六进制字符及换行，属容器映射后的 65532:65532，权限为 0400。清单按目录顺序记录相对路径、类型、权限和文件摘要，对会话密钥仅记录用途标记。发布者及控制器必须分别保护根快照与可信摘要。
+控制器准备属主为专用映射 root、权限 0700 的私有 bundle，保证映射后的 root 能遍历其上级路径，内含独立的 `rootfs/`。镜像文件属于容器映射后的 root，禁止可写组、特殊文件、不受控链接、set-id 和扩展属性。审核的 Linux x86_64 引擎位于 `/opt/orange/bin/llama-server`；模型须匹配配置中的完整权重摘要。控制器为每次运行准备全新密钥文件 `/opt/orange/session/api.key`，包含 64 个小写十六进制字符及换行，属容器映射后的 65532:65532，权限为 0400。清单按目录顺序记录相对路径、类型、权限和文件摘要，对会话密钥仅记录用途标记。发布者及控制器必须分别保护根快照与可信摘要。
 
 ```sh
 python3.12 prepare-inference-policy.py describe
@@ -22,3 +22,7 @@ python3.12 prepare-inference-policy.py verify --bundle "$PRIVATE_BUNDLE" --trust
 ### 观测执行环境
 
 `inspect-target.py` 只观测当前诊断进程。它核对挂载、有效身份、capability、seccomp 状态、设备路径与网络接口，并尝试创建一个本地 IPv4 套接字后立即关闭，全程不发起连接。缺失路径、拒绝访问和观测失败分别记录。诊断镜像中观测满足条件，也不能证明另一模型镜像已经通过 GPU、容量或隔离验收。工具的输出不签发设备租约，也不会开始接单。
+
+开发包内 `orange-isolation-probe` 是可在 Linux x86_64 运行的静态 ELF。它从真正的运行进程内部核对限制，使用 Unix 套接字往返两个测试字节，核对 IPv4 套接字是否被内核拒绝，并区分路径不存在、权限拒绝和未观测。探针只输出枚举与数量。运行时可能按 OCI 规范逐个挂载标准字符设备，探针逐项匹配路径、文件类型及设备号。[OCI 1.1.0 默认设备](https://github.com/opencontainers/runtime-spec/blob/v1.1.0/config-linux.md#default-devices)
+
+源码验收 `python3.12 scripts/check-contributor-oci.py` 在隔离的 Linux arm64 测试虚拟机使用实际 runc，以静态诊断程序替代模型，只替换目标架构、客体 uid/gid 映射及测试实例标识，并省去 GPU 设备。宿主从活动 PID 核对七个命名空间与 cgroup v2 的内存、交换、CPU、进程数限制，然后确认实例及其 cgroup 消失。此项验收与目标 Windows 的 GPU 驱动观测、模型加载和显存回收分别登记。
