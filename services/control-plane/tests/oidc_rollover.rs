@@ -18,12 +18,12 @@ async fn fresh_key_set_verifies_multi_key_lifetimes_without_repeating_code_excha
             .kill_on_drop(true)
             .spawn()
             .expect("loopback fixture");
-    let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
+    let mut lines = BufReader::new(child.stdout.take().expect("fixture stdout")).lines();
     let issuer = tokio::time::timeout(std::time::Duration::from_secs(15), lines.next_line())
         .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
+        .expect("issuer readiness deadline")
+        .expect("read issuer origin")
+        .expect("issuer provided its URL");
     let provider = OidcProvider::discover(ProviderConfig {
         issuer: issuer.clone(),
         development: true,
@@ -38,12 +38,21 @@ async fn fresh_key_set_verifies_multi_key_lifetimes_without_repeating_code_excha
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
         .build()
-        .unwrap();
+        .expect("local HTTP transport");
     for index in 1..=9 {
         let flow = provider.start("fixture").expect("real PKCE challenge");
-        let redirect = http.get(flow.authorization_url).send().await.unwrap();
+        let redirect = http
+            .get(flow.authorization_url)
+            .send()
+            .await
+            .expect("authorize fixture login");
         assert_eq!(redirect.status(), reqwest::StatusCode::FOUND);
-        let target = reqwest::Url::parse(redirect.headers()["location"].to_str().unwrap()).unwrap();
+        let target = reqwest::Url::parse(
+            redirect.headers()["location"]
+                .to_str()
+                .expect("redirect is text"),
+        )
+        .expect("parse callback");
         let pairs: std::collections::HashMap<_, _> = target.query_pairs().collect();
         assert_eq!(pairs["state"], flow.state);
         let result = provider
@@ -63,10 +72,10 @@ async fn fresh_key_set_verifies_multi_key_lifetimes_without_repeating_code_excha
         .get(format!("{issuer}/counts"))
         .send()
         .await
-        .unwrap()
+        .expect("get issuer counters")
         .json()
         .await
-        .unwrap();
+        .expect("decode counter evidence");
     assert_eq!(counts, json!({"exchanges":9,"reads":10}));
     child.kill().await.expect("stop test issuer");
 }
