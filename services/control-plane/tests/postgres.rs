@@ -683,7 +683,8 @@ async fn only_one_concurrent_terminal_revision_wins_and_an_old_attempt_cannot_re
 
 #[tokio::test]
 async fn existing_schema66_job_and_hold_survive_revision_upgrade() {
-    let url = std::env::var("ORANGE_TEST_DATABASE_URL").expect("dedicated empty upgrade DB");
+    let url =
+        std::env::var("ORANGE_TEST_UPGRADE_DATABASE_URL").expect("dedicated empty upgrade DB");
     let store = Store::connect(&url).await.expect("connect");
     let missing: bool = sqlx::query_scalar("SELECT to_regclass('public.jobs') IS NULL")
         .fetch_one(store.pool())

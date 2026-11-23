@@ -15,8 +15,8 @@ environment['PATH'] = str(cargo.parent) + os.pathsep + environment.get('PATH', '
 version = subprocess.check_output([str(cargo.parent/'rustc'), '--version'], env=environment, text=True)
 if not version.startswith('rustc 1.97.1 '):
     raise SystemExit('Expected Rust 1.97.1; select installed toolchain with ORANGE_RUST_TOOLCHAIN')
-def run(*args):
-    subprocess.run([str(cargo), *args], cwd=ROOT, env=environment, check=True)
+def run(*args, env=None):
+    subprocess.run([str(cargo), *args], cwd=ROOT, env=environment if env is None else env, check=True)
 options=set(sys.argv[1:])
 focused='--focused' in options
 targets={'--http','--postgres','--teams','--events','--queue'}
@@ -42,4 +42,11 @@ else:
             environment['ORANGE_TEST_DATABASE_URL'] = url.read_text().strip()
         for flag, name in [('--postgres', 'postgres'), ('--teams', 'teams'), ('--events','events'), ('--queue','queue')]:
             if flag in sys.argv:
-                run('test', '-p', 'orange-control-plane', '--features', 'integration-tests', '--test', name, '--locked')
+                command=('test','-p','orange-control-plane','--features','integration-tests','--test',name,'--locked')
+                if name=='postgres':
+                    # The migration-under-test needs schema 66, while its sibling tests require current schema.
+                    from owned_postgres import database_at
+                    with database_at(environment['ORANGE_TEST_DATABASE_URL'],'orange_pg_upgrade_') as (_,upgrade_url):
+                        run(*command,env=dict(environment,ORANGE_TEST_UPGRADE_DATABASE_URL=upgrade_url))
+                else:
+                    run(*command)

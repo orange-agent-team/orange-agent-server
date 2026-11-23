@@ -7,11 +7,15 @@ import subprocess
 from urllib.parse import unquote,urlsplit,urlunsplit
 import uuid
 
-@contextmanager
 def database(url_file,prefix):
+    return database_at(url_file.read_text().strip(),prefix)
+
+
+@contextmanager
+def database_at(url,prefix):
     if not re.fullmatch(r'orange_[a-z_]{1,20}_',prefix):
         raise ValueError('Test database prefix required')
-    base=urlsplit(url_file.read_text().strip())
+    base=urlsplit(url)
     if base.scheme not in ('postgres','postgresql') or base.hostname not in ('127.0.0.1','localhost','::1'):
         raise ValueError('Explicit loopback PostgreSQL database required')
     name=prefix+uuid.uuid4().hex

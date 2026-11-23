@@ -23,6 +23,8 @@ env.update(PATH=str(cargo.parent)+os.pathsep+env["PATH"],CARGO_NET_OFFLINE="true
 with database(private/"database-url","orange_job_revision_") as (_,url):
     env.update(ORANGE_TEST_DATABASE_URL=url,ORANGE_TEST_USER_CONFIG_FILE=str(private/"identity/user-config.json"),
                ORANGE_TEST_OIDC_CONFIG_FILE=str(private/"identity/admin-config.json"))
+    if args.section=="upgrade":
+        env["ORANGE_TEST_UPGRADE_DATABASE_URL"]=url
     if args.section=="sequences":
         case="every_job_state_accepts_only_its_start_cancel_and_completion_edges"
         result=subprocess.run([cargo,"test","--locked","--offline","-p","orange-domain",case],cwd=ROOT,env=env,text=True,stdout=subprocess.PIPE)
