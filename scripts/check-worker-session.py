@@ -62,8 +62,11 @@ with tempfile.TemporaryDirectory(prefix='orange-worker-mtls-') as directory:
         features='transcription-input-tests'
     elif environment.get('ORANGE_TRANSCRIPTION_OBSERVATION_TESTS'):
         features='transcription-observation-tests'
+    if environment.get("ORANGE_JOB_REVISION_BROWSER_TEST"): features="job-revision-browser-tests"
     command=[str(cargo),'test','-p','orange-control-plane','--features',features,'--test','worker_sessions','--locked']
-    if environment.get('ORANGE_QUARANTINE_HEARTBEAT_TEST'):
+    if environment.get('ORANGE_JOB_REVISION_BROWSER_TEST'):
+        command+=['input_cases::cancel_cases::browsers_review_personal_and_organization_job_versions_before_cancelling','--','--exact','--nocapture']
+    elif environment.get('ORANGE_QUARANTINE_HEARTBEAT_TEST'):
         command+=['ordinary_authenticated_heartbeat_preserves_quarantine_and_cannot_recreate_execution','--','--exact']
     elif environment.get('ORANGE_DIAGNOSTIC_CORRELATION_TEST'):
         command+=['input_cases::exact_customer_input_requires_start_and_rechecks_deletion_on_real_mtls','--','--exact','--nocapture']

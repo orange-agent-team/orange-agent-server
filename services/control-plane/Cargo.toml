@@ -6,6 +6,7 @@ rust-version.workspace = true
 publish.workspace = true
 
 [features]
+job-revision-browser-tests=["integration-tests"]
 integration-tests = []
 metering-upgrade-tests = ["integration-tests"]
 cloud-host-tests = ["integration-tests"]

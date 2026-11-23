@@ -7,11 +7,13 @@ import shutil
 import subprocess
 import sys
 from owned_postgres import database
+from acceptance_origins import reserve_origins
 
 ROOT=Path(__file__).resolve().parents[1]
 p=argparse.ArgumentParser()
 p.add_argument("--environment",type=Path,default=ROOT/".local")
-p.add_argument("--section",required=True,choices=["race","cancel","upgrade","policy","interruptions"])
+p.add_argument("--section",required=True,choices=["race","cancel","upgrade","policy","interruptions","browser"])
+p.add_argument("--web-repo",type=Path)
 args=p.parse_args()
 private=args.environment.resolve()
 rustup=shutil.which("rustup") or "/opt/homebrew/opt/rustup/bin/rustup"
@@ -21,7 +23,18 @@ env.update(PATH=str(cargo.parent)+os.pathsep+env["PATH"],CARGO_NET_OFFLINE="true
 with database(private/"database-url","orange_job_revision_") as (_,url):
     env.update(ORANGE_TEST_DATABASE_URL=url,ORANGE_TEST_USER_CONFIG_FILE=str(private/"identity/user-config.json"),
                ORANGE_TEST_OIDC_CONFIG_FILE=str(private/"identity/admin-config.json"))
-    if args.section=="policy":
+    if args.section=="browser":
+        if not args.web_repo:raise SystemExit("An explicit version-pinned Web checkout is required")
+        web=args.web_repo.resolve()
+        reserve_origins(43122)
+        node=Path.home()/".nvm/versions/node/v22.23.2/bin/node"
+        subprocess.run([node,web/"scripts/check.mjs"],cwd=web,check=True)
+        subprocess.run([sys.executable,web/"scripts/local-tls.py"],cwd=web,check=True)
+        env.update(ORANGE_JOB_REVISION_BROWSER_TEST="1",ORANGE_REVISION_BROWSER_NODE=str(node),
+                   ORANGE_REVISION_BROWSER_DRIVER=str(web/"apps/web/scripts/real-job-preconditions.mjs"))
+        command=[sys.executable,ROOT/"scripts/check-worker-session.py"]
+        required={"browsers_review_personal_and_organization_job_versions_before_cancelling"}
+    elif args.section=="policy":
         env["ORANGE_QUARANTINE_HEARTBEAT_TEST"]="1"
         command=[sys.executable,ROOT/"scripts/check-worker-session.py"]
         required={"ordinary_authenticated_heartbeat_preserves_quarantine_and_cannot_recreate_execution"}

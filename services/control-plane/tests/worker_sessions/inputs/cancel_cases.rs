@@ -328,3 +328,94 @@ async fn conditional_cancellation_replays_the_original_precondition_but_rejects_
     assert_eq!(read(&f).await.0, after);
     assert_eq!(counts().await.expect("no duplicate refund"), settled);
 }
+
+#[cfg(feature = "job-revision-browser-tests")]
+#[tokio::test]
+async fn browsers_review_personal_and_organization_job_versions_before_cancelling() {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    for (team, cert) in [(false, "client-ay"), (true, "client-di")] {
+        let f = setup_model_scope(
+            cert,
+            &"b".repeat(64),
+            &"c".repeat(64),
+            "conditional browser fixture".into(),
+            32,
+            team,
+        )
+        .await;
+        let pool = f.d.store.pool();
+        let before: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM ledger_transactions WHERE owner_id=$1")
+                .bind(&f.owner)
+                .fetch_one(pool)
+                .await
+                .expect("funded");
+        let routes = orange_control_plane::auth::routes::router(f.identity.clone()).merge(
+            orange_control_plane::artifacts::http::router(f.identity.clone(), f.objects.clone()),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let address = listener.local_addr().expect("address");
+        let task = tokio::spawn(async move { axum::serve(listener, routes).await });
+        let cookie = f.headers["cookie"]
+            .to_str()
+            .expect("cookie")
+            .strip_prefix("__Host-orange-user=")
+            .expect("session token");
+        let input=serde_json::to_vec(&serde_json::json!({"api":format!("http://{address}"),"origin":f.identity.config.user_origin,"token":cookie,
+            "csrf":f.headers["x-csrf-token"].to_str().expect("csrf"),"team":team,"owner":f.owner,"job":f.job})).expect("fixture");
+        let outcome = tokio::task::spawn_blocking(move || {
+            let mut child = Command::new(
+                std::env::var_os("ORANGE_REVISION_BROWSER_NODE").expect("pinned Node"),
+            )
+            .arg(std::env::var_os("ORANGE_REVISION_BROWSER_DRIVER").expect("driver"))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("browser");
+            child
+                .stdin
+                .take()
+                .expect("stdin")
+                .write_all(&input)
+                .expect("send fixture");
+            child.wait_with_output().expect("browser completion")
+        })
+        .await
+        .expect("driver task");
+        task.abort();
+        assert!(
+            outcome.status.success(),
+            "{}",
+            String::from_utf8_lossy(&outcome.stderr)
+        );
+        let evidence: serde_json::Value =
+            serde_json::from_slice(&outcome.stdout).expect("browser receipt");
+        assert_eq!(evidence["browser_posts"], 1);
+        assert_eq!(evidence["observed"], evidence["sent"]);
+        assert_eq!(evidence["status"], if team { 200 } else { 412 });
+        let row: (String, String, i64) = sqlx::query_as(
+            "SELECT execution_state,settlement_state,charge FROM jobs WHERE job_id=$1",
+        )
+        .bind(&f.job)
+        .fetch_one(pool)
+        .await
+        .expect("actual final state");
+        assert_eq!(row, ("cancelled".into(), "settled".into(), 0));
+        let after: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM ledger_transactions WHERE owner_id=$1")
+                .bind(&f.owner)
+                .fetch_one(pool)
+                .await
+                .expect("cancel accounting");
+        assert_eq!(
+            after,
+            before + 1,
+            "only the winning request may release the freeze"
+        );
+        println!("verified_conditional_portal {evidence}");
+    }
+}
