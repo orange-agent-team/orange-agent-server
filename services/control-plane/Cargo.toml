@@ -168,3 +168,7 @@ required-features = ["integration-tests"]
 [[test]]
 name = "credential_purposes"
 required-features = ["integration-tests"]
+
+[[example]]
+name = "hosted-repository-api-fixture"
+required-features = ["repository-fixture-tests"]

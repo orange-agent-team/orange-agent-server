@@ -31,10 +31,15 @@ pub(super) async fn exercise(c: Setup<'_>, driver: &str) {
         .canonicalize()
         .expect("repo");
     let host_id = Uuid::new_v4().to_string();
+    let archive = std::env::var_os("ORANGE_CLOUD_TEST_GVISOR_ARCHIVE")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| repo.join(".local/gvisor-download/gvisor-aarch64.tar.bz2"));
     let admission = Command::new(&python)
         .arg(repo.join("scripts/admit-local-cloud-host.py"))
         .arg("--database-url-file")
         .arg(tls.join("database-url"))
+        .arg("--archive")
+        .arg(&archive)
         .arg("--host-cert")
         .arg(tls.join("host.pem"))
         .arg("--platform-host-ca")
@@ -83,7 +88,7 @@ pub(super) async fn exercise(c: Setup<'_>, driver: &str) {
     let cfg = private.path().join("node.json");
     std::fs::write(&cfg,serde_json::to_vec(&json!({"endpoint":format!("https://127.0.0.1:{port}"),"host_instance_id":host_id,"attestation_digest":report["attestation_digest"],
         "ca":tls.join("host-ca.pem"),"certificate":tls.join("host.pem"),"private_key":tls.join("host.key"),"journal_dir":private.path().join("journal"),
-        "driver_root":repo,"archive":repo.join(".local/gvisor-download/gvisor-aarch64.tar.bz2"),"python":python})).expect("config")).expect("private node config");
+        "driver_root":repo,"archive":archive,"python":python})).expect("config")).expect("private node config");
     let mut command = Command::new(env!("CARGO_BIN_EXE_orange-cloud-host-node"));
     command.env_clear();
     for k in ["PATH", "HOME", "TMPDIR"] {
@@ -116,7 +121,17 @@ pub(super) async fn exercise(c: Setup<'_>, driver: &str) {
     let gate_release = private.path().join("queue-release");
     let expiry_op = private.path().join("expiry-operation");
     let expiry_locked = private.path().join("expiry-locked");
-    let connector_case = std::env::var_os("ORANGE_MODEL_CONNECTOR_FIXTURE").is_some();
+    let repository = std::env::var_os("ORANGE_MODEL_REPOSITORY_FIXTURE").map(|path| {
+        let f: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path).expect("provider fixture")).expect("JSON");
+        match f["provider"].as_str() {
+            Some("github") => "github",
+            Some("gitlab") => "gitlab",
+            _ => panic!("invalid provider"),
+        }
+    });
+    let connector_case =
+        std::env::var_os("ORANGE_MODEL_CONNECTOR_FIXTURE").is_some() || repository.is_some();
     let continuing = std::env::var_os("ORANGE_CLOUD_CONTINUATION").is_some();
     let tool_cases = std::env::var_os("ORANGE_CLOUD_DIRECTORY_TOOLS").is_some();
     let web_origin = format!(
@@ -124,7 +139,7 @@ pub(super) async fn exercise(c: Setup<'_>, driver: &str) {
         std::env::var("ORANGE_WEB_COMPUTE_QA_PORT").unwrap_or_else(|_| "43127".into())
     );
     let packet = json!({"api":format!("http://{}/",c.api),"origin":web_origin,"cookie":c.cookie,"user":c.user,"owner":c.owner,"budget":c.budget,"price":c.price,"model":profile().model_version,
-        "expiry_operation":expiry_op,"expiry_locked":expiry_locked,"connector_case":connector_case,"connector_screenshot":evidence.join("actual-model-connector.png"),"continuation_case":continuing,"continuation_screenshot":evidence.join("actual-tool-continuation.png"),"directory_cases":tool_cases,"tool_screenshot":evidence.join("actual-approved-directory.png"),"gate_quote":gate_quote,"gate_locked":gate_locked,"gate_release":gate_release,"oracle_input":input_file,"oracle_output":output_file,"screenshot":evidence.join("actual-hosted-model.png")});
+        "expiry_operation":expiry_op,"expiry_locked":expiry_locked,"connector_case":connector_case,"repository_provider":repository,"connector_screenshot":evidence.join("actual-model-connector.png"),"continuation_case":continuing,"continuation_screenshot":evidence.join("actual-tool-continuation.png"),"directory_cases":tool_cases,"tool_screenshot":evidence.join("actual-approved-directory.png"),"gate_quote":gate_quote,"gate_locked":gate_locked,"gate_release":gate_release,"oracle_input":input_file,"oracle_output":output_file,"screenshot":evidence.join("actual-hosted-model.png")});
     let mut fd = browser.stdin.take().expect("private stdin");
     fd.write_all(&serde_json::to_vec(&packet).expect("packet"))
         .await
@@ -304,6 +319,8 @@ pub(super) async fn exercise(c: Setup<'_>, driver: &str) {
     assert_eq!(count, 1);
     let guest = Command::new(&python)
         .arg(repo.join("scripts/cloud-workspace-driver.py"))
+        .arg("--archive")
+        .arg(&archive)
         .arg("recover")
         .arg(row.get::<String, _>("allocation_id"))
         .output()
@@ -368,6 +385,8 @@ pub(super) async fn exercise(c: Setup<'_>, driver: &str) {
             let allocation: String = facts.get("allocation_id");
             let proof = Command::new(&python)
                 .arg(repo.join("scripts/cloud-workspace-driver.py"))
+                .arg("--archive")
+                .arg(&archive)
                 .args(["recover", &allocation])
                 .output()
                 .await
@@ -479,11 +498,20 @@ pub(super) async fn exercise(c: Setup<'_>, driver: &str) {
         for cse in cases {
             let run = cse["run_id"].as_str().expect("Run");
             let row=sqlx::query("SELECT p.tool_name,c.job_id,c.commit_id,d.call_id,d.operation_id,d.decision,e.state,e.result_digest,
-                (SELECT count(*) FROM s3_source_calls reads WHERE reads.run_id=p.run_id AND reads.request_key='connector-effect/'||d.operation_id) AS dispatches,
+                ((SELECT count(*) FROM s3_source_calls reads WHERE reads.run_id=p.run_id AND reads.request_key='connector-effect/'||d.operation_id)
+                + (SELECT count(*) FROM repository_source_calls reads WHERE reads.run_id=p.run_id AND reads.request_key='connector-effect/'||d.operation_id)) AS dispatches,
                 (SELECT count(*) FROM job_settlements settled WHERE settled.job_id=c.job_id) AS settlements
                 FROM cloud_connector_plans p JOIN cloud_connector_model_commits c USING(run_id) JOIN cloud_connector_decisions d USING(run_id) JOIN cloud_connector_effect_receipts e USING(run_id) WHERE p.run_id=$1")
                 .bind(run).fetch_one(c.pool).await.expect("actual committed model connector");
-            assert_eq!(row.get::<String, _>("tool_name"), "list_objects");
+            assert_eq!(
+                row.get::<String, _>("tool_name"),
+                match repository {
+                    Some("github") => "list_repositories",
+                    Some("gitlab") => "list_projects",
+                    None => "list_objects",
+                    _ => unreachable!(),
+                }
+            );
             assert_eq!(
                 row.get::<String, _>("job_id"),
                 cse["job_id"].as_str().expect("Job")

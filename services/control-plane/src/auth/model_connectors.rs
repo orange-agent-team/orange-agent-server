@@ -44,19 +44,37 @@ pub(super) async fn available(
             .filter(|s| s.owner == owner)
             .map(|s| s.digest.as_str())
             .collect(),
+        "github" | "gitlab" => i
+            .repository_sources
+            .0
+            .values()
+            .filter(|s| s.owner == owner && s.registration.provider.name() == family)
+            .map(|s| s.digest.as_str())
+            .collect(),
         _ => return Ok(false),
     };
     sqlx::query_scalar("SELECT EXISTS(SELECT FROM unnest($1::text[]) AS active(digest) WHERE NOT EXISTS(SELECT FROM connector_credential_faults f WHERE f.source_digest=active.digest))")
         .bind(digests).fetch_one(&mut **tx).await.map_err(db)
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct CatalogQuery {
+    #[serde(default)]
+    repository_listing: bool,
+}
 pub(super) async fn catalog(
     State(i): State<Arc<UserIdentity>>,
     headers: HeaderMap,
+    query: Result<axum::extract::Query<CatalogQuery>, axum::extract::rejection::QueryRejection>,
 ) -> Result<Json<Value>, UserApiError> {
+    let options = query.map_err(|_| AuthError::Invalid)?.0;
     let mut g = i.authenticate(&headers).await?;
     let owner = g.view().personal_owner_id.clone();
     let mut values = Vec::new();
-    for kind in ["postgres", "s3"] {
+    for kind in ["postgres", "s3", "github", "gitlab"] {
+        if matches!(kind, "github" | "gitlab") && !options.repository_listing {
+            continue;
+        }
         if available(&i, &owner, kind, g.transaction()).await? {
             for (family, name, _) in tools::TOOLS {
                 if family == kind {
@@ -133,7 +151,9 @@ async fn grant_authority(
     p: &Proposal,
     grant: &str,
 ) -> Result<(), UserApiError> {
-    if p.family == "s3" {
+    if let Some(provider) = crate::repo_connector::Provider::named(&p.family) {
+        super::repository_connectors::live(i, g, run, provider, grant).await?;
+    } else if p.family == "s3" {
         super::s3_connectors::live(i, g, run, grant).await?;
     } else {
         let (_, views) = super::pg_connectors::authority(i, g, run, grant).await?;
@@ -259,6 +279,20 @@ async fn read_source(
 ) -> Result<Value, UserApiError> {
     let permit = ReadPermit { proposal: p };
     let i = api.identity.clone();
+    if let Some(provider) = crate::repo_connector::Provider::named(&p.family) {
+        let action = serde_json::from_value(p.args.clone()).map_err(|_| AuthError::Invalid)?;
+        return Ok(super::repository_connectors::perform_checked(
+            i,
+            run,
+            provider,
+            grant,
+            h,
+            action,
+            Some(&permit),
+        )
+        .await?
+        .0);
+    }
     if p.family == "s3" {
         let action = serde_json::from_value(p.args.clone()).map_err(|_| AuthError::Invalid)?;
         Ok(super::s3_connectors::perform_checked(

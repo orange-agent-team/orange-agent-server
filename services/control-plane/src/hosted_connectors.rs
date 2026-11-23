@@ -7,7 +7,17 @@ use orange_protocol::{
 use serde_json::{Value, json};
 use std::sync::OnceLock;
 
-pub(crate) const TOOLS: [(&str, &str, &str); 6] = [
+pub(crate) const TOOLS: [(&str, &str, &str); 8] = [
+    (
+        "github",
+        "list_repositories",
+        "List only the GitHub repositories selected in the approved Run grant.",
+    ),
+    (
+        "gitlab",
+        "list_projects",
+        "List only the GitLab projects selected in the approved Run grant.",
+    ),
     (
         "postgres",
         "list_views",
@@ -85,15 +95,30 @@ fn catalog() -> Result<&'static ToolCatalog, ()> {
                 "../../../contracts/json-schema/s3-connector.schema.json"
             ))
             .map_err(|_| ())?;
+            let repo: Value = serde_json::from_str(include_str!(
+                "../../../contracts/json-schema/repository-connector.schema.json"
+            ))
+            .map_err(|_| ())?;
             let mut specs = Vec::new();
             for (family, name, description) in TOOLS {
-                let schema = if family == "postgres" { &pg } else { &s3 };
+                let schema = match family {
+                    "postgres" => &pg,
+                    "s3" => &s3,
+                    "github" | "gitlab" => &repo,
+                    _ => return Err(()),
+                };
                 let defs = &schema["$defs"];
                 let variant = defs["Action"]["oneOf"]
                     .as_array()
                     .ok_or(())?
                     .iter()
-                    .find(|v| v["properties"]["action"]["const"] == name)
+                    .find(|v| {
+                        let action = &v["properties"]["action"];
+                        action["const"] == name
+                            || action["enum"]
+                                .as_array()
+                                .is_some_and(|names| names.iter().any(|n| n == name))
+                    })
                     .ok_or(())?;
                 let mut args = expanded(variant, defs, 0)?;
                 args["properties"]
@@ -105,7 +130,12 @@ fn catalog() -> Result<&'static ToolCatalog, ()> {
                     .ok_or(())?
                     .retain(|v| v != "action");
                 let mut output = defs["Output"].clone();
+                let mut repo_listing = defs["Page"].clone();
+                if matches!(family, "github" | "gitlab") {
+                    repo_listing["properties"]["data"]["items"] = defs["Repository"].clone();
+                }
                 let payload = match (family, name) {
+                    ("github", "list_repositories") | ("gitlab", "list_projects") => &repo_listing,
                     ("postgres", name) => {
                         let marker = match name {
                             "list_views" => "view_ids",
@@ -273,6 +303,34 @@ mod tests {
             &json!({"kind":"external_untrusted_data","data":{"view_ids":["one"]}}),
         )
         .expect("result");
+    }
+    #[test]
+    fn repository_listing_exposes_only_registered_metadata_and_bounded_page_arguments() {
+        for name in ["list_repositories", "list_projects"] {
+            let pin = digest(name).expect("pin");
+            let mut call = ToolCall {
+                id: "call_2".into(),
+                name: name.into(),
+                arguments: json!({"page":1,"limit":2}),
+            };
+            assert_eq!(
+                action(&call, name, &pin).expect("arguments"),
+                json!({"action":name,"page":1,"limit":2})
+            );
+            for invalid in [
+                json!({"page":1,"limit":0}),
+                json!({"page":1,"limit":101}),
+                json!({"page":1,"limit":2,"url":"elsewhere"}),
+                json!({"page":1,"limit":2,"grant_id":"foreign"}),
+            ] {
+                call.arguments = invalid;
+                assert!(action(&call, name, &pin).is_err());
+            }
+            let mut result = json!({"kind":"external_untrusted_data","data":{"data":[{"id":"17","path":"acme/notes","default_branch":"main"}],"next_page":null}});
+            check_result(name, &result).expect("metadata");
+            result["data"]["data"][0]["content"] = json!("unexpected body");
+            assert!(check_result(name, &result).is_err());
+        }
     }
     #[test]
     fn model_input_and_user_result_must_match_one_selected_operation() {

@@ -26,3 +26,11 @@ python3 scripts/check-repository-grants.py --database-url-file .local/database-u
 ```
 
 指定 `--web-repo ../orange-agent-web` 可在受控厂商协议环境运行 Chrome，验证两种来源的 12 个动作、文件下载完整性以及撤权后的页面重载。
+
+## 托管模型读取仓库清单
+
+用户在创建 Run 时勾选允许向已登记第三方仓库发出查询，选择 GitHub 的 `list_repositories` 或 GitLab 的 `list_projects`。客户端通过 `GET /api/v1/agent/connector-tools?repository_listing=true` 取得模型定义与执行摘要。默认目录保留旧客户端的六种工具。模型只能指定页码和每页数量，用户另行决定 Run 的数据源、仓库编号以及是否批准这一次调用。
+
+服务端使用已经提交并完成开发账本结算的模型响应生成操作编号。候选响应、错误的内容摘要、已撤销的授权或不同提供方的授权不能启动读取。申请被批准后，服务端按登记的数值仓库编号和路径核对提供方记录，返回仓库编号、路径、默认分支和下一页。源内容始终按外部非可信数据展示。结果交付时再次核对 Run、源授权及批准记录。撤回授权或提供方拒绝凭证时，清除已经保存的结果正文，保留摘要。
+
+`scripts/check-hosted-repository-listing.py` 通过 `--provider github` 或 `--provider gitlab` 选择协议。该命令使用独立的本机测试入口、实际 CPU 模型、Chrome、临时 PostgreSQL 和仅接受一个登记仓库的回环协议服务。用户服务发行包仍使用固定的服务商地址。商户、私有 SaaS 账号以及互联网服务商认证需要各自的验收记录。

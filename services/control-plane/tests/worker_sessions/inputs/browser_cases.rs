@@ -84,7 +84,24 @@ async fn actual_browser_quote_model_settlement_cleanup_and_deleted_content() {
         std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).expect("private");
         connector_env.insert("ORANGE_S3_SOURCES", file);
     }
-    let mut api = Command::new(std::env::var("ORANGE_USER_API_BINARY").expect("actual API"))
+    let mut binary = std::env::var_os("ORANGE_USER_API_BINARY").expect("actual API");
+    if let Some(path) = std::env::var_os("ORANGE_MODEL_REPOSITORY_FIXTURE") {
+        assert!(
+            connector_env.is_empty(),
+            "One connector provider per acceptance"
+        );
+        let mut fixture: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path).expect("loopback provider configuration"))
+                .expect("fixture JSON");
+        fixture["owner_id"] = serde_json::json!(c.f.owner);
+        let config = config_root.path().join("repository-listing.json");
+        std::fs::write(&config, serde_json::to_vec(&fixture).expect("fixture"))
+            .expect("write private fixture");
+        std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o600)).expect("private");
+        connector_env.insert("ORANGE_REPOSITORY_SOURCES", config);
+        binary = std::env::var_os("ORANGE_TEST_REPOSITORY_API").expect("qualification process");
+    }
+    let mut api = Command::new(binary)
         .env_clear()
         .envs(connector_env)
         .env("ORANGE_ENV", "development")

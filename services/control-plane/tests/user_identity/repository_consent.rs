@@ -100,6 +100,39 @@ async fn third_party_access_requires_creation_opt_in_and_live_selected_grant() {
     let server =
         tokio::spawn(async move { axum::serve(listener, api).await.expect("serve fixture") });
     register(&mut f, addr, false);
+    let catalog = "/api/v1/agent/connector-tools";
+    let historic = request(&f, "GET", catalog, None, headers(&f)).await;
+    assert_eq!(historic.0, StatusCode::OK);
+    assert!(
+        historic.1["tools"]
+            .as_array()
+            .expect("legacy catalog")
+            .iter()
+            .all(|t| t["connector"] != "github" && t["connector"] != "gitlab")
+    );
+    let opted_catalog = format!("{catalog}?repository_listing=true");
+    let (status, listing) = request(&f, "GET", &opted_catalog, None, headers(&f)).await;
+    assert_eq!(status, StatusCode::OK);
+    for (family, name) in [("github", "list_repositories"), ("gitlab", "list_projects")] {
+        let tools = listing["tools"].as_array().expect("catalog");
+        let tool = tools
+            .iter()
+            .find(|t| t["name"] == name)
+            .expect("registered tool");
+        assert_eq!(tool["connector"], family);
+        assert_eq!(tool["approval_required"], true);
+        assert_eq!(tool["model_definition"]["name"], name);
+    }
+    let foreign = request(&outsider, "GET", &opted_catalog, None, headers(&outsider)).await;
+    assert_eq!(foreign.0, StatusCode::OK);
+    assert!(
+        foreign.1["tools"]
+            .as_array()
+            .expect("foreign catalog")
+            .iter()
+            .all(|t| t["connector"] != "github" && t["connector"] != "gitlab")
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
     let terms = json!({"source_id":"github","source_digest":hex::encode(Sha256::digest(b"github")),"repository_ids":["17"],"duration_seconds":180});
     let old = format!("/api/v1/agent/runs/{legacy}/connectors/github");
     assert_eq!(

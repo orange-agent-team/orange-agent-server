@@ -223,7 +223,8 @@ pub(super) async fn create(
                 .tool
                 .as_ref()
                 .and_then(|c| crate::hosted_connectors::family(&c.name))
-                && !super::model_connectors::available(&identity, &owner, family, tx).await?
+                && ((matches!(family, "github" | "gitlab") && !c.allow_external_connectors)
+                    || !super::model_connectors::available(&identity, &owner, family, tx).await?)
             {
                 return Err(UserApiError(
                     StatusCode::FORBIDDEN,

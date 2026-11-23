@@ -60,7 +60,7 @@ fn source_error(e: Error) -> UserApiError {
         Error::Invalid => AuthError::Invalid.into(),
     }
 }
-async fn live(
+pub(super) async fn live(
     i: &UserIdentity,
     g: &mut UserSessionGuard,
     run: &str,
@@ -445,20 +445,38 @@ pub(super) async fn perform(
 ) -> Result<Json<Value>, UserApiError> {
     let f = provider(&name)?;
     let Json(a) = body.map_err(|_| AuthError::Invalid)?;
-    let req = key(&h)?;
+    perform_checked(i, &run, f, &id, &h, a, None).await
+}
+pub(super) async fn perform_checked(
+    i: Arc<UserIdentity>,
+    run: &str,
+    f: Provider,
+    id: &str,
+    h: &HeaderMap,
+    a: Action,
+    permit: Option<&super::model_connectors::ReadPermit<'_>>,
+) -> Result<Json<Value>, UserApiError> {
+    let protected = permit.map(|p| p.key());
+    let req = protected.as_deref().unwrap_or(key(h)?);
     let digest = orange_protocol::request_digest("repository.read.v1", &(&run, f, &id, &a))
         .map_err(|_| AuthError::Invalid)?;
-    let (mut g, _) = guard(&i, &h, &run, true, true).await?;
-    let (s, allowed) = live(&i, &mut g, &run, f, &id).await?;
-    super::connector_access::released_action(&mut g, f.name(), &id, &a).await?;
+    let (mut g, _) = guard(&i, h, run, true, true).await?;
+    if let Some(p) = permit {
+        p.check(&mut g, run, id).await?;
+    }
+    let (s, allowed) = live(&i, &mut g, run, f, id).await?;
+    super::connector_access::released_action(&mut g, f.name(), id, &a).await?;
     a.authorize(&s, &allowed)?;
-    if let Some(old) = reserve(&mut g, &run, f, &id, req, &digest).await? {
+    if let Some(old) = reserve(&mut g, run, f, id, req, &digest).await? {
         g.finish().await?;
         return Ok(Json(json!({"kind":"external_untrusted_data","data":old})));
     }
     g.finish().await?;
     let fetched = execute(&s, &allowed, a).await;
-    let mut g = finalize(&i, &h, &run, f, &id, req, &s).await?;
+    let mut g = finalize(&i, h, run, f, id, req, &s).await?;
+    if let Some(p) = permit {
+        p.check(&mut g, run, id).await?;
+    }
     let data = match fetched {
         Err(e) => {
             g.finish().await?;
@@ -467,7 +485,7 @@ pub(super) async fn perform(
         Ok(Data::Metadata(v)) => v,
         Ok(Data::File(n, b)) => {
             let a = uuid::Uuid::new_v4().to_string();
-            let row=sqlx::query("INSERT INTO repository_file_receipts(artifact_id,run_id,provider,grant_id,request_key,repository_id,path,commit_id,blob_id,size_bytes,content_sha256) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *").bind(a).bind(run).bind(name).bind(id).bind(req).bind(n.to_string()).bind(b.path).bind(b.commit).bind(b.oid).bind(b.bytes.len() as i64).bind(b.sha256).fetch_one(&mut **g.transaction()).await.map_err(db)?;
+            let row=sqlx::query("INSERT INTO repository_file_receipts(artifact_id,run_id,provider,grant_id,request_key,repository_id,path,commit_id,blob_id,size_bytes,content_sha256) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *").bind(a).bind(run).bind(f.name()).bind(id).bind(req).bind(n.to_string()).bind(b.path).bind(b.commit).bind(b.oid).bind(b.bytes.len() as i64).bind(b.sha256).fetch_one(&mut **g.transaction()).await.map_err(db)?;
             receipt(&row)
         }
     };
