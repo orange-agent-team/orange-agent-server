@@ -31,13 +31,14 @@ def notices(files,vendor,lockfile,source_blob):
             files[out]=data;included.append(out)
         provenance=origins.get(name+"-"+version)
         if provenance:
-            if not provenance["local"].startswith("distribution/notices/rust/"):raise ValueError("Unexpected upstream notice path")
-            source=source_blob(provenance["local"])
-            vcs=json.loads((directory/".cargo_vcs_info.json").read_bytes())
-            if sha(source)!=provenance["sha256"] or vcs["git"]["sha1"]!=provenance["commit"]:raise ValueError("Upstream notice mismatch")
-            if hashlib.sha1(b"blob "+str(len(source)).encode()+b"\0"+source).hexdigest()!=provenance["blob"]:raise ValueError("Git notice object mismatch")
-            out="licenses/upstream/"+provenance["local"].removeprefix("distribution/notices/rust/")
-            files[out]=source;included.append(out)
+            for notice in (provenance,*provenance.get("additional_notices",[])):
+                if not notice["local"].startswith("distribution/notices/rust/"):raise ValueError("Unexpected upstream notice path")
+                source=source_blob(notice["local"])
+                vcs=json.loads((directory/".cargo_vcs_info.json").read_bytes())
+                if sha(source)!=notice["sha256"] or vcs["git"]["sha1"]!=notice["commit"]:raise ValueError("Upstream notice mismatch")
+                if hashlib.sha1(b"blob "+str(len(source)).encode()+b"\0"+source).hexdigest()!=notice["blob"]:raise ValueError("Git notice object mismatch")
+                out="licenses/upstream/"+notice["local"].removeprefix("distribution/notices/rust/")
+                files[out]=source;included.append(out)
         inventory.append({"name":name,"version":version,"registry_checksum":checksum,"declared_license":meta.get("license"),"notice_files":included,"additional_upstream_source":provenance})
     result={"scope":"All registry sources pinned in Cargo.lock, including optional and other-target packages.","packages":inventory,
             "without_packaged_notice":[r["name"]+" "+r["version"] for r in inventory if not r["notice_files"]]}
