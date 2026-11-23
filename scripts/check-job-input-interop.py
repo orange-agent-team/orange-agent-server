@@ -24,6 +24,11 @@ def main():
     args = parser.parse_args()
     desktop = args.desktop_repo.resolve()
     dart = (args.dart or (desktop / ".local/toolchains/flutter-3.47.9/flutter/bin/cache/dart-sdk/bin/dart")).resolve()
+    sdk = dart.parents[3]
+    flutter_lock = json.loads((desktop / "config/flutter.lock.json").read_bytes())
+    revision = subprocess.check_output(["git", "-C", sdk, "rev-parse", "HEAD"], text=True).strip()
+    if revision != flutter_lock["framework_revision"]:
+        raise ValueError("Dart SDK is outside the pinned Flutter checkout")
     source = (ROOT / FIXTURE).read_bytes()
     lock = json.loads((desktop / "config/job-input-contract.lock.json").read_bytes())
     if lock["fixture"] != FIXTURE or len(lock["source_commit"]) != 40:
@@ -39,6 +44,10 @@ def main():
     rustup = shutil.which("rustup") or "/opt/homebrew/opt/rustup/bin/rustup"
     cargo = Path(subprocess.check_output([rustup, "which", "--toolchain", "1.97.1", "cargo"], text=True).strip())
     env = dict(os.environ, PATH=str(cargo.parent) + os.pathsep + os.environ["PATH"], CARGO_NET_OFFLINE="true")
+    env.update(DASH__SUPPRESS_ANALYTICS="true", FLUTTER_SUPPRESS_ANALYTICS="true")
+    env.setdefault("PUB_CACHE", str(desktop / ".local/pub-cache"))
+    subprocess.run([sdk / "bin/flutter", "pub", "get", "--offline", "--enforce-lockfile"],
+                   cwd=desktop / "apps/desktop", env=env, check=True)
     subprocess.run([cargo, "build", "--locked", "--offline", "-p", "orange-protocol", "--example", "job_input_codec"],
                    cwd=ROOT, env=env, check=True)
     meta = json.loads(subprocess.check_output([cargo, "metadata", "--format-version", "1", "--no-deps",
