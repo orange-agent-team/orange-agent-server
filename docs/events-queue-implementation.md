@@ -34,3 +34,5 @@ inbox使用consumer/event_id唯一身份，绑定原始载荷与完整事件头�
 `python3 scripts/check.py --events --queue`执行3项持久事件和4项队列真实PostgreSQL测试。覆盖并发取消只有一条终态通知、逐页重放、跨owner/撤权拒绝、失败事务零事件、保留期边界、并发扇出一次、SQL效果与确认的提交/回滚、旧租约/旧订阅拒绝、有界重试/死信以及源通知清理后inbox不丢失。
 
 事件保留期单测显式设置已投递夹具，只证明保留期；队列测试另通过真实publish_owner后清理并消费，证明持久接受链路。租约过期和重试时钟使用数据库中的受控时间夹具，不宣称已经过30天运行观察。`scripts/http-smoke.py`另外运行实际API进程，验证通知发现、游标续读和no-store。
+
+迁移 0069 新增按单流分批清理的维护入口。参数、暂停条件、独立消费者的保留规则及升级演练见[控制面数据库事务与清理](database/transactions-and-retention.md)。

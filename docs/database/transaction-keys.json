@@ -1,0 +1,23 @@
+{
+  "owners": {"key":["owner_id"],"references":{}},
+  "wallets": {"key":["owner_id"],"references":{"owner_id":"owners.owner_id"}},
+  "budget_roots": {"key":["root_budget_id"],"unique":[["owner_id","scope_id"]],"references":{"owner_id":"owners.owner_id"}},
+  "text_prices": {"key":["price_version"],"references":{"node_id":"nodes.node_id","execution_profile_id":"reviewed_execution_profiles.execution_profile_id","meter_profile_digest":"trusted_meter_profiles.profile_digest"}},
+  "quotes": {"key":["quote_id"],"references":{"owner_id":"owners.owner_id","root_budget_id":"budget_roots.root_budget_id"}},
+  "jobs": {"key":["job_id"],"unique":[["owner_id","invocation_id"]],"references":{"owner_id":"owners.owner_id","root_budget_id":"budget_roots.root_budget_id","quote_id":"quotes.quote_id"}},
+  "idempotency": {"key":["owner_id","operation","key"],"references":{"owner_id":"owners.owner_id"}},
+  "worker_execution_attempts": {"key":["attempt_id"],"unique":[["job_id"],["command_id"],["fencing_token"],["lease_id"]],"references":{"job_id":"jobs.job_id","node_id":"nodes.node_id"}},
+  "ledger_transactions": {"key":["transaction_id"],"unique":[["business_key"]],"references":{"owner_id":"owners.owner_id"}},
+  "ledger_entries": {"key":["transaction_id","account"],"references":{"transaction_id":"ledger_transactions.transaction_id"}},
+  "artifacts": {"key":["artifact_id"],"unique":[["version_id"]],"references":{"owner_id":"owners.owner_id","creator_id":"users.user_id"}},
+  "artifact_uploads": {"key":["owner_id","upload_id"],"references":{"owner_id":"owners.owner_id","artifact_id":"artifacts.artifact_id"},"unique":[["artifact_id"]]},
+  "artifact_pins": {"key":["artifact_id","reference_id"],"references":{"artifact_id":"artifacts.artifact_id"}},
+  "event_streams": {"key":["stream_id"],"unique":[["owner_id","entity_kind","entity_id"]],"references":{"owner_id":"owners.owner_id"}},
+  "durable_events": {"key":["event_id"],"unique":[["stream_id","seq"],["source_outbox_id"]],"references":{"stream_id":"event_streams.stream_id","attempt_id":"worker_execution_attempts.attempt_id"}},
+  "outbox": {"key":["event_id"],"unique":[["domain_event_id"]],"references":{"domain_event_id":"durable_events.event_id"}},
+  "inbox": {"key":["consumer_id","event_id"],"references":{}},
+  "test_stripe_inbox": {"key":["merchant_id","event_id"],"references":{}},
+  "test_credit_fulfillments": {"key":["order_id"],"unique":[["session_id"],["payment_intent"],["charge_id"],["transaction_id"]],"references":{"order_id":"test_checkout_orders.order_id","transaction_id":"ledger_transactions.transaction_id","owner_id":"owners.owner_id"}},
+  "test_purchase_lots": {"key":["order_id"],"references":{"order_id":"test_credit_fulfillments.order_id","owner_id":"owners.owner_id"}},
+  "test_job_lot_allocations": {"key":["job_id","order_id"],"references":{"order_id":"test_purchase_lots.order_id","job_id":"jobs.job_id"}}
+}

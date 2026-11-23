@@ -140,3 +140,7 @@ required-features = ["cloud-upgrade-tests"]
 name = "metering_upgrade"
 path = "tests/metering_upgrade.rs"
 required-features = ["metering-upgrade-tests"]
+
+[[test]]
+name = "storage_contract"
+required-features = ["integration-tests"]

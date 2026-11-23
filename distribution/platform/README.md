@@ -26,3 +26,5 @@
 schema 67 为个人与组织任务提供状态版本，旧客户端可以继续使用原取消接口。读取、条件取消、幂等重试及升级行为见[作业状态与版本](docs/engineering/job-state-revisions.md)。
 
 用户作业的持久事件支持 HTTP 快照和只读 WebSocket。反向代理需将 /api/v1/owners/*/jobs/*/events/ws 的升级请求传给同一个用户 API，并保留浏览器 Origin。确认、游标和关闭语义见[作业事件](docs/engineering/owned-job-events.md)。
+
+数据库维护随包提供[关键表与事务说明](docs/database/transactions-and-retention.md)和[业务键字典](docs/database/transaction-keys.json)。升级前请核对迁移版本与目标数据库。

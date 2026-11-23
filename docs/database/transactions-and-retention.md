@@ -1,0 +1,46 @@
+# 控制面数据库事务与清理
+
+迁移 0069 适用于 E07 PostgreSQL。关键表清单列出实际列名、复合键顺序、业务唯一键和引用目标。结构验收在新建数据库执行完整迁移，通过 PostgreSQL 系统目录逐项核对。[数据字典](transaction-keys.json)
+
+## 一个请求涉及哪些提交
+
+| 操作 | 一个数据库事务内的变更 | 连接中断后的依据 |
+|---|---|---|
+| 创建预算、提交作业 | 校验 owner、报价和请求摘要，锁定预算与钱包，按资金来源冻结，写 Job、幂等记录、复式分录、领域事件及 outbox。单独创建预算只记录预算及通知。 | 按 owner、operation 和请求键查询原结果；同键异参拒绝。冻结失败没有新 Job、分录或通知。 |
+| 分配 Worker | 串行选择节点上可执行的 Job，保存 attempt、命令、租约、连接代次及分配摘要。节点上未决 attempt 占用同一槽位；本地 Worker 独立持久化接受记录，再以设备身份提交 ACK。 | 重发同一命令或查询已存结果。控制面核对设备与连接代次、租约、执行配置和摘要后给出开始许可。失联后进入待核对状态，资源回收另行确认。 |
+| 通知交付 | 发布者在同一事务中保存订阅者 inbox 并标记 outbox 已投递。数据库消费者在处理事务内同时提交业务效果和完成标记。 | 按 consumer 和 event_id 领取；旧订阅版本或旧租约失效。外部工具的结果须按原操作标识单独核对。 |
+| 开发商户积分入账 | 验证签名后保存不可变商户事件和待处理记录。处理器按订单身份取得可核对的商户状态，在本地事务中一次写入钱包、账本、履行凭据及对应购入批次。 | 商户确认与平台提交有各自的时间点。原订单在响应丢失时保留，重复事件按商户与事件 ID 去重，重复履行受订单、支付身份和账本业务键约束。 |
+| 上传、引用与回收 | 先登记 upload_id、内容摘要与持久传输记录，写对象，再提交产物版本、存储位置和用量。维护任务检查有效引用与传输状态后回收。 | 调用方失联后，存储端可能仍在写。用原 upload_id 核对版本及发布记录；直到对象端确认删除才释放相应占用。 |
+
+## 读路径与数据生命周期
+
+- 流内用唯一键 `(stream_id,seq)` 顺序重放。队列用 `inbox_ready(consumer_id,state,available_at)` 查找就绪项。outbox 的投递时间代表通知已持久交接，inbox 保留独立的内容和执行状态。
+- 按账户浏览记账事实时，用 `(owner_id,created_at DESC,transaction_id DESC)` 排序。同一时间点用交易 ID 决胜，续页以 `(created_at,transaction_id) < ($time,$id)` 过滤。分录通过 transaction_id 关联。
+- 暂存回收索引覆盖 `state='staging'` 的 root、创建时间和 artifact_id。扫描候选项后仍须检查引用、锁及写入状态，索引命中本身不能授权删除。
+- 事件清理每次锁定一个 stream。从 oldest_seq 起核对每条事件及其原始 outbox ID。遇到待投递行即停止，缺行或配对不符会回滚。预算、账本、用户产物、pin 和 inbox 由各自的保留策略管理。
+
+维护方先确定单流的保留上限。以下是参数化查询，三个参数依次为流 ID、要清理的最后序号和每次最多检查的条数。
+
+```sql
+SELECT removed, oldest_remaining, blocked_at, complete
+FROM orange_prune_event_batch($1, $2, $3);
+```
+
+批次大小为 1 至 256，水位必须小于 next_seq。每次调用独立提交。complete 为真即可结束；blocked_at 有值时等待对应通知交接；其他情况可用原水位继续。已完成的水位重试返回零删除。并发维护方按数据库行锁串行推进。同一事务中的旧版全量调用会在遇到待投递事件时回滚之前各批。读取已过期游标会收到 SNAPSHOT_REQUIRED，客户端按当前授权重新读取实体快照。函数以调用者权限执行，默认仅函数所有者可调用。部署若拆分迁移与运维角色，须由数据库管理员按需授予函数执行和相应表权限。
+
+## 迁移与恢复演练
+
+1. 用新建回环数据库加载锁定版本的全部 SQLx 迁移。升级演练另建空库，仅应用 0001 至 0068，写入预算、幂等结果与待交付通知，再升级到 0069。
+2. 在升级后的库用原请求重放，核对预算 ID、事件 ID 与摘要；在同一事务写入测试借记与重复业务键，检查数据库返回 23505，回滚后原余额保留。
+3. 启动时若发现迁移校验和错误，服务退出并报告 STARTUP_MIGRATION_FAILED。运维应暂停放量，核对锁定源码、发布包、迁移记录与备份。故障演练只在自建空库故意更改校验和并还原该夹具，真实恢复应在隔离目标验证后切换。
+
+在服务端仓库中运行以下验收；工作树可追加 `--environment /path/to/private-dev-environment` 指向开发数据库 URL 文件和身份配置目录。交易测试使用本机 PostgreSQL、mTLS 和回环商户协议夹具。
+
+```sh
+python3 scripts/check-storage-contract.py --section keys
+python3 scripts/check-storage-contract.py --section transactions
+python3 scripts/check-storage-contract.py --section retention
+python3 scripts/check-storage-contract.py --section upgrade
+```
+
+补充阅读：[持久通知与事务队列](../events-queue-implementation.md)。
