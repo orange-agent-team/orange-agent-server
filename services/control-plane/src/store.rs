@@ -278,7 +278,7 @@ impl Store {
             finish_submit(tx, actor).await?;
             return Ok(view);
         }
-        if let Some(row) = sqlx::query("SELECT * FROM jobs WHERE owner_id=$1 AND invocation_id=$2")
+        if let Some(row) = sqlx::query("SELECT job_id,root_budget_id,invocation_id,execution_state,settlement_state,reserved,charge,request_digest FROM jobs WHERE owner_id=$1 AND invocation_id=$2")
             .bind(owner)
             .bind(&req.invocation_id)
             .fetch_optional(&mut *tx)
@@ -345,7 +345,7 @@ impl Store {
             .await?;
         let job = Uuid::new_v4().to_string();
         let purpose = serde_json::to_value(&req.purpose).map_err(|_| StoreError::Invalid)?;
-        let row = sqlx::query("INSERT INTO jobs(job_id,owner_id,root_budget_id,invocation_id,purpose,quote_id,request_digest,execution_state,reserved,held_gift,held_earned,held_purchased,submitting_user_id,input_required) VALUES($1,$2,$3,$4,$5,$6,$7,'queued',$8,$9,$10,$11,$12,$13) RETURNING *")
+        let row = sqlx::query("INSERT INTO jobs(job_id,owner_id,root_budget_id,invocation_id,purpose,quote_id,request_digest,execution_state,reserved,held_gift,held_earned,held_purchased,submitting_user_id,input_required) VALUES($1,$2,$3,$4,$5,$6,$7,'queued',$8,$9,$10,$11,$12,$13) RETURNING job_id,root_budget_id,invocation_id,execution_state,settlement_state,reserved,charge")
             .bind(&job).bind(owner).bind(&req.root_budget_id).bind(&req.invocation_id).bind(purpose.as_str().ok_or(StoreError::Invalid)?)
             .bind(&req.quote_id).bind(&digest).bind(maximum.units()).bind(hg).bind(he).bind(hp).bind(actor.map(|a|a.user.as_str())).bind(actor.is_some()).fetch_one(&mut *tx).await?;
         let mut entries = Vec::new();
@@ -394,7 +394,7 @@ impl Store {
         let mut tx = self.begin().await?;
         authorize(&mut tx, owner.as_str()).await?;
         let job = orange_domain::identity::JobId::try_from(id).map_err(|_| StoreError::Invalid)?;
-        let row = sqlx::query("SELECT * FROM jobs WHERE owner_id=$1 AND job_id=$2")
+        let row = sqlx::query("SELECT job_id,root_budget_id,invocation_id,execution_state,settlement_state,reserved,charge,state_revision FROM jobs WHERE owner_id=$1 AND job_id=$2")
             .bind(owner.as_str())
             .bind(job.as_str())
             .fetch_optional(&mut *tx)
@@ -503,7 +503,7 @@ impl Store {
             .bind(owner)
             .fetch_one(&mut *tx)
             .await?;
-        let row = sqlx::query("SELECT * FROM jobs WHERE job_id=$1 AND owner_id=$2 FOR UPDATE")
+        let row = sqlx::query("SELECT job_id,root_budget_id,invocation_id,execution_state,settlement_state,reserved,charge,owner_id,state_revision,held_gift,held_earned,held_purchased FROM jobs WHERE job_id=$1 AND owner_id=$2 FOR UPDATE")
             .bind(id)
             .bind(owner)
             .fetch_one(&mut *tx)
@@ -640,7 +640,7 @@ async fn job_in_tx(
     owner: &str,
     id: &str,
 ) -> Result<JobView, StoreError> {
-    let row = sqlx::query("SELECT * FROM jobs WHERE job_id=$1 AND owner_id=$2")
+    let row = sqlx::query("SELECT job_id,root_budget_id,invocation_id,execution_state,settlement_state,reserved,charge FROM jobs WHERE job_id=$1 AND owner_id=$2")
         .bind(id)
         .bind(owner)
         .fetch_optional(&mut **tx)
@@ -821,7 +821,7 @@ pub(crate) async fn stop_cloud_job(
             .bind(&owner)
             .fetch_one(&mut **tx)
             .await?;
-        let row = sqlx::query("SELECT * FROM jobs WHERE job_id=$1 AND owner_id=$2 FOR UPDATE")
+        let row = sqlx::query("SELECT job_id,root_budget_id,invocation_id,execution_state,settlement_state,reserved,charge,owner_id,state_revision,held_gift,held_earned,held_purchased FROM jobs WHERE job_id=$1 AND owner_id=$2 FOR UPDATE")
             .bind(&job)
             .bind(&owner)
             .fetch_one(&mut **tx)

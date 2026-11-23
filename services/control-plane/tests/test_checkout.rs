@@ -641,7 +641,13 @@ async fn schema_58_purchase_and_job_history_survives_lot_upgrade_and_exact_queue
             .next()
             .is_some_and(|v| v.starts_with("orange_checkout_old_"))
     );
-    let db = Store::connect(&url).await.expect("database");
+    // Exercise the prepared statements on the same PostgreSQL connection across the upgrade.
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&url)
+        .await
+        .expect("historical connection");
+    let db = Store::from_pool(pool);
     sqlx::migrate::Migrator::with_migrations(
         sqlx::migrate!()
             .iter()
@@ -673,8 +679,36 @@ async fn schema_58_purchase_and_job_history_survives_lot_upgrade_and_exact_queue
         .expect("budget")
         .root_budget_id;
     let historic = job_from_wallet(&db, &b.owner, &root, 1600).await;
+    let pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(db.pool())
+        .await
+        .expect("legacy backend");
+    let reader = orange_control_plane::events::EventStore::new(db.pool().clone());
+    let stream = reader
+        .discover(&b.owner, "job", &historic)
+        .await
+        .expect("legacy stream");
+    let first = reader
+        .read(&b.owner, &stream.stream_id, "0", 4)
+        .await
+        .expect("legacy events");
+    assert_eq!(first.events.len(), 1);
     db.migrate().await.expect("actual migration");
     db.migrate().await.expect("repeat migrations");
+    let after: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(db.pool())
+        .await
+        .expect("upgraded backend");
+    assert_eq!(pid, after);
+    let upgraded = reader
+        .read(&b.owner, &stream.stream_id, "0", 4)
+        .await
+        .expect("warm event projection");
+    assert_eq!(first.events[0].event_id, upgraded.events[0].event_id);
+    assert_eq!(
+        first.events[0].payload_digest,
+        upgraded.events[0].payload_digest
+    );
     assert_eq!(lot(&db, &a).await, (0, 1000, 0));
     assert_eq!(lot(&db, &c).await, (1500, 500, 0));
     for _ in 0..2 {
