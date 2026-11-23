@@ -61,32 +61,12 @@ impl WorkerSessionStore {
         let renewal_version = hello.renewal_version;
         let output_version = hello.output_version;
         let cpu_cleanup_version = hello.cpu_cleanup_version;
-        if hello.protocol_version != 1 {
-            return Err(SessionError::Invalid);
-        }
         if !valid_id(node)
             || !valid_digest(fingerprint)
             || !valid_digest(capabilities)
-            || node_control_version > 2
-            || execution_control_version > 2
-            || rejection_receipts_version > 1
-            || transcription_output_version > 1
-            || (transcription_output_version == 1
-                && (transcription_input_version != 1 || output_version != 1))
-            || transcription_input_version > 1
-            || (transcription_input_version == 1 && input_artifacts_version != 1)
-            || input_artifacts_version > 1
-            || renewal_version > 1
-            || output_version > 1
-            || cpu_cleanup_version > 1
-            || (cpu_cleanup_version == 1
-                && (execution_control_version != 2 || node_control_version != 2))
-            || (output_version == 1 && (renewal_version != 1 || input_artifacts_version != 1))
-            || (renewal_version == 1 && input_artifacts_version != 1)
-            || (input_artifacts_version == 1
-                && (execution_control_version != 2 || node_control_version != 2))
-            || (rejection_receipts_version == 1
-                && (execution_control_version != 2 || node_control_version != 2))
+            || orange_protocol::worker_capabilities::ControlVersions::from(hello)
+                .validate(hello.protocol_version)
+                .is_err()
         {
             return Err(SessionError::Invalid);
         }

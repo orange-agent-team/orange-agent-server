@@ -1068,3 +1068,113 @@ async fn ordinary_authenticated_heartbeat_preserves_quarantine_and_cannot_recrea
     drop(sender);
     server.stop().await;
 }
+
+#[tokio::test]
+async fn rejected_capability_offers_do_not_rotate_the_current_device_session() {
+    use orange_protocol::worker_capabilities::ControlVersions;
+    use tonic::Code;
+    let d = device("client-hello-matrix").await;
+    let server = Running::start(&d.store).await;
+    let mut unregistered = server
+        .client(Some("client-unregistered-hello"))
+        .await
+        .expect("trusted fixture CA only");
+    assert_eq!(
+        control(&mut unregistered, hello(&d.node))
+            .await
+            .err()
+            .expect("unregistered certificate")
+            .code(),
+        Code::Unauthenticated
+    );
+    let mut c = server
+        .client(Some(&d.certificate))
+        .await
+        .expect("enrolled device");
+    let (sender, mut stream) = control(&mut c, hello(&d.node))
+        .await
+        .expect("legacy control connection");
+    let first = welcome(&mut stream).await;
+    assert!(ControlVersions::default().matches_welcome(&first));
+    for (major, features, code) in [
+        (2, ControlVersions::default(), Code::FailedPrecondition),
+        (
+            1,
+            ControlVersions {
+                node_control_version: 3,
+                ..Default::default()
+            },
+            Code::FailedPrecondition,
+        ),
+        (
+            1,
+            ControlVersions {
+                renewal_version: 1,
+                ..Default::default()
+            },
+            Code::InvalidArgument,
+        ),
+        (
+            1,
+            ControlVersions {
+                execution_control_version: 1,
+                cpu_cleanup_version: 1,
+                ..Default::default()
+            },
+            Code::InvalidArgument,
+        ),
+        (
+            1,
+            ControlVersions {
+                transcription_input_version: 1,
+                ..Default::default()
+            },
+            Code::FailedPrecondition,
+        ),
+        (
+            1,
+            ControlVersions {
+                node_control_version: 2,
+                execution_control_version: 2,
+                input_artifacts_version: 1,
+                ..Default::default()
+            },
+            Code::FailedPrecondition,
+        ),
+    ] {
+        let mut offer = features.hello(d.node.clone(), "a".repeat(64));
+        offer.protocol_version = major;
+        assert_eq!(
+            control(
+                &mut c,
+                worker::WorkerFrame {
+                    body: Some(worker_frame::Body::Hello(offer))
+                }
+            )
+            .await
+            .err()
+            .expect("unsupported offer")
+            .code(),
+            code
+        );
+    }
+    heartbeat(&sender, &mut stream, &d.node, &first)
+        .await
+        .expect("original session remains current");
+    let stored: (String, i64) =
+        sqlx::query_as("SELECT session_id,connection_epoch FROM worker_sessions WHERE node_id=$1")
+            .bind(&d.node)
+            .fetch_one(d.store.pool())
+            .await
+            .expect("original authority");
+    assert_eq!(stored, (first.session_id, first.connection_epoch as i64));
+    let attempts: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM worker_execution_attempts WHERE node_id=$1")
+            .bind(&d.node)
+            .fetch_one(d.store.pool())
+            .await
+            .expect("no execution");
+    assert_eq!(attempts, 0);
+    drop(sender);
+    server.stop().await;
+}

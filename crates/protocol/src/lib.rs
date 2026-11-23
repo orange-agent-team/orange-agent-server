@@ -27,6 +27,8 @@ pub mod tool_spec;
 pub mod tools;
 pub mod transcript;
 pub mod user;
+#[cfg(feature = "grpc")]
+pub mod worker_capabilities;
 
 use orange_domain::Credits;
 use serde::{Deserialize, Serialize};

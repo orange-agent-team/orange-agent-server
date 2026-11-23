@@ -61,18 +61,7 @@ pub struct ControlIdentity {
     pub session_id: String,
     pub connection_epoch: u64,
 }
-#[derive(Default)]
-struct ControlVersions {
-    node_control_version: u32,
-    execution_control_version: u32,
-    rejection_receipts_version: u32,
-    input_artifacts_version: u32,
-    transcription_input_version: u32,
-    transcription_output_version: u32,
-    renewal_version: u32,
-    output_version: u32,
-    cpu_cleanup_version: u32,
-}
+use orange_protocol::worker_capabilities::{ControlVersions, PROTOCOL_MAJOR};
 pub struct ControlConnection {
     identity: ControlIdentity,
     sender: mpsc::Sender<worker::WorkerFrame>,
@@ -167,6 +156,9 @@ impl ControlConnection {
         config: ControlConfig,
         versions: ControlVersions,
     ) -> Result<Self, ControlError> {
+        versions
+            .validate(PROTOCOL_MAJOR)
+            .map_err(|_| ControlError::Unsupported)?;
         if !valid_id(&config.node_id)
             || !valid_digest(&config.capabilities_digest)
             || config.server_name.is_empty()
@@ -236,20 +228,9 @@ impl ControlConnection {
         let sent = Instant::now();
         sender
             .send(worker::WorkerFrame {
-                body: Some(worker_frame::Body::Hello(worker::Hello {
-                    node_id: node.clone(),
-                    protocol_version: 1,
-                    capabilities_digest: capabilities,
-                    node_control_version,
-                    execution_control_version,
-                    rejection_receipts_version,
-                    input_artifacts_version,
-                    transcription_input_version,
-                    transcription_output_version,
-                    renewal_version,
-                    output_version,
-                    cpu_cleanup_version,
-                })),
+                body: Some(worker_frame::Body::Hello(
+                    versions.hello(node.clone(), capabilities),
+                )),
             })
             .await
             .map_err(|_| ControlError::Unavailable)?;
@@ -279,16 +260,7 @@ impl ControlConnection {
         {
             return Err(ControlError::Protocol);
         }
-        if welcome.node_control_version != node_control_version
-            || welcome.execution_control_version != execution_control_version
-            || welcome.rejection_receipts_version != rejection_receipts_version
-            || welcome.transcription_output_version != transcription_output_version
-            || welcome.transcription_input_version != transcription_input_version
-            || welcome.input_artifacts_version != input_artifacts_version
-            || welcome.renewal_version != renewal_version
-            || welcome.output_version != output_version
-            || welcome.cpu_cleanup_version != cpu_cleanup_version
-        {
+        if !versions.matches_welcome(&welcome) {
             return Err(ControlError::Unsupported);
         }
         if node_control_version == 2 && welcome.node_policy_generation > i64::MAX as u64 {

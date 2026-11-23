@@ -490,26 +490,23 @@ impl WorkerGateway for Gateway {
         let Some(worker_frame::Body::Hello(hello)) = first.body else {
             return Err(Status::invalid_argument("first frame must be Hello"));
         };
-        if hello.protocol_version != 1
-            || hello.node_control_version > 2
-            || hello.execution_control_version > 2
-            || hello.rejection_receipts_version > 1
-            || hello.transcription_output_version > 1
-            || (hello.transcription_output_version == 1
-                && (hello.transcription_input_version != 1
-                    || hello.output_version != 1
-                    || self.writer.is_none()))
-            || hello.transcription_input_version > 1
-            || (hello.transcription_input_version == 1 && hello.input_artifacts_version != 1)
-            || hello.input_artifacts_version > 1
-            || hello.renewal_version > 1
-            || hello.output_version > 1
-            || hello.cpu_cleanup_version > 1
-            || (hello.output_version == 1 && self.writer.is_none())
-            || (hello.input_artifacts_version == 1 && self.artifacts.is_none())
+        use orange_protocol::worker_capabilities::{ControlVersions, NegotiationError};
+        let versions = ControlVersions::from(&hello);
+        if (versions.output_version == 1 && self.writer.is_none())
+            || (versions.input_artifacts_version == 1 && self.artifacts.is_none())
         {
             return Err(Status::failed_precondition("unsupported protocol version"));
         }
+        versions
+            .validate(hello.protocol_version)
+            .map_err(|error| match error {
+                NegotiationError::Unsupported => {
+                    Status::failed_precondition("unsupported protocol version")
+                }
+                NegotiationError::MissingPrerequisite => {
+                    Status::invalid_argument("incomplete capability offer")
+                }
+            })?;
         let session = tokio::time::timeout(
             Duration::from_secs(5),
             self.store.claim(&hello, &fingerprint),
