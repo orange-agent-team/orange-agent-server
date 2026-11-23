@@ -1,4 +1,33 @@
 use serde::{Deserialize, Serialize};
+/// Maximum normalized GenerateRequest object admitted by the text quote service.
+pub const MAX_QUOTE_REQUEST_BYTES: usize = 256 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CatalogueModality {
+    Text,
+}
+
+/// Current development text offers. The server still authorizes and meters every individual quote.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewedTextModel {
+    pub modality: CatalogueModality,
+    pub model_version: String,
+    pub model_sha256: String,
+    pub repository: String,
+    pub revision: String,
+    pub license: String,
+    pub context_tokens: u32,
+    pub max_request_bytes: u32,
+    pub offers: Vec<TextPriceView>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MarketModelList {
+    pub data: Vec<ReviewedTextModel>,
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CreateTextQuote {

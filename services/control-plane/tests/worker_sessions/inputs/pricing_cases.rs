@@ -286,6 +286,31 @@ async fn replace_input(c: &mut Case) {
             .expect("actual input")
             .version_id;
 }
+async fn model_list(
+    c: &Case,
+    path: &str,
+    authenticated: bool,
+) -> (axum::http::StatusCode, serde_json::Value) {
+    let app =
+        orange_control_plane::artifacts::http::router(c.f.identity.clone(), c.f.objects.clone());
+    let mut req = axum::http::Request::get(path)
+        .body(axum::body::Body::empty())
+        .expect("request");
+    if authenticated {
+        *req.headers_mut() = c.f.headers.clone();
+    }
+    let reply = app.oneshot(req).await.expect("model listing");
+    let status = reply.status();
+    assert_eq!(reply.headers()["cache-control"], "no-store");
+    let bytes = axum::body::to_bytes(reply.into_body(), 128 * 1024)
+        .await
+        .expect("bounded catalog");
+    (
+        status,
+        serde_json::from_slice(&bytes).expect("JSON response"),
+    )
+}
+
 #[tokio::test]
 async fn disabled_price_cannot_create_a_new_quote_or_reservation() {
     let c = setup_priced("client-cp").await;
@@ -319,6 +344,38 @@ async fn disabled_price_cannot_create_a_new_quote_or_reservation() {
         !catalog.iter().any(|p| p.price_version.starts_with(&prefix)),
         "disabled execution profile cannot be offered"
     );
+    let (status, document) = model_list(&c, "/api/v1/models", true).await;
+    assert_eq!(status, 200);
+    let models: orange_protocol::pricing::MarketModelList =
+        serde_json::from_value(document).expect("typed HTTP catalogue");
+    let [model] = models.data.as_slice() else {
+        panic!("one active licensed model expected")
+    };
+    assert_eq!(model.license, "Apache-2.0");
+    assert_eq!(model.repository, "Qwen/Qwen2.5-0.5B-Instruct-GGUF");
+    assert_eq!(model.model_sha256, c.meter.descriptor().model_sha256);
+    assert_eq!(model.model_version, c.meter.descriptor().model_version);
+    assert_eq!(model.context_tokens, c.meter.descriptor().context_tokens);
+    assert_eq!(model.max_request_bytes, 262144);
+    let offer = model
+        .offers
+        .iter()
+        .find(|offer| offer.price_version == c.price)
+        .expect("live price");
+    assert_eq!(serde_json::to_value(offer).unwrap()["input_price"], "2000");
+    assert!(
+        model
+            .offers
+            .iter()
+            .all(|offer| !offer.price_version.starts_with(&prefix))
+    );
+    assert_eq!(model_list(&c, "/api/v1/models", false).await.0, 401);
+    assert_eq!(
+        model_list(&c, "/api/v1/models?owner_id=another", true)
+            .await
+            .0,
+        400
+    );
     let req = quote_request(&c, 32);
     let q = quote_http(&c, &req).await;
     sqlx::query("UPDATE text_prices SET enabled=false WHERE price_version=$1")
@@ -334,6 +391,17 @@ async fn disabled_price_cannot_create_a_new_quote_or_reservation() {
             .iter()
             .any(|p| p.price_version == c.price),
         "revoked price disappears from the catalog"
+    );
+    let (status, document) = model_list(&c, "/api/v1/models", true).await;
+    assert_eq!(status, 200);
+    let refreshed: orange_protocol::pricing::MarketModelList =
+        serde_json::from_value(document).expect("revalidated catalogue");
+    assert!(
+        refreshed
+            .data
+            .iter()
+            .flat_map(|m| &m.offers)
+            .all(|offer| offer.price_version != c.price)
     );
     assert_eq!(
         quote_http(&c, &req).await.quote_id,

@@ -77,6 +77,7 @@ pub fn build_router(
             "/api/v1/owners/{owner}/transcription-quotes",
             axum::routing::post(audio_quote),
         )
+        .route("/api/v1/models", get(market_models))
         .route("/api/v1/text-prices", get(prices))
         .route(
             "/api/v1/owners/{owner}/text-quotes",
@@ -262,6 +263,20 @@ async fn quote_funding(
     let actor = api.identity.artifact_actor(&headers, false).await?;
     let view = api.store.funding(&actor, &owner, &quote).await?;
     Ok(private(Json(view).into_response()))
+}
+
+async fn market_models(
+    State(api): State<Api>,
+    headers: HeaderMap,
+    axum::extract::RawQuery(query): axum::extract::RawQuery,
+) -> Result<Response, Error> {
+    let actor = api.identity.artifact_actor(&headers, false).await?;
+    if query.as_deref().is_some_and(|query| !query.is_empty()) {
+        return Err(ArtifactError::Invalid.into());
+    }
+    Ok(private(
+        Json(api.store.market_models(&actor).await?).into_response(),
+    ))
 }
 
 async fn prices(State(api): State<Api>, headers: HeaderMap) -> Result<Response, Error> {

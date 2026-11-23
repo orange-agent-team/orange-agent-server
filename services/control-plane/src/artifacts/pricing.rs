@@ -10,7 +10,10 @@ fn meter_error(error: MeterError) -> ArtifactError {
 }
 use orange_protocol::{
     Money,
-    pricing::{CreateTextQuote, TextPriceView, TextQuoteView},
+    pricing::{
+        CatalogueModality, CreateTextQuote, MAX_QUOTE_REQUEST_BYTES, MarketModelList,
+        ReviewedTextModel, TextPriceView, TextQuoteView,
+    },
 };
 fn money(n: i64) -> Result<Money, ArtifactError> {
     Ok(Money(
@@ -120,6 +123,52 @@ impl ArtifactStore {
         authority::finish(tx, actor).await?;
         Ok(result)
     }
+    /// Expose a license only when the running meter and the pinned licensed bytes agree.
+    /// Availability is taken from the same eligibility and authorization checks as quote discovery.
+    pub(super) async fn market_models(
+        &self,
+        actor: &ArtifactActor,
+    ) -> Result<MarketModelList, ArtifactError> {
+        #[derive(serde::Deserialize)]
+        struct Pin {
+            model: Weight,
+        }
+        #[derive(serde::Deserialize)]
+        struct Weight {
+            repository: String,
+            revision: String,
+            license: String,
+            sha256: String,
+        }
+        let offers = self.prices(actor).await?;
+        let meter = self
+            .inner
+            .meter
+            .as_ref()
+            .ok_or(ArtifactError::PricingUnavailable)?;
+        if !meter.available() {
+            return Err(ArtifactError::PricingUnavailable);
+        }
+        let descriptor = meter.descriptor();
+        let pin: Pin =
+            serde_json::from_str(include_str!("../../../../config/local-model.lock.json"))
+                .map_err(|_| ArtifactError::Integrity)?;
+        let mut data = Vec::new();
+        if !offers.is_empty() && descriptor.model_sha256 == pin.model.sha256 {
+            data.push(ReviewedTextModel {
+                modality: CatalogueModality::Text,
+                model_version: descriptor.model_version.clone(),
+                model_sha256: pin.model.sha256,
+                repository: pin.model.repository,
+                revision: pin.model.revision,
+                license: pin.model.license,
+                context_tokens: descriptor.context_tokens,
+                max_request_bytes: MAX_QUOTE_REQUEST_BYTES as u32,
+                offers,
+            });
+        }
+        Ok(MarketModelList { data })
+    }
     pub async fn create_text_quote(
         &self,
         actor: &ArtifactActor,
@@ -191,7 +240,7 @@ impl ArtifactStore {
         let (input, bytes, stamp) = self
             .read(actor, owner, &r.input_upload_id, &r.input_version_id)
             .await?;
-        if input.media_type != "application/json" || bytes.len() > 256 * 1024 {
+        if input.media_type != "application/json" || bytes.len() > MAX_QUOTE_REQUEST_BYTES {
             return Err(ArtifactError::Invalid);
         }
         let value = orange_protocol::canonical::parse_tool_arguments(
