@@ -741,6 +741,49 @@ async fn real_http_enforces_cookie_csrf_streaming_integrity_and_revocation() {
         .expect("create");
     assert_eq!(response.status(), 200);
     let view: ArtifactView = response.json().await.expect("metadata");
+    let retention_url = format!("{collection}/{}/retention", req.upload_id);
+    let clock = || async {
+        let response = client
+            .get(&retention_url)
+            .header("cookie", &cookie)
+            .send()
+            .await
+            .expect("live retention API");
+        assert_eq!(response.status(), 200);
+        assert_eq!(response.headers()["cache-control"], "no-store");
+        response
+            .json::<orange_protocol::artifacts::ArtifactRetentionView>()
+            .await
+            .expect("typed retention view")
+    };
+    let before = clock().await;
+    assert_eq!(before.version_id, view.version_id);
+    assert_eq!(
+        before.basis,
+        orange_protocol::artifacts::RetentionBasis::Staging
+    );
+    assert_eq!(
+        before
+            .due_unix
+            .expect("deadline")
+            .parse::<i64>()
+            .expect("seconds")
+            - before
+                .anchor_unix
+                .expect("anchor")
+                .parse::<i64>()
+                .expect("seconds"),
+        3600
+    );
+    assert_eq!(
+        client
+            .get(&retention_url)
+            .send()
+            .await
+            .expect("no session")
+            .status(),
+        401
+    );
     let content = format!("{collection}/{}/content", req.upload_id);
     let response = client
         .put(&content)
@@ -756,6 +799,25 @@ async fn real_http_enforces_cookie_csrf_streaming_integrity_and_revocation() {
     let ready: ArtifactView = response.json().await.expect("published");
     assert_eq!(ready.version_id, view.version_id);
     assert_eq!(ready.state, "available");
+    let published = clock().await;
+    assert_eq!(
+        published.basis,
+        orange_protocol::artifacts::RetentionBasis::Published
+    );
+    assert!(!published.protected_by_reference);
+    assert_eq!(
+        published
+            .due_unix
+            .expect("deadline")
+            .parse::<i64>()
+            .expect("seconds")
+            - published
+                .anchor_unix
+                .expect("published")
+                .parse::<i64>()
+                .expect("seconds"),
+        86400
+    );
     let read = format!("{content}?version_id={}", view.version_id);
     let response = client
         .get(&read)
@@ -777,6 +839,12 @@ async fn real_http_enforces_cookie_csrf_streaming_integrity_and_revocation() {
     .execute(&f.store.inner.pool)
     .await
     .expect("active usage");
+    let held = clock().await;
+    assert_eq!(
+        held.basis,
+        orange_protocol::artifacts::RetentionBasis::ActiveReference
+    );
+    assert!(held.protected_by_reference && held.anchor_unix.is_none() && held.due_unix.is_none());
     let attempted = client
         .delete(format!("{collection}/{}", req.upload_id))
         .header("cookie", &cookie)
@@ -804,6 +872,41 @@ async fn real_http_enforces_cookie_csrf_streaming_integrity_and_revocation() {
     assert_eq!(
         survived.bytes().await.expect("current source").as_ref(),
         bytes.as_slice()
+    );
+    let mut tx = f.store.inner.pool.begin().await.expect("temporary release");
+    sqlx::query("DELETE FROM artifact_pins WHERE artifact_id=$1")
+        .bind(&ready.artifact_id)
+        .execute(&mut *tx)
+        .await
+        .expect("uncommitted release");
+    tx.rollback().await.expect("undo release");
+    assert_eq!(
+        clock().await.basis,
+        orange_protocol::artifacts::RetentionBasis::ActiveReference
+    );
+    sqlx::query("DELETE FROM artifact_pins WHERE artifact_id=$1")
+        .bind(&ready.artifact_id)
+        .execute(&f.store.inner.pool)
+        .await
+        .expect("final release");
+    let released = clock().await;
+    assert_eq!(
+        released.basis,
+        orange_protocol::artifacts::RetentionBasis::LastReferenceReleased
+    );
+    assert!(!released.protected_by_reference);
+    assert_eq!(
+        released
+            .due_unix
+            .expect("deadline")
+            .parse::<i64>()
+            .expect("seconds")
+            - released
+                .anchor_unix
+                .expect("release")
+                .parse::<i64>()
+                .expect("seconds"),
+        86400
     );
     sqlx::query("UPDATE user_sessions SET revoked=TRUE WHERE session_id=$1")
         .bind(&f.actor.session)

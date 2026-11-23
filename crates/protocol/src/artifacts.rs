@@ -62,6 +62,30 @@ pub struct ArtifactView {
     pub media_type: String,
     pub state: String,
 }
+/// Retention deadlines are policy observations. They do not prove physical removal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RetentionBasis {
+    Staging,
+    Published,
+    LastReferenceReleased,
+    ResponseCommit,
+    MigrationGrace,
+    ActiveReference,
+    Deleted,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArtifactRetentionView {
+    pub artifact_id: String,
+    pub version_id: String,
+    pub basis: RetentionBasis,
+    pub anchor_unix: Option<String>,
+    pub due_unix: Option<String>,
+    pub protected_by_reference: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

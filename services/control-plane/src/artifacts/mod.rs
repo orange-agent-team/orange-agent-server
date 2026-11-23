@@ -329,6 +329,47 @@ impl ArtifactStore {
         authority::finish(tx, actor).await?;
         Ok(result)
     }
+    pub(super) async fn retention(
+        &self,
+        actor: &ArtifactActor,
+        owner: &str,
+        upload: &str,
+    ) -> Result<orange_protocol::artifacts::ArtifactRetentionView, ArtifactError> {
+        use orange_protocol::artifacts::{ArtifactRetentionView, RetentionBasis};
+        let mut tx = self.inner.pool.begin().await?;
+        authority::scope(&mut tx, actor, owner, false).await?;
+        let row = self.row_in(&mut tx, owner, upload).await?;
+        authority::resource(&mut tx, actor, owner, &row, false, true).await?;
+        let artifact_id: String = row.try_get("artifact_id")?;
+        let clock=sqlx::query("SELECT basis,floor(extract(epoch FROM anchor_at))::bigint AS anchor,
+            floor(extract(epoch FROM due_at))::bigint AS due,protected_by_reference FROM orange_artifact_retention($1)")
+            .bind(&artifact_id).fetch_one(&mut *tx).await?;
+        let basis = match clock.try_get::<Option<&str>, _>("basis")? {
+            Some("staging") => RetentionBasis::Staging,
+            Some("published") => RetentionBasis::Published,
+            Some("last_reference_released") => RetentionBasis::LastReferenceReleased,
+            Some("response_commit") => RetentionBasis::ResponseCommit,
+            Some("migration_grace") => RetentionBasis::MigrationGrace,
+            Some("active_reference") => RetentionBasis::ActiveReference,
+            Some("deleted") => RetentionBasis::Deleted,
+            _ => return Err(ArtifactError::Integrity),
+        };
+        let view = ArtifactRetentionView {
+            artifact_id,
+            version_id: row.try_get("version_id")?,
+            basis,
+            anchor_unix: clock
+                .try_get::<Option<i64>, _>("anchor")?
+                .map(|v| v.to_string()),
+            due_unix: clock
+                .try_get::<Option<i64>, _>("due")?
+                .map(|v| v.to_string()),
+            protected_by_reference: clock.try_get("protected_by_reference")?,
+        };
+        authority::finish(tx, actor).await?;
+        Ok(view)
+    }
+
     /// Immediate trusted revocation. Public user deletion uses the active-reference check below.
     pub async fn delete(
         &self,
@@ -360,21 +401,10 @@ impl ArtifactStore {
             // row_in holds FOR UPDATE on this exact artifact. Pins and cloud admissions
             // acquire at least a share lock before committing a new use of the source.
             if check_active {
-                let in_use: bool = sqlx::query_scalar(
-                    "SELECT EXISTS(
-                      SELECT FROM artifact_pins p WHERE p.artifact_id=$1
-                        AND NOT EXISTS(SELECT FROM job_inputs i JOIN jobs j USING(job_id)
-                          WHERE i.artifact_id=p.artifact_id AND p.reference_id='job-input:'||i.job_id
-                            AND j.execution_state IN ('succeeded','failed','cancelled'))
-                        AND NOT EXISTS(SELECT FROM worker_output_uploads w JOIN jobs j USING(job_id)
-                          WHERE w.artifact_id=p.artifact_id AND p.reference_id='job-output:'||w.job_id
-                            AND j.execution_state IN ('succeeded','failed','cancelled'))
-                    ) OR EXISTS(SELECT FROM cloud_runs WHERE input_artifact_id=$1 AND status NOT IN ('completed','failed','cancelled'))
-                      OR EXISTS(SELECT FROM quote_metering m JOIN jobs j USING(quote_id)
-                        WHERE m.input_artifact_id=$1 AND j.execution_state NOT IN ('succeeded','failed','cancelled'))
-                      OR EXISTS(SELECT FROM transcription_input_grants g JOIN transcription_quote_terms q USING(owner_id,grant_id)
-                        JOIN jobs j ON j.quote_id=q.quote_id WHERE g.artifact_id=$1 AND j.execution_state NOT IN ('succeeded','failed','cancelled'))"
-                ).bind(&result.artifact_id).fetch_one(&mut *tx).await?;
+                let in_use: bool = sqlx::query_scalar("SELECT orange_artifact_active_use($1)")
+                    .bind(&result.artifact_id)
+                    .fetch_one(&mut *tx)
+                    .await?;
                 if in_use {
                     return Err(ArtifactError::InUse);
                 }

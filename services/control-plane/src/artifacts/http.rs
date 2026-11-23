@@ -80,6 +80,10 @@ pub fn build_router(
         .route("/api/v1/models", get(market_models))
         .route("/api/v1/text-prices", get(prices))
         .route(
+            "/api/v1/owners/{owner}/uploads/{upload}/retention",
+            get(retention),
+        )
+        .route(
             "/api/v1/owners/{owner}/text-quotes",
             axum::routing::post(text_quote),
         )
@@ -415,6 +419,21 @@ async fn status(
         Json(api.store.status(&actor, &owner, &upload).await?).into_response(),
     ))
 }
+async fn retention(
+    State(api): State<Api>,
+    Path((owner, upload)): Path<(String, String)>,
+    headers: HeaderMap,
+    axum::extract::RawQuery(query): axum::extract::RawQuery,
+) -> Result<Response, Error> {
+    let actor = api.identity.artifact_actor(&headers, false).await?;
+    if query.as_deref().is_some_and(|q| !q.is_empty()) {
+        return Err(ArtifactError::Invalid.into());
+    }
+    Ok(private(
+        Json(api.store.retention(&actor, &owner, &upload).await?).into_response(),
+    ))
+}
+
 async fn delete(
     State(api): State<Api>,
     Path((owner, upload)): Path<(String, String)>,

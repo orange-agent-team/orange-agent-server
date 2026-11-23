@@ -790,6 +790,14 @@ async fn actual_counter_quote_output_and_atomic_credit_settlement_ignore_provide
             .await
             .expect("once");
     assert_eq!(count, 1);
+    let (basis,interval,anchored):(String,i64,bool)=sqlx::query_as(
+        "SELECT r.basis,extract(epoch FROM r.due_at-r.anchor_at)::bigint,r.anchor_at=c.committed_at
+         FROM job_response_commits c CROSS JOIN LATERAL orange_artifact_retention(c.artifact_id) r WHERE c.job_id=$1"
+    ).bind(&c.f.job).fetch_one(c.f.d.store.pool()).await.expect("delivered output retention clock");
+    assert_eq!(
+        (basis.as_str(), interval, anchored),
+        ("response_commit", 86400, true)
+    );
     connection.close();
     server.stop().await;
     c.f.objects.drain().await.expect("drain");
