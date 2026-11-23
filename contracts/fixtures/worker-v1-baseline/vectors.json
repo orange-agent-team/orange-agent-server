@@ -1,0 +1,63 @@
+{
+  "floor_commit": "5849d9678ffa701540964aa0333f9d7309373f27",
+  "floor_schema_path": "contracts/proto/worker.proto",
+  "schema_sha256": "c5404cb5c81e9395af50921a54ca4f3fdf940ec4bfee696d3e8da5676b4f42a8",
+  "samples": [
+    {
+      "name": "floor-hello",
+      "producer": "floor",
+      "message": "WorkerFrame",
+      "textproto": "hello { node_id: \"legacy-node\" protocol_version: 1 capabilities_digest: \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\" }",
+      "hex": "0a510a0b6c65676163792d6e6f646510011a4062626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262",
+      "expected": "accepted_without_execution"
+    },
+    {
+      "name": "current-hello",
+      "producer": "current",
+      "message": "WorkerFrame",
+      "textproto": "hello { node_id: \"legacy-node\" protocol_version: 1 capabilities_digest: \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\" node_control_version: 2 execution_control_version: 2 }",
+      "hex": "0a550a0b6c65676163792d6e6f646510011a406262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626220022802",
+      "expected": "capabilities_declared"
+    },
+    {
+      "name": "floor-welcome",
+      "producer": "floor",
+      "message": "ServerFrame",
+      "textproto": "welcome { session_id: \"session-fixture\" connection_epoch: 9007199254740993 protocol_version: 1 expires_at { seconds: 1800000000 } }",
+      "hex": "0a240a0f73657373696f6e2d66697874757265108180808080808010180122060880a4a7da06",
+      "expected": "welcome"
+    },
+    {
+      "name": "current-welcome",
+      "producer": "current",
+      "message": "ServerFrame",
+      "textproto": "welcome { session_id: \"session-fixture\" connection_epoch: 9007199254740993 protocol_version: 1 expires_at { seconds: 1800000000 } node_control_version: 2 execution_control_version: 2 node_policy_generation: 17 }",
+      "hex": "0a2a0a0f73657373696f6e2d66697874757265108180808080808010180122060880a4a7da06280230113802",
+      "expected": "welcome"
+    },
+    {
+      "name": "floor-heartbeat",
+      "producer": "floor",
+      "message": "WorkerFrame",
+      "textproto": "heartbeat { node_id: \"legacy-node\" connection_epoch: 9007199254740993 capability_snapshot_id: \"snapshot\" }",
+      "hex": "42200a0b6c65676163792d6e6f64651081808080808080101a08736e617073686f74",
+      "expected": "liveness_only"
+    },
+    {
+      "name": "future-major",
+      "producer": "current",
+      "message": "WorkerFrame",
+      "textproto": "hello { node_id: \"legacy-node\" protocol_version: 2 capabilities_digest: \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\" }",
+      "hex": "0a510a0b6c65676163792d6e6f646510021a4062626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262",
+      "expected": "FAILED_PRECONDITION"
+    },
+    {
+      "name": "missing-prerequisite",
+      "producer": "current",
+      "message": "WorkerFrame",
+      "textproto": "hello { node_id: \"legacy-node\" protocol_version: 1 capabilities_digest: \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\" renewal_version: 1 }",
+      "hex": "0a530a0b6c65676163792d6e6f646510011a40626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262624001",
+      "expected": "INVALID_ARGUMENT"
+    }
+  ]
+}

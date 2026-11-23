@@ -1156,6 +1156,40 @@ async fn rejected_capability_offers_do_not_rotate_the_current_device_session() {
             code
         );
     }
+    // Keep actual gateway status codes tied to the historical compatibility corpus.
+    // Only node identity is replaced by the device enrolled for this mTLS test.
+    {
+        use prost::Message;
+        let vectors: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../contracts/fixtures/worker-v1-baseline/vectors.json"
+        ))
+        .expect("fixed wire corpus");
+        for (name, code) in [
+            ("future-major", Code::FailedPrecondition),
+            ("missing-prerequisite", Code::InvalidArgument),
+        ] {
+            let sample = vectors["samples"]
+                .as_array()
+                .expect("samples")
+                .iter()
+                .find(|s| s["name"] == name)
+                .expect("required negative fixture");
+            let bytes = hex::decode(sample["hex"].as_str().expect("bytes")).expect("hex");
+            let mut frame =
+                worker::WorkerFrame::decode(bytes.as_slice()).expect("typed wire sample");
+            let Some(worker_frame::Body::Hello(ref mut h)) = frame.body else {
+                panic!("expected Hello")
+            };
+            h.node_id.clone_from(&d.node);
+            assert_eq!(
+                control(&mut c, frame)
+                    .await
+                    .expect_err("rejected fixed wire sample")
+                    .code(),
+                code
+            );
+        }
+    }
     heartbeat(&sender, &mut stream, &d.node, &first)
         .await
         .expect("original session remains current");
