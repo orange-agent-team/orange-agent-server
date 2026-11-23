@@ -87,6 +87,7 @@ def main():
             imports=inspect(exe,tools/"llvm-readobj")
             payload={"bin/orange-worker.exe":exe.read_bytes(),"README.md":source("distribution/windows-worker/README.md"),
                      "docs/nvidia-inventory.md":source("docs/worker/nvidia-inventory.md"),
+                     "Test-WorkerInventory.ps1":source("distribution/windows-worker/Test-WorkerInventory.ps1"),
                      "Cargo.lock":source("Cargo.lock"),"rust-toolchain.toml":source("rust-toolchain.toml"),
                      "windows-cross-toolchain.lock.json":source("config/windows-cross-toolchain.lock.json")}
             manifest={"source":commit,"target":TARGET,"rust":lock["rust"],"toolchain_sha256":lock["sha256"],
