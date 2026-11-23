@@ -79,7 +79,8 @@ impl EventStore {
         if after >= next {
             return Err(EventError::Invalid);
         }
-        let rows=sqlx::query("SELECT *,FLOOR(EXTRACT(EPOCH FROM occurred_at))::bigint AS timestamp FROM durable_events WHERE stream_id=$1 AND seq>$2 ORDER BY seq LIMIT $3").bind(stream).bind(after).bind(i64::from(limit)).fetch_all(&mut *tx).await?;
+        let rows=sqlx::query("SELECT seq,event_id,event_type,schema_version,payload_digest,correlation_id,causation_id,
+            FLOOR(EXTRACT(EPOCH FROM occurred_at))::bigint AS timestamp FROM durable_events WHERE stream_id=$1 AND seq>$2 ORDER BY seq LIMIT $3").bind(stream).bind(after).bind(i64::from(limit)).fetch_all(&mut *tx).await?;
         let mut events = Vec::new();
         let mut last = after;
         for event in rows {
