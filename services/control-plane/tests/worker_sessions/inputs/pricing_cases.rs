@@ -455,7 +455,49 @@ async fn concurrent_quote_is_one_snapshot_and_equal_bytes_cannot_replace_quoted_
     assert_eq!(q.quote_id, b.expect("concurrent same quote").quote_id);
     let events:i64=sqlx::query_scalar("SELECT count(*) FROM durable_events e JOIN event_streams s USING(stream_id) WHERE s.entity_id=$1 AND e.event_type='quote.created'").bind(&q.quote_id).fetch_one(c.f.d.store.pool()).await.expect("one event");
     assert_eq!(events, 1);
-    submit_mode(&mut c, &q, false).await;
+    let pool = c.f.d.store.pool().clone();
+    let artifact: String = sqlx::query_scalar(
+        "SELECT artifact_id FROM artifact_uploads WHERE owner_id=$1 AND upload_id=$2",
+    )
+    .bind(&c.f.owner)
+    .bind(&c.f.upload.upload_id)
+    .fetch_one(&pool)
+    .await
+    .expect("quoted input ID");
+    let mut funding_barrier = pool.begin().await.expect("private fixture transaction");
+    let blocker: i32 =
+        sqlx::query_scalar("SELECT pg_backend_pid() FROM wallets WHERE owner_id=$1 FOR UPDATE")
+            .bind(&c.f.owner)
+            .fetch_one(&mut *funding_barrier)
+            .await
+            .expect("delay after input check");
+    let verify_lock = async {
+        tokio::time::timeout(Duration::from_secs(8),async {
+            loop {
+                let waiting:bool=sqlx::query_scalar("SELECT EXISTS(SELECT FROM pg_stat_activity WHERE datname=current_database() AND $1=ANY(pg_blocking_pids(pid)))")
+                    .bind(blocker).fetch_one(&pool).await.expect("observe actual funding wait");
+                if waiting {break;}
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }).await.expect("submission reached the wallet");
+        let mut competitor = pool.begin().await.expect("independent deletion lock probe");
+        let conflict =
+            sqlx::query("SELECT artifact_id FROM artifacts WHERE artifact_id=$1 FOR UPDATE NOWAIT")
+                .bind(&artifact)
+                .fetch_one(&mut *competitor)
+                .await
+                .expect_err("quoted source must still be locked");
+        assert_eq!(
+            conflict
+                .as_database_error()
+                .and_then(|e| e.code())
+                .as_deref(),
+            Some("55P03")
+        );
+        competitor.rollback().await.expect("discard competing lock");
+        funding_barrier.commit().await.expect("release test wallet");
+    };
+    tokio::join!(submit_mode(&mut c, &q, false), verify_lock);
     let (active, fault) = delete_input(&c.f).await;
     assert_eq!(
         active, 409,
