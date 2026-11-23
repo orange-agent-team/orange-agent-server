@@ -52,6 +52,54 @@ id!(
     "Authenticated application user, independent of the account responsible for a Job."
 );
 
+id!(
+    OrganizationId,
+    "Organization identifier used by membership and resource ACLs."
+);
+id!(
+    NodeId,
+    "Registered supplier device identity, authenticated by the control connection."
+);
+id!(
+    ModelVersionId,
+    "Version in the platform's reviewed execution profile catalogue."
+);
+id!(
+    AttemptId,
+    "Specific execution attempt of a Job, distinct from its lease and node."
+);
+id!(
+    ArtifactId,
+    "Owner-scoped artifact identity, independent of a particular version."
+);
+id!(
+    ArtifactVersionId,
+    "Exact artifact content version bound to an operation."
+);
+id!(
+    LedgerTransactionId,
+    "An immutable posting group in the account ledger."
+);
+
+#[derive(Clone, Copy)]
+pub struct AssignedExecution<'a> {
+    pub job: JobId<'a>,
+    pub attempt: AttemptId<'a>,
+    pub node: NodeId<'a>,
+    pub model: ModelVersionId<'a>,
+}
+
+/// Organization membership always binds a user to an organization, never to a supplier node.
+///
+/// ```compile_fail
+/// use orange_domain::identity::{Membership,NodeId,UserId};
+/// let _ = Membership { organization:NodeId::try_from("device").unwrap(), user:UserId::try_from("user").unwrap() };
+/// ```
+pub struct Membership<'a> {
+    pub organization: OrganizationId<'a>,
+    pub user: UserId<'a>,
+}
+
 /// Typed coordinates for a submitted Job. The authenticated user is used in addition
 /// to the owner in user-facing lookups.
 ///

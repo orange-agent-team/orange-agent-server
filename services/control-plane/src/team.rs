@@ -504,11 +504,16 @@ pub(crate) async fn membership(
     org: &str,
     user: &str,
 ) -> Result<TeamRole, TeamError> {
+    use orange_domain::identity::{Membership, OrganizationId, UserId};
+    let member = Membership {
+        organization: OrganizationId::try_from(org).map_err(|_| TeamError::Invalid)?,
+        user: UserId::try_from(user).map_err(|_| TeamError::Invalid)?,
+    };
     let role: Option<String> = sqlx::query_scalar(
         "SELECT role FROM memberships WHERE organization_id=$1 AND user_id=$2 AND active FOR SHARE",
     )
-    .bind(org)
-    .bind(user)
+    .bind(member.organization.as_str())
+    .bind(member.user.as_str())
     .fetch_optional(&mut **tx)
     .await?;
     role.ok_or(TeamError::Forbidden)?

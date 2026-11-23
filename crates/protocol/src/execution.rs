@@ -118,16 +118,21 @@ pub fn transcription_observation_digest(r: &worker::TranscriptionObservation) ->
 
 pub fn assignment_digest(a: &worker::Assignment) -> Option<String> {
     let l = a.lease.as_ref()?;
+    use orange_domain::identity::{
+        ArtifactId, ArtifactVersionId, AssignedExecution, AttemptId, JobId, ModelVersionId, NodeId,
+    };
+    let identity = AssignedExecution {
+        node: NodeId::try_from(a.node_id.as_str()).ok()?,
+        job: JobId::try_from(l.job_id.as_str()).ok()?,
+        attempt: AttemptId::try_from(l.attempt_id.as_str()).ok()?,
+        model: ModelVersionId::try_from(a.model_version_id.as_str()).ok()?,
+    };
     let expires = seconds(&l.expires_at)?;
     let deadline = seconds(&a.job_deadline)?;
     if ![
         &a.command_id,
-        &a.node_id,
         &a.session_id,
         &l.lease_id,
-        &l.job_id,
-        &l.attempt_id,
-        &a.model_version_id,
         &a.execution_profile_id,
     ]
     .iter()
@@ -159,8 +164,8 @@ pub fn assignment_digest(a: &worker::Assignment) -> Option<String> {
         }
         let input = &a.input_artifacts[0];
         if a.input_artifact_ids[0] != input.artifact_id
-            || !valid_id(&input.artifact_id)
-            || !valid_id(&input.version_id)
+            || ArtifactId::try_from(input.artifact_id.as_str()).is_err()
+            || ArtifactVersionId::try_from(input.version_id.as_str()).is_err()
             || !valid_digest(&input.sha256)
             || input.size_bytes == 0
             || input.size_bytes > 256 * 1024
@@ -182,12 +187,12 @@ pub fn assignment_digest(a: &worker::Assignment) -> Option<String> {
         return None;
     }
     let mut body = json!({
-        "command_id": a.command_id, "node_id": a.node_id, "session_id": a.session_id,
+        "command_id": a.command_id, "node_id": identity.node.as_str(), "session_id": a.session_id,
         "policy_generation": a.node_policy_generation.to_string(),
-        "lease_id": l.lease_id, "job_id": l.job_id, "attempt_id": l.attempt_id,
+        "lease_id": l.lease_id, "job_id": identity.job.as_str(), "attempt_id": identity.attempt.as_str(),
         "connection_epoch": l.connection_epoch.to_string(), "fencing_token": l.fencing_token.to_string(),
         "expires_at": expires.to_string(), "job_deadline": deadline.to_string(),
-        "model_version_id": a.model_version_id, "model_sha256": a.model_sha256,
+        "model_version_id": identity.model.as_str(), "model_sha256": a.model_sha256,
         "execution_profile_id": a.execution_profile_id, "execution_profile_digest": a.execution_profile_digest,
         "request_projection_digest": a.request_projection_digest, "input_artifact_ids": a.input_artifact_ids
     });

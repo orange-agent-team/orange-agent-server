@@ -679,18 +679,21 @@ pub(crate) async fn ledger(
     if entries.iter().map(|(_, v)| i128::from(*v)).sum::<i128>() != 0 {
         return Err(StoreError::Invalid);
     }
-    let id = Uuid::new_v4().to_string();
+    use orange_domain::identity::{LedgerTransactionId, OwnerId};
+    let owner = OwnerId::try_from(owner).map_err(|_| StoreError::Invalid)?;
+    let key_id = Uuid::new_v4().to_string();
+    let id = LedgerTransactionId::try_from(key_id.as_str()).map_err(|_| StoreError::Invalid)?;
     sqlx::query(
         "INSERT INTO ledger_transactions(transaction_id,business_key,owner_id) VALUES($1,$2,$3)",
     )
-    .bind(&id)
+    .bind(id.as_str())
     .bind(key)
-    .bind(owner)
+    .bind(owner.as_str())
     .execute(&mut **tx)
     .await?;
     for (account, amount) in entries {
         sqlx::query("INSERT INTO ledger_entries(transaction_id,account,amount) VALUES($1,$2,$3)")
-            .bind(&id)
+            .bind(id.as_str())
             .bind(account)
             .bind(amount)
             .execute(&mut **tx)
