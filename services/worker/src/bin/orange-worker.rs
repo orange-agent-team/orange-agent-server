@@ -1,6 +1,25 @@
 //! Local development CPU Worker; never installs a background service implicitly.
-#[cfg(unix)]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut args = std::env::args_os().skip(1);
+    if args.next().as_deref() == Some(std::ffi::OsStr::new("probe-gpu")) {
+        if args.next().is_some() {
+            return Err("usage: orange-worker probe-gpu".into());
+        }
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        let report = runtime.block_on(orange_worker::gpu_inventory::observe());
+        serde_json::to_writer(std::io::stdout().lock(), &report)?;
+        println!();
+        if report.status != orange_worker::gpu_inventory::InventoryStatus::Observed {
+            std::process::exit(2);
+        }
+        return Ok(());
+    }
+    serve()
+}
+#[cfg(unix)]
+fn serve() -> Result<(), Box<dyn std::error::Error>> {
     let runtime = tokio::runtime::Runtime::new()?;
     let result = runtime.block_on(run());
     runtime.shutdown_timeout(std::time::Duration::from_secs(1));
@@ -67,7 +86,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     result.map_err(Into::into)
 }
 #[cfg(not(unix))]
-fn main() {
+fn serve() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("This development Worker requires a verified Unix process backend");
     std::process::exit(2);
 }
