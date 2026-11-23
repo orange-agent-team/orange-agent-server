@@ -40,8 +40,24 @@ async fn aged_notification_prefix_preserves_recent_pending_and_independent_finan
         .execute(pool)
         .await
         .expect("owner");
+    let mut financial_tx = pool.begin().await.expect("ledger transaction");
     sqlx::query("INSERT INTO ledger_transactions(transaction_id,business_key,owner_id) VALUES('protected-transaction','original-retention-fixture','retention-owner')")
-        .execute(pool).await.expect("financial fixture");
+        .execute(&mut *financial_tx).await.expect("financial fixture");
+    sqlx::query("INSERT INTO ledger_entries(transaction_id,account,amount) VALUES('protected-transaction','fixture-debit',-7),('protected-transaction','fixture-credit',7)")
+        .execute(&mut *financial_tx).await.expect("balanced original postings");
+    financial_tx.commit().await.expect("durable finance");
+    let queue = orange_control_plane::queue::EventQueue::new(pool.clone());
+    queue
+        .subscribe("notify-fixture", "retention-owner", "job.fixture")
+        .await
+        .expect("real subscription");
+    let accepted = seed(pool, "job", &[42], &[None]).await;
+    queue
+        .publish_owner("retention-owner", 8)
+        .await
+        .expect("durably delivered");
+    sqlx::query("UPDATE outbox SET delivered_at=clock_timestamp()-interval '41 days' WHERE entity_id=$1 AND delivered_at IS NOT NULL")
+        .bind(&accepted).execute(pool).await.expect("age the completed handoff");
     let job = seed(
         pool,
         "job",
@@ -60,9 +76,10 @@ async fn aged_notification_prefix_preserves_recent_pending_and_independent_finan
     let (one, two) = tokio::join!(run(), run());
     let (one, _) = one.expect("first maintenance");
     let (two, _) = two.expect("second maintenance");
-    assert_eq!(one + two, 3);
+    assert_eq!(one + two, 4);
     assert_eq!(run().await.expect("repeat"), (0, 1));
     for (stream, oldest, count) in [
+        (&accepted, 2, 0),
         (&job, 3, 2),
         (&worker, 2, 2),
         (&node, 1, 2),
@@ -81,6 +98,23 @@ async fn aged_notification_prefix_preserves_recent_pending_and_independent_finan
     .await
     .expect("unaltered ledger");
     assert_eq!(postings, 1);
+    let amounts:Vec<i64>=sqlx::query_scalar("SELECT amount FROM ledger_entries WHERE transaction_id='protected-transaction' ORDER BY amount").fetch_all(pool).await.expect("immutable postings");
+    assert_eq!(amounts, [-7, 7]);
+    assert!(
+        queue
+            .claim("notify-fixture")
+            .await
+            .expect("claim after retention")
+            .is_some()
+    );
+    let anomaly: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT FROM operational_retention_faults WHERE stream_id=$1)",
+    )
+    .bind(&damaged)
+    .fetch_one(pool)
+    .await
+    .expect("recorded oversight");
+    assert!(anomaly);
     assert!(prune_old_notifications(pool, 33, 1).await.is_err());
     assert!(prune_old_notifications(pool, 1, 257).await.is_err());
     let bounded = seed(
