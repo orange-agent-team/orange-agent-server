@@ -299,6 +299,25 @@ impl Store {
                 .await
                 .map_err(artifact_error)?;
         }
+        // A quote fixes terms, but does not preserve content access. Hold the exact
+        // input version through the new reservation so user deletion and submission
+        // have one observable order even before the separate input binding arrives.
+        if priced_requester.is_some() {
+            let source=sqlx::query("SELECT a.* FROM quote_metering m JOIN artifacts a
+                ON a.artifact_id=m.input_artifact_id AND a.version_id=m.input_version_id AND a.owner_id=m.owner_id
+                WHERE m.quote_id=$1 AND m.owner_id=$2 AND a.state='available' FOR SHARE OF a")
+                .bind(&req.quote_id).bind(owner).fetch_optional(&mut *tx).await?.ok_or(StoreError::Forbidden)?;
+            crate::artifacts::authority::resource(
+                &mut tx,
+                actor.ok_or(StoreError::Forbidden)?,
+                owner,
+                &source,
+                false,
+                false,
+            )
+            .await
+            .map_err(artifact_error)?;
+        }
         let invalid_price:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM quote_metering m JOIN text_prices p USING(price_version) JOIN trusted_meter_profiles mp ON mp.profile_digest=m.meter_profile_digest WHERE m.quote_id=$1 AND (NOT p.enabled OR NOT mp.enabled))").bind(&req.quote_id).fetch_one(&mut *tx).await?;
         if invalid_price {
             return Err(StoreError::QuoteMismatch);

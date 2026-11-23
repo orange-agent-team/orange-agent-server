@@ -354,6 +354,29 @@ async fn setup_input_case(
         identity,
     }
 }
+async fn delete_input(f: &InputFixture) -> (axum::http::StatusCode, serde_json::Value) {
+    let app = orange_control_plane::artifacts::http::router(f.identity.clone(), f.objects.clone());
+    let mut req = axum::http::Request::delete(format!(
+        "/api/v1/owners/{}/uploads/{}",
+        f.owner, f.upload.upload_id
+    ))
+    .body(axum::body::Body::empty())
+    .expect("delete request");
+    *req.headers_mut() = f.headers.clone();
+    req.headers_mut().insert(
+        "idempotency-key",
+        f.upload.upload_id.parse().expect("original upload key"),
+    );
+    let response = app.oneshot(req).await.expect("actual delete route");
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), 65536)
+        .await
+        .expect("response bytes");
+    (
+        status,
+        serde_json::from_slice(&body).expect("typed deletion response"),
+    )
+}
 async fn bind(f: &InputFixture) {
     let req = BindJobInput {
         upload_id: f.upload.upload_id.clone(),

@@ -370,6 +370,8 @@ impl ArtifactStore {
                           WHERE w.artifact_id=p.artifact_id AND p.reference_id='job-output:'||w.job_id
                             AND j.execution_state IN ('succeeded','failed','cancelled'))
                     ) OR EXISTS(SELECT FROM cloud_runs WHERE input_artifact_id=$1 AND status NOT IN ('completed','failed','cancelled'))
+                      OR EXISTS(SELECT FROM quote_metering m JOIN jobs j USING(quote_id)
+                        WHERE m.input_artifact_id=$1 AND j.execution_state NOT IN ('succeeded','failed','cancelled'))
                       OR EXISTS(SELECT FROM transcription_input_grants g JOIN transcription_quote_terms q USING(owner_id,grant_id)
                         JOIN jobs j ON j.quote_id=q.quote_id WHERE g.artifact_id=$1 AND j.execution_state NOT IN ('succeeded','failed','cancelled'))"
                 ).bind(&result.artifact_id).fetch_one(&mut *tx).await?;

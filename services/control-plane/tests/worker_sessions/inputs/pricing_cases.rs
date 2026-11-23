@@ -456,6 +456,12 @@ async fn concurrent_quote_is_one_snapshot_and_equal_bytes_cannot_replace_quoted_
     let events:i64=sqlx::query_scalar("SELECT count(*) FROM durable_events e JOIN event_streams s USING(stream_id) WHERE s.entity_id=$1 AND e.event_type='quote.created'").bind(&q.quote_id).fetch_one(c.f.d.store.pool()).await.expect("one event");
     assert_eq!(events, 1);
     submit_mode(&mut c, &q, false).await;
+    let (active, fault) = delete_input(&c.f).await;
+    assert_eq!(
+        active, 409,
+        "accepted priced job protects its input before binding"
+    );
+    assert_eq!(fault["code"], "ARTIFACT_IN_USE");
     let bytes = serde_json::to_vec(&c.f.request).expect("same request");
     let alternate = CreateUpload {
         upload_id: Uuid::new_v4().to_string(),
@@ -497,6 +503,50 @@ async fn concurrent_quote_is_one_snapshot_and_equal_bytes_cannot_replace_quoted_
         .cancel_queued(&c.f.owner, &c.f.job, "end-quote-fixture")
         .await
         .expect("queued fixture cleanup");
+    assert_eq!(
+        delete_input(&c.f).await.0,
+        200,
+        "terminal use no longer blocks deletion"
+    );
+    replace_input(&mut c).await;
+    let later = quote_http(&c, &quote_request(&c, 32)).await;
+    assert_eq!(
+        delete_input(&c.f).await.0,
+        200,
+        "an unused quote does not hold the source"
+    );
+    let request = SubmitJob {
+        root_budget_id: later.root_budget_id,
+        invocation_id: later.invocation_id.clone(),
+        purpose: InvocationPurpose::Primary,
+        quote_id: later.quote_id,
+        request_projection_digest: later.request_projection_digest,
+    };
+    let before: (i64,i64,i64) = sqlx::query_as("SELECT gift,reserved_gift,(SELECT count(*) FROM ledger_transactions WHERE owner_id=$1) FROM wallets WHERE owner_id=$1")
+        .bind(&c.f.owner).fetch_one(c.f.d.store.pool()).await.expect("prior credit facts");
+    let admission =
+        c.f.d
+            .store
+            .submit_for_user(&c.f.actor, &c.f.owner, "deleted-before-submit", &request)
+            .await;
+    assert!(matches!(
+        admission,
+        Err(orange_control_plane::store::StoreError::Forbidden)
+    ));
+    let after: (i64,i64,i64) = sqlx::query_as("SELECT gift,reserved_gift,(SELECT count(*) FROM ledger_transactions WHERE owner_id=$1) FROM wallets WHERE owner_id=$1")
+        .bind(&c.f.owner).fetch_one(c.f.d.store.pool()).await.expect("no frozen credits or posting");
+    assert_eq!(before, after);
+    let residue: (i64, i64) = sqlx::query_as(
+        "SELECT (SELECT count(*) FROM jobs WHERE owner_id=$1 AND invocation_id=$2),
+        (SELECT reserved FROM budget_roots WHERE root_budget_id=$3)",
+    )
+    .bind(&c.f.owner)
+    .bind(later.invocation_id)
+    .bind(&c.budget)
+    .fetch_one(c.f.d.store.pool())
+    .await
+    .expect("job and budget");
+    assert_eq!(residue, (0, 0));
     connection.close();
     server.stop().await;
     c.f.objects.drain().await.expect("drain");
