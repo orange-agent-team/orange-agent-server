@@ -35,7 +35,7 @@ rustc --edition=2024 --test domain.rs -o domain-tests
 cat test-results
 grep -q '^test tests::published_billing_examples_and_fee_conservation ... ok$' test-results
 grep -q '^test tests::cancel_wins_before_completion_and_old_authorities_fail ... ok$' test-results
-./protoc --proto_path=. --include_imports --descriptor_set_out=result.pb worker.proto host.proto
+./protoc --proto_path=. --proto_path=include --include_imports --descriptor_set_out=result.pb worker.proto host.proto
 actual="$(sha256sum result.pb | cut -d' ' -f1)"
 if [[ "$actual" != "$ORANGE_WIRE_SHA" ]]; then echo 'REJECT protocol descriptor differs' >&2; exit 19; fi
 echo 'PASS domain and wire'
@@ -57,6 +57,7 @@ def run(commit,policy,archive,inject):
         raise ValueError("Protobuf input differs from its release")
     with ZipFile(archive) as bundle:
         compiler=bundle.read("bin/protoc")
+        well_known={n:bundle.read(n) for n in bundle.namelist() if n.startswith("include/google/protobuf/") and n.endswith(".proto")}
     files={filename:git("show",commit+":"+src) for filename,src in zip(("domain.rs","worker.proto","host.proto"),TARGETS)}
     if inject=="wire":
         files["worker.proto"]+=b"\nmessage CiDriftExample { string version = 1; }\n"
@@ -65,7 +66,7 @@ def run(commit,policy,archive,inject):
     owner=secrets.token_hex(12)
     with tempfile.TemporaryFile() as payload:
         with tarfile.open(fileobj=payload,mode="w") as tar:
-            for name,data in {**files,"protoc":compiler}.items():
+            for name,data in {**files,**well_known,"protoc":compiler}.items():
                 info=tarfile.TarInfo(name)
                 info.size=len(data)
                 info.mode=0o755 if name=="protoc" else 0o644
