@@ -40,7 +40,7 @@ echo checking-clippy >&2
 ./clippy-driver --sysroot "$sysroot" --crate-type=lib --edition=2024 -D warnings domain.rs
 echo checking-domain >&2
 rustc --edition=2024 --test domain.rs -o domain-tests
-./domain-tests --test-threads=1 > test-results
+./domain-tests --test-threads=1 > test-results || { result=$?; cat test-results; exit "$result"; }
 cat test-results
 grep -q '^test tests::published_billing_examples_and_fee_conservation ... ok$' test-results
 grep -q '^test tests::cancel_wins_before_completion_and_old_authorities_fail ... ok$' test-results
@@ -102,7 +102,7 @@ def run(commit,trusted,policy,archive,inject):
                 tar.addfile(info,io.BytesIO(data))
         payload.seek(0)
         raw=subprocess.check_output([*DOCKER,"create","-i","--pull","never","--label","org.orange-agent.ci="+owner,
-                "--network","none","--read-only","--cap-drop","ALL","--security-opt","no-new-privileges",
+                "--log-opt","max-size=1m","--log-opt","max-file=1","--network","none","--read-only","--cap-drop","ALL","--security-opt","no-new-privileges",
                 "--pids-limit","128","--cpus","1","--memory","768m","--user","65532:65532",
                 "--tmpfs","/work:rw,exec,nosuid,nodev,size=256m,mode=1777","--workdir","/work",
                 "-e","HOME=/work/home","-e","TMPDIR=/work","-e","ORANGE_RUST="+policy["rust_version"],
@@ -146,9 +146,6 @@ def run(commit,trusted,policy,archive,inject):
                 subprocess.run([*DOCKER,"wait",raw],stdout=subprocess.DEVNULL,check=True,timeout=max(1,deadline-time.monotonic()))
                 state=json.loads(subprocess.check_output([*DOCKER,"inspect",raw]))[0]["State"]
             exit_code=state["ExitCode"]
-            if not transcript:
-                messages=subprocess.check_output([*DOCKER,"logs","--tail","40",raw],stderr=subprocess.STDOUT,timeout=4)
-                transcript=messages[:65536].decode(errors="replace")
             passed="PASS domain and wire" in transcript.splitlines()
             if inject is None:
                 ok=result==exit_code==0 and passed
