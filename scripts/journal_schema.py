@@ -1,5 +1,9 @@
 """Independent release expectation for legacy-to-current SQLite acceptance."""
+from contextlib import contextmanager
 import json
+import shutil
+import sqlite3
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -15,3 +19,21 @@ def verify_current_journal(db):
     objects = set(db.execute("SELECT type, name FROM sqlite_schema"))
     assert required <= objects, required - objects
     return actual
+
+
+@contextmanager
+def inspect_closed_journal(database):
+    """Read committed pages from a private replica of a fixture after its prior process exited."""
+    with tempfile.TemporaryDirectory(prefix="journal-inspection-") as copy_dir:
+        replica = Path(copy_dir) / database.name
+        shutil.copyfile(database, replica)
+        for suffix in ("-wal", "-journal"):
+            sidecar = database.with_name(database.name + suffix)
+            if sidecar.exists():
+                shutil.copyfile(sidecar, replica.with_name(replica.name + suffix))
+        db = sqlite3.connect(replica)
+        try:
+            db.execute("PRAGMA query_only=ON")
+            yield db
+        finally:
+            db.close()

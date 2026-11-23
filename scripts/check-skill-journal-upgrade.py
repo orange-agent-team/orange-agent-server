@@ -5,12 +5,11 @@ import json
 import os
 from pathlib import Path
 import shutil
-import sqlite3
 import subprocess
 import tempfile
 import time
 
-from journal_schema import verify_current_journal
+from journal_schema import inspect_closed_journal, verify_current_journal
 
 if not __debug__:
     raise SystemExit("Migration verification requires active assertions")
@@ -59,23 +58,9 @@ def verify(base, prior, old, new):
         return json.loads(result.stdout)
 
     def snapshot(current=False):
-        # Both child processes have exited. Recover committed WAL pages on a private copy
-        # so a read cannot create lock files or checkpoint the journal under verification.
-        with tempfile.TemporaryDirectory(dir=base) as copy_dir:
-            replica = Path(copy_dir) / database.name
-            shutil.copyfile(database, replica)
-            for suffix in ("-wal", "-journal"):
-                sidecar = database.with_name(database.name + suffix)
-                if sidecar.exists():
-                    shutil.copyfile(sidecar, replica.with_name(replica.name + suffix))
-            db = sqlite3.connect(replica)
-            try:
-                db.execute("PRAGMA query_only=ON")
-                version = verify_current_journal(db) if current else db.execute("PRAGMA user_version").fetchone()[0]
-                return version, db.execute("SELECT config_digest,messages,phase FROM runtime_runs WHERE run_id='old-run'").fetchone()
-            finally:
-                db.close()
-
+        with inspect_closed_journal(database) as db:
+            version = verify_current_journal(db) if current else db.execute("PRAGMA user_version").fetchone()[0]
+            return version, db.execute("SELECT config_digest,messages,phase FROM runtime_runs WHERE run_id='old-run'").fetchone()
 
     config["run"]["environment"] = run(old, "grant-info")["environment"]
     old_pin = None

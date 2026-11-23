@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Actual fixed memory data -> locked current schema, with no HTTP/model inference."""
-import argparse, hashlib, json, os, re, shutil, sqlite3, subprocess, tempfile
+import argparse, hashlib, json, os, re, shutil, subprocess, tempfile
 from pathlib import Path
-from journal_schema import verify_current_journal
+from journal_schema import inspect_closed_journal, verify_current_journal
 
 if not __debug__:
     raise SystemExit("Migration verification requires active assertions")
@@ -58,14 +58,14 @@ with tempfile.TemporaryDirectory(dir=stage,prefix='actual-') as directory:
     subprocess.run([str(binaries[0]),'seed',str(case)],env=env,check=True,timeout=60)
     dbpath=case/'private/journal.sqlite'
     def snapshot():
-        with sqlite3.connect(dbpath) as db:
+        with inspect_closed_journal(dbpath) as db:
             return {'schema':db.execute('PRAGMA user_version').fetchone()[0], 'operations':db.execute('SELECT operation_id,request_json,argument_digest,tool_version,result_digest,result_json,model_result,context_applied FROM operations ORDER BY operation_id').fetchall(), 'sources':db.execute('SELECT * FROM runtime_memory_sources ORDER BY operation_id').fetchall(), 'catalogs':db.execute('SELECT invocation,revision,document_digest,document FROM runtime_tool_catalogs ORDER BY invocation').fetchall()}
     before=snapshot();assert before['schema']==legacy_schema and len(before['sources'])==1 and len(before['operations'])==(2 if args.continuity else 1)
     subprocess.run([str(binaries[1]),'resume',str(case)],env=env,check=True,timeout=60)
-    with sqlite3.connect(dbpath.resolve(strict=True).as_uri()+"?mode=ro", uri=True) as db:
+    with inspect_closed_journal(dbpath) as db:
         destination_version=verify_current_journal(db)
     after=snapshot();assert after['schema']==destination_version;assert before['operations']==after['operations'];assert before['sources']==after['sources'];assert all(row in after['catalogs'] for row in before['catalogs'])
-    with sqlite3.connect(dbpath) as db:assert db.execute("SELECT read_version FROM runtime_memory_protocol WHERE run_id='run'").fetchone()==(1,)
+    with inspect_closed_journal(dbpath) as db:assert db.execute("SELECT read_version FROM runtime_memory_protocol WHERE run_id='run'").fetchone()==(1,)
     def durable_bytes():return {p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in [dbpath,dbpath.with_name(dbpath.name+'-wal')] if p.exists()}
     digest=durable_bytes();old=subprocess.run([str(binaries[0]),'inspect',str(case)],env=env,capture_output=True,text=True,timeout=30);assert old.returncode!=0,'old reader must refuse';assert 'UnsupportedVersion' in old.stderr or 'unsupported journal' in old.stderr.lower(),old.stderr;assert durable_bytes()==digest,'old reader mutated newer data'
 print(json.dumps({'result':'PASS','scenario':('actual-schema27-human-confirmation-to'+str(destination_version) if args.continuity else 'actual-schema'+str(legacy_schema)+'-memory-v1-to'+str(destination_version)),'old_binary_seeded_and_approved_read':True,'old_tool_snapshots_and_results_preserved':True,'protocol_retained_v1':True,'read_replays':0,'known_source_required_after_confirmation':args.continuity,'raw_store_bypass_rejected':args.continuity,'withdrawal_after_migration_rejected':args.continuity,'old_binary_rejected_without_mutation':True,'transport':'explicit scripted model; no actual inference'},indent=2))
