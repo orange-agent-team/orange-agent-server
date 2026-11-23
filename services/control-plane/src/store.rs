@@ -821,7 +821,7 @@ pub(crate) async fn stop_cloud_job(
             .bind(&owner)
             .fetch_one(&mut **tx)
             .await?;
-        let row = sqlx::query("SELECT job_id,root_budget_id,invocation_id,execution_state,settlement_state,reserved,charge,owner_id,state_revision,held_gift,held_earned,held_purchased FROM jobs WHERE job_id=$1 AND owner_id=$2 FOR UPDATE")
+        let row = sqlx::query("SELECT job_id,root_budget_id,invocation_id,execution_state,settlement_state,reserved,charge,owner_id,held_gift,held_earned,held_purchased FROM jobs WHERE job_id=$1 AND owner_id=$2 FOR UPDATE")
             .bind(&job)
             .bind(&owner)
             .fetch_one(&mut **tx)
