@@ -191,6 +191,30 @@ async fn socket_checks_origin_ack_credit_cursor_generation_and_current_session_w
         .expect("slow client");
     frame(&mut slow).await;
     assert_eq!(closed(&mut slow).await, 1008);
+    sqlx::query("UPDATE outbox o SET delivered_at=clock_timestamp() FROM durable_events e WHERE e.event_id=o.domain_event_id AND e.stream_id=$1 AND e.seq=1")
+        .bind(&cursor.stream_id).execute(f.d.store.pool()).await.expect("acknowledged retained event fixture");
+    orange_control_plane::events::EventStore::new(f.d.store.pool().clone())
+        .prune_delivered(&cursor.stream_id, 1)
+        .await
+        .expect("prune acknowledged sequence");
+    let mut pruned = open(&resume, Some(cookie), Some(origin), P)
+        .await
+        .expect("resume with obsolete cursor");
+    let reset = frame(&mut pruned).await;
+    let JobHistory::Reset {
+        job,
+        cursor: Some(cover),
+        ..
+    } = reset.history
+    else {
+        panic!("expected authoritative reset")
+    };
+    assert_eq!(job.job_id, f.job);
+    assert_eq!(job.execution_state, "queued");
+    assert!(job.charge.is_none());
+    assert_eq!(cover, cursor);
+    ack(&mut pruned, reset.connection_generation, Some(cover)).await;
+    pruned.close(None).await.expect("close reset subscriber");
     let mut live = open(
         &format!(
             "{}?stream_id={}&after={}",
