@@ -44,15 +44,39 @@ fn runtime() -> tempfile::TempDir {
     std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).expect("private");
     root
 }
-async fn generating(handle: &orange_worker::cpu::CpuWorkerHandle) {
+async fn generating(handle: &mut orange_worker::cpu::CpuWorkerHandle) {
     let mut phases = handle.phases();
-    tokio::time::timeout(Duration::from_secs(30), async {
-        while *phases.borrow() != CpuPhase::Generating {
-            phases.changed().await.expect("live owner");
+    let started = std::time::Instant::now();
+    let mut observed = Vec::new();
+    let ready = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let phase = phases.borrow_and_update().clone();
+            observed.push((started.elapsed().as_millis(), phase.clone()));
+            match phase {
+                CpuPhase::Generating => return true,
+                CpuPhase::Stopping | CpuPhase::Finished => return false,
+                _ => {}
+            }
+            if phases.changed().await.is_err() {
+                return false;
+            }
         }
     })
-    .await
-    .expect("actual generation started");
+    .await;
+    if ready != Ok(true) {
+        handle.cancel();
+        let outcome = tokio::time::timeout(Duration::from_secs(20), handle.wait()).await;
+        let diagnosis = outcome.map(|exit| {
+            exit.map(|exit| {
+                (
+                    exit.report.outcome,
+                    exit.report.error_code,
+                    exit.report.cleanup_confirmed,
+                )
+            })
+        });
+        panic!("model did not enter generation: phases={observed:?}, exit={diagnosis:?}");
+    }
 }
 #[tokio::test]
 async fn actual_worker_model_uses_bound_input_and_confirms_owned_cpu_exit() {
@@ -166,14 +190,7 @@ async fn actual_worker_cancel_keeps_supervision_and_never_returns_a_candidate() 
             capability_snapshot: "cancel-cpu-fixture".into(),
         },
     );
-    let mut phases = handle.phases();
-    tokio::time::timeout(Duration::from_secs(30), async {
-        while *phases.borrow() != CpuPhase::Generating {
-            phases.changed().await.expect("live owner");
-        }
-    })
-    .await
-    .expect("real model reached generation");
+    generating(&mut handle).await;
     tokio::time::sleep(Duration::from_millis(100)).await;
     handle.cancel();
     let exit = tokio::time::timeout(Duration::from_secs(20), handle.wait())
@@ -237,7 +254,7 @@ async fn stops_after_losing_renewal(cert: &str, block_authority: bool) {
             capability_snapshot: "revoke-cpu-fixture".into(),
         },
     );
-    generating(&handle).await;
+    generating(&mut handle).await;
     let held = if block_authority {
         let mut tx =
             f.d.store
@@ -319,7 +336,7 @@ async fn dropped_handle_still_joins_model_and_persists_cleanup() {
             .await
             .is_err()
     );
-    generating(&handle).await;
+    generating(&mut handle).await;
     let mut phases = handle.phases();
     drop(handle);
     tokio::time::timeout(Duration::from_secs(20), async {
@@ -591,7 +608,7 @@ async fn stopped_by_policy(cert: &str, kind: &str) {
             capability_snapshot: "policy-cpu".into(),
         },
     );
-    generating(&handle).await;
+    generating(&mut handle).await;
     tokio::time::timeout(Duration::from_secs(5), gate.reached())
         .await
         .expect("policy-first heartbeat gate reached");
@@ -701,7 +718,7 @@ async fn changed_policy_without_command_stops_model_without_inventing_applicatio
             capability_snapshot: "missing-policy-command".into(),
         },
     );
-    generating(&handle).await;
+    generating(&mut handle).await;
     sqlx::query("UPDATE nodes SET policy_generation=1,state='draining' WHERE node_id=$1")
         .bind(&f.d.node)
         .execute(f.d.store.pool())
@@ -850,7 +867,7 @@ async fn queued_policy_after_heartbeat_cannot_forge_application_from_execution_r
             capability_snapshot: "execution-first-policy".into(),
         },
     );
-    generating(&handle).await;
+    generating(&mut handle).await;
     tokio::time::timeout(Duration::from_secs(5), gate.reached())
         .await
         .expect("execution-first heartbeat completed");
