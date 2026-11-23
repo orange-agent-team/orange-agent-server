@@ -258,11 +258,11 @@ async fn retained_stream(store: &Store, owner: &str, length: i64, pending: i64) 
         .bind(owner).bind(&entity).bind(length+1).fetch_one(&mut *tx).await.expect("stream");
     sqlx::query("WITH inserted AS (
         INSERT INTO durable_events(stream_id,seq,event_type,payload_digest,correlation_id,occurred_at,source_outbox_id)
-        SELECT $1,seq,'retention_test.seed',repeat('a',64),$2,clock_timestamp(),nextval(pg_get_serial_sequence('outbox','event_id'))
+        SELECT $1,seq,'retention_test.seed',encode(sha256(convert_to($6,'UTF8')),'hex'),$2,clock_timestamp(),nextval(pg_get_serial_sequence('outbox','event_id'))
         FROM generate_series(1::bigint,$3::bigint) AS seq RETURNING event_id,seq,source_outbox_id)
         INSERT INTO outbox(event_id,domain_event_id,owner_id,entity_id,event_type,payload,delivered_at)
-        SELECT source_outbox_id,event_id,$4,$2,'retention_test.seed','development seed',CASE WHEN seq=$5 THEN NULL ELSE clock_timestamp() END FROM inserted")
-        .bind(&stream).bind(&entity).bind(length).bind(owner).bind(pending).execute(&mut *tx).await.expect("linked outbox rows");
+        SELECT source_outbox_id,event_id,$4,$2,'retention_test.seed',$6,CASE WHEN seq=$5 THEN NULL ELSE clock_timestamp() END FROM inserted")
+        .bind(&stream).bind(&entity).bind(length).bind(owner).bind(pending).bind("development seed").execute(&mut *tx).await.expect("linked outbox rows");
     tx.commit().await.expect("seed commit");
     stream
 }
