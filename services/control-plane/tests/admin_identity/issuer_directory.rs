@@ -14,16 +14,29 @@ async fn grant(f: &Fixture, role: &str, kind: &str, scope: &str) {
     .await
     .expect("explicit scoped grant");
 }
+enum CredentialState {
+    Active,
+    Waiting,
+    GrantExpired,
+    Withdrawn,
+    CertificateExpired,
+}
 async fn seed(
     pool: &PgPool,
     owner: &str,
     region: &str,
     issuer: &str,
     validity: i64,
-    claimed: bool,
-    withdrawn: bool,
-    past_grant: bool,
+    state: CredentialState,
 ) {
+    let claimed = matches!(
+        state,
+        CredentialState::Active | CredentialState::Withdrawn | CredentialState::CertificateExpired
+    );
+    let past_grant = matches!(
+        state,
+        CredentialState::CertificateExpired | CredentialState::GrantExpired
+    );
     let task = Uuid::new_v4().to_string();
     let node = Uuid::new_v4().to_string();
     let fingerprint = hash_secret(&task);
@@ -48,7 +61,7 @@ async fn seed(
             SELECT certificate_sha256,node_id,$2,not_before,expires_at FROM worker_enrollment_certificates WHERE request_id=$1::text::uuid")
             .bind(&task).bind(owner).execute(pool).await.expect("credential");
     }
-    if withdrawn {
+    if matches!(state, CredentialState::Withdrawn) {
         sqlx::query("UPDATE worker_enrollment_grants SET state='revoked',revoked_at=clock_timestamp() WHERE request_id=$1::text::uuid")
         .bind(&task).execute(pool).await.expect("withdrawn credential");
     }
@@ -75,15 +88,16 @@ async fn issuer_directory_filters_regions_binds_positions_and_preserves_missing_
     let a = "1".repeat(64);
     let b = "2".repeat(64);
     let key = "8".repeat(64);
-    for (r, i, valid, claimed, revoked, expired) in [
-        (&east, &a, 500, true, false, false),
-        (&east, &a, 3600, false, false, false),
-        (&east, &a, -30, true, false, true),
-        (&east, &a, 7200, true, true, false),
-        (&west, &a, 7200, true, false, false),
-        (&east, &b, 3600, false, false, true),
+    use CredentialState::*;
+    for (r, i, valid, state) in [
+        (&east, &a, 500, Active),
+        (&east, &a, 3600, Waiting),
+        (&east, &a, -30, CertificateExpired),
+        (&east, &a, 7200, Withdrawn),
+        (&west, &a, 7200, Active),
+        (&east, &b, 3600, GrantExpired),
     ] {
-        seed(&f.pool, &owner, r, i, valid, claimed, revoked, expired).await;
+        seed(&f.pool, &owner, r, i, valid, state).await;
     }
     sqlx::query("INSERT INTO worker_issuer_public_keys(issuer_sha256,spki_sha256) VALUES($1,$2)")
         .bind(&a)
@@ -259,9 +273,7 @@ async fn historical_issuer_mapping_requires_verified_pinned_ca_after_schema81_up
         "legacy-region",
         &issuer,
         600,
-        true,
-        false,
-        false,
+        CredentialState::Active,
     )
     .await;
     let meta = || {
