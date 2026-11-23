@@ -357,7 +357,8 @@ async fn typed_job_status_requires_the_original_owner_job_and_authenticated_subm
     assert_eq!(missing, 404);
     assert!(body.get("job_id").is_none());
     let (invalid, body) = status(app.clone(), &f.headers, &f.owner, "bad%20job").await;
-    assert_eq!(invalid, 400);
+    assert_eq!(invalid, 422);
+    assert_eq!(body["code"], "VALIDATION_ERROR");
     assert!(body.get("job_id").is_none());
     assert_eq!(
         status(app, &Default::default(), &f.owner, &f.job).await.0,
