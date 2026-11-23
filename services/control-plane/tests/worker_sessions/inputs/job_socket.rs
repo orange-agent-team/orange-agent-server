@@ -68,7 +68,7 @@ async fn ack(client: &mut Client, generation: String, cursor: Option<JobEventCur
 #[tokio::test]
 async fn socket_checks_origin_ack_credit_cursor_generation_and_current_session_without_job_effects()
 {
-    let f = setup("client-ay").await;
+    let f = setup("client-history-socket").await;
     let cookie = f.headers["cookie"].to_str().expect("cookie");
     let origin = f.identity.config.user_origin.as_str();
     let app = orange_control_plane::artifacts::http::router(f.identity.clone(), f.objects.clone());

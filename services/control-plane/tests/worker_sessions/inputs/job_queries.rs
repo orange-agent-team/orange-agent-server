@@ -330,7 +330,7 @@ async fn membership_changes_and_owner_restriction_preserve_original_job_and_ledg
 
 #[tokio::test]
 async fn typed_job_status_requires_the_original_owner_job_and_authenticated_submitter() {
-    let f = setup("client-ay").await;
+    let f = setup("client-typed-job").await;
     let app = orange_control_plane::artifacts::http::router(f.identity.clone(), f.objects.clone());
     async fn status(
         app: axum::Router,

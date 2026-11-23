@@ -232,7 +232,7 @@ async fn team_role_does_not_allow_cancelling_another_submitter_and_stop_survives
 #[tokio::test]
 async fn conditional_cancellation_replays_the_original_precondition_but_rejects_new_stale_commands()
 {
-    let f = setup("client-ay").await;
+    let f = setup("client-job-revision").await;
     async fn read(f: &InputFixture) -> (i64, serde_json::Value) {
         let app =
             orange_control_plane::artifacts::http::router(f.identity.clone(), f.objects.clone());
@@ -334,7 +334,10 @@ async fn conditional_cancellation_replays_the_original_precondition_but_rejects_
 async fn browsers_review_personal_and_organization_job_versions_before_cancelling() {
     use std::io::Write;
     use std::process::{Command, Stdio};
-    for (team, cert) in [(false, "client-ay"), (true, "client-di")] {
+    for (team, cert) in [
+        (false, "client-browser-version-personal"),
+        (true, "client-browser-version-team"),
+    ] {
         let f = setup_model_scope(
             cert,
             &"b".repeat(64),

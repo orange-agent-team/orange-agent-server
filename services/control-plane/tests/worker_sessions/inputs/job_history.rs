@@ -26,7 +26,7 @@ async fn read(
 #[tokio::test]
 async fn owned_history_resets_after_retention_replays_only_digests_and_binds_real_attempts() {
     let f = setup_model_scope(
-        "client-ay",
+        "client-history-submitter",
         &"b".repeat(64),
         &"c".repeat(64),
         "private-job-history-canary".into(),
@@ -34,7 +34,7 @@ async fn owned_history_resets_after_retention_replays_only_digests_and_binds_rea
         true,
     )
     .await;
-    let outsider = setup("client-di").await;
+    let outsider = setup("client-history-other").await;
     sqlx::query(
         "INSERT INTO memberships(organization_id,user_id,role,active) VALUES($1,$2,'admin',TRUE)",
     )

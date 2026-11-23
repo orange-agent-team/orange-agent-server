@@ -1041,7 +1041,7 @@ async fn real_worker_client_old_epoch_and_dropped_heartbeat_cannot_remain_active
 
 #[tokio::test]
 async fn ordinary_authenticated_heartbeat_preserves_quarantine_and_cannot_recreate_execution() {
-    let d = device("client-a").await;
+    let d = device("client-quarantined-heartbeat").await;
     let server = Running::start(&d.store).await;
     let mut client = server.client(Some(&d.certificate)).await.expect("TLS");
     let (sender, mut stream) = control(&mut client, hello(&d.node)).await.expect("session");
