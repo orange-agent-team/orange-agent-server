@@ -680,3 +680,89 @@ async fn only_one_concurrent_terminal_revision_wins_and_an_old_attempt_cannot_re
             .expect("terminal fact");
     assert_eq!(current, (state, version));
 }
+
+#[tokio::test]
+async fn existing_schema66_job_and_hold_survive_revision_upgrade() {
+    let url = std::env::var("ORANGE_TEST_DATABASE_URL").expect("dedicated empty upgrade DB");
+    let store = Store::connect(&url).await.expect("connect");
+    let missing: bool = sqlx::query_scalar("SELECT to_regclass('public.jobs') IS NULL")
+        .fetch_one(store.pool())
+        .await
+        .expect("fresh DB");
+    assert!(missing, "dedicated empty upgrade database required");
+    let stage = tempfile::tempdir().expect("old migrations");
+    let sources = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations");
+    let mut n = 0;
+    for item in std::fs::read_dir(sources).expect("migration sources") {
+        let entry = item.expect("file");
+        let name = entry.file_name();
+        let text = name.to_str().expect("filename");
+        if text.ends_with(".sql")
+            && text
+                .split('_')
+                .next()
+                .expect("prefix")
+                .parse::<u32>()
+                .expect("version")
+                <= 66
+        {
+            std::fs::copy(entry.path(), stage.path().join(name)).expect("copy immutable migration");
+            n += 1;
+        }
+    }
+    assert_eq!(n, 66);
+    sqlx::migrate::Migrator::new(stage.path())
+        .await
+        .expect("legacy migration chain")
+        .run(store.pool())
+        .await
+        .expect("old schema");
+    let who = owner(&store, 40, 160, 300).await;
+    let budget = store
+        .create_budget(
+            &who,
+            "legacy-budget",
+            &CreateBudget {
+                scope_id: "old-scope".into(),
+                limit: money(500),
+            },
+        )
+        .await
+        .expect("old budget");
+    let req = request(&store, &who, &budget.root_budget_id, 250).await;
+    let original = store
+        .submit(&who, "old-submit", &req)
+        .await
+        .expect("frozen on schema 66");
+    let account_snapshot = || {
+        sqlx::query_as::<_, (i64, i64, i64)>(
+            "SELECT gift,earned,purchased FROM wallets WHERE owner_id=$1",
+        )
+        .bind(&who)
+        .fetch_one(store.pool())
+    };
+    let old_wallet = account_snapshot().await.expect("old wallet");
+    store.migrate().await.expect("upgrade in place");
+    let version: i64 = sqlx::query_scalar("SELECT state_revision FROM jobs WHERE job_id=$1")
+        .bind(&original.job_id)
+        .fetch_one(store.pool())
+        .await
+        .expect("initial revision");
+    assert_eq!(version, 1);
+    assert_eq!(account_snapshot().await.expect("wallet"), old_wallet);
+    let replay = store
+        .submit(&who, "old-submit", &req)
+        .await
+        .expect("prior key");
+    assert_eq!(replay.job_id, original.job_id);
+    assert_eq!(replay.reserved.0.units(), 250);
+    let closed = store
+        .cancel_queued(&who, &replay.job_id, "legacy-cancel")
+        .await
+        .expect("unconditional older client");
+    assert_eq!(closed.execution_state, "cancelled");
+    assert_eq!(
+        account_snapshot().await.expect("restitution"),
+        (40, 160, 300)
+    );
+}

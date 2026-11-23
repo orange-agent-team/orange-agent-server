@@ -11,7 +11,7 @@ from owned_postgres import database
 ROOT=Path(__file__).resolve().parents[1]
 p=argparse.ArgumentParser()
 p.add_argument("--environment",type=Path,default=ROOT/".local")
-p.add_argument("--section",required=True,choices=["race","cancel"])
+p.add_argument("--section",required=True,choices=["race","cancel","upgrade"])
 args=p.parse_args()
 private=args.environment.resolve()
 rustup=shutil.which("rustup") or "/opt/homebrew/opt/rustup/bin/rustup"
@@ -27,7 +27,8 @@ with database(private/"database-url","orange_job_revision_") as (_,url):
         required={"conditional_cancellation_replays_the_original_precondition_but_rejects_new_stale_commands",
                   "running_cancel_keeps_hold_and_attempt_until_independent_cleanup","cancelled_request_rolls_back_when_durable_event_cannot_commit"}
     else:
-        case="only_one_concurrent_terminal_revision_wins_and_an_old_attempt_cannot_rewind_it"
+        case=("existing_schema66_job_and_hold_survive_revision_upgrade" if args.section=="upgrade" else
+              "only_one_concurrent_terminal_revision_wins_and_an_old_attempt_cannot_rewind_it")
         command=[cargo,"test","--locked","--offline","-p","orange-control-plane","--features","integration-tests","--test","postgres",case,"--","--exact"]
         required={case}
     with subprocess.Popen(command,env=env,cwd=ROOT,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True) as child:
