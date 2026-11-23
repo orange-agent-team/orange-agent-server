@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Cross-build and inspect two independent Windows x64 GPU inventory artifacts on macOS."""
 import hashlib
-import io
 import json
 import os
 from pathlib import Path

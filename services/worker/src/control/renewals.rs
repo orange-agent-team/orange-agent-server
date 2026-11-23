@@ -140,6 +140,7 @@ impl ControlConnection {
             stop_at,
         })
     }
+    #[cfg(unix)]
     pub(crate) fn confirm_input_renewal(
         &mut self,
         journal: &mut ExecutionJournal,

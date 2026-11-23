@@ -30,6 +30,7 @@ impl StartedExecution {
     pub fn grant(&self) -> &Grant {
         &self.grant
     }
+    #[cfg(unix)]
     pub(super) fn renew_until(&mut self, deadline: Instant) {
         self.deadline = deadline;
     }

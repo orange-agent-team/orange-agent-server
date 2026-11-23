@@ -372,6 +372,7 @@ impl ControlConnection {
             deadline,
         })
     }
+    #[cfg(unix)]
     pub(crate) fn policy_changed_since(&self, generation: u64) -> bool {
         self.observed_policy_generation != generation
     }
