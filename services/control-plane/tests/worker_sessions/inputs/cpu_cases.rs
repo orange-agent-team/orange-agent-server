@@ -199,10 +199,17 @@ async fn actual_worker_cancel_keeps_supervision_and_never_returns_a_candidate() 
 
 #[tokio::test]
 async fn actual_worker_revocation_discards_output_and_joins_the_engine() {
+    stops_after_losing_renewal("client-bg", false).await;
+}
+#[tokio::test]
+async fn actual_lost_renewal_response_stops_owned_cpu_before_any_result_is_published() {
+    stops_after_losing_renewal("client-unavailable-renewal", true).await;
+}
+async fn stops_after_losing_renewal(cert: &str, block_authority: bool) {
     let p = profile();
     let digest = cpu_profile_digest(&p).expect("digest");
     let f = setup_model(
-        "client-bg",
+        cert,
         &p.model_sha256,
         &digest,
         "Count upwards from 1 to 10000. Output every number.".into(),
@@ -231,14 +238,33 @@ async fn actual_worker_revocation_discards_output_and_joins_the_engine() {
         },
     );
     generating(&handle).await;
-    f.objects
-        .delete(&f.actor, &f.owner, &f.upload.upload_id)
-        .await
-        .expect("actual customer deletion");
+    let held = if block_authority {
+        let mut tx =
+            f.d.store
+                .pool()
+                .begin()
+                .await
+                .expect("fault injection transaction");
+        sqlx::query("SELECT node_id FROM nodes WHERE node_id=$1 FOR UPDATE")
+            .bind(&f.d.node)
+            .fetch_one(&mut *tx)
+            .await
+            .expect("hold renewal authority");
+        Some(tx)
+    } else {
+        f.objects
+            .delete(&f.actor, &f.owner, &f.upload.upload_id)
+            .await
+            .expect("actual customer deletion");
+        None
+    };
     let exit = tokio::time::timeout(Duration::from_secs(20), handle.wait())
         .await
         .expect("bounded revocation")
         .expect("report");
+    if let Some(tx) = held {
+        tx.rollback().await.expect("release test authority");
+    }
     assert_eq!(exit.report.outcome, "authority_lost");
     assert!(exit.report.response.is_none());
     assert!(exit.report.cleanup_confirmed);
