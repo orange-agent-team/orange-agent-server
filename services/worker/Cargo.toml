@@ -11,7 +11,6 @@ test-control-gates = []
 
 [dependencies]
 orange-domain.workspace = true
-orange-model-runtime.workspace = true
 orange-protocol = { workspace = true, features = ["grpc"] }
 rusqlite.workspace = true
 serde.workspace = true
@@ -27,6 +26,7 @@ prost.workspace = true
 tokio-stream.workspace = true
 
 [target.'cfg(unix)'.dependencies]
+orange-model-runtime.workspace = true
 rustix.workspace = true
 
 [dev-dependencies]

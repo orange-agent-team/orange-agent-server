@@ -114,6 +114,7 @@ impl ControlConnection {
 impl ControlConnection {
     /// Current cloud execution/data authority only; it does not renew a lease or
     /// certify local resource ownership. The execution owner must supervise that.
+    #[cfg(unix)]
     pub(crate) async fn check_cpu_authority(
         &mut self,
         record: &crate::execution_journal::ExecutionRecord,
