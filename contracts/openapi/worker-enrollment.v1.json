@@ -1,0 +1,259 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Worker enrollment authorization",
+    "version": "0.1.0",
+    "description": "Current personal owner or organization owner/admin authorizes one proven client-only key. Replays cannot restore revoked or expired grants. This operation does not issue a certificate or register compute."
+  },
+  "security": [
+    {
+      "userSession": []
+    }
+  ],
+  "paths": {
+    "/api/v1/owners/{owner}/worker-enrollments/{request}": {
+      "parameters": [
+        {
+          "name": "owner",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "name": "request",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "get": {
+        "summary": "Read enrollment authorization",
+        "operationId": "getWorkerEnrollment",
+        "responses": {
+          "422": {
+            "description": "Invalid request, CSR or idempotency key"
+          },
+          "401": {
+            "description": "Session unavailable or expired"
+          },
+          "403": {
+            "description": "Owner permission, origin or CSRF rejected"
+          },
+          "404": {
+            "description": "Unknown owner-scoped request"
+          },
+          "200": {
+            "description": "Current enrollment authorization metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnrollmentView"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Authorize the exact verified device request",
+        "operationId": "authorizeWorkerEnrollment",
+        "responses": {
+          "422": {
+            "description": "Invalid request, CSR or idempotency key"
+          },
+          "401": {
+            "description": "Session unavailable or expired"
+          },
+          "403": {
+            "description": "Owner permission, origin or CSRF rejected"
+          },
+          "404": {
+            "description": "Unknown owner-scoped request"
+          },
+          "409": {
+            "description": "Request or token commitment conflict"
+          },
+          "429": {
+            "description": "Hourly owner limit reached"
+          },
+          "200": {
+            "description": "Current enrollment authorization metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnrollmentView"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "request",
+                  "exchange_token_sha256"
+                ],
+                "properties": {
+                  "request": {
+                    "$ref": "../json-schema/worker-certificate-request.v1.json"
+                  },
+                  "exchange_token_sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Revoke this authorization",
+        "operationId": "revokeWorkerEnrollment",
+        "responses": {
+          "422": {
+            "description": "Invalid request, CSR or idempotency key"
+          },
+          "401": {
+            "description": "Session unavailable or expired"
+          },
+          "403": {
+            "description": "Owner permission, origin or CSRF rejected"
+          },
+          "404": {
+            "description": "Unknown owner-scoped request"
+          },
+          "200": {
+            "description": "Current enrollment authorization metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnrollmentView"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "userSession": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "__Host-orange-user"
+      }
+    },
+    "schemas": {
+      "EnrollmentView": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "request_id",
+          "owner_id",
+          "requested_by",
+          "spki_sha256",
+          "csr_sha256",
+          "state",
+          "expires_unix"
+        ],
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "owner_id": {
+            "type": "string"
+          },
+          "requested_by": {
+            "type": "string"
+          },
+          "spki_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "csr_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "state": {
+            "enum": [
+              "authorized",
+              "revoked",
+              "expired"
+            ]
+          },
+          "expires_unix": {
+            "type": "string",
+            "pattern": "^[0-9]+$"
+          }
+        }
+      }
+    }
+  }
+}

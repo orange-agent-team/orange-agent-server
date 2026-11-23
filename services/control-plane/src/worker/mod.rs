@@ -12,3 +12,4 @@ mod renewals;
 mod transcription_observations;
 
 pub mod bootstrap;
+pub(crate) mod enrollment_csr;

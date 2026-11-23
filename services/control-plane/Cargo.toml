@@ -10,6 +10,7 @@ oidc-rollover-tests = []
 personal-key-browser-tests=["integration-tests"]
 job-revision-browser-tests=["integration-tests"]
 integration-tests = []
+worker-enrollment-tests = ["integration-tests"]
 metering-upgrade-tests = ["integration-tests"]
 cloud-host-tests = ["integration-tests"]
 pg-view-tests = []
@@ -113,6 +114,7 @@ percent-encoding = "=2.3.2"
 reqwest.workspace = true
 opendal = { workspace = true, features = ["services-s3"] }
 libc.workspace = true
+x509-parser = { version = "=0.18.1", features = ["verify"] }
 
 [target.'cfg(unix)'.dependencies]
 rustix.workspace = true

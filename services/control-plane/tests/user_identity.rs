@@ -509,3 +509,7 @@ async fn session_refresh_after_idle_deadline_is_denied() {
             .expect("read deadline");
     assert_eq!(stored, deadline);
 }
+
+#[cfg(feature = "worker-enrollment-tests")]
+#[path = "user_identity/worker_enrollments.rs"]
+mod worker_enrollments;

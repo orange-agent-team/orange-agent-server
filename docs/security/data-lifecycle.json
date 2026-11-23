@@ -117,6 +117,16 @@
         "purpose",
         "subject_id",
         "enrollment_user_id"
+      ],
+      "worker_enrollment_grants": [
+        "request_id",
+        "owner_id",
+        "requested_by",
+        "spki_sha256",
+        "csr_sha256",
+        "created_at",
+        "expires_at",
+        "revoked_at"
       ]
     },
     "ownership_links": [
@@ -147,6 +157,14 @@
       [
         "cloud_pool_hosts.certificate_sha256",
         "execution_certificate_purposes.certificate_sha256"
+      ],
+      [
+        "worker_enrollment_grants.owner_id",
+        "owners.owner_id"
+      ],
+      [
+        "worker_enrollment_grants.requested_by",
+        "users.user_id"
       ]
     ],
     "implementation": [
@@ -154,7 +172,8 @@
       "services/control-plane/src/auth/users.rs",
       "services/control-plane/src/admin/identity.rs",
       "services/control-plane/src/worker/isolation_observations.rs",
-      "services/control-plane/migrations/0079_execution_certificate_purposes.sql"
+      "services/control-plane/migrations/0079_execution_certificate_purposes.sql",
+      "services/control-plane/src/auth/worker_enrollments.rs"
     ]
   },
   "events": {

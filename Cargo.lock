@@ -2256,6 +2256,7 @@ dependencies = [
  "tonic",
  "tower",
  "uuid",
+ "x509-parser",
 ]
 
 [[package]]
