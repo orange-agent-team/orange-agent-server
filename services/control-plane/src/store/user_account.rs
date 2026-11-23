@@ -8,13 +8,20 @@ impl Store {
     ) -> Result<WalletView, StoreError> {
         let user = guard.view().user_id.clone();
         let owner = guard.view().personal_owner_id.clone();
-        let row = sqlx::query("SELECT * FROM wallets WHERE owner_id=$1")
-            .bind(&owner)
-            .fetch_one(&mut **guard.transaction())
+        Self::wallet_for_owner(guard.transaction(), &user, &owner).await
+    }
+    pub(crate) async fn wallet_for_owner(
+        tx: &mut Transaction<'_, Postgres>,
+        user: &str,
+        owner: &str,
+    ) -> Result<WalletView, StoreError> {
+        let row = sqlx::query("SELECT gift,earned,purchased,reserved_gift,reserved_earned,reserved_purchased,pending_earned FROM wallets WHERE owner_id=$1")
+            .bind(owner)
+            .fetch_one(&mut **tx)
             .await?;
         Ok(WalletView {
-            user_id: user,
-            owner_id: owner,
+            user_id: user.to_owned(),
+            owner_id: owner.to_owned(),
             gift: Money(credits(row.try_get("gift")?)?),
             earned: Money(credits(row.try_get("earned")?)?),
             purchased: Money(credits(row.try_get("purchased")?)?),
@@ -45,12 +52,21 @@ impl Store {
         after: &str,
         limit: u16,
     ) -> Result<PersonalBudgetList, StoreError> {
+        let user = guard.view().user_id.clone();
+        let owner = guard.view().personal_owner_id.clone();
+        Self::budgets_for_owner(guard.transaction(), &user, &owner, after, limit).await
+    }
+    pub(crate) async fn budgets_for_owner(
+        tx: &mut Transaction<'_, Postgres>,
+        user: &str,
+        owner: &str,
+        after: &str,
+        limit: u16,
+    ) -> Result<PersonalBudgetList, StoreError> {
         if (!after.is_empty() && !valid_id(after)) || !(1..=100).contains(&limit) {
             return Err(StoreError::Invalid);
         }
-        let user = guard.view().user_id.clone();
-        let owner = guard.view().personal_owner_id.clone();
-        let rows=sqlx::query("SELECT * FROM budget_roots WHERE owner_id=$1 AND root_budget_id>$2 ORDER BY root_budget_id LIMIT $3").bind(&owner).bind(after).bind(i64::from(limit)+1).fetch_all(&mut **guard.transaction()).await?;
+        let rows=sqlx::query("SELECT root_budget_id,scope_id,limit_amount,spent,reserved,state FROM budget_roots WHERE owner_id=$1 AND root_budget_id>$2 ORDER BY root_budget_id LIMIT $3").bind(owner).bind(after).bind(i64::from(limit)+1).fetch_all(&mut **tx).await?;
         let more = rows.len() > usize::from(limit);
         let mut data = Vec::new();
         for row in rows.iter().take(usize::from(limit)) {
@@ -62,8 +78,8 @@ impl Store {
             None
         };
         Ok(PersonalBudgetList {
-            user_id: user,
-            owner_id: owner,
+            user_id: user.to_owned(),
+            owner_id: owner.to_owned(),
             data,
             next_cursor,
         })

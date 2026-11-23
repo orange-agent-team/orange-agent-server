@@ -418,3 +418,6 @@ async fn revoked_session_cannot_authenticate_and_owner_ledger_remains_balanced_a
             .is_err()
     );
 }
+
+#[path = "user_identity/personal_keys.rs"]
+mod personal_key_cases;

@@ -4,6 +4,8 @@ mod accounts;
 mod cloud_approvals;
 #[path = "cloud_runs.rs"]
 mod cloud_runs;
+#[path = "personal_keys.rs"]
+mod personal_keys;
 #[path = "team_budgets.rs"]
 mod team_budgets;
 #[path = "team_management.rs"]
@@ -212,6 +214,19 @@ pub fn router(identity: UserIdentity) -> Router {
         .route(
             "/api/v1/organizations/{id}/budgets/{budget}",
             get(team_budgets::read).post(team_budgets::adjust),
+        )
+        .route("/api/v1/account/api-keys", get(personal_keys::list))
+        .route(
+            "/api/v1/account/api-keys/{key}",
+            axum::routing::put(personal_keys::register).delete(personal_keys::revoke),
+        )
+        .route(
+            "/api/v1/automation/account/wallet",
+            get(personal_keys::wallet),
+        )
+        .route(
+            "/api/v1/automation/account/budgets",
+            get(personal_keys::budgets),
         )
         .route("/api/v1/account/wallet", get(accounts::wallet))
         .route("/api/v1/account/earnings", get(accounts::earnings))

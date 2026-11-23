@@ -11,6 +11,7 @@ pub mod local_model;
 pub mod marketplace;
 pub mod model;
 pub mod node_control;
+pub mod personal_keys;
 pub mod pricing;
 pub mod questions;
 #[cfg(feature = "grpc")]
