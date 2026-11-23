@@ -7,7 +7,7 @@ use crate::{
 use orange_protocol::{node_control::NodeStopIntent, valid_digest, valid_id};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
-use std::{fs::File, path::Path};
+use std::path::Path;
 
 #[derive(Debug, thiserror::Error)]
 pub enum JournalError {
@@ -33,7 +33,7 @@ pub struct ReceivedNodeIntent {
 }
 pub struct NodeJournal {
     connection: Connection,
-    _lock: File,
+    _lock: storage::JournalLock,
     node_id: String,
 }
 impl NodeJournal {
