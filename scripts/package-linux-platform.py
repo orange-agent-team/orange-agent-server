@@ -49,6 +49,7 @@ def package(native,context,cache):
         files["bin/"+prog]=data
     vendor=cache/("vendor-"+sha(files["Cargo.lock"]))
     packages,missing=notices(files,vendor if vendor.is_dir() else cache/"vendor",files["Cargo.lock"],lambda path:git("show",packaging+":"+path))
+    if missing:raise ValueError("Missing Cargo source notices in Linux release")
     sums={name:sha(data) for name,data in sorted(files.items())}
     manifest={"source":native,"packaging_source":packaging,"target":lock["target"],"programs":list(PLATFORM_PROGRAMS),"sha256":sums}
     release=json.loads(git("show",native+":config/worker-isolation-release.v1.json"))

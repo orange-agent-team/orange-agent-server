@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -15,6 +16,7 @@ import tempfile
 
 from local_distribution_profiles import PLATFORM_PROGRAMS
 from platform_package_smoke import check
+from rust_notices import notices
 
 ROOT=Path(__file__).resolve().parents[1]
 parser=argparse.ArgumentParser()
@@ -22,6 +24,7 @@ parser.add_argument("--database-url-file",type=Path,default=ROOT/".local/databas
 parser.add_argument("--user-config",type=Path,default=ROOT/".local/identity/user-config.json")
 parser.add_argument("--admin-config",type=Path,default=ROOT/".local/identity/admin-config.json")
 parser.add_argument("--reuse-native",action="store_true",help="Use the separately verified two-build result for this same Git commit")
+parser.add_argument("--vendor",type=Path,help="Verified versioned Cargo vendor cache matching the release lock")
 args=parser.parse_args()
 if not __debug__ or sys.version_info[:2]!=(3,12) or (platform.system(),platform.machine())!=("Darwin","arm64"):
     raise SystemExit("Python 3.12 with assertions on macOS arm64 required")
@@ -42,6 +45,17 @@ for program in PLATFORM_PROGRAMS:
     files["bin/"+program]=data
 from platform_payload import service_files,write_archive
 files.update(service_files(ROOT,commit,"distribution/platform/README.md"))
+with tempfile.TemporaryDirectory(prefix="orange-native-notices-") as work:
+    vendor=args.vendor or ROOT/".local/linux"/("vendor-"+sha(files["Cargo.lock"]))
+    if not vendor.is_dir():
+        if args.vendor:raise ValueError("Requested vendor cache is missing")
+        rustup=shutil.which("rustup") or "/opt/homebrew/opt/rustup/bin/rustup"
+        cargo=Path(subprocess.check_output([rustup,"which","cargo"],cwd=ROOT,text=True).strip())
+        vendor=Path(work)/"vendor"
+        subprocess.run([cargo,"vendor","--locked","--offline","--versioned-dirs",vendor],cwd=ROOT,
+            env=dict(os.environ,PATH=str(cargo.parent)+os.pathsep+os.environ["PATH"]),check=True,stdout=subprocess.DEVNULL)
+    locked,missing=notices(files,vendor,files["Cargo.lock"],lambda path:git("show",commit+":"+path))
+    if missing:raise ValueError("Missing Cargo source notices in macOS release")
 manifest={"source":commit,"target":report["target"],"build_macos":report["macos"],"programs":list(PLATFORM_PROGRAMS),
           "sha256":{n:sha(d) for n,d in sorted(files.items())}}
 release=json.loads(files["config/worker-isolation-release.v1.json"])
@@ -70,7 +84,7 @@ with tempfile.TemporaryDirectory(dir=dest,prefix=".verify-") as tmp:
         with target.open("rb") as f:assert hashlib.file_digest(f,"sha256").hexdigest()==digest
     else:os.link(first,target)
     record={"archive":target.name,"sha256":digest,"bytes":target.stat().st_size,"source":commit,"target":report["target"],
-            "two_native_builds":report["builds"],"identical_archives":2,"verified_files":verified["verified_files"],"smoke":smoke,
+            "locked_crates":locked,"without_packaged_notice":missing,"two_native_builds":report["builds"],"identical_archives":2,"verified_files":verified["verified_files"],"smoke":smoke,
             "limits":"Real loopback user/admin services; Worker and cloud binaries compiled and checked for refusal without configuration. No production deployment or signing."}
     target.with_suffix(".json").write_text(json.dumps(record,indent=2)+"\n")
     print(json.dumps(record))

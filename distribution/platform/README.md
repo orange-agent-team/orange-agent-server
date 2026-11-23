@@ -38,3 +38,5 @@ schema 67 为个人与组织任务提供状态版本，旧客户端可以继续�
 开发设备签发方可从独立进程调用 `bin/orange-worker-gateway issue-one`。包内提供 `config/worker-device-issuer.example.json`。该进程只准备已经获用户或团队管理员授权的证书，设备还需完成一次性兑换。[签发、激活与撤销](docs/worker/development-device-issuer.md)
 
 设备端可运行 `bin/orange-worker redeem-enrollment`。包内的 `config/worker-redemption.example.json` 列出私有配置字段。[设备证书安装](docs/worker/device-certificate-install.md)
+
+包内 `licenses/inventory.json` 按 Cargo.lock 列出注册表依赖、校验和、声明许可及实际通知文件。缺少包内许可原文时使用发布提交中内容可核对的上游补充，实际文本与来源一同归档。
