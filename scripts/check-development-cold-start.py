@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Provision a fresh private development cluster and realm on isolated loopback ports, then restart both."""
 import json
+import http.client
 import os
 from pathlib import Path
 import secrets
@@ -10,7 +11,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-from urllib.parse import unquote,urlsplit
+from urllib.parse import unquote,urlsplit,urlencode
 
 ROOT=Path(__file__).resolve().parents[1]
 
@@ -20,6 +21,35 @@ def ports():
         a.bind(("127.0.0.1",0))
         b.bind(("127.0.0.1",0))
         return [str(x.getsockname()[1]) for x in (a,b)]
+
+
+def clients(private,port):
+    fixture=json.loads((private/"identity/fixture.json").read_bytes())
+    conn=http.client.HTTPConnection("127.0.0.1",int(port),timeout=5)
+    try:
+        form=urlencode(dict(grant_type="password",client_id="admin-cli",username="local-bootstrap",password=fixture["bootstrap_password"]))
+        conn.request("POST","/realms/master/protocol/openid-connect/token",form,{"Content-Type":"application/x-www-form-urlencoded"})
+        res=conn.getresponse()
+        if res.status!=200:
+            raise ValueError("Fixture administrative token unavailable")
+        token=json.loads(res.read(65536))["access_token"]
+        result={}
+        for role in ("user","admin"):
+            cfg=json.loads((private/("identity/"+role+"-config.json")).read_bytes())
+            conn.request("GET","/admin/realms/orange-dev/clients?"+urlencode({"clientId":cfg["client_id"]}),
+                         headers={"Authorization":"Bearer "+token})
+            res=conn.getresponse()
+            if res.status!=200:
+                raise ValueError("Realm client registry unavailable")
+            entry,=json.loads(res.read(262144))
+            if entry["clientId"]!=cfg["client_id"] or not entry["enabled"] or entry["protocol"]!="openid-connect":
+                raise ValueError("Missing active fixture client")
+            result[role]=entry["id"]
+        if result["user"]==result["admin"]:
+            raise ValueError("Realm aliased the two application identities")
+        return result
+    finally:
+        conn.close()
 
 
 def main():
@@ -46,6 +76,13 @@ def main():
         private=tree/".local"
         cfg=[private/"database-url",private/"identity/user-config.json",private/"identity/admin-config.json"]
         original=[p.read_bytes() for p in cfg]
+        registered=clients(private,idpport)
+        other=folder/"unowned-source"
+        shutil.copytree(tree/"scripts",other/"scripts")
+        refused=subprocess.run([sys.executable,other/"scripts/local-identity.py","stop"],cwd=other,env=env,capture_output=True)
+        if not refused.returncode or b"fixture mismatch" not in refused.stderr:
+            raise ValueError("Unowned stop was not refused for the expected reason")
+        readiness()
         uri=urlsplit(original[0].decode().strip())
         penv={k:v for k,v in env.items() if not k.startswith("PG")}
         penv.update(PGHOST="127.0.0.1",PGPORT=pgport,PGDATABASE="orange_dev",PGUSER="orange_local",PGPASSWORD=unquote(uri.password))
@@ -60,10 +97,10 @@ def main():
         if denied.returncode!=1:
             raise ValueError("Stopped dependencies reported ready")
         readiness("--start","--wait-seconds","10")
-        if query("SELECT id FROM boot_probe")!="37" or [p.read_bytes() for p in cfg]!=original:
+        if clients(private,idpport)!=registered or query("SELECT id FROM boot_probe")!="37" or [p.read_bytes() for p in cfg]!=original:
             raise ValueError("Restart changed private configuration or lost persisted fixture data")
         print(json.dumps({"source":commit,"clean_boot":True,"repeat_start_same_identity":True,"stopped_dependencies_denied":True,
-                          "actual_cluster_and_realm_restart":True,"credentials_preserved":True,"postgres_seed_preserved":True}))
+                          "actual_cluster_and_realm_restart":True,"credentials_preserved":True,"postgres_seed_preserved":True,"realm_client_ids_preserved":True,"foreign_stop_denied":True}))
     finally:
         # Never discard generated cluster state if its owned services could not be stopped.
         run("local-identity.py","remove")

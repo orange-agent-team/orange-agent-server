@@ -115,11 +115,16 @@ def oidc(issuer):
 def start_owned(directory):
     directory.mkdir(mode=0o700,exist_ok=True)
     check(directory.resolve(strict=True)==directory,"Provisioning requires an owned physical directory")
+    for relative in ("postgres","postgres/data","postgres/password","postgres/socket","postgres/identity.json","postgres/server.log",
+                     "identity","identity/fixture.json","identity/container.env","identity/admin-config.json","identity/user-config.json","database-url"):
+        check(not (directory/relative).is_symlink(),"Linked development setup resource: "+relative)
     descriptor=os.open(directory/".local-start.lock",os.O_RDWR|os.O_CREAT|os.O_NOFOLLOW,0o600)
     with os.fdopen(descriptor,"rb+") as lock:
         fcntl.flock(lock,fcntl.LOCK_EX)
         try:
+            from development_profile import POSTGRES_PORT, IDENTITY_PORT
             data,uri,issuer=config(directory)
+            check(uri.port==POSTGRES_PORT and issuer.port==IDENTITY_PORT,"Development profile ports differ from private state")
             postgres(data,uri)
             oidc(issuer)
             return

@@ -153,6 +153,7 @@ with tempfile.TemporaryDirectory(prefix="oa-s3-", dir="/tmp") as tmp:
     for s in reservations:
         s.close()
     evidence = root / ".local/seaweedfs"
+    evidence.mkdir(parents=True,mode=0o700,exist_ok=True)
     with (evidence / "service.log").open("w") as log:
         service = subprocess.Popen(
             service_args,

@@ -17,3 +17,5 @@
 首次运行 `python3.12 scripts/prepare-linux-images.py --image development_cache` 取得内容寻址的 Redis 镜像。使用 `python3.12 scripts/local_cache.py start --instance demo` 与 `status --instance demo` 获取回环端口及私有连接文件路径；文件内的 password 仅供本地开发客户端读取。用 `stop --instance demo` 结束该实例。重复启动复用健康进程，重建后发放新的键前缀和口令。缓存使用 tmpfs，容器生存时间上限为 30 分钟。磁盘上的旧连接文件可由 stop 回收。镜像来源为 Docker Official Images 的 library/redis，Linux ARM64 manifest 与配置摘要见[版本锁](../../config/development-cache.lock.json)。
 
 S3 服务使用本地固定版本 SeaweedFS。运行 `python3.12 scripts/prepare-s3-source.py` 准备测试二进制。随后运行 `python3.12 scripts/check-development-lifecycle.py --section services`，会启动真实 S3 与 Redis、分配临时端口并检查认证和数据操作。 Worker 用例由 `--section worker` 启动，临时 CA 签发测试证书，mTLS 客户端模拟推理回执。可重复输出提交只能产生一次可读结果；该协议测试不计费。运行 `--section restart` 验证一次性数据库与缓存被回收、替换实例为空、同机相邻命名空间的数据仍然存在。
+
+冷启动验证命令为 `python3.12 scripts/check-development-cold-start.py`。它从固定提交导出脚本，选择独立端口和专属身份容器，验证用户与 Admin 在真实 realm 中分别注册、重启后客户端 ID 与数据保持一致，并检查另一个目录无法停止该实例。
