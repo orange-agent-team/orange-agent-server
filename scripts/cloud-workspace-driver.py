@@ -6,7 +6,7 @@ import io
 import json
 from pathlib import Path
 import shutil
-import selectors
+import os
 import struct
 import subprocess
 import sys
@@ -27,7 +27,9 @@ guest=(ROOT/'scripts/cloud/qualify_guest.py').read_text()
 command=['colima','ssh','--profile','orange-agent','--','sudo','-n','python3','-c',guest,args.operation,args.allocation]
 if args.operation=='recover':
     raise SystemExit(subprocess.run(command,stdin=subprocess.DEVNULL).returncode)
-packet=json.loads(sys.stdin.buffer.readline(360000))
+# Keep the same buffer for the initial packet and renewals that may arrive in one write.
+control_stream=os.fdopen(os.dup(sys.stdin.fileno()),'rb')
+packet=json.loads(control_stream.readline(360000))
 if args.operation=='reserve':
     metadata=json.dumps(packet,separators=(',',':')).encode()+b'\n'
     if len(metadata)>4096 or 'content_base64' in packet:raise ValueError('Bounded identity-only reservation required')
@@ -62,10 +64,8 @@ with tempfile.TemporaryDirectory(prefix='orange-host-driver-') as directory:
             def relay():
                 try:
                     while not finished.is_set():
-                        with selectors.DefaultSelector() as watch:
-                            watch.register(sys.stdin,selectors.EVENT_READ)
-                            if not watch.select(timeout=0.25):continue
-                        line=sys.stdin.buffer.readline(2048)
+                        line=control_stream.readline(2049)
+                        if len(line)>2048:break
                         if not line:break
                         if line!=b'stop\n' and not (line.startswith(b'renew ') and line[6:-1].isdigit() and line.endswith(b'\n')) and not (line.startswith(b'tool {') and line.endswith(b'}\n')):
                             break
