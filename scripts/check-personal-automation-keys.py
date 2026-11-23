@@ -24,7 +24,7 @@ if args.web_repo:
     subprocess.run([node,web/"scripts/check.mjs"],cwd=web,check=True)
     subprocess.run([sys.executable,web/"scripts/local-tls.py"],cwd=web,check=True)
     env.update(ORANGE_TEST_KEY_BROWSER=str(web/"apps/web/scripts/real-personal-keys.mjs"),ORANGE_TEST_KEY_NODE=str(node))
-cases=["personal_key_lifecycle_binds_owner_scope_and_original_intent","budget_key_never_outlives_expiry_or_withdrawn_account_authority","key_read_rechecks_database_time_after_an_authority_lock_wait","logout_keeps_delegation_and_user_disablement_permanently_withdraws_it"]
+cases=["replacement_retires_once_and_an_uncommitted_successor_cannot_retire_anything","personal_key_lifecycle_binds_owner_scope_and_original_intent","budget_key_never_outlives_expiry_or_withdrawn_account_authority","key_read_rechecks_database_time_after_an_authority_lock_wait","logout_keeps_delegation_and_user_disablement_permanently_withdraws_it"]
 if args.web_repo:cases.append("real_personal_key_browser_management")
 with database(private/"database-url","orange_personal_keys_") as (_,url):
     env["ORANGE_TEST_DATABASE_URL"]=url

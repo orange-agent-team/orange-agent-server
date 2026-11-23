@@ -65,28 +65,54 @@ pub(super) async fn register(
     Path(id): Path<String>,
     body: Result<Json<RegisterPersonalKey>, JsonRejection>,
 ) -> Result<Json<PersonalKeyView>, UserApiError> {
+    issue(&identity, headers, id, None, body).await
+}
+
+pub(super) async fn replace(
+    State(identity): State<Arc<UserIdentity>>,
+    headers: HeaderMap,
+    Path((previous, id)): Path<(String, String)>,
+    body: Result<Json<RegisterPersonalKey>, JsonRejection>,
+) -> Result<Json<PersonalKeyView>, UserApiError> {
+    issue(&identity, headers, id, Some(previous), body).await
+}
+
+async fn issue(
+    identity: &UserIdentity,
+    headers: HeaderMap,
+    id: String,
+    previous: Option<String>,
+    body: Result<Json<RegisterPersonalKey>, JsonRejection>,
+) -> Result<Json<PersonalKeyView>, UserApiError> {
     let mut guard = identity.authenticate(&headers).await?;
-    write_intent(&headers, &identity, &guard.view().csrf_token, &id)?;
+    write_intent(&headers, identity, &guard.view().csrf_token, &id)?;
     let Json(req) = body.map_err(|_| AuthError::Invalid)?;
-    if !req.valid() {
+    if !req.valid() || previous.as_deref().is_some_and(|p| !key_id(p) || p == id) {
         return Err(AuthError::Invalid.into());
     }
     let user = guard.view().user_id.clone();
     let owner = guard.view().personal_owner_id.clone();
     let tx = guard.transaction();
     let inserted = sqlx::query("WITH instant AS MATERIALIZED (SELECT floor(extract(epoch FROM clock_timestamp()))::bigint AS n)
-        INSERT INTO personal_automation_keys(user_id,key_id,owner_id,verifier,scope,label,ttl_seconds,created_unix,expires_unix)
-        SELECT $1,$2::text::uuid,$3,$4,$5,$6,$7,n,n+$7::integer FROM instant ON CONFLICT DO NOTHING")
+        INSERT INTO personal_automation_keys(user_id,key_id,owner_id,verifier,scope,label,ttl_seconds,created_unix,expires_unix,rotated_from)
+        SELECT $1,$2::text::uuid,$3,$4,$5,$6,$7,n,n+$7::integer,$8::text::uuid FROM instant ON CONFLICT DO NOTHING")
         .bind(&user).bind(&id).bind(&owner).bind(&req.verifier).bind(req.scope.as_str()).bind(&req.label)
-        .bind(req.ttl_seconds).execute(&mut **tx).await?;
+        .bind(req.ttl_seconds).bind(previous.as_deref()).execute(&mut **tx).await.map_err(|error| {
+            if error.as_database_error().and_then(|e|e.code()).as_deref()==Some("OA073"){
+                UserApiError(StatusCode::CONFLICT,"KEY_REPLACEMENT_CONFLICT")
+            } else { UserApiError::from(error) }
+        })?;
     // A prior withdrawal has a NULL verifier. A retry must never turn it back into a credential.
     let row=sqlx::query("SELECT key_id::text AS id,user_id,owner_id,scope,label,created_unix,expires_unix,revoked_unix,
         expires_unix<=floor(extract(epoch FROM clock_timestamp())) AS expired
         FROM personal_automation_keys WHERE user_id=$1 AND key_id=$2::text::uuid AND owner_id=$3 AND verifier=$4
-        AND scope=$5 AND label=$6 AND ttl_seconds=$7 FOR SHARE")
+        AND scope=$5 AND label=$6 AND ttl_seconds=$7 AND rotated_from IS NOT DISTINCT FROM $8::text::uuid FOR SHARE")
         .bind(&user).bind(&id).bind(&owner).bind(&req.verifier).bind(req.scope.as_str()).bind(&req.label)
-        .bind(req.ttl_seconds).fetch_optional(&mut **tx).await?.ok_or(UserApiError(StatusCode::CONFLICT,"KEY_REGISTRATION_CONFLICT"))?;
+        .bind(req.ttl_seconds).bind(previous.as_deref()).fetch_optional(&mut **tx).await?.ok_or(UserApiError(StatusCode::CONFLICT,"KEY_REGISTRATION_CONFLICT"))?;
     if inserted.rows_affected() == 1 {
+        if let Some(previous) = previous.as_deref() {
+            crate::events::append(tx, &owner, previous, "api_key.withdrawn", "replacement").await?;
+        }
         crate::events::append(tx, &owner, &id, "api_key.registered", req.scope.as_str()).await?;
     }
     let result = view(&row)?;

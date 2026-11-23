@@ -25,6 +25,24 @@ fn bearer(token: &str) -> HeaderMap {
     h
 }
 
+async fn second_management_session(f: &Fixture, id: &str) -> HeaderMap {
+    let second_token = random_secret();
+    let second_csrf = random_secret();
+    sqlx::query("INSERT INTO user_sessions(token_hash,session_id,user_id,csrf_token,auth_time,idle_expires_at,absolute_expires_at)
+        SELECT $1,$2,user_id,$3,auth_time,idle_expires_at,absolute_expires_at FROM user_sessions WHERE token_hash=$4")
+        .bind(hash_secret(&second_token)).bind(Uuid::new_v4().to_string()).bind(&second_csrf).bind(hash_secret(&f.token))
+        .execute(&f.pool).await.expect("independent concurrent session");
+    let mut second = management(f, id);
+    second.insert(
+        "cookie",
+        format!("{USER_COOKIE}={second_token}")
+            .parse()
+            .expect("test cookie"),
+    );
+    second.insert("x-csrf-token", second_csrf.parse().expect("test CSRF"));
+    second
+}
+
 #[tokio::test]
 async fn personal_key_lifecycle_binds_owner_scope_and_original_intent() {
     let f = fixture().await;
@@ -49,20 +67,7 @@ async fn personal_key_lifecycle_binds_owner_scope_and_original_intent() {
             .0,
         StatusCode::UNPROCESSABLE_ENTITY
     );
-    let second_token = random_secret();
-    let second_csrf = random_secret();
-    sqlx::query("INSERT INTO user_sessions(token_hash,session_id,user_id,csrf_token,auth_time,idle_expires_at,absolute_expires_at)
-        SELECT $1,$2,user_id,$3,auth_time,idle_expires_at,absolute_expires_at FROM user_sessions WHERE token_hash=$4")
-        .bind(hash_secret(&second_token)).bind(Uuid::new_v4().to_string()).bind(&second_csrf).bind(hash_secret(&f.token))
-        .execute(&f.pool).await.expect("independent concurrent session");
-    let mut second = headers.clone();
-    second.insert(
-        "cookie",
-        format!("{USER_COOKIE}={second_token}")
-            .parse()
-            .expect("test cookie"),
-    );
-    second.insert("x-csrf-token", second_csrf.parse().expect("test CSRF"));
+    let second = second_management_session(&f, &id).await;
     let (a, b) = tokio::join!(
         request(&f, "PUT", &path, Some(body.clone()), headers.clone()),
         request(&f, "PUT", &path, Some(body.clone()), second)
@@ -410,4 +415,196 @@ async fn real_personal_key_browser_management() {
     ] {
         assert_eq!(report[mark], true, "missing browser observation {mark}");
     }
+}
+
+#[tokio::test]
+async fn replacement_retires_once_and_an_uncommitted_successor_cannot_retire_anything() {
+    let f = fixture().await;
+    let other = fixture().await;
+    let (old, original) = credential();
+    let old_path = format!("{KEYS}/{old}");
+    let original_body = registration(&original, "wallet:read");
+    assert_eq!(
+        request(
+            &f,
+            "PUT",
+            &old_path,
+            Some(original_body.clone()),
+            management(&f, &old)
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let (new, secret) = credential();
+    let replace = |id: &str| format!("{KEYS}/{old}/replacements/{id}");
+    assert_eq!(
+        request(
+            &other,
+            "PUT",
+            &replace(&new),
+            Some(registration(&secret, "wallet:read")),
+            management(&other, &new)
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        request(
+            &f,
+            "PUT",
+            &replace(&new),
+            Some(registration(&secret, "budgets:read")),
+            management(&f, &new)
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        request(&f, "GET", WALLET, None, bearer(&original)).await.0,
+        StatusCode::OK
+    );
+    let (abandoned, abandoned_secret) = credential();
+    assert_eq!(
+        request(
+            &f,
+            "DELETE",
+            &format!("{KEYS}/{abandoned}"),
+            None,
+            management(&f, &abandoned)
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        request(
+            &f,
+            "PUT",
+            &replace(&abandoned),
+            Some(registration(&abandoned_secret, "wallet:read")),
+            management(&f, &abandoned)
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+
+    // Force the successor's own final outbox write to fail after the predecessor would be retired.
+    let (fault, uncommitted) = credential();
+    sqlx::query("INSERT INTO event_streams(owner_id,entity_kind,entity_id,next_seq) VALUES($1,'api_key',$2,9223372036854775807)")
+        .bind(&f.user).bind(&fault).execute(&f.pool).await.expect("isolated exhausted fixture stream");
+    assert_eq!(
+        request(
+            &f,
+            "PUT",
+            &replace(&fault),
+            Some(registration(&uncommitted, "wallet:read")),
+            management(&f, &fault)
+        )
+        .await
+        .0,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    assert_eq!(
+        request(&f, "GET", WALLET, None, bearer(&original)).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        request(&f, "GET", WALLET, None, bearer(&uncommitted))
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    let count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM personal_automation_keys WHERE user_id=$1 AND key_id=$2::text::uuid",
+    )
+    .bind(&f.user)
+    .bind(&fault)
+    .fetch_one(&f.pool)
+    .await
+    .expect("no failed successor");
+    assert_eq!(count, 0);
+
+    let (other_id, second_secret) = credential();
+    let other_session = second_management_session(&f, &other_id).await;
+    let path_a = replace(&new);
+    let path_b = replace(&other_id);
+    let (a, b) = tokio::join!(
+        request(
+            &f,
+            "PUT",
+            &path_a,
+            Some(registration(&secret, "wallet:read")),
+            management(&f, &new)
+        ),
+        request(
+            &f,
+            "PUT",
+            &path_b,
+            Some(registration(&second_secret, "wallet:read")),
+            other_session
+        )
+    );
+    let (winner, winning_secret, losing_secret, first) = match (a.0, b.0) {
+        (StatusCode::OK, StatusCode::CONFLICT) => (new, secret, second_secret, a.1),
+        (StatusCode::CONFLICT, StatusCode::OK) => (other_id, second_secret, secret, b.1),
+        _ => panic!("one rotation must win"),
+    };
+    let body = registration(&winning_secret, "wallet:read");
+    let retry = request(
+        &f,
+        "PUT",
+        &replace(&winner),
+        Some(body.clone()),
+        management(&f, &winner),
+    )
+    .await;
+    assert_eq!(retry, (StatusCode::OK, first));
+    assert_eq!(
+        request(
+            &f,
+            "PUT",
+            &format!("{KEYS}/{winner}"),
+            Some(body),
+            management(&f, &winner)
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        request(
+            &f,
+            "PUT",
+            &old_path,
+            Some(original_body),
+            management(&f, &old)
+        )
+        .await
+        .1["status"],
+        "revoked"
+    );
+    assert_eq!(
+        request(&f, "GET", WALLET, None, bearer(&original)).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        request(&f, "GET", WALLET, None, bearer(&losing_secret))
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        request(&f, "GET", WALLET, None, bearer(&winning_secret))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let totals:(i64,i64)=sqlx::query_as("SELECT count(*) FILTER(WHERE entity_id=$2 AND event_type='api_key.withdrawn'),
+        count(*) FILTER(WHERE entity_id=$3 AND event_type='api_key.registered') FROM outbox WHERE owner_id=$1")
+        .bind(&f.user).bind(&old).bind(&winner).fetch_one(&f.pool).await.expect("pair of notices");
+    assert_eq!(totals, (1, 1));
 }

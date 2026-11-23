@@ -215,6 +215,10 @@ pub fn router(identity: UserIdentity) -> Router {
             "/api/v1/organizations/{id}/budgets/{budget}",
             get(team_budgets::read).post(team_budgets::adjust),
         )
+        .route(
+            "/api/v1/account/api-keys/{previous}/replacements/{key}",
+            axum::routing::put(personal_keys::replace),
+        )
         .route("/api/v1/account/api-keys", get(personal_keys::list))
         .route(
             "/api/v1/account/api-keys/{key}",
