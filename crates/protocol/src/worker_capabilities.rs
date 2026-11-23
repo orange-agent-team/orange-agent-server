@@ -145,7 +145,7 @@ mod tests {
                 }
             }
         }
-        assert!(accepted > 9 && accepted < 1152);
+        assert_eq!(accepted, 40, "v1 capability compatibility changed");
     }
     #[test]
     fn future_major_and_silent_capability_changes_are_rejected() {
