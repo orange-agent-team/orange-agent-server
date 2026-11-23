@@ -24,7 +24,7 @@ def main():
     args = parser.parse_args()
     desktop = args.desktop_repo.resolve()
     dart = (args.dart or (desktop / ".local/toolchains/flutter-3.47.9/flutter/bin/cache/dart-sdk/bin/dart")).resolve()
-    sdk = dart.parents[3]
+    sdk = dart.parents[4]
     flutter_lock = json.loads((desktop / "config/flutter.lock.json").read_bytes())
     revision = subprocess.check_output(["git", "-C", sdk, "rev-parse", "HEAD"], text=True).strip()
     if revision != flutter_lock["framework_revision"]:
