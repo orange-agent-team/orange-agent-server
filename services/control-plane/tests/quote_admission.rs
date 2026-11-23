@@ -96,9 +96,13 @@ async fn issued_terms_stay_immutable_and_only_new_effects_require_an_unexpired_q
     // sequence proves the original insert was reached while the quote was live,
     // even when the transaction containing the Job and ledger later rolls back.
     sqlx::raw_sql("CREATE SEQUENCE test_quote_write_seen;
+        CREATE TABLE test_delayed_quotes (quote_id TEXT PRIMARY KEY REFERENCES quotes);
         CREATE FUNCTION test_delay_new_job() RETURNS trigger LANGUAGE plpgsql AS $$
         DECLARE deadline timestamptz;
         BEGIN
+            IF NOT EXISTS (SELECT 1 FROM test_delayed_quotes WHERE quote_id=NEW.quote_id) THEN
+                RETURN NEW;
+            END IF;
             SELECT expires_at INTO STRICT deadline FROM quotes WHERE quote_id=NEW.quote_id;
             IF deadline <= clock_timestamp() THEN RAISE EXCEPTION 'fixture reached too late'; END IF;
             PERFORM nextval('test_quote_write_seen');
@@ -108,6 +112,11 @@ async fn issued_terms_stay_immutable_and_only_new_effects_require_an_unexpired_q
         CREATE TRIGGER test_delay_job AFTER INSERT ON jobs FOR EACH ROW EXECUTE FUNCTION test_delay_new_job();")
         .execute(db.pool()).await.expect("isolated delayed database effect");
     let late = quote(&db, &owner, &budget, 3).await;
+    sqlx::query("INSERT INTO test_delayed_quotes(quote_id) VALUES($1)")
+        .bind(&late.quote_id)
+        .execute(db.pool())
+        .await
+        .expect("select only this test quote");
     assert!(matches!(
         db.submit(&owner, "late", &late).await,
         Err(StoreError::QuoteExpired)
