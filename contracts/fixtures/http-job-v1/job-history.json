@@ -1,0 +1,65 @@
+{
+  "server": "2f470240629419cf9dd6ca28334be8dbec438926",
+  "readers": [
+    {
+      "source": "c0ffde5b93de4a3310f0113d841c6c0216e2ab6c",
+      "passed": 2
+    },
+    {
+      "source": "ece0e3ac954c5e6975ddbc471b5041621da0729d",
+      "passed": 3
+    }
+  ],
+  "synthetic_development_fixtures": true,
+  "sample": {
+    "owner": "5dbda7c6-85ff-4b8e-8871-1cf8d3156344",
+    "job": "96dd2e5f-fa4a-4deb-91cb-578296215eba",
+    "before": {
+      "status": 200,
+      "body": {
+        "job_id": "96dd2e5f-fa4a-4deb-91cb-578296215eba",
+        "root_budget_id": "155534ca-26a1-4098-9782-c3c10eca0ef5",
+        "invocation_id": "2d52884c-ee90-4865-a1b5-9e67de128176",
+        "execution_state": "queued",
+        "settlement_state": "pending",
+        "reserved": "65",
+        "charge": null
+      },
+      "headers": {
+        "content-type": "application/json",
+        "x-orange-job-version": "1",
+        "cache-control": "no-store"
+      }
+    },
+    "after": {
+      "status": 200,
+      "body": {
+        "job_id": "96dd2e5f-fa4a-4deb-91cb-578296215eba",
+        "root_budget_id": "155534ca-26a1-4098-9782-c3c10eca0ef5",
+        "invocation_id": "2d52884c-ee90-4865-a1b5-9e67de128176",
+        "execution_state": "cancelled",
+        "settlement_state": "settled",
+        "reserved": "65",
+        "charge": "0"
+      },
+      "headers": {
+        "content-type": "application/json",
+        "x-orange-job-version": "2",
+        "cache-control": "no-store"
+      }
+    },
+    "denied": {
+      "status": 401,
+      "body": {
+        "code": "UNAUTHENTICATED",
+        "message": "UNAUTHENTICATED",
+        "request_id": "ed0cc032-baf1-41df-926f-cad6b760bbda",
+        "retry_class": "after_reauth"
+      },
+      "headers": {
+        "content-type": "application/json",
+        "cache-control": "no-store"
+      }
+    }
+  }
+}
