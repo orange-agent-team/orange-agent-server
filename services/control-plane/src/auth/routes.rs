@@ -4,6 +4,8 @@ mod accounts;
 mod cloud_approvals;
 #[path = "cloud_runs.rs"]
 mod cloud_runs;
+#[path = "model_manifests.rs"]
+mod model_manifests;
 #[path = "personal_keys.rs"]
 mod personal_keys;
 #[path = "team_budgets.rs"]
@@ -86,6 +88,11 @@ pub async fn prune_worker_enrollment_grants(pool: &sqlx::PgPool) -> Result<u64, 
 }
 pub fn router(identity: UserIdentity) -> Router {
     Router::new()
+        .route("/api/v1/model-manifests", get(model_manifests::list))
+        .route(
+            "/api/v1/model-manifests/{version}",
+            get(model_manifests::get_one),
+        )
         .route(
             "/api/v1/worker-enrollments/{request}/redeem",
             axum::routing::post(worker_redemption::redeem),

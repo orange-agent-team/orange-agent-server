@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "model_version": "qwen-local-test-v1",
+  "source": {
+    "repository": "Qwen/Qwen2.5-0.5B-Instruct-GGUF",
+    "revision": "9217f5db79a29953eb74d5343926648285ec7e67",
+    "license": "Apache-2.0",
+    "asset_lock_sha256": "524e0e707a207dff218d5ea0cb10ac579c7835a8b79e890f429a54c4a843de51"
+  },
+  "artifacts": [
+    {
+      "source_path": "qwen2.5-0.5b-instruct-q4_k_m.gguf",
+      "cache_path": "74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db.gguf",
+      "bytes": 491400032,
+      "sha256": "74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db"
+    }
+  ],
+  "runtime": {
+    "engine": "llama_cpp",
+    "source_revision": "b74298c109c107494b792c30af4bb8fa0ce1eb2f",
+    "build_recipe_sha256": "3eadf8f34ec36a9dc0a92af13cb4928c39b4435d330ce3b2d016f20068a8bb69"
+  },
+  "interface": {
+    "modality": "text",
+    "input": "chat_messages",
+    "output": "generated_text",
+    "context_tokens": 4096
+  },
+  "resources": {
+    "device": "cpu",
+    "artifact_bytes": 491400032
+  },
+  "pricing": {
+    "policy": "local_unpriced"
+  }
+}

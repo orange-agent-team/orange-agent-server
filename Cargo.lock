@@ -2272,6 +2272,8 @@ name = "orange-model-runtime"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "cap-fs-ext",
+ "cap-std",
  "hex",
  "jsonschema",
  "libc",

@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "model_version": "multilingual-e5-small-onnx-cpu-v1",
+  "source": {
+    "repository": "intfloat/multilingual-e5-small",
+    "revision": "bdd905ef05181adf3ebbfaac5cd5bd4ed9a58760",
+    "license": "MIT",
+    "asset_lock_sha256": "7cded2271c8a7b42f41bb3d95288cbfecb956e54d25d14efbca5fedb676707ac"
+  },
+  "artifacts": [
+    {
+      "source_path": "onnx/model.onnx",
+      "cache_path": "model.onnx",
+      "bytes": 470268510,
+      "sha256": "ca456c06b3a9505ddfd9131408916dd79290368331e7d76bb621f1cba6bc8665"
+    },
+    {
+      "source_path": "onnx/tokenizer.json",
+      "cache_path": "tokenizer.json",
+      "bytes": 17082730,
+      "sha256": "0b44a9d7b51c3c62626640cda0e2c2f70fdacdc25bbbd68038369d14ebdf4c39"
+    }
+  ],
+  "runtime": {
+    "engine": "onnx_runtime",
+    "dependency_lock_sha256": "d076b0d78c2f73d2d406fc7658c34ac4c4d6a1bbd957863fb17dc5e8acb6d676",
+    "adapter_sha256": "60063ab523151665ee2d6d959a104a5da9277233cc1b890209d68c34d28d1da8"
+  },
+  "interface": {
+    "modality": "embedding",
+    "input": "text_batch",
+    "output": "float_vectors",
+    "max_batch": 32,
+    "max_tokens_per_text": 512,
+    "dimensions": 384
+  },
+  "resources": {
+    "device": "cpu",
+    "artifact_bytes": 487351240
+  },
+  "pricing": {
+    "policy": "local_unpriced"
+  }
+}

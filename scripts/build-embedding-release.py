@@ -16,12 +16,16 @@ import tempfile
 root = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser()
 parser.add_argument("--commit", required=True)
-parser.add_argument("--profile", choices=(*PROFILES,"platform","market-report","knowledge"), default="embedding")
+parser.add_argument("--profile", choices=(*PROFILES,"platform","market-report","knowledge","model-manifest"), default="embedding")
 args = parser.parse_args()
 if args.profile == "platform":
     programs = PLATFORM_PROGRAMS
     packages = ["-p","orange-control-plane","-p","orange-worker"]
     target_args = [part for name in programs for part in ("--bin",name)]
+elif args.profile == "model-manifest":
+    programs = ["orange-model-manifest"]
+    packages = ["-p","orange-model-runtime"]
+    target_args = ["--bin","orange-model-manifest"]
 elif args.profile == "knowledge":
     programs = ["orange-knowledge"]
     packages = ["-p","orange-agent-runtime"]

@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "model_version": "whisper-small-ct2-int8-cpu-v1",
+  "source": {
+    "repository": "Systran/faster-whisper-small",
+    "revision": "ace8b2ad9dee031c53b6371f6c3c918b5e4f1db9",
+    "license": "MIT",
+    "asset_lock_sha256": "227160558c09fdaef4fc848978b328099a4a85b44aefef180dcf58f2c6940d41"
+  },
+  "artifacts": [
+    {
+      "source_path": "config.json",
+      "cache_path": "config.json",
+      "bytes": 2370,
+      "sha256": "b55496ac7940a7ae47d2c01eab40edfd8701feec1229d9cce3b40014383fb828"
+    },
+    {
+      "source_path": "model.bin",
+      "cache_path": "model.bin",
+      "bytes": 483546902,
+      "sha256": "3e305921506d8872816023e4c273e75d2419fb89b24da97b4fe7bce14170d671"
+    },
+    {
+      "source_path": "tokenizer.json",
+      "cache_path": "tokenizer.json",
+      "bytes": 2203239,
+      "sha256": "fb7b63191e9bb045082c79fd742a3106a12c99513ab30df4a0d47fa6cb6fd0ab"
+    },
+    {
+      "source_path": "vocabulary.txt",
+      "cache_path": "vocabulary.txt",
+      "bytes": 459861,
+      "sha256": "34ce3fe1c5041027b3f8d42912270993f986dbc4bb34cf27f951e34a1e453913"
+    }
+  ],
+  "runtime": {
+    "engine": "faster_whisper",
+    "dependency_lock_sha256": "d076b0d78c2f73d2d406fc7658c34ac4c4d6a1bbd957863fb17dc5e8acb6d676",
+    "adapter_sha256": "5060532ee818c527e492e95c82069373ba24d85e64fb668b8ab755055779fa97"
+  },
+  "interface": {
+    "modality": "transcription",
+    "input": "audio_file",
+    "output": "transcript",
+    "channels": 1,
+    "sample_rate": 16000,
+    "max_input_bytes": 100000000,
+    "max_decoded_ms": 600000
+  },
+  "resources": {
+    "device": "cpu",
+    "artifact_bytes": 486212372
+  },
+  "pricing": {
+    "policy": "local_unpriced"
+  }
+}

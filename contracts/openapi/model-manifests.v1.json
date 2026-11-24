@@ -1,0 +1,178 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Bundled model version manifests",
+    "version": "1.0.0",
+    "description": "Read-only model metadata. Availability, prices and admission are checked separately at quote and scheduling time."
+  },
+  "security": [
+    {
+      "userSession": []
+    }
+  ],
+  "paths": {
+    "/api/v1/model-manifests": {
+      "get": {
+        "operationId": "listBundledModelManifests",
+        "summary": "List the shipped reference identifiers and digests",
+        "responses": {
+          "401": {
+            "description": "A current user session is required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../json-schema/user.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unsupported query or invalid version identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../json-schema/user.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Bundled catalogue unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../json-schema/user.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Shipped release index",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "items"
+                  ],
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "model_version",
+                          "manifest_sha256"
+                        ],
+                        "properties": {
+                          "model_version": {
+                            "$ref": "../json-schema/model-version.v1.json#/$defs/id"
+                          },
+                          "manifest_sha256": {
+                            "$ref": "../json-schema/model-version.v1.json#/$defs/digest"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/model-manifests/{version}": {
+      "get": {
+        "operationId": "getBundledModelManifest",
+        "summary": "Read one exact shipped model descriptor and its canonical digest",
+        "parameters": [
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "../json-schema/model-version.v1.json#/$defs/id"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "A current user session is required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../json-schema/user.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unsupported query or invalid version identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../json-schema/user.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Bundled catalogue unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../json-schema/user.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No shipped release has this identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../json-schema/user.schema.json#/$defs/Error"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Immutable reference descriptor",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "manifest_sha256",
+                    "manifest"
+                  ],
+                  "properties": {
+                    "manifest_sha256": {
+                      "$ref": "../json-schema/model-version.v1.json#/$defs/digest"
+                    },
+                    "manifest": {
+                      "$ref": "../json-schema/model-version.v1.json"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "userSession": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "__Host-orange-user"
+      }
+    }
+  }
+}

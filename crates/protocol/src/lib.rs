@@ -13,6 +13,7 @@ pub mod knowledge;
 pub mod local_model;
 pub mod marketplace;
 pub mod model;
+pub mod model_versions;
 pub mod node_control;
 pub mod personal_keys;
 pub mod pricing;

@@ -2,6 +2,7 @@
 pub mod cache;
 pub mod embeddings;
 pub mod llama;
+pub mod manifest;
 pub mod meter_service;
 pub mod metering;
 mod responses;
