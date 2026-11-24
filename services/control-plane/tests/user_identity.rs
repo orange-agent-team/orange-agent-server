@@ -484,6 +484,72 @@ mod personal_key_cases;
 mod session_deadlines;
 
 #[tokio::test]
+async fn session_refresh_logout_leaves_the_original_queued_job_and_reservation_intact() {
+    use orange_protocol::{CreateBudget, InvocationPurpose, Money, SubmitJob};
+    let f = fixture().await;
+    let store = Store::from_pool(f.pool.clone());
+    let owner = &f.user;
+    sqlx::query("UPDATE wallets SET gift=700 WHERE owner_id=$1")
+        .bind(owner)
+        .execute(&f.pool)
+        .await
+        .expect("development credits");
+    let root = store
+        .create_budget(
+            owner,
+            "open-session-budget",
+            &CreateBudget {
+                scope_id: Uuid::new_v4().to_string(),
+                limit: Money(orange_domain::Credits::new(500).expect("limit")),
+            },
+        )
+        .await
+        .expect("budget");
+    let quote = Uuid::new_v4().to_string();
+    let invocation = Uuid::new_v4().to_string();
+    let projection = "e".repeat(64);
+    sqlx::query("INSERT INTO quotes(quote_id,owner_id,root_budget_id,invocation_id,projection_digest,price_version,max_amount,expires_at)
+        VALUES($1,$2,$3,$4,$5,'session-lifetime-fixture',120,clock_timestamp()+interval '5 minutes')")
+        .bind(&quote).bind(owner).bind(&root.root_budget_id).bind(&invocation).bind(&projection).execute(&f.pool).await.expect("trusted quote fixture");
+    let actor = f
+        .identity
+        .artifact_actor(&headers(&f), true)
+        .await
+        .expect("session actor");
+    let job = store
+        .submit_for_user(
+            &actor,
+            owner,
+            "submit-in-original-session",
+            &SubmitJob {
+                invocation_id: invocation,
+                root_budget_id: root.root_budget_id.clone(),
+                quote_id: quote,
+                purpose: InvocationPurpose::Primary,
+                request_projection_digest: projection,
+            },
+        )
+        .await
+        .expect("queued remote job");
+    assert_eq!(job.execution_state, "queued");
+    assert_eq!(job.reserved.0.units(), 120);
+    let facts = || async {
+        sqlx::query_scalar::<_,Value>("SELECT jsonb_build_array(to_jsonb(j),(SELECT jsonb_build_array(spent,reserved) FROM budget_roots WHERE root_budget_id=j.root_budget_id),
+            (SELECT to_jsonb(w) FROM wallets w WHERE owner_id=j.owner_id),(SELECT count(*) FROM ledger_transactions WHERE owner_id=j.owner_id),
+            (SELECT count(*) FROM job_settlements WHERE job_id=j.job_id)) FROM jobs j WHERE j.job_id=$1")
+            .bind(&job.job_id).fetch_one(&f.pool).await.expect("original job and ledger")
+    };
+    let before = facts().await;
+    f.identity.revoke_self(&headers(&f)).await.expect("logout");
+    assert!(f.identity.authenticate(&headers(&f)).await.is_err());
+    assert_eq!(
+        facts().await,
+        before,
+        "retiring a session must not cancel or release a paid job"
+    );
+}
+
+#[tokio::test]
 async fn session_refresh_after_idle_deadline_is_denied() {
     let f = fixture().await;
     let hash = hash_secret(&f.token);

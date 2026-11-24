@@ -32,7 +32,7 @@ def main():
                         "--features", "oidc-rollover-tests", "--test", "oidc_rollover"],check=True,cwd=ROOT,env=env)
         print("PASS signing-key rollover and recovery across nine one-time code exchanges")
         return
-    cases = {"user_identity": ["session_refresh_after_idle_deadline_is_denied"],
+    cases = {"user_identity": ["session_refresh_logout_leaves_the_original_queued_job_and_reservation_intact", "session_refresh_after_idle_deadline_is_denied"],
              "admin_identity": ["session_refresh_after_idle_deadline_is_denied",
                                 "session_refresh_keeps_only_grants_still_live_after_waiting"]}
     with database(private / "database-url", "orange_session_refresh_") as (_, url):
