@@ -27,6 +27,8 @@ parser.add_argument("--model-run", action="store_true")
 parser.add_argument("--artifact-versions",action="store_true",help="Check versioned artifact publication against the isolated private bucket")
 parser.add_argument("--model-runtime-root", type=Path)
 parser.add_argument("--signed-lifetimes",action="store_true",help="Observe actual 60-second GET and five-minute PUT expiry in the artifact fixture")
+parser.add_argument("--direct-upload-expiry",action="store_true",help="Wait for the API-issued PUT to expire and prove exact storage recovery")
+parser.add_argument("--direct-upload",action="store_true",help="Verify the platform issued scoped PUT and crash recovery")
 parser.add_argument("--download-expiry",action="store_true",help="Check expiry of actual API-issued GET grants")
 parser.add_argument("--artifact-old-api",type=Path,help="Prior packaged User API for the filesystem schema upgrade")
 parser.add_argument("--artifact-web",type=Path,help="Run the independent Web client against the real artifact issuer")
@@ -37,7 +39,8 @@ parser.add_argument("--artifact-backend-api",type=Path,help="Run the real User A
 args = parser.parse_args()
 if (args.artifact_old_api or args.artifact_web or args.artifact_site or args.artifact_png or args.artifact_rgb_sha256) and not args.artifact_backend_api:parser.error("Browser and image fixtures require --artifact-backend-api")
 if bool(args.artifact_png)!=bool(args.artifact_rgb_sha256):parser.error("Supply both real image and verified pixel digest")
-if args.download_expiry and not args.artifact_backend_api:
+if args.direct_upload_expiry and not args.direct_upload:parser.error("Use --direct-upload for its expiry observation")
+if (args.direct_upload or args.download_expiry) and not args.artifact_backend_api:
     parser.error("--download-expiry requires --artifact-backend-api")
 if args.artifact_backend_api and not (args.artifact_versions and args.database_url_file and args.identity_config):
     parser.error("The artifact backend requires --artifact-versions and an owned database/identity environment")
@@ -213,7 +216,7 @@ with tempfile.TemporaryDirectory(prefix="oa-s3-", dir="/tmp") as tmp:
                     with relay(endpoint,bucket) as (address,fence):
                         run(args.artifact_backend_api.resolve(strict=True),args.database_url_file.resolve(strict=True),args.identity_config.resolve(strict=True),
                             folder,address,bucket,owner["credentials"][0],lambda method,path,data:call(owner,method,path,data),fence,args.download_expiry,
-                            args.artifact_web,args.artifact_site,args.artifact_png,args.artifact_rgb_sha256,args.artifact_old_api)
+                            args.artifact_web,args.artifact_site,args.artifact_png,args.artifact_rgb_sha256,args.artifact_old_api,args.direct_upload,args.direct_upload_expiry)
                 raise SystemExit(0)  # The enclosing finally always stops the private fixture.
             for name, content in [
                 ("a.txt", b"confirmed source data"),

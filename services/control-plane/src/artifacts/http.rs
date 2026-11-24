@@ -57,6 +57,18 @@ pub fn build_router(
         )
         .route("/api/v1/agent/runs/{run}/model/history", get(cloud_history))
         .route(
+            "/api/v1/owners/{owner}/uploads/{upload}/upload-authorizations",
+            get(latest_upload).post(authorize_upload),
+        )
+        .route(
+            "/api/v1/owners/{owner}/uploads/{upload}/upload-authorizations/{transfer}",
+            get(observe_upload),
+        )
+        .route(
+            "/api/v1/owners/{owner}/uploads/{upload}/upload-confirmations",
+            axum::routing::post(confirm_upload),
+        )
+        .route(
             "/api/v1/owners/{owner}/uploads/{upload}/download-authorizations",
             axum::routing::post(download_authorization),
         )
@@ -492,6 +504,92 @@ async fn upload(
 #[serde(deny_unknown_fields)]
 struct Version {
     version_id: String,
+}
+async fn authorize_upload(
+    State(api): State<Api>,
+    Path((owner, upload)): Path<(String, String)>,
+    headers: HeaderMap,
+    body: Result<Json<Version>, axum::extract::rejection::JsonRejection>,
+) -> Result<Response, Error> {
+    let actor = api.identity.artifact_actor(&headers, true).await?;
+    let key = headers
+        .get("idempotency-key")
+        .and_then(|v| v.to_str().ok())
+        .ok_or(ArtifactError::Invalid)?;
+    let Json(v) = body.map_err(|_| ArtifactError::Invalid)?;
+    let _permit = api
+        .downloads
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| ArtifactError::Busy)?;
+    Ok(private(
+        Json(
+            api.store
+                .direct_upload(&actor, &owner, &upload, &v.version_id, key)
+                .await?,
+        )
+        .into_response(),
+    ))
+}
+async fn latest_upload(
+    State(api): State<Api>,
+    Path((owner, upload)): Path<(String, String)>,
+    headers: HeaderMap,
+    axum::extract::RawQuery(query): axum::extract::RawQuery,
+) -> Result<Response, Error> {
+    let actor = api.identity.artifact_actor(&headers, false).await?;
+    if query.is_some_and(|q| !q.is_empty()) {
+        return Err(ArtifactError::Invalid.into());
+    }
+    let _permit = api
+        .downloads
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| ArtifactError::Busy)?;
+    Ok(private(
+        Json(api.store.latest_upload(&actor, &owner, &upload).await?).into_response(),
+    ))
+}
+
+async fn observe_upload(
+    State(api): State<Api>,
+    Path((owner, upload, transfer)): Path<(String, String, String)>,
+    headers: HeaderMap,
+    axum::extract::RawQuery(query): axum::extract::RawQuery,
+) -> Result<Response, Error> {
+    let actor = api.identity.artifact_actor(&headers, false).await?;
+    if query.is_some_and(|q| !q.is_empty()) {
+        return Err(ArtifactError::Invalid.into());
+    }
+    let _permit = api
+        .downloads
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| ArtifactError::Busy)?;
+    Ok(private(
+        Json(
+            api.store
+                .observe_upload(&actor, &owner, &upload, &transfer)
+                .await?,
+        )
+        .into_response(),
+    ))
+}
+async fn confirm_upload(
+    State(api): State<Api>,
+    Path((owner, upload)): Path<(String, String)>,
+    headers: HeaderMap,
+    body: Result<
+        Json<super::versioned_store::ConfirmUpload>,
+        axum::extract::rejection::JsonRejection,
+    >,
+) -> Result<Response, Error> {
+    let actor = api.identity.artifact_actor(&headers, true).await?;
+    let Json(r) = body.map_err(|_| ArtifactError::Invalid)?;
+    original_key(&headers, &r.transfer_id)?;
+    Ok(private(
+        Json(api.store.confirm_direct(actor, owner, upload, r).await?).into_response(),
+    ))
 }
 async fn download_authorization(
     State(api): State<Api>,

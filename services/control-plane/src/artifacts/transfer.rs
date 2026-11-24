@@ -34,31 +34,45 @@ impl ArtifactStore {
         upload: &str,
     ) -> Result<Transfer, ArtifactError> {
         let mut tx = self.inner.pool.begin().await?;
-        authority::scope(&mut tx, actor, owner, true).await?;
+        let t = self
+            .prepare_in(&mut tx, actor, owner, upload, 300.0)
+            .await?;
+        authority::finish(tx, actor).await?;
+        Ok(t)
+    }
+    pub(super) async fn prepare_in(
+        &self,
+        tx: &mut Tx<'_>,
+        actor: &ArtifactActor,
+        owner: &str,
+        upload: &str,
+        lifetime_seconds: f64,
+    ) -> Result<Transfer, ArtifactError> {
+        authority::scope(tx, actor, owner, true).await?;
         let cap = sqlx::query(
             "SELECT used_bytes,byte_limit FROM artifact_capacity WHERE root_id=$1 FOR UPDATE",
         )
         .bind(&self.inner.objects.root_id)
-        .fetch_one(&mut *tx)
+        .fetch_one(&mut **tx)
         .await?;
-        let row = self.row_in(&mut tx, owner, upload).await?;
+        let row = self.row_in(tx, owner, upload).await?;
         let worker_output: bool = sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM worker_output_uploads WHERE artifact_id=$1)",
         )
         .bind(row.try_get::<String, _>("artifact_id")?)
-        .fetch_one(&mut *tx)
+        .fetch_one(&mut **tx)
         .await?;
         if worker_output {
             return Err(ArtifactError::Forbidden);
         }
-        authority::resource(&mut tx, actor, owner, &row, true, false).await?;
+        authority::resource(tx, actor, owner, &row, true, false).await?;
         let v = view(&row)?;
-        let stamp = authority::stamp(&mut tx, &row).await?;
+        let stamp = authority::stamp(tx, &row).await?;
         if v.state == "deleted" {
             return Err(ArtifactError::Deleted);
         }
         if v.state == "available" {
-            let key:String=sqlx::query_scalar("SELECT published_key FROM artifact_transfers WHERE transfer_id=$1 AND state='attached' AND NOT published_deleted").bind(row.try_get::<Option<String>,_>("published_transfer_id")?).fetch_optional(&mut *tx).await?.ok_or(ArtifactError::Integrity)?;
+            let key:String=sqlx::query_scalar("SELECT published_key FROM artifact_transfers WHERE transfer_id=$1 AND state='attached' AND NOT published_deleted").bind(row.try_get::<Option<String>,_>("published_transfer_id")?).fetch_optional(&mut **tx).await?.ok_or(ArtifactError::Integrity)?;
             let result = Transfer {
                 id: String::new(),
                 stage: String::new(),
@@ -67,14 +81,18 @@ impl ArtifactStore {
                 replay: true,
                 stamp,
             };
-            authority::finish(tx, actor).await?;
             return Ok(result);
         }
         if !row.try_get::<bool, _>("upload_live")? {
             return Err(ArtifactError::Expired);
         }
         // Expired writers remain accounted for and invisible until maintenance.
-        let busy:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM artifact_transfers WHERE artifact_id=$1 AND state='writing')").bind(&v.artifact_id).fetch_one(&mut *tx).await?;
+        if self.inner.objects.remote().is_ok() {
+            sqlx::query("UPDATE artifact_transfers t SET state='orphan',finished_at=clock_timestamp() WHERE t.artifact_id=$1 AND t.state='writing'
+                AND t.expires_at<=clock_timestamp() AND EXISTS(SELECT FROM artifact_s3_upload_grants g WHERE g.transfer_id=t.transfer_id)")
+                .bind(&v.artifact_id).execute(&mut **tx).await?;
+        }
+        let busy:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM artifact_transfers WHERE artifact_id=$1 AND state='writing')").bind(&v.artifact_id).fetch_one(&mut **tx).await?;
         if busy {
             return Err(ArtifactError::Busy);
         }
@@ -98,13 +116,12 @@ impl ArtifactStore {
             replay: false,
             stamp,
         };
-        sqlx::query("INSERT INTO artifact_transfers(transfer_id,artifact_id,stage_key,published_key,reserved_bytes,state,expires_at) VALUES($1,$2,$3,$4,$5,'writing',clock_timestamp()+interval '5 minutes')").bind(&transfer.id).bind(&transfer.view.artifact_id).bind(&transfer.stage).bind(&transfer.published).bind(bytes).execute(&mut *tx).await?;
+        sqlx::query("INSERT INTO artifact_transfers(transfer_id,artifact_id,stage_key,published_key,reserved_bytes,state,expires_at) VALUES($1,$2,$3,$4,$5,'writing',clock_timestamp()+make_interval(secs=>$6))").bind(&transfer.id).bind(&transfer.view.artifact_id).bind(&transfer.stage).bind(&transfer.published).bind(bytes).bind(lifetime_seconds).execute(&mut **tx).await?;
         sqlx::query("UPDATE artifact_capacity SET used_bytes=used_bytes+$2 WHERE root_id=$1")
             .bind(&self.inner.objects.root_id)
             .bind(bytes)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
-        authority::finish(tx, actor).await?;
         Ok(transfer)
     }
     async fn put_owned<S>(
@@ -270,7 +287,7 @@ impl ArtifactStore {
         }
         result
     }
-    async fn publish(
+    pub(super) async fn publish(
         &self,
         actor: &ArtifactActor,
         t: &Transfer,
@@ -298,7 +315,10 @@ impl ArtifactStore {
         if current.state == "deleted" {
             return Err(ArtifactError::Deleted);
         }
-        if t.replay {
+        if t.replay
+            || (current.state == "available"
+                && row.try_get::<Option<&str>, _>("published_transfer_id")? == Some(t.id.as_str()))
+        {
             if current.state != "available" {
                 return Err(ArtifactError::Conflict);
             }

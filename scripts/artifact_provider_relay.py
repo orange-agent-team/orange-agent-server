@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 class Fence:
     def __init__(self):
         self.path=None
+        self.method="HEAD"
         self.received=Event()
         self.release=Event()
 
@@ -35,7 +36,8 @@ def relay(endpoint,bucket):
                 response=upstream.getresponse()
                 content=response.read((16<<20)+1)
                 if len(content)>(16<<20):self.send_error(413);return
-                if self.command=="HEAD" and route.path==fence.path and response.status==200 and "versionId=" in route.query:
+                if (self.command==fence.method and route.path==fence.path and response.status==200 and
+                        ("versionId=" in route.query if self.command=="HEAD" else self.command=="PUT" and self.headers.get("x-amz-copy-source"))):
                     fence.received.set()
                     if not fence.release.wait(18):self.send_error(504);return
                 self.send_response(response.status)

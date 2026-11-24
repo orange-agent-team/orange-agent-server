@@ -70,7 +70,21 @@ impl ArtifactStore {
         // while physical orphan retention remains one hour from creation.
         sqlx::query("UPDATE artifact_transfers t SET state='orphan',finished_at=clock_timestamp() FROM artifacts a WHERE t.artifact_id=a.artifact_id AND a.root_id=$1 AND t.state='writing' AND t.expires_at<=clock_timestamp()")
             .bind(&self.inner.objects.root_id).execute(&self.inner.pool).await?;
-        let candidates:Vec<String>=sqlx::query_scalar("SELECT t.transfer_id FROM artifact_transfers t JOIN artifacts a USING(artifact_id) WHERE a.root_id=$1 AND t.state!='purged' AND ((t.state='attached' AND NOT t.stage_deleted) OR t.state='purging' OR (t.state IN('writing','orphan') AND t.created_at<clock_timestamp()-interval '1 hour' AND t.expires_at<clock_timestamp()) OR (a.state='deleted' AND orange_deleted_version_due(a.artifact_id))) ORDER BY t.created_at LIMIT $2").bind(&self.inner.objects.root_id).bind(i64::from(limit)).fetch_all(&self.inner.pool).await?;
+        macro_rules! candidates {
+            ($guard:literal)=>{concat!("SELECT t.transfer_id FROM artifact_transfers t JOIN artifacts a USING(artifact_id) WHERE a.root_id=$1 AND t.state!='purged' AND ((t.state='attached' AND NOT t.stage_deleted) OR t.state='purging' OR (t.state IN('writing','orphan') AND t.created_at<clock_timestamp()-interval '1 hour' AND t.expires_at<clock_timestamp()) OR (a.state='deleted' AND orange_deleted_version_due(a.artifact_id)))",$guard," ORDER BY t.created_at LIMIT $2")};
+        }
+        let query = if self.inner.objects.remote().is_ok() {
+            candidates!(
+                " AND NOT EXISTS(SELECT FROM artifact_s3_upload_grants g WHERE g.transfer_id=t.transfer_id AND g.expires_unix>=floor(extract(epoch FROM clock_timestamp()))::bigint)"
+            )
+        } else {
+            candidates!("")
+        };
+        let candidates: Vec<String> = sqlx::query_scalar(query)
+            .bind(&self.inner.objects.root_id)
+            .bind(i64::from(limit))
+            .fetch_all(&self.inner.pool)
+            .await?;
         let mut cleaned = 0;
         for id in candidates {
             let mut tx = self.inner.pool.begin().await?;

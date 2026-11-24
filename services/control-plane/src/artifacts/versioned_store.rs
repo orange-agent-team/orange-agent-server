@@ -2,6 +2,8 @@
 //! Credentials and signed URLs never enter persisted request digests or diagnostic errors.
 use super::{storage::key_valid, *};
 mod downloads;
+mod uploads;
+pub(super) use uploads::ConfirmUpload;
 mod marker;
 mod transport;
 use axum::http::{Method, Request, Response};
@@ -348,6 +350,9 @@ impl VersionedStore {
     pub async fn remove(&self, key: &str) -> Result<(), ArtifactError> {
         key_valid(key)?;
         self.writer_authority().await?;
+        if self.retire_direct_stage(key).await? {
+            return Ok(());
+        }
         let attached: Option<String> = sqlx::query_scalar(
             "SELECT provider_version FROM artifact_s3_versions WHERE root_id=$1 AND storage_key=$2",
         )

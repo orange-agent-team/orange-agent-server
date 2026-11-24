@@ -23,7 +23,7 @@ def require(ok,msg):
     if not ok: raise RuntimeError(msg)
 
 
-def run(api,dbfile,identity,folder,endpoint,bucket,credentials,s3,fence,expiry,web,site,png,rgb,old_api):
+def run(api,dbfile,identity,folder,endpoint,bucket,credentials,s3,fence,expiry,web,site,png,rgb,old_api,direct_upload,direct_expiry):
     def secret(path,value):
         with os.fdopen(os.open(path,os.O_CREAT|os.O_EXCL|os.O_WRONLY,0o600),"w") as stream:json.dump(value,stream)
     prefix="orange-fixture";cfg=folder/"artifact-config.json";keys=folder/"artifact-identity.json"
@@ -91,14 +91,14 @@ def run(api,dbfile,identity,folder,endpoint,bucket,credentials,s3,fence,expiry,w
                 original=sql("SELECT jsonb_agg(to_jsonb(a) ORDER BY a.artifact_id) FROM artifacts a")
                 old_read=prior_path+"/content?"+urlencode({"version_id":prior_version})
             with listening(api,previous,"User API") as address:
-                require(sql("SELECT max(version) FROM _sqlx_migrations WHERE success")=="88" and sql("SELECT jsonb_agg(to_jsonb(a) ORDER BY a.artifact_id) FROM artifacts a")==original,
+                require(sql("SELECT max(version) FROM _sqlx_migrations WHERE success")=="89" and sql("SELECT jsonb_agg(to_jsonb(a) ORDER BY a.artifact_id) FROM artifacts a")==original,
                         "Migration changed the original artifact row")
                 require(wire("GET",old_read,prior_user)==(200,prior_bytes),"Existing filesystem content changed across upgrade")
                 status,raw=wire("POST",prior_path+"/download-authorizations",prior_user,{"version_id":prior_version},str(uuid4()))
                 require(status==503 and json.loads(raw).get("code")=="DIRECT_STORAGE_UNAVAILABLE","Filesystem root issued an S3 address")
                 require(wire("PUT",prior_path+"/content",prior_user,prior_bytes,prior_upload)[0]==200 and sql("SELECT count(*) FROM artifact_s3_versions")=="0",
                         "Existing filesystem retry created a remote pin")
-                print("PASS actual schema 87 to 88 upgrade, unchanged owned object, filesystem replay and explicit direct-download unavailability",flush=True)
+                print("PASS actual schema 87 to 89 upgrade, unchanged owned object, filesystem replay and explicit direct-download unavailability",flush=True)
         with listening(api,settings,"User API") as address:
             if old_api:
                 require(wire("GET",old_read,prior_user)[0]!=200,"A different root exposed a prior filesystem object")
@@ -184,8 +184,14 @@ def run(api,dbfile,identity,folder,endpoint,bucket,credentials,s3,fence,expiry,w
             sql(f"""DROP TRIGGER injected_provider_receipt ON artifact_s3_versions;
                     UPDATE artifact_transfers SET created_at=clock_timestamp()-interval '3 hours',expires_at=clock_timestamp()-interval '2 hours'
                     WHERE artifact_id='{failed_id}' AND state='orphan';""")
+            if direct_upload:
+                from verify_direct_ingress import prepare
+                direct=prepare(wire,sql,author,other)
         # A separate process must reopen the root and resolve the original PostgreSQL version pin.
         with listening(api,settings,"User API") as address:
+            if direct_upload:
+                from verify_direct_ingress import recover
+                direct_stage=recover(direct,wire,sql,author,provider_call,prefix)
             deadline=time.monotonic()+18
             while sql(f"SELECT state FROM artifact_transfers WHERE published_key='{orphan}'")!="purged" and time.monotonic()<deadline:
                 time.sleep(.15)
@@ -206,6 +212,12 @@ def run(api,dbfile,identity,folder,endpoint,bucket,credentials,s3,fence,expiry,w
             get_signed(g)
             n=sql("SELECT (SELECT count(*) FROM artifact_download_grants),(SELECT count(*) FROM jobs),(SELECT count(*) FROM ledger_transactions)")
             require(n=="1|0|0","Repeated or denied reads changed grant/accounting state")
+            if direct_upload:
+                from verify_direct_ingress import deletion_during_copy
+                deletion_during_copy(wire,sql,author,fence,prefix,bucket)
+            if direct_expiry:
+                from verify_direct_ingress import expire_and_reclaim
+                expire_and_reclaim(direct,wire,sql,provider_call,prefix,author)
             if web:
                 # Configure the actual test bucket's CORS for this HTTPS application origin.
                 cors=f'<CORSConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><CORSRule><AllowedOrigin>{origin}</AllowedOrigin><AllowedMethod>GET</AllowedMethod><AllowedHeader>*</AllowedHeader><ExposeHeader>Content-Length</ExposeHeader></CORSRule></CORSConfiguration>'.encode()
