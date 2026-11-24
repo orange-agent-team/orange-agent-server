@@ -66,9 +66,11 @@ def main():
     cli.add_argument("--environment",type=Path,default=ROOT/".local")
     cli.add_argument("--installed",action="store_true")
     cli.add_argument("--device-client",action="store_true",help="Run the real Worker CLI through ambiguous and corrupted redemption responses")
+    cli.add_argument("--rotate-device",action="store_true",help="Activate competing replacements and test bounded overlap through the real mTLS gateway")
     cli.add_argument("--rotation-handoff",action="store_true",help="Verify current-key ownership over a fresh key and owner-bound handoff")
     cli.add_argument("--withdraw-issuer",action="store_true")
     args=cli.parse_args();private=args.environment.resolve()
+    if args.rotate_device:args.rotation_handoff=True
     if args.rotation_handoff:args.device_client=True
     rustup=shutil.which("rustup") or "/opt/homebrew/opt/rustup/bin/rustup"
     cargo=Path(subprocess.check_output([rustup,"which","cargo"],cwd=ROOT,text=True).strip())
@@ -168,7 +170,7 @@ def main():
                 installed_receipt,installed_pem=check(programs/"orange-worker",origin,root,device,ca,gw,issuer_hash,secret,rid,sql)
                 if args.rotation_handoff:
                     from device_rotation_handoff_acceptance import qualify
-                    qualify(programs/"orange-worker",device,owner,rid,installed_receipt,sql)
+                    new_rotation=qualify(programs/"orange-worker",device,owner,rid,installed_receipt,sql)
 
                 receipt_id=installed_receipt["redemption_id"];rb["redemption_id"]=receipt_id;auth["Idempotency-Key"]=receipt_id
             with ThreadPoolExecutor(max_workers=2) as parallel:
@@ -187,6 +189,12 @@ def main():
             second=str(uuid.uuid4())
             require(http(origin,"POST",redeem,dict(auth,**{"Idempotency-Key":second}),dict(rb,redemption_id=second))[0]==409,"Token activated a second identity")
             require(sql("SELECT count(*) FROM nodes")=="1" and sql("SELECT count(*) FROM worker_credentials WHERE active")=="1","Wrong authentication effects")
+            if args.rotate_device:
+                from device_rotation_activation_acceptance import exercise
+                exercise(worker=programs/"orange-worker",origin=origin,owner=owner,headers=headers,device=device,root=root,
+                         gw_cfg=gw_cfg,programs=programs,base=base,old=issued,old_config=device/"redeem-config.json",new_handoff=new_rotation,
+                         issue=issue,sql=sql,http=http,config=config,gateway=gateway,client_test=client_test,env=env,require=require)
+                return
             # Losing the authorizing role after signing permanently withdraws the grant, even after regrant.
             team,team_req=str(uuid.uuid4()),str(uuid.uuid4())
             sql(f"""INSERT INTO owners(owner_id) VALUES('{team}'); INSERT INTO organizations(organization_id,name) VALUES('{team}','Issuer team');

@@ -29,3 +29,13 @@ orange-worker prepare-certificate-rotation "$private_enrollment_config" "$owner_
 ```
 
 Worker 先检查原安装回执、当前有效的客户端证书链和私钥，随后使用新密钥签署 PKCS#10 请求，并用原 Ed25519 设备密钥签署整份轮换意图。签名覆盖所有者、原节点、原请求和证书摘要、签发方、新 CSR 以及兑换令牌摘要。相同私有目录与请求编号支持重复导出。公开文件仅表示设备持有两把密钥，服务端授权、证书激活与旧凭据退出另行处理。
+
+所有者本人或团队管理员通过 `PUT /api/v1/owners/{owner}/worker-certificate-rotations/{request}` 提交公开轮换请求。沿用用户会话、Origin、CSRF 和请求 UUID 幂等键。服务端用数据库中原证书的公钥核验签名，检查原凭据、签发方、区域和节点身份，独立验证新 CSR。签发方和网关只处理仍有效的授权。
+
+独立签发方备妥新叶证书后，使用新请求 UUID、同一设备私有目录、新令牌文件和可信 CA 配置完成兑换：
+
+```sh
+orange-worker redeem-certificate-rotation "$new_private_enrollment_config"
+```
+
+多份获批请求竞争同一原凭据时，仅一份可以激活。激活复用原节点，保留前一张凭据至其原期限与激活后两分钟两者中的较早时间。新凭据首次成功建立 mTLS 控制会话后，原凭据立即退出，旧连接在下一次权威校验时失效。撤销上游注册授权会同时撤销下游轮换；重新授权需要新的独立请求。

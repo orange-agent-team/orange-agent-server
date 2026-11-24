@@ -91,6 +91,10 @@ pub fn router(identity: UserIdentity) -> Router {
             axum::routing::post(worker_redemption::redeem),
         )
         .route(
+            "/api/v1/owners/{owner}/worker-certificate-rotations/{request}",
+            get(worker_enrollments::inspect_rotation).put(worker_enrollments::authorize_rotation),
+        )
+        .route(
             "/api/v1/owners/{owner}/worker-enrollments/{request}",
             get(worker_enrollments::inspect)
                 .put(worker_enrollments::authorize)

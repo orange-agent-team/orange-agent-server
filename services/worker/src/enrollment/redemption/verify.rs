@@ -2,7 +2,7 @@ use super::{Error, Intent, WorkerCertificateReceipt, hash, uuid4};
 use rustls_pki_types::{CertificateDer, UnixTime};
 use x509_parser::{parse_x509_certificate, pem::parse_x509_pem};
 
-fn cert(bytes: &[u8]) -> Result<CertificateDer<'static>, Error> {
+pub(super) fn cert(bytes: &[u8]) -> Result<CertificateDer<'static>, Error> {
     if !bytes.starts_with(b"-----BEGIN CERTIFICATE-----") {
         return Err(Error::Certificate);
     }

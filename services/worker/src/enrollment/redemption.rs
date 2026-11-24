@@ -303,6 +303,12 @@ fn prepare_handoff_locked(
     Ok(handoff)
 }
 pub async fn redeem(config: &Path) -> Result<Installation, Error> {
+    redeem_kind(config, false).await
+}
+pub async fn redeem_rotation(config: &Path) -> Result<Installation, Error> {
+    redeem_kind(config, true).await
+}
+async fn redeem_kind(config: &Path, require_rotation: bool) -> Result<Installation, Error> {
     let c: Config = serde_json::from_slice(&input(config, 8192)?).map_err(|_| Error::Config)?;
     if c.version != 1
         || c.environment != "development"
@@ -355,6 +361,7 @@ pub async fn redeem(config: &Path) -> Result<Installation, Error> {
     {
         return Err(Error::Conflict);
     }
+    let rotation_node = rotation::bound_node(&dir, &intent, require_rotation)?;
     let intent_bytes = encode(&intent)?;
     publish(&dir, &intent_name, &intent_bytes, 4096)?;
     fs::flock(&dir, fs::FlockOperation::Unlock)?;
@@ -372,6 +379,13 @@ pub async fn redeem(config: &Path) -> Result<Installation, Error> {
         return Err(Error::Local);
     }
     verify::leaf(&receipt, &intent, &ca)?;
+    if rotation::bound_node(&dir, &intent, require_rotation)? != rotation_node
+        || rotation_node
+            .as_ref()
+            .is_some_and(|node| node != &receipt.node_id)
+    {
+        return Err(Error::Certificate);
+    }
     if spki(&dir, id)? != key
         || read_at(&dir, intent_name.as_ref(), 4096)?.as_deref() != Some(intent_bytes.as_slice())
     {

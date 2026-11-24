@@ -75,3 +75,72 @@ pub fn prepare_rotation(
     publish(&dir, &record, &encode(&handoff)?, 16384)?;
     Ok(handoff)
 }
+
+/// The saved handoff pins the expected stable node before sending a redemption. An already
+/// confirmed replacement remains recoverable after the old credential has expired.
+pub(super) fn bound_node(
+    dir: &File,
+    intent: &Intent,
+    required: bool,
+) -> Result<Option<String>, Error> {
+    let Some(bytes) = read_at(
+        dir,
+        format!("{}.rotation.json", intent.request_id).as_ref(),
+        16384,
+    )?
+    else {
+        return if required {
+            Err(Error::Conflict)
+        } else {
+            Ok(None)
+        };
+    };
+    let handoff: WorkerRotationHandoff = decode(&bytes)?;
+    let r = &handoff.intent;
+    if r.version != 1
+        || !uuid4(&r.previous_request_id)
+        || !uuid4(&r.node_id)
+        || !orange_protocol::valid_id(&r.owner_id)
+        || r.previous_request_id == intent.request_id
+        || r.replacement.request.request_id != intent.request_id
+        || r.replacement.request.spki_sha256 != intent.spki_sha256
+        || r.replacement.exchange_token_sha256 != intent.token_sha256
+    {
+        return Err(Error::Conflict);
+    }
+    let old: WorkerCertificateReceipt = decode(
+        &read_at(
+            dir,
+            format!("{}.receipt.json", r.previous_request_id).as_ref(),
+            32768,
+        )?
+        .ok_or(Error::Conflict)?,
+    )?;
+    if old.request_id != r.previous_request_id
+        || old.node_id != r.node_id
+        || old.issuer_sha256 != r.previous_issuer_sha256
+        || old.certificate_sha256 != r.previous_certificate_sha256
+    {
+        return Err(Error::Conflict);
+    }
+    let der = verify::cert(old.certificate_pem.as_bytes())?;
+    if hash(&der) != r.previous_certificate_sha256 {
+        return Err(Error::Conflict);
+    }
+    let signature = URL_SAFE_NO_PAD
+        .decode(&handoff.previous_key_signature)
+        .map_err(|_| Error::Conflict)?;
+    if signature.len() != 64 || URL_SAFE_NO_PAD.encode(&signature) != handoff.previous_key_signature
+    {
+        return Err(Error::Conflict);
+    }
+    webpki::EndEntityCert::try_from(&der)
+        .map_err(|_| Error::Certificate)?
+        .verify_signature(
+            webpki::ring::ED25519,
+            r.signing_message().map_err(|_| Error::Config)?.as_bytes(),
+            &signature,
+        )
+        .map_err(|_| Error::Conflict)?;
+    Ok(Some(r.node_id.clone()))
+}

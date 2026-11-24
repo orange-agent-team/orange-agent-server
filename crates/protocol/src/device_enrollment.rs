@@ -78,3 +78,17 @@ pub struct WorkerRotationHandoff {
     pub intent: WorkerRotationIntent,
     pub previous_key_signature: String,
 }
+
+/// Owner-scoped rotation readback. The deadline is the recorded maximum overlap, which a Hello may end earlier.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerRotationView {
+    pub enrollment: WorkerEnrollmentView,
+    pub node_id: String,
+    pub previous_request_id: String,
+    pub previous_certificate_sha256: String,
+    pub intent_sha256: String,
+    pub predecessor_eligible: bool,
+    pub activated_unix: Option<String>,
+    pub overlap_until_unix: Option<String>,
+}

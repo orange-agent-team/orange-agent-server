@@ -191,8 +191,12 @@ pub async fn issue_one(pool: &PgPool, path: &Path) -> Result<Option<String>, Err
     let candidate=sqlx::query("SELECT g.request_id::text,g.owner_id,g.requested_by FROM worker_enrollment_grants g
         JOIN users u ON u.user_id=g.requested_by AND u.active JOIN owners personal ON personal.owner_id=u.personal_owner_id AND personal.state='active' JOIN owners o ON o.owner_id=g.owner_id AND o.state='active'
         WHERE g.state='authorized' AND g.expires_at>clock_timestamp() AND NOT EXISTS(SELECT FROM worker_enrollment_certificates c WHERE c.request_id=g.request_id)
+        AND (NOT EXISTS(SELECT FROM worker_certificate_rotation_requests r WHERE r.request_id=g.request_id)
+          OR EXISTS(SELECT FROM worker_certificate_rotation_requests r JOIN renewable_worker_certificates src
+                   ON src.certificate_sha256=r.previous_certificate_sha256 AND src.request_id=r.previous_request_id
+                   WHERE r.request_id=g.request_id AND r.node_id=src.node_id AND src.owner_id=g.owner_id AND src.region_id=$1))
         AND (u.personal_owner_id=g.owner_id OR EXISTS(SELECT FROM memberships m WHERE m.organization_id=g.owner_id AND m.user_id=u.user_id AND m.active AND m.role IN ('owner','admin')))
-        ORDER BY g.created_at,g.request_id LIMIT 1").fetch_optional(&mut *tx).await?;
+        ORDER BY g.created_at,g.request_id LIMIT 1").bind(&signer.region).fetch_optional(&mut *tx).await?;
     let Some(candidate) = candidate else {
         return Ok(None);
     };
@@ -232,11 +236,16 @@ pub async fn issue_one(pool: &PgPool, path: &Path) -> Result<Option<String>, Err
             .fetch_one(&mut *tx)
             .await?;
     let (pem, fingerprint, start, end) = signer.make(&request, now)?;
-    let node = Uuid::new_v4().to_string();
-    let changed=sqlx::query("INSERT INTO worker_enrollment_certificates(request_id,node_id,region_id,certificate_sha256,issuer_sha256,leaf_pem,not_before,expires_at)
-        SELECT request_id,$2,$3,$4,$5,$6,to_timestamp($7::bigint),to_timestamp($8::bigint) FROM worker_enrollment_grants
+    let source:Option<(String,String)>=sqlx::query_as("SELECT node_id,previous_certificate_sha256 FROM worker_certificate_rotation_requests WHERE request_id=$1::text::uuid")
+        .bind(&id).fetch_optional(&mut *tx).await?;
+    let (node, parent) = match source {
+        Some((node, parent)) => (node, Some(parent)),
+        None => (Uuid::new_v4().to_string(), None),
+    };
+    let changed=sqlx::query("INSERT INTO worker_enrollment_certificates(request_id,node_id,region_id,certificate_sha256,issuer_sha256,leaf_pem,not_before,expires_at,rotation_parent)
+        SELECT request_id,$2,$3,$4,$5,$6,to_timestamp($7::bigint),to_timestamp($8::bigint),$9 FROM worker_enrollment_grants
         WHERE request_id=$1::text::uuid AND state='authorized' AND expires_at>clock_timestamp() AND clock_timestamp()<to_timestamp($8::bigint)")
-        .bind(&id).bind(&node).bind(signer.region).bind(fingerprint).bind(signer.root).bind(pem).bind(start).bind(end).execute(&mut *tx).await?.rows_affected();
+        .bind(&id).bind(&node).bind(signer.region).bind(fingerprint).bind(signer.root).bind(pem).bind(start).bind(end).bind(parent).execute(&mut *tx).await?.rows_affected();
     if changed != 1 {
         return Err(Error::Unavailable);
     }

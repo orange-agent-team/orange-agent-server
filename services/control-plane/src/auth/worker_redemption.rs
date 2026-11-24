@@ -61,7 +61,7 @@ pub(super) async fn redeem(
         AND owner_id=$3 AND requested_by=$4 AND state='authorized' AND expires_at>clock_timestamp() FOR UPDATE")
         .bind(&id).bind(&hash).bind(&owner).bind(&user).fetch_optional(&mut *tx).await?.ok_or_else(invalid)?;
     let cert=sqlx::query("SELECT node_id,region_id,certificate_sha256,issuer_sha256,leaf_pem,floor(extract(epoch FROM expires_at))::bigint AS expiry,
-        redemption_id::text FROM worker_enrollment_certificates WHERE request_id=$1::text::uuid AND not_before<=clock_timestamp() AND expires_at>clock_timestamp() FOR UPDATE")
+        redemption_id::text,rotation_parent FROM worker_enrollment_certificates WHERE request_id=$1::text::uuid AND not_before<=clock_timestamp() AND expires_at>clock_timestamp() FOR UPDATE")
         .bind(&id).fetch_optional(&mut *tx).await?.ok_or(UserApiError(StatusCode::CONFLICT,"ENROLLMENT_CERTIFICATE_UNAVAILABLE"))?;
     if !sqlx::query_scalar::<_, bool>("SELECT worker_issued_leaf_allowed($1)")
         .bind(cert.try_get::<&str, _>("issuer_sha256")?)
@@ -80,8 +80,24 @@ pub(super) async fn redeem(
             ));
         }
     } else {
-        sqlx::query("INSERT INTO nodes(node_id,owner_id,environment,region_id,state) VALUES($1,$2,'dev',$3,'offline')")
+        if let Some(parent) = cert.try_get::<Option<String>, _>("rotation_parent")? {
+            let locked=sqlx::query_scalar::<_,String>("SELECT node_id FROM nodes WHERE node_id=$1 AND owner_id=$2 AND region_id=$3 AND state NOT IN ('quarantined','revoked') FOR UPDATE")
+                .bind(&node).bind(&owner).bind(cert.try_get::<&str,_>("region_id")?).fetch_optional(&mut *tx).await?;
+            if locked.is_none() {
+                return Err(invalid());
+            }
+            let live:bool=sqlx::query_scalar("SELECT EXISTS(SELECT FROM renewable_worker_certificates WHERE certificate_sha256=$1 AND node_id=$2 AND owner_id=$3)")
+                .bind(parent).bind(&node).bind(&owner).fetch_one(&mut *tx).await?;
+            if !live {
+                return Err(UserApiError(
+                    StatusCode::CONFLICT,
+                    "ENROLLMENT_ROTATION_UNAVAILABLE",
+                ));
+            }
+        } else {
+            sqlx::query("INSERT INTO nodes(node_id,owner_id,environment,region_id,state) VALUES($1,$2,'dev',$3,'offline')")
             .bind(&node).bind(&owner).bind(cert.try_get::<&str,_>("region_id")?).execute(&mut *tx).await?;
+        }
         sqlx::query("INSERT INTO worker_credentials(certificate_sha256,node_id,enrollment_user_id,not_before,expires_at)
             SELECT certificate_sha256,node_id,$2,not_before,expires_at FROM worker_enrollment_certificates WHERE request_id=$1::text::uuid")
             .bind(&id).bind(&user).execute(&mut *tx).await?;

@@ -31,7 +31,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         return Err("private device enrollment storage is unavailable on this target".into());
     }
-    if command.as_deref() == Some(std::ffi::OsStr::new("redeem-enrollment")) {
+    let rotation = command.as_deref() == Some(std::ffi::OsStr::new("redeem-certificate-rotation"));
+    if rotation || command.as_deref() == Some(std::ffi::OsStr::new("redeem-enrollment")) {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             let config = args
@@ -43,9 +44,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()?;
-            let installation = runtime.block_on(orange_worker::enrollment::redemption::redeem(
-                std::path::Path::new(&config),
-            ))?;
+            let path = std::path::Path::new(&config);
+            let installation = if rotation {
+                runtime.block_on(orange_worker::enrollment::redemption::redeem_rotation(path))?
+            } else {
+                runtime.block_on(orange_worker::enrollment::redemption::redeem(path))?
+            };
             serde_json::to_writer(std::io::stdout().lock(), &installation)?;
             println!();
             return Ok(());

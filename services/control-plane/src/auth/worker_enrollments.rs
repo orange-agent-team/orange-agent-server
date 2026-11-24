@@ -1,7 +1,10 @@
 //! A browser manager authorizes a verified public key request. No CA key lives in this router.
+#[path = "worker_rotation_proof.rs"]
+mod rotation_proof;
 use super::*;
 use crate::auth::users::UserSessionGuard;
 use crate::worker::enrollment_csr;
+use orange_protocol::device_enrollment::WorkerRotationHandoff;
 use orange_protocol::{
     device_enrollment::{AuthorizeWorkerEnrollment, WorkerEnrollmentView},
     team::TeamRole,
@@ -77,9 +80,47 @@ pub(super) async fn authorize(
     headers: HeaderMap,
     body: Result<Json<AuthorizeWorkerEnrollment>, JsonRejection>,
 ) -> Result<Json<WorkerEnrollmentView>, UserApiError> {
-    let mut guard = manager(&identity, &headers, &owner, &id, true).await?;
     let Json(input) = body.map_err(|_| AuthError::Invalid)?;
-    let req = input.request;
+    authorize_request(identity, owner, id, headers, &input, None).await
+}
+pub(super) async fn authorize_rotation(
+    State(identity): State<Arc<UserIdentity>>,
+    Path((owner, id)): Path<(String, String)>,
+    headers: HeaderMap,
+    body: Result<Json<WorkerRotationHandoff>, JsonRejection>,
+) -> Result<Json<WorkerEnrollmentView>, UserApiError> {
+    let Json(handoff) = body.map_err(|_| AuthError::Invalid)?;
+    if handoff.intent.version != 1
+        || handoff.intent.owner_id != owner
+        || handoff.intent.replacement.request.request_id != id
+        || !crate::worker::enrollment_csr::request_id(&handoff.intent.node_id)
+        || !crate::worker::enrollment_csr::request_id(&handoff.intent.previous_request_id)
+        || handoff.intent.previous_request_id == id
+        || !orange_protocol::valid_digest(&handoff.intent.previous_certificate_sha256)
+        || !orange_protocol::valid_digest(&handoff.intent.previous_issuer_sha256)
+    {
+        return Err(AuthError::Invalid.into());
+    }
+    authorize_request(
+        identity,
+        owner,
+        id,
+        headers,
+        &handoff.intent.replacement,
+        Some(&handoff),
+    )
+    .await
+}
+async fn authorize_request(
+    identity: Arc<UserIdentity>,
+    owner: String,
+    id: String,
+    headers: HeaderMap,
+    input: &AuthorizeWorkerEnrollment,
+    rotation: Option<&WorkerRotationHandoff>,
+) -> Result<Json<WorkerEnrollmentView>, UserApiError> {
+    let mut guard = manager(&identity, &headers, &owner, &id, true).await?;
+    let req = &input.request;
     if req.request_id != id
         || !orange_protocol::valid_digest(&input.exchange_token_sha256)
         || input.exchange_token_sha256 == req.csr_sha256
@@ -88,12 +129,30 @@ pub(super) async fn authorize(
     {
         return Err(AuthError::Invalid.into());
     }
-    let der = enrollment_csr::verify(&req).ok_or(AuthError::Invalid)?;
+    let der = enrollment_csr::verify(req).ok_or(AuthError::Invalid)?;
     let user = guard.view().user_id.clone();
     let tx = guard.transaction();
     serialize(tx, &owner).await?;
     let conflict = || UserApiError(StatusCode::CONFLICT, "ENROLLMENT_CONFLICT");
+    let proposed = rotation
+        .map(|r| r.intent.signing_message())
+        .transpose()
+        .map_err(|_| AuthError::Invalid)?;
     if let Some(row) = read(tx, &owner, &id).await? {
+        let stored=sqlx::query_scalar::<_,String>("SELECT intent_sha256 FROM worker_certificate_rotation_requests WHERE request_id=$1::text::uuid")
+            .bind(&id).fetch_optional(&mut **tx).await?;
+        if stored != proposed {
+            return Err(conflict());
+        }
+        if let Some(handoff) = rotation {
+            // A retry with a copied digest but a different signature is not the original authorization.
+            let signature = rotation_proof::decode_signature(handoff)?;
+            let bound:bool=sqlx::query_scalar("SELECT EXISTS(SELECT FROM worker_certificate_rotation_requests WHERE request_id=$1::text::uuid AND previous_key_signature=$2)")
+                .bind(&id).bind(signature).fetch_one(&mut **tx).await?;
+            if !bound {
+                return Err(conflict());
+            }
+        }
         if row.try_get::<&str, _>("requested_by")? != user
             || row.try_get::<&str, _>("spki_sha256")? != req.spki_sha256
             || row.try_get::<&str, _>("csr_sha256")? != req.csr_sha256
@@ -118,8 +177,48 @@ pub(super) async fn authorize(
         if inserted != 1 {
             return Err(conflict());
         }
+        if let (Some(handoff), Some(digest)) = (rotation, proposed) {
+            rotation_proof::bind(tx, handoff, &digest).await?;
+        }
     }
     let result = view(&read(tx, &owner, &id).await?.ok_or_else(conflict)?)?;
+    guard.finish().await?;
+    Ok(Json(result))
+}
+pub(super) async fn inspect_rotation(
+    State(identity): State<Arc<UserIdentity>>,
+    Path((owner, id)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Json<orange_protocol::device_enrollment::WorkerRotationView>, UserApiError> {
+    let mut guard = manager(&identity, &headers, &owner, &id, false).await?;
+    let statement=format!("WITH enrollment AS ({SELECT}) SELECT enrollment.*,r.node_id,r.previous_request_id::text,r.previous_certificate_sha256,r.intent_sha256,
+        EXISTS(SELECT FROM renewable_worker_certificates src WHERE src.certificate_sha256=r.previous_certificate_sha256 AND src.node_id=r.node_id AND src.owner_id=enrollment.owner_id) AS eligible,
+        floor(extract(epoch FROM a.activated_at))::bigint AS activated,floor(extract(epoch FROM a.overlap_until))::bigint AS cutoff
+        FROM enrollment JOIN worker_certificate_rotation_requests r ON r.request_id=enrollment.request_id::uuid
+        LEFT JOIN worker_certificate_rotation_receipts a ON a.request_id=r.request_id");
+    let row = sqlx::query(&statement)
+        .bind(&owner)
+        .bind(&id)
+        .fetch_optional(&mut **guard.transaction())
+        .await?
+        .ok_or(UserApiError(
+            StatusCode::NOT_FOUND,
+            "ENROLLMENT_ROTATION_NOT_FOUND",
+        ))?;
+    let result = orange_protocol::device_enrollment::WorkerRotationView {
+        enrollment: view(&row)?,
+        node_id: row.try_get("node_id")?,
+        previous_request_id: row.try_get("previous_request_id")?,
+        previous_certificate_sha256: row.try_get("previous_certificate_sha256")?,
+        intent_sha256: row.try_get("intent_sha256")?,
+        predecessor_eligible: row.try_get("eligible")?,
+        activated_unix: row
+            .try_get::<Option<i64>, _>("activated")?
+            .map(|v| v.to_string()),
+        overlap_until_unix: row
+            .try_get::<Option<i64>, _>("cutoff")?
+            .map(|v| v.to_string()),
+    };
     guard.finish().await?;
     Ok(Json(result))
 }

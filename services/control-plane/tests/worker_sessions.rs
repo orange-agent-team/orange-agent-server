@@ -1336,3 +1336,55 @@ async fn independent_admin_withdrawal_fences_the_live_signer_and_preserves_anoth
         .await
         .expect("unrelated signer can reconnect");
 }
+
+#[cfg(feature = "worker-enrollment-tests")]
+#[tokio::test]
+async fn rotated_device_fences_old_control_and_preserves_node_identity()
+-> Result<(), Box<dyn std::error::Error>> {
+    use orange_worker::control::{ControlConfig, ControlConnection};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let raw = std::fs::read(std::env::var("ORANGE_TEST_ROTATION_SESSION")?)?;
+    let config: serde_json::Value = serde_json::from_slice(&raw)?;
+    let field = |name: &str| config[name].as_str().expect("rotation fixture");
+    let input = |which: &str| -> Result<ControlConfig, std::io::Error> {
+        let device = &config[which];
+        Ok(ControlConfig {
+            endpoint: field("gateway").into(),
+            server_name: "localhost".into(),
+            server_ca_pem: std::fs::read(field("gateway_ca"))?,
+            certificate_pem: std::fs::read(device["leaf"].as_str().expect("public leaf"))?,
+            private_key_pem: std::fs::read(device["key"].as_str().expect("fixture key"))?,
+            node_id: field("node").into(),
+            capabilities_digest: "a".repeat(64),
+        })
+    };
+    let mut old = ControlConnection::connect(input("previous")?).await?;
+    old.heartbeat("overlap-before-cutoff").await?;
+    let prior_epoch = old.identity().connection_epoch;
+    if let Some(end) = config["deadline"].as_u64() {
+        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+        assert!(
+            end > now && end - now <= 20,
+            "test-owned shortened predecessor expiry expected"
+        );
+        tokio::time::sleep(Duration::from_secs(end - now + 1)).await;
+        assert!(old.heartbeat("after-expiry").await.is_err());
+        assert!(
+            ControlConnection::connect(input("previous")?)
+                .await
+                .is_err()
+        );
+    }
+    let mut new = ControlConnection::connect(input("replacement")?).await?;
+    assert_eq!(new.identity().node_id, field("node"));
+    assert!(new.identity().connection_epoch > prior_epoch);
+    new.heartbeat("rotation-current").await?;
+    assert!(old.heartbeat("after-takeover").await.is_err());
+    assert!(
+        ControlConnection::connect(input("previous")?)
+            .await
+            .is_err()
+    );
+    new.heartbeat("old-key-cannot-take-over").await?;
+    Ok(())
+}
