@@ -94,9 +94,11 @@ fn source_url(
 async fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = env::args().skip(1).collect();
     if !(2..=3).contains(&args.len()) {
-        return Err("Usage: model-fetch <pinned-manifest.json> <private-cache-directory> [--source=huggingface|modelscope]".into());
+        return Err("Usage: model-fetch <pinned-manifest.json> <private-cache-directory> [--inspect|--source=huggingface|modelscope]".into());
     }
+    let inspect = args.get(2).is_some_and(|arg| arg == "--inspect");
     let source = match args.get(2) {
+        Some(_) if inspect => "huggingface",
         None => "huggingface",
         Some(value) => value
             .strip_prefix("--source=")
@@ -115,6 +117,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let model = manifest.model;
     let (url, hosts) = source_url(&model, source)?;
     let spec = ArtifactSpec::new(url.as_str(), &model.sha256, model.bytes, &hosts, b"GGUF")?;
+    if inspect {
+        let observed = ModelCache::observe(std::path::Path::new(&args[1]), &spec).await?;
+        println!("{}", serde_json::to_string(&observed)?);
+        return Ok(());
+    }
     let cache = ModelCache::new(&PathBuf::from(&args[1]), 4 * 1024 * 1024 * 1024)?;
     let artifact = cache.ensure(&spec).await?;
     println!(

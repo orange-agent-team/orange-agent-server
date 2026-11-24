@@ -12,6 +12,8 @@ use std::{
 };
 use tokio::io::AsyncReadExt;
 mod import;
+mod observation;
+pub use observation::{CacheObservation, CacheState};
 
 #[derive(Debug, thiserror::Error)]
 pub enum CacheError {
@@ -131,6 +133,7 @@ pub struct VerifiedArtifact {
     digest: String,
     bytes: u64,
     cached: bool,
+    _read_lease: ReadLease,
 }
 impl VerifiedArtifact {
     pub fn path(&self) -> &Path {
@@ -164,17 +167,7 @@ impl ModelCache {
                 fs::set_permissions(root, fs::Permissions::from_mode(0o700))?;
             }
         }
-        let metadata = fs::symlink_metadata(root)?;
-        if !metadata.is_dir() || metadata.file_type().is_symlink() {
-            return Err(CacheError::UnsafePath);
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            if metadata.permissions().mode() & 0o077 != 0 {
-                return Err(CacheError::UnsafePath);
-            }
-        }
+        validate_root(&fs::symlink_metadata(root)?)?;
         Ok(Self {
             root: root.canonicalize()?,
             quota,
@@ -187,8 +180,7 @@ impl ModelCache {
             if !exists(&ready)? {
                 return Err(CacheError::LocalFileRequired);
             }
-            verify(&ready, spec).await?;
-            return Ok(artifact(&ready, spec, true));
+            return artifact(&ready, spec, true, verify(&ready, spec).await?);
         }
         let hosts = spec.allowed_hosts.clone();
         let client = Client::builder()
@@ -230,14 +222,12 @@ impl ModelCache {
         let ready = self.root.join(format!("{}.gguf", spec.digest));
         let partial = self.root.join(format!("{}.part", spec.digest));
         if exists(&ready)? {
-            verify(&ready, spec).await?;
-            return Ok(artifact(&ready, spec, true));
+            return artifact(&ready, spec, true, verify(&ready, spec).await?);
         }
         // Serialize quota reservations for this cache. Ready immutable files remain readable concurrently.
         let lock = cache_lease(&self.root.join(".model-cache-lock"))?;
         if exists(&ready)? {
-            verify(&ready, spec).await?;
-            return Ok(artifact(&ready, spec, true));
+            return artifact(&ready, spec, true, verify(&ready, spec).await?);
         }
         let previous = if exists(&partial)? {
             private_file(&partial, false)?.metadata()?.len()
@@ -272,13 +262,13 @@ impl ModelCache {
                 transfer_once(transport, spec, &partial, lock.clone()).await
             };
             match result {
-                Ok(()) => {
+                Ok(verified) => {
                     fs::rename(&partial, &ready)?;
                     #[cfg(unix)]
                     {
                         File::open(&self.root)?.sync_all()?;
                     }
-                    return Ok(artifact(&ready, spec, false));
+                    return artifact(&ready, spec, false, verified);
                 }
                 Err(error) if error.retryable() && attempt < 2 => {
                     // A corrupt prefix is discarded only in our owned staging file, never an active model.
@@ -318,13 +308,31 @@ impl ModelCache {
         Ok(total)
     }
 }
-fn artifact(path: &Path, spec: &ArtifactSpec, cached: bool) -> VerifiedArtifact {
-    VerifiedArtifact {
+struct ReadLease(File);
+impl Drop for ReadLease {
+    fn drop(&mut self) {
+        // A fork or incidental duplicate of this description must not outlive the
+        // cooperating reader. Other readers acquire independent shared locks.
+        let _ = self.0.unlock();
+    }
+}
+fn artifact(
+    path: &Path,
+    spec: &ArtifactSpec,
+    cached: bool,
+    file: ReadLease,
+) -> Result<VerifiedArtifact, CacheError> {
+    // Bind the receipt to the same file even after moving a verified staging object into place.
+    if !same_snapshot(&file.0, &private_file(path, false)?)? {
+        return Err(CacheError::Integrity);
+    }
+    Ok(VerifiedArtifact {
         path: path.into(),
         digest: spec.digest.clone(),
         bytes: spec.bytes,
         cached,
-    }
+        _read_lease: file,
+    })
 }
 struct CacheLease {
     file: File,
@@ -389,19 +397,67 @@ fn private_file(path: &Path, create: bool) -> Result<File, CacheError> {
     }
     Ok(file)
 }
-async fn verify(path: &Path, spec: &ArtifactSpec) -> Result<(), CacheError> {
+fn validate_root(metadata: &fs::Metadata) -> Result<(), CacheError> {
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(CacheError::UnsafePath);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err(CacheError::UnsafePath);
+        }
+    }
+    Ok(())
+}
+
+fn same_snapshot(left: &File, right: &File) -> Result<bool, CacheError> {
+    use cap_fs_ext::MetadataExt;
+    let left = cap_std::fs::Metadata::from_file(left)?;
+    let right = cap_std::fs::Metadata::from_file(right)?;
+    Ok(left.dev() == right.dev()
+        && left.ino() == right.ino()
+        && left.nlink() == 1
+        && right.nlink() == 1
+        && left.len() == right.len()
+        && left.modified()? == right.modified()?)
+}
+
+async fn verify(path: &Path, spec: &ArtifactSpec) -> Result<ReadLease, CacheError> {
     let original = private_file(path, false)?;
-    if original.metadata()?.len() != spec.bytes {
+    // A read-only inventory probes for existing readers with a transient exclusive lock.
+    // Let ordinary readers join after a bounded wait; a persistent external lock remains busy.
+    let mut retries = 0;
+    loop {
+        match original.try_lock_shared() {
+            Ok(()) => break,
+            Err(std::fs::TryLockError::WouldBlock) if retries < 4 => {
+                retries += 1;
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            Err(std::fs::TryLockError::WouldBlock) => return Err(CacheError::LockUnavailable),
+            Err(std::fs::TryLockError::Error(e)) => return Err(CacheError::Io(e)),
+        }
+    }
+    let lease = ReadLease(original);
+    let before = lease.0.metadata()?;
+    if before.len() != spec.bytes {
         return Err(CacheError::Incomplete);
     }
-    let mut file = tokio::fs::File::from_std(original);
+    let file = tokio::fs::File::from_std(lease.0.try_clone()?);
+    let mut reader = file.take(spec.bytes + 1);
     let mut hash = Sha256::new();
     let mut buffer = vec![0_u8; 1024 * 1024];
     let mut prefix = Vec::new();
+    let mut read = 0u64;
     loop {
-        let count = file.read(&mut buffer).await?;
+        let count = reader.read(&mut buffer).await?;
         if count == 0 {
             break;
+        }
+        read += count as u64;
+        if read > spec.bytes {
+            return Err(CacheError::TooLarge);
         }
         if prefix.len() < spec.magic.len() {
             let needed = (spec.magic.len() - prefix.len()).min(count);
@@ -409,10 +465,16 @@ async fn verify(path: &Path, spec: &ArtifactSpec) -> Result<(), CacheError> {
         }
         hash.update(&buffer[..count]);
     }
-    if prefix != spec.magic || hex::encode(hash.finalize()) != spec.digest {
+    let file = reader.into_inner().into_std().await;
+    if read != spec.bytes
+        || prefix != spec.magic
+        || hex::encode(hash.finalize()) != spec.digest
+        || before.modified()? != file.metadata()?.modified()?
+        || !same_snapshot(&file, &private_file(path, false)?)?
+    {
         return Err(CacheError::Integrity);
     }
-    Ok(())
+    Ok(lease)
 }
 struct DownloadResponse<B> {
     status: u16,
@@ -516,7 +578,7 @@ async fn transfer_once<T: Transport>(
     spec: &ArtifactSpec,
     path: &Path,
     lock: Arc<CacheLease>,
-) -> Result<(), CacheError> {
+) -> Result<ReadLease, CacheError> {
     let original = private_file(path, true)?;
     let mut length = original.metadata()?.len();
     if length > spec.bytes {

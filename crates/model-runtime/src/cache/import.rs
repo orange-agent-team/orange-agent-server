@@ -33,9 +33,9 @@ impl ModelCache {
         let ready = self.root.join(format!("{}.gguf", spec.digest));
         let staged = self.root.join(format!("{}.import", spec.digest));
         if exists(&ready)? {
-            verify(&ready, spec).await?;
+            let file = verify(&ready, spec).await?;
             check_cancel(&cancel)?;
-            return Ok(artifact(&ready, spec, true));
+            return artifact(&ready, spec, true, file);
         }
         if !source.is_absolute() || source.is_symlink() {
             return Err(CacheError::UnsafePath);
@@ -51,9 +51,9 @@ impl ModelCache {
         }
         let lock = cache_lease(&self.root.join(".model-cache-lock"))?;
         if exists(&ready)? {
-            verify(&ready, spec).await?;
+            let file = verify(&ready, spec).await?;
             check_cancel(&cancel)?;
-            return Ok(artifact(&ready, spec, true));
+            return artifact(&ready, spec, true, file);
         }
         let previous = if exists(&staged)? {
             private_file(&staged, false)?.metadata()?.len()
@@ -121,12 +121,12 @@ impl ModelCache {
         drop(destination);
         // Re-read our staging inode; the active model is never an alias of the
         // caller-selected file and never accepts only a claimed source digest.
-        verify(&staged, spec).await?;
+        let file = verify(&staged, spec).await?;
         check_cancel(&cancel)?;
         fs::rename(&staged, &ready)?;
         #[cfg(unix)]
         File::open(&self.root)?.sync_all()?;
-        Ok(artifact(&ready, spec, false))
+        artifact(&ready, spec, false, file)
     }
 }
 

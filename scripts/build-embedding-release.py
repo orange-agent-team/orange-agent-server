@@ -23,9 +23,9 @@ if args.profile == "platform":
     packages = ["-p","orange-control-plane","-p","orange-worker"]
     target_args = [part for name in programs for part in ("--bin",name)]
 elif args.profile == "model-manifest":
-    programs = ["orange-model-manifest"]
+    programs = ["orange-model-manifest","model-fetch"]
     packages = ["-p","orange-model-runtime"]
-    target_args = ["--bin","orange-model-manifest"]
+    target_args = ["--bin","orange-model-manifest","--bin","model-fetch"]
 elif args.profile == "knowledge":
     programs = ["orange-knowledge"]
     packages = ["-p","orange-agent-runtime"]

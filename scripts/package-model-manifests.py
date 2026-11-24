@@ -38,11 +38,14 @@ def main():
     native=ROOT/".local/model-manifest-release"/commit
     build=json.loads((native/"native-build.json").read_bytes())
     binary=native/PROGRAM
-    if build["source_commit"]!=commit or build["target"]!="aarch64-apple-darwin" or not build["reproducible"] or build["builds"]!=[{PROGRAM:sha(binary)}]*2:
+    binaries={name:sha(native/name) for name in [PROGRAM,"model-fetch"]}
+    if build["source_commit"]!=commit or build["target"]!="aarch64-apple-darwin" or not build["reproducible"] or build["builds"]!=[binaries]*2:
         raise ValueError("Invalid native build receipts")
     files={"bin/"+PROGRAM:binary.read_bytes(),"README.md":source("distribution/model-manifest/README.md"),"docs/model-version-manifests.md":source("docs/model-version-manifests.md"),"Cargo.lock":source("Cargo.lock")}
     for name in ("contracts/json-schema/model-version.v1.json","contracts/json-schema/user.schema.json","contracts/openapi/model-manifests.v1.json"):
         files[name]=source(name)
+    files["bin/model-fetch"]=(native/"model-fetch").read_bytes()
+    files["config/local-model.lock.json"]=source("config/local-model.lock.json")
     versions={}
     for name in git("ls-tree","-r","--name-only",commit,"--","crates/model-runtime/model-manifests").decode().splitlines():
         doc=json.loads(source(name));id_=doc["model_version"]
@@ -82,13 +85,25 @@ def main():
             if checks[kind]["manifest_sha256"]!=digest or checks[kind]["verified_bytes"]!=result["manifest"]["resources"]["artifact_bytes"]:
                 raise ValueError("Packaged verifier did not measure exact declared assets")
         if set(checks)!=set(CACHES):raise ValueError("Missing modality")
+        import fcntl
+        spec=installed/"config/local-model.lock.json";cache=args.asset_root.resolve()/CACHES["text"]
+        spec_data=json.loads(spec.read_bytes())["model"];weight=cache/(spec_data["sha256"]+".gguf")
+        def observe(directory):
+            return json.loads(subprocess.check_output([installed/"bin/model-fetch",spec,directory,"--inspect"],timeout=180))
+        absent=work/"absent";before=observe(absent)
+        if before["state"]!="absent" or absent.exists():raise ValueError("Read-only inspection created a cache")
+        with weight.open("rb") as reader:
+            fcntl.flock(reader,fcntl.LOCK_SH)
+            status=observe(cache)
+        if status["state"]!="verified" or status["read_lease_observed"] is not True or status["sha256"]!=spec_data["sha256"] or status["expected_bytes"]!=spec_data["bytes"]:
+            raise ValueError("Installed cache inspector did not verify the real locked artifact")
         final=dest/(PROGRAM+"-macos-arm64-"+checksum[:16]+".tar.gz")
         if final.exists():
             if final.is_symlink() or sha(final)!=checksum:raise ValueError("Conflicting release")
         else:os.link(first,final)
         report={"source":commit,"archive":final.name,"bytes":first.stat().st_size,"sha256":checksum,"native_builds":build["builds"],
                 "identical_archives":2,"target":build["target"],"locked_crates":total,"missing_notices":missing,
-                "measured":checks,"local_http_adapters":adapters,"production_signed_or_notarized":False}
+                "measured":checks,"local_http_adapters":adapters,"observed_cache":status,"production_signed_or_notarized":False}
         receipt=work/"receipt.json";receipt.write_text(json.dumps(report,indent=2)+"\n")
         os.replace(receipt,final.with_suffix(".json"));print(json.dumps(report),flush=True)
 

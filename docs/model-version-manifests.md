@@ -28,3 +28,9 @@ target/debug/orange-model-manifest verify-proposed /absolute/path/to/cache < pro
 ### SDXL 固定模板
 
 在解包后的 macOS 开发包中执行 `bin/orange-image --describe-template` 可离线读取模板。回执包含模型清单和模板各自的 SHA-256、执行环境锁、请求字段、精度、调度器、种子范围、设备类型及输入限制。生成入口核对同一份编译时模板及 Python 适配器。请求只提供提示词和种子；UTF-8 字节数及两个 CLIP 编码器的 token 上限分别校验。模板读取不启动 Python 或加载权重。
+
+### 查询本地权重缓存
+
+在模型检查工具包中运行 `bin/model-fetch config/local-model.lock.json /path/to/private-cache --inspect`，可以只读检查内容寻址的 GGUF。没有缓存目录时返回 `absent`；下载或导入的暂存文件按各自的字节数列出；只有重新核对固定大小、文件头、完整 SHA-256 和当前文件身份后才返回 `verified`。查询不创建缓存、不发起下载，也不修复损坏的权重。
+
+`read_lease_observed` 表示是否观测到该已发布文件上的协作锁。通过 ModelCache 取得的 VerifiedArtifact 在持有期间保留共享锁。这个字段不能作为全机推理进程数或 GPU 已卸载的依据。
