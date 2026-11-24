@@ -487,11 +487,9 @@ async fn rejects_non_text_use_of_text_quote(c: &Case, q: &TextQuoteView) {
             let body = axum::body::to_bytes(response.into_body(), 16384)
                 .await
                 .expect("error");
-            assert!(
-                std::str::from_utf8(&body)
-                    .unwrap()
-                    .contains("QUOTE_INPUT_CHANGED")
-            );
+            let failure: orange_protocol::ApiError =
+                serde_json::from_slice(&body).expect("typed rejection");
+            assert_eq!(failure.code, "QUOTE_MODALITY_MISMATCH");
         }
     }
     assert_eq!(snapshot().await, before);

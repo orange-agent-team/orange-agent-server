@@ -304,6 +304,9 @@ impl HttpError {
             StoreError::Budget => (StatusCode::CONFLICT, "BUDGET_EXCEEDED", "never"),
             StoreError::Balance => (StatusCode::CONFLICT, "INSUFFICIENT_BALANCE", "never"),
             StoreError::QuoteExpired => (StatusCode::CONFLICT, "QUOTE_EXPIRED", "never"),
+            StoreError::QuoteModalityMismatch => {
+                (StatusCode::CONFLICT, "QUOTE_MODALITY_MISMATCH", "never")
+            }
             StoreError::QuoteMismatch => (StatusCode::CONFLICT, "QUOTE_INPUT_CHANGED", "never"),
             StoreError::InvalidTransition => {
                 (StatusCode::CONFLICT, "INVALID_TRANSITION", "query_original")

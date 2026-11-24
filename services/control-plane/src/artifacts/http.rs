@@ -572,6 +572,9 @@ async fn submit_job(
                 Error(StatusCode::CONFLICT, "INVOCATION_WITHDRAWN")
             }
             crate::store::StoreError::Forbidden => Error(StatusCode::FORBIDDEN, "FORBIDDEN"),
+            crate::store::StoreError::QuoteModalityMismatch => {
+                Error(StatusCode::CONFLICT, "QUOTE_MODALITY_MISMATCH")
+            }
             crate::store::StoreError::NotFound => Error(StatusCode::NOT_FOUND, "NOT_FOUND"),
             crate::store::StoreError::Database(_) | crate::store::StoreError::Migration(_) => {
                 Error(StatusCode::SERVICE_UNAVAILABLE, "SERVICE_UNAVAILABLE")
