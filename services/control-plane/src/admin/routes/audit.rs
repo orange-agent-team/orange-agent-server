@@ -74,7 +74,8 @@ fn project(row: &sqlx::postgres::PgRow) -> Result<Value, AdminError> {
     }
     Ok(value)
 }
-pub(in crate::admin) async fn record_read(
+pub(in crate::admin) use record_event as record_read;
+pub(in crate::admin) async fn record_event(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     current: &CurrentSession,
     scope: &Scope,

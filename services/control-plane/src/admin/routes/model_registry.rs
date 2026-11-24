@@ -103,7 +103,7 @@ pub(super) async fn create(
             }
             return Err(error.into());
         }
-        audit::record_read(
+        audit::record_event(
             &mut tx,
             &current,
             &prop.scope,

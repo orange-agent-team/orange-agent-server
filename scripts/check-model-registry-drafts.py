@@ -3,6 +3,7 @@
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 import copy
+from contextlib import nullcontext
 import hashlib
 from http.client import HTTPConnection
 import json
@@ -11,6 +12,7 @@ from pathlib import Path
 import secrets
 import shutil
 import subprocess
+import sys
 import uuid
 from urllib.parse import unquote, urlsplit
 
@@ -38,7 +40,11 @@ def native():
 def main():
     cli=argparse.ArgumentParser()
     cli.add_argument("--environment",type=Path,default=ROOT/".local")
+    cli.add_argument("--admin-repo",type=Path,help="Explicit Admin checkout for Chrome acceptance")
+    cli.add_argument("--assets",type=Path,help="Previously verified static files, optionally extracted from a package")
+    cli.add_argument("--installed",action="store_true",help="Use the extracted native release matching this checkout")
     args=cli.parse_args()
+    if args.assets and not args.admin_repo:cli.error("--assets requires --admin-repo")
     config=args.environment.resolve()/"identity/admin-config.json"
     origin=json.loads(config.read_bytes())["admin_origin"]
     check_contract(json.loads((ROOT/"contracts/openapi/admin.v1.json").read_bytes()),json.loads((ROOT/"contracts/json-schema/admin.schema.json").read_bytes()))
@@ -53,7 +59,14 @@ def main():
     template=json.loads((ROOT/"crates/model-runtime/model-manifests/qwen-local-test-v1.json").read_bytes())
     scope={"environment":"dev","kind":"platform","scope_id":"platform"}
     query="?environment=dev&scope_kind=platform&scope_id=platform"
-    with database(args.environment.resolve()/"database-url","orange_model_draft_") as (_,url):
+    from verified_platform_archive import binaries
+    if args.admin_repo:
+        from acceptance_origins import reserve_origins
+        reserve_origins(43112)
+        admin=args.admin_repo.resolve(strict=True)
+        subprocess.run([sys.executable,admin/"scripts/local-tls.py"],cwd=admin,check=True)
+    with (binaries(None) if args.installed else nullcontext(program.parent)) as programs, database(args.environment.resolve()/"database-url","orange_model_draft_") as (_,url):
+        program=programs/"orange-admin-api"
         parsed=urlsplit(url)
         pg=dict(os.environ,PGHOST=parsed.hostname,PGPORT=str(parsed.port or 5432),PGUSER=unquote(parsed.username),PGPASSWORD=unquote(parsed.password),PGDATABASE=parsed.path[1:])
         psql=shutil.which("psql") or "/opt/homebrew/opt/postgresql@17/bin/psql"
@@ -93,6 +106,7 @@ def main():
             require(http("GET","models"+query)[0]==401,"Anonymous directory opened")
             require(post(template,reader)[0]==403 and post(template,foreign)[0]==403,"Unauthorized draft registration")
             require(post(template,overrides={"origin":"https://wrong.invalid"})[0]==403 and post(template,overrides={"x-csrf-token":"invalid"})[0]==403,"Missing write protection")
+            require(post(template,overrides={"cookie":"__Host-orange-user="+writer[1]})[0]==401,"User cookie replaced Admin identity")
             bad=copy.deepcopy(template);bad["runtime"]["command"]="launch"
             require(post(bad)[0]==422,"Accepted unknown runtime field")
             duplicate=json.dumps({"scope":scope,"manifest":template}).replace('"schema_version": 1','"schema_version": 0,"schema_version": 1').encode()
@@ -124,6 +138,23 @@ def main():
             token=page["next_cursor"]
             require(len(page["data"])==1 and http("GET","models"+query+"&limit=1&cursor="+token,writer)[1]["data"][0]["model_version_id"]=="z-second","Missing next page")
             require(http("GET","models"+query+"&limit=1&cursor="+token,reader)[0]==422,"Cursor crossed principals")
+            # The manifest can exceed the general Admin JSON limit while remaining inside its own bound.
+            large=dict(template,model_version="large-fixture")
+            large["artifacts"]=[{"source_path":"weights/"+("a"*86)+f"{i:03d}","cache_path":"assets/"+("b"*86)+f"{i:03d}",
+                                 "bytes":1,"sha256":"a"*64} for i in range(250)]
+            large["resources"]=dict(template["resources"],artifact_bytes=250)
+            require(len(json.dumps(large).encode())>65536 and post(large,key="large")[0]==201,
+                    "A valid large proposal did not traverse the normal endpoint")
+            sql("""CREATE FUNCTION test_draft_audit_failure() RETURNS trigger LANGUAGE plpgsql AS $$
+                 BEGIN RAISE EXCEPTION 'test-owned audit failure'; END $$;
+                 CREATE TRIGGER test_draft_audit_failure BEFORE INSERT ON admin_audit FOR EACH ROW
+                 WHEN (NEW.entity_id='audit-failure') EXECUTE FUNCTION test_draft_audit_failure();""")
+            failed=dict(template,model_version="audit-failure")
+            require(post(failed,key="audit-abort")[0]==503,"A failed audit write was acknowledged")
+            require(sql("SELECT count(*) FROM model_version_names WHERE model_version_id='audit-failure'")=="0",
+                    "Rolled-back registration retained its name claim")
+            sql("DROP TRIGGER test_draft_audit_failure ON admin_audit; DROP FUNCTION test_draft_audit_failure()")
+            require(post(failed,key="audit-abort")[0]==201,"An atomic registration failure consumed the original key")
             # The two provisioners do not share an application lock. PostgreSQL must choose only one.
             for number in range(4):
                 race="race-"+str(number)
@@ -132,6 +163,19 @@ def main():
                     permitted=old.result().returncode==0;status=new.result()[0]
                     require((permitted and status==409) or (not permitted and status==201),"Racing provisioners disagreed about the model namespace")
             require(sql("SELECT count(*) FROM admin_model_drafts d JOIN reviewed_execution_profiles p USING(model_version_id)")=="0","Draft visible to the legacy dispatch planner")
+            if args.admin_repo:
+                browser_doc=dict(template,model_version="browser-draft")
+                fingerprint=hashlib.sha256(json.dumps(browser_doc,sort_keys=True,separators=(",",":")).encode()).hexdigest()
+                web=Path.home()/".nvm/versions/node/v22.23.2/bin/node"
+                values={"api":api,"origin":origin,"writer":writer[1],"reader":reader[1],"assets":str((args.assets or admin/"apps/admin/dist").resolve(strict=True)),
+                        "manifest":browser_doc,"sha":fingerprint}
+                proc=subprocess.run([web,admin/"apps/admin/scripts/real-model-registry.mjs"],cwd=admin,input=json.dumps(values),text=True,stdout=subprocess.PIPE,timeout=100)
+                print(proc.stdout,end="",flush=True);proc.check_returncode()
+                require("PASS actual Admin browser registered a draft once" in proc.stdout,"Missing real browser")
+                require(sql("SELECT count(*) FROM admin_audit WHERE event_type='model.draft_registered' AND entity_id='browser-draft'")=="1","Browser performed more than one mutation")
+            sql(f"UPDATE admin_sessions SET auth_time=extract(epoch FROM now())::bigint-310 WHERE principal_id='{writer[0]}'")
+            status,reason=post(dict(template,model_version="requires-mfa"),key="stale")
+            require(status==403 and reason.get("code")=="STEP_UP_REQUIRED" and sql("SELECT count(*) FROM admin_model_drafts WHERE model_version_id='requires-mfa'")=="0","Stale authentication had a write effect")
             sql(f"UPDATE admin_grants SET revoked=true WHERE principal_id='{writer[0]}'")
             require(post(template)[0] in (401,403) and http("GET","model-drafts/"+name+query,writer)[0] in (401,403),"Revocation exposed an old idempotent receipt")
         print(json.dumps({"duplicate_posts":2,"original_write_audits":1,"racing_namespace_claims":4,"legacy_draft_overlaps":0,
