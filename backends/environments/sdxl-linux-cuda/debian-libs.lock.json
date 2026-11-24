@@ -1,0 +1,264 @@
+{
+  "origin": "https://deb.debian.org/debian/",
+  "codename": "bookworm",
+  "component": "main",
+  "architecture": "amd64",
+  "base_digest": "sha256:59a32f2866470624edbdde0e3e504bbbf46222fed2d4c2392bef3894e1b6334d",
+  "inrelease_sha256": "77737fa4b34f2693e982cc9ee35736816c35a7778fc2d326cc1bbf5b301fe1aa",
+  "packages_index_sha256": "9e0b5aabb2465b3d2e7a7fe27f9913846277833f7a2826e7767acccff5b588c5",
+  "date": "Sat, 11 Jul 2026 10:16:37 UTC",
+  "packages": [
+    {
+      "name": "libdrm-amdgpu1",
+      "version": "2.4.114-1+b1",
+      "architecture": "amd64",
+      "bytes": 20864,
+      "path": "pool/main/libd/libdrm/libdrm-amdgpu1_2.4.114-1+b1_amd64.deb",
+      "sha256": "b75a71e96f1faac0f131ac657e09efcbe8968eef62cc34b8abfcff2ff9f0cccd",
+      "depends": "libc6 (>= 2.34), libdrm2 (>= 2.4.108)"
+    },
+    {
+      "name": "libdrm-common",
+      "version": "2.4.114-1",
+      "architecture": "all",
+      "bytes": 7112,
+      "path": "pool/main/libd/libdrm/libdrm-common_2.4.114-1_all.deb",
+      "sha256": "32f9664138b38b224383c6986457d5ad2ec8efd559b1a0ce7749405f7a451aad",
+      "depends": ""
+    },
+    {
+      "name": "libdrm-intel1",
+      "version": "2.4.114-1+b1",
+      "architecture": "amd64",
+      "bytes": 64032,
+      "path": "pool/main/libd/libdrm/libdrm-intel1_2.4.114-1+b1_amd64.deb",
+      "sha256": "b0e39318d14c07f4d85668b6da7f66a1341addf87a47d785c34d5a8b393f544c",
+      "depends": "libc6 (>= 2.34), libdrm2 (>= 2.4.108), libpciaccess0"
+    },
+    {
+      "name": "libdrm-nouveau2",
+      "version": "2.4.114-1+b1",
+      "architecture": "amd64",
+      "bytes": 19064,
+      "path": "pool/main/libd/libdrm/libdrm-nouveau2_2.4.114-1+b1_amd64.deb",
+      "sha256": "ba59bb9ec6e1baf59fc4d4eb095a524e40d045af2413dad9d28df517005388b6",
+      "depends": "libc6 (>= 2.14), libdrm2 (>= 2.4.108)"
+    },
+    {
+      "name": "libdrm-radeon1",
+      "version": "2.4.114-1+b1",
+      "architecture": "amd64",
+      "bytes": 21848,
+      "path": "pool/main/libd/libdrm/libdrm-radeon1_2.4.114-1+b1_amd64.deb",
+      "sha256": "2da3a9233187f995ad5a3e6db3d37252ea7209f0ca9605484d03478ebcc15feb",
+      "depends": "libc6 (>= 2.4), libdrm2 (>= 2.4.108)"
+    },
+    {
+      "name": "libdrm2",
+      "version": "2.4.114-1+b1",
+      "architecture": "amd64",
+      "bytes": 37472,
+      "path": "pool/main/libd/libdrm/libdrm2_2.4.114-1+b1_amd64.deb",
+      "sha256": "be18fb670797ba32da9628cf3e8acd83160d8db8c8dd842501dd8e401c3b5371",
+      "depends": "libdrm-common (>= 2.4.114-1), libc6 (>= 2.33)"
+    },
+    {
+      "name": "libgl1",
+      "version": "1.6.0-1",
+      "architecture": "amd64",
+      "bytes": 88448,
+      "path": "pool/main/libg/libglvnd/libgl1_1.6.0-1_amd64.deb",
+      "sha256": "6f89b1702c48e9a2437bb3c1ffac8e1ab2d828fc28b3d14b2eecd4cc19b2c790",
+      "depends": "libc6 (>= 2.34), libglvnd0 (= 1.6.0-1), libglx0 (= 1.6.0-1)"
+    },
+    {
+      "name": "libgl1-mesa-dri",
+      "version": "22.3.6-1+deb12u2",
+      "architecture": "amd64",
+      "bytes": 7239704,
+      "path": "pool/main/m/mesa/libgl1-mesa-dri_22.3.6-1+deb12u2_amd64.deb",
+      "sha256": "350e4263aaacd521f6f757951262b57c003930edaf0419508f2c5675317577fe",
+      "depends": "libc6 (>= 2.34), libdrm-amdgpu1 (>= 2.4.110), libdrm-intel1 (>= 2.4.38), libdrm-nouveau2 (>= 2.4.66), libdrm-radeon1 (>= 2.4.31), libdrm2 (>= 2.4.75), libelf1 (>= 0.142), libexpat1 (>= 2.0.1), libgcc-s1 (>= 3.4), libglapi-mesa (= 22.3.6-1+deb12u2), libllvm15, libsensors5 (>= 1:3.5.0), libstdc++6 (>= 11), libxcb-dri3-0 (>= 1.13), libzstd1 (>= 1.5.2), zlib1g (>= 1:1.1.4)"
+    },
+    {
+      "name": "libglapi-mesa",
+      "version": "22.3.6-1+deb12u2",
+      "architecture": "amd64",
+      "bytes": 35900,
+      "path": "pool/main/m/mesa/libglapi-mesa_22.3.6-1+deb12u2_amd64.deb",
+      "sha256": "2db5b13a6b7f4042f9a417ad7fa4338b6c47528dc64d7f89cfd5e53d07d76bc4",
+      "depends": "libc6 (>= 2.34)"
+    },
+    {
+      "name": "libglvnd0",
+      "version": "1.6.0-1",
+      "architecture": "amd64",
+      "bytes": 51820,
+      "path": "pool/main/libg/libglvnd/libglvnd0_1.6.0-1_amd64.deb",
+      "sha256": "b6da5b153dd62d8b5e5fbe25242db1fc05c068707c365db49abda8c2427c75f8",
+      "depends": "libc6 (>= 2.34)"
+    },
+    {
+      "name": "libglx-mesa0",
+      "version": "22.3.6-1+deb12u2",
+      "architecture": "amd64",
+      "bytes": 147676,
+      "path": "pool/main/m/mesa/libglx-mesa0_22.3.6-1+deb12u2_amd64.deb",
+      "sha256": "88e7ffa61f1a0a86c30736ad7657ab4774c9b711bbaff76cef0bd32ffb85ec90",
+      "depends": "libc6 (>= 2.34), libdrm2 (>= 2.4.75), libexpat1 (>= 2.0.1), libglapi-mesa (= 22.3.6-1+deb12u2), libx11-6 (>= 2:1.4.99.1), libx11-xcb1 (>= 2:1.8.4), libxcb-dri2-0 (>= 1.8), libxcb-dri3-0 (>= 1.13), libxcb-glx0 (>= 1.8), libxcb-present0, libxcb-randr0, libxcb-shm0, libxcb-sync1, libxcb-xfixes0, libxcb1 (>= 1.9.2), libxext6, libxfixes3, libxshmfence1, libxxf86vm1, libgl1-mesa-dri"
+    },
+    {
+      "name": "libglx0",
+      "version": "1.6.0-1",
+      "architecture": "amd64",
+      "bytes": 34384,
+      "path": "pool/main/libg/libglvnd/libglx0_1.6.0-1_amd64.deb",
+      "sha256": "95f568df73dedf43ae66834a75502112e0d4f3ad7124f3dbfa790b739383b896",
+      "depends": "libc6 (>= 2.34), libglvnd0 (= 1.6.0-1), libx11-6 (>= 2:1.4.99.1), libglx-mesa0"
+    },
+    {
+      "name": "libllvm15",
+      "version": "1:15.0.6-4+b1",
+      "architecture": "amd64",
+      "bytes": 23115156,
+      "path": "pool/main/l/llvm-toolchain-15/libllvm15_15.0.6-4+b1_amd64.deb",
+      "sha256": "9f0751109ba89e65b1313a4f3e34a29977a0db6fa30ed475e2c6bd555fa9e866",
+      "depends": "libc6 (>= 2.36), libedit2 (>= 2.11-20080614-0), libffi8 (>= 3.4), libgcc-s1 (>= 3.3), libstdc++6 (>= 12), libtinfo6 (>= 6), libxml2 (>= 2.7.4), libz3-4 (>= 4.8.12), zlib1g (>= 1:1.2.0)"
+    },
+    {
+      "name": "libpciaccess0",
+      "version": "0.17-2",
+      "architecture": "amd64",
+      "bytes": 51384,
+      "path": "pool/main/libp/libpciaccess/libpciaccess0_0.17-2_amd64.deb",
+      "sha256": "4025f3608cf431c163efb94fdc553e7b93e16b8f0d741ea87762e19025ffc80e",
+      "depends": "libc6 (>= 2.33), zlib1g (>= 1:1.1.4)"
+    },
+    {
+      "name": "libsensors-config",
+      "version": "1:3.6.0-7.1",
+      "architecture": "all",
+      "bytes": 14252,
+      "path": "pool/main/l/lm-sensors/libsensors-config_3.6.0-7.1_all.deb",
+      "sha256": "7f3c9fbd822858a9e30335e4a7f66c9468962eb26cd375b93bc8b789660bf02f",
+      "depends": ""
+    },
+    {
+      "name": "libsensors5",
+      "version": "1:3.6.0-7.1",
+      "architecture": "amd64",
+      "bytes": 34160,
+      "path": "pool/main/l/lm-sensors/libsensors5_3.6.0-7.1_amd64.deb",
+      "sha256": "b7eb91dce728fbb9203aec8b22637303b29821c3384e5f78a8ff348b4e44efe3",
+      "depends": "libsensors-config, libc6 (>= 2.33)"
+    },
+    {
+      "name": "libx11-xcb1",
+      "version": "2:1.8.4-2+deb12u2",
+      "architecture": "amd64",
+      "bytes": 192356,
+      "path": "pool/main/libx/libx11/libx11-xcb1_1.8.4-2+deb12u2_amd64.deb",
+      "sha256": "f5da45e1d881a793250a96613f28c471a248877f1a0f18a5c90e2a620a76c898",
+      "depends": "libx11-6 (= 2:1.8.4-2+deb12u2)"
+    },
+    {
+      "name": "libxcb-dri2-0",
+      "version": "1.15-1",
+      "architecture": "amd64",
+      "bytes": 106792,
+      "path": "pool/main/libx/libxcb/libxcb-dri2-0_1.15-1_amd64.deb",
+      "sha256": "ef4959aa9e09a0d38d1de432e747585129d5d2dc1d84c8b6b3d2ffc3708b5805",
+      "depends": "libc6 (>= 2.4), libxcb1"
+    },
+    {
+      "name": "libxcb-dri3-0",
+      "version": "1.15-1",
+      "architecture": "amd64",
+      "bytes": 106676,
+      "path": "pool/main/libx/libxcb/libxcb-dri3-0_1.15-1_amd64.deb",
+      "sha256": "02699b144b9467de8636d27a76984b8f4e7b66e2d25d96df2b9677be86ee9a29",
+      "depends": "libc6 (>= 2.4), libxcb1 (>= 1.12)"
+    },
+    {
+      "name": "libxcb-glx0",
+      "version": "1.15-1",
+      "architecture": "amd64",
+      "bytes": 122392,
+      "path": "pool/main/libx/libxcb/libxcb-glx0_1.15-1_amd64.deb",
+      "sha256": "1bce55fc292d93fa5f7fa50f84cef99ec29be70d0ffe98e86b8008e59f4a34fa",
+      "depends": "libc6 (>= 2.4), libxcb1"
+    },
+    {
+      "name": "libxcb-present0",
+      "version": "1.15-1",
+      "architecture": "amd64",
+      "bytes": 105420,
+      "path": "pool/main/libx/libxcb/libxcb-present0_1.15-1_amd64.deb",
+      "sha256": "89383e627a4d17b9390d609b2459481bfd2029566367b43068586769e418b6e5",
+      "depends": "libc6 (>= 2.4), libxcb1"
+    },
+    {
+      "name": "libxcb-randr0",
+      "version": "1.15-1",
+      "architecture": "amd64",
+      "bytes": 116680,
+      "path": "pool/main/libx/libxcb/libxcb-randr0_1.15-1_amd64.deb",
+      "sha256": "f86e3d8ff8622871008833e9d064919b7a6237399c903c59fc330ff00f199ff5",
+      "depends": "libc6 (>= 2.4), libxcb1 (>= 1.9.2)"
+    },
+    {
+      "name": "libxcb-sync1",
+      "version": "1.15-1",
+      "architecture": "amd64",
+      "bytes": 108692,
+      "path": "pool/main/libx/libxcb/libxcb-sync1_1.15-1_amd64.deb",
+      "sha256": "3366ce715220d38dd0148b78a8e738137bade25ef7eec0698850c6f66800844f",
+      "depends": "libc6 (>= 2.14), libxcb1"
+    },
+    {
+      "name": "libxcb-xfixes0",
+      "version": "1.15-1",
+      "architecture": "amd64",
+      "bytes": 109368,
+      "path": "pool/main/libx/libxcb/libxcb-xfixes0_1.15-1_amd64.deb",
+      "sha256": "d744a7ebad2cbcf301c96cd6a1ab3ee856e436fc7be5cff5b7c28ac2ac181a64",
+      "depends": "libc6 (>= 2.4), libxcb1"
+    },
+    {
+      "name": "libxfixes3",
+      "version": "1:6.0.0-2",
+      "architecture": "amd64",
+      "bytes": 22684,
+      "path": "pool/main/libx/libxfixes/libxfixes3_6.0.0-2_amd64.deb",
+      "sha256": "1cd616396ff2ecae77e6e8b5b7695d414f0146de2d147837a2a02165f99e1a2c",
+      "depends": "libc6 (>= 2.14), libx11-6 (>= 2:1.6.0)"
+    },
+    {
+      "name": "libxshmfence1",
+      "version": "1.3-1",
+      "architecture": "amd64",
+      "bytes": 8820,
+      "path": "pool/main/libx/libxshmfence/libxshmfence1_1.3-1_amd64.deb",
+      "sha256": "1a38142e40e3d32dc4f9a326bf5617363b7d9b4bb762fdcdd262f2192092024d",
+      "depends": "libc6 (>= 2.27)"
+    },
+    {
+      "name": "libxxf86vm1",
+      "version": "1:1.1.4-1+b2",
+      "architecture": "amd64",
+      "bytes": 20820,
+      "path": "pool/main/libx/libxxf86vm/libxxf86vm1_1.1.4-1+b2_amd64.deb",
+      "sha256": "6f4ca916aaec26d7000fa7f58de3f71119309ab7590ce1f517abfe1825a676c7",
+      "depends": "libc6 (>= 2.4), libx11-6 (>= 2:1.6.0), libxext6"
+    },
+    {
+      "name": "libz3-4",
+      "version": "4.8.12-3.1",
+      "architecture": "amd64",
+      "bytes": 7216172,
+      "path": "pool/main/z/z3/libz3-4_4.8.12-3.1_amd64.deb",
+      "sha256": "6221ca25ad5abcfbe1965801029d85a88b4775320384b4b716de8fab7a4d2f7a",
+      "depends": "libc6 (>= 2.34), libgcc-s1 (>= 3.4), libstdc++6 (>= 12)"
+    }
+  ]
+}

@@ -18,3 +18,9 @@ Linux 依赖使用独立的 uv.lock 以及 CPython 3.12 / glibc 2.36 / AMD64 whe
 在本地 Linux 执行宿主上运行 `scripts/run-linux-sdxl-attempt.py` 时，需要提供来自独立审核登记的 qualification 文件及其 SHA-256、明确的 GPU UUID、私有权重与工作目录，以及尚不存在的目标 PNG 路径。模型输入从标准输入传递。启动器拒绝远程 Docker daemon，固定无网络、只读根文件系统、非 root 和单设备可见性，且只终止带有本次 UUID 标记的容器。
 
 启动前记录该设备的显存与计算进程。进程退出后，只有连续两次读到无计算进程且显存使用量回到初始水平，才清除本次占用记录。读数缺失、退出不明或容器身份不匹配时保留记录供恢复核对。宿主另外使用 Pillow 独立解码候选 PNG，验证 SHA-256、尺寸和像素摘要，通过后才发布文件。当前的无设备与状态机测试不能代替真实 NVIDIA 设备回收认证。[NVIDIA 驱动观测接口](https://docs.nvidia.com/deploy/nvidia-smi/index.html)
+
+### Debian 动态库
+
+官方 Python Bookworm 基础镜像缺少 OpenCV 所需的 libGL。建包时用该镜像的 Debian 密钥环验证 InRelease，再核对 AMD64 Packages.xz 的 SHA-256。用镜像自带的 APT 在禁网条件下解析 libgl1 的必要依赖，锁定所缺的 28 个包。附加的 OCI 层包含签名索引对应的二进制文件、库链接、版权文本和精确的 Debian 来源清单。该层以数据文件形式组装，不执行 Debian 维护脚本。
+
+先运行 `scripts/build-linux-sdxl-image.py` 得到 Python 依赖层的回执，再用 `scripts/assemble-sdxl-system-layer.py --parent-receipt PATH --fetch-locked` 补齐系统层。最后用 `scripts/check-linux-sdxl-image.py --receipt PATH` 验证最终镜像。只有最终镜像通过实际模块导入和设备拒绝测试后，才可保存其开发验收记录。

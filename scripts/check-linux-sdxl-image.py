@@ -37,7 +37,12 @@ def locked_layout(receipt_path):
             cfg["config"]["Entrypoint"]==["/usr/local/bin/python3.12","-I","-B","/opt/orange/app/runner.py"] and cfg["config"]["Labels"]["org.opencontainers.image.revision"]==manifest["source"],
             "Different runtime entry point")
     require(manifest["dependencies"]==72 and len(manifest["offline_installs"])==2 and manifest["offline_installs"][0]==manifest["offline_installs"][1],"Missing independent identical installs")
-    require(cfg["rootfs"]["diff_ids"][-1]==manifest["offline_installs"][0]["diff_id"] and doc["layers"][-1]["digest"]==manifest["offline_installs"][0]["layer"],"Different installed layer")
+    all_installs=[manifest["offline_installs"]]
+    if "system_installations" in manifest:
+        require(len(manifest["system_installations"])==2 and manifest["system_installations"][0]==manifest["system_installations"][1],"Different system layers")
+        all_installs.append(manifest["system_installations"])
+    for installed,diff,layer in zip(all_installs,cfg["rootfs"]["diff_ids"][-len(all_installs):],doc["layers"][-len(all_installs):],strict=True):
+        require(installed[0]["diff_id"]==diff and installed[0]["layer"]==layer["digest"],"Different installed layer")
     inventory={item["digest"][7:],doc["config"]["digest"][7:]}
     for d in doc["layers"]:inventory.add(blob(d).name)
     require(inventory=={p.name for p in blobs.iterdir()},"Unexpected OCI inventory")
