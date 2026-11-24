@@ -260,3 +260,144 @@ async fn database_wait_crossing_prior_expiry_rolls_back_renewal_instead_of_reviv
     server.stop().await;
     f.objects.drain().await.expect("drain");
 }
+
+/// This fixture is enrolled through the real owner HTTP endpoint and signs a live mTLS session.
+/// Only the buyer input, quote, initial balances and reviewed CPU capability are local fixtures.
+#[cfg(feature = "worker-enrollment-tests")]
+#[tokio::test]
+async fn owner_withdrawal_fences_running_renewal_replay_and_further_assignment()
+-> Result<(), Box<dyn std::error::Error>> {
+    let fixture: serde_json::Value = serde_json::from_slice(&std::fs::read(std::env::var(
+        "ORANGE_TEST_ENROLLED_EXECUTION",
+    )?)?)?;
+    let field = |key: &str| fixture[key].as_str().expect("issued device fixture field");
+    let db = Store::connect(&std::env::var("ORANGE_TEST_DATABASE_URL")?).await?;
+    let device = Device {
+        store: db,
+        node: field("node").into(),
+        owner: field("owner").into(),
+        user: field("owner").into(),
+        certificate: "issued".into(),
+        fingerprint: field("fingerprint").into(),
+    };
+    let f = setup_input_for_device(
+        device,
+        &"b".repeat(64),
+        &"c".repeat(64),
+        "local-lease-fence ".repeat(2500),
+        32,
+        InputAdmission {
+            organization: false,
+            meter: None,
+            deadline_seconds: 3600,
+        },
+    )
+    .await;
+    bind(&f).await;
+    let server = Running::start_with_input(&f.d.store, Some(f.objects.reader())).await;
+    let (
+        mut control,
+        mut device_log,
+        mut execution_log,
+        record,
+        _broker,
+        _supervisor,
+        _grant,
+        request,
+    ) = started(&f, &server, true).await;
+    // Copy the actual issued key into a second client configuration while it is valid. A
+    // transport built later from those bytes must not reacquire either a different node or the revoked one.
+    let copied = worker_config(&server, &f.d);
+    let mut foreign = worker_config(&server, &f.d);
+    foreign.node_id = Uuid::new_v4().to_string();
+    assert!(matches!(
+        ControlConnection::connect(foreign).await,
+        Err(orange_worker::control::ControlError::Unauthorized)
+    ));
+    let mut rpc = server.client(Some(&f.d.certificate)).await?;
+    let first = rpc.renew_execution(request.clone()).await?.into_inner();
+    let active: (String, String) = sqlx::query_as(
+        "SELECT state,lease_expires_at::text FROM worker_execution_attempts WHERE command_id=$1",
+    )
+    .bind(&record.command_id)
+    .fetch_one(f.d.store.pool())
+    .await?;
+    assert_eq!(active.0, "started");
+    assert_eq!(count(&f).await, 1);
+    assert!(first.expires_at.is_some());
+    let before:i64=sqlx::query_scalar("SELECT count(*) FROM worker_execution_events e JOIN worker_execution_attempts a USING(attempt_id) WHERE a.job_id=$1 AND e.kind IN ('execution.offered','execution.started','execution.renewed')")
+        .bind(&f.job).fetch_one(f.d.store.pool()).await?;
+    let result = reqwest::Client::new()
+        .delete(field("revoke_url"))
+        .header("Cookie", field("cookie"))
+        .header("Origin", field("origin"))
+        .header("X-CSRF-Token", field("csrf"))
+        .header("Idempotency-Key", field("request"))
+        .send()
+        .await?;
+    assert_eq!(result.status(), reqwest::StatusCode::OK);
+    let ack: orange_protocol::device_enrollment::WorkerEnrollmentView = result.json().await?;
+    assert_eq!(ack.state, "revoked");
+    assert_eq!(ack.request_id, field("request"));
+    assert_eq!(ack.owner_id, f.d.owner);
+    let evidence:bool=sqlx::query_scalar("SELECT EXISTS(SELECT FROM worker_enrollment_grants g JOIN worker_enrollment_certificates e USING(request_id)
+        JOIN worker_credentials c USING(certificate_sha256,node_id) WHERE e.node_id=$1 AND e.certificate_sha256=$2 AND g.owner_id=$3
+        AND g.request_id=$4::text::uuid AND g.state='revoked' AND g.revoked_at IS NOT NULL AND NOT c.active)")
+        .bind(&f.d.node).bind(&f.d.fingerprint).bind(&f.d.owner).bind(field("request")).fetch_one(f.d.store.pool()).await?;
+    assert!(
+        evidence,
+        "Missing durable source of the disabled credential"
+    );
+    assert_eq!(
+        rpc.renew_execution(request.clone())
+            .await
+            .expect_err("Historical receipt reopened the lease")
+            .code(),
+        tonic::Code::Unauthenticated
+    );
+    let mut next = request;
+    next.sequence += 1;
+    next.request_id = Uuid::new_v4().to_string();
+    assert_eq!(
+        rpc.renew_execution(next)
+            .await
+            .expect_err("Revoked live channel extended the lease")
+            .code(),
+        tonic::Code::Unauthenticated
+    );
+    assert!(
+        control
+            .poll_execution("post-revocation", &mut device_log, &mut execution_log)
+            .await
+            .is_err(),
+        "Revoked stream claimed new work"
+    );
+    assert!(
+        super::super::control(&mut rpc, hello(&f.d.node))
+            .await
+            .is_err(),
+        "Revoked leaf reconnected"
+    );
+    assert!(matches!(
+        ControlConnection::connect(copied).await,
+        Err(orange_worker::control::ControlError::Unauthorized)
+    ));
+    let after: (String, String) = sqlx::query_as(
+        "SELECT state,lease_expires_at::text FROM worker_execution_attempts WHERE command_id=$1",
+    )
+    .bind(&record.command_id)
+    .fetch_one(f.d.store.pool())
+    .await?;
+    assert_eq!(
+        after, active,
+        "Rejected calls changed the existing grant or its deadline"
+    );
+    assert_eq!(count(&f).await, 1);
+    let events:i64=sqlx::query_scalar("SELECT count(*) FROM worker_execution_events e JOIN worker_execution_attempts a USING(attempt_id) WHERE a.job_id=$1 AND e.kind IN ('execution.offered','execution.started','execution.renewed')")
+        .bind(&f.job).fetch_one(f.d.store.pool()).await?;
+    assert_eq!(before, events);
+    control.close();
+    server.stop().await;
+    f.objects.drain().await?;
+    Ok(())
+}

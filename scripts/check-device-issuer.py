@@ -68,11 +68,14 @@ def main():
     cli.add_argument("--device-client",action="store_true",help="Run the real Worker CLI through ambiguous and corrupted redemption responses")
     cli.add_argument("--rotation-web",type=Path,help="Explicit independent web checkout for native browser rotation approval")
     cli.add_argument("--rotation-assets",type=Path,help="Serve these previously verified static files during browser qualification")
+    cli.add_argument("--fence-live-work",action="store_true",help="Withdraw an enrolled credential while it owns a started execution lease")
     cli.add_argument("--rotate-device",action="store_true",help="Activate competing replacements and test bounded overlap through the real mTLS gateway")
     cli.add_argument("--rotation-handoff",action="store_true",help="Verify current-key ownership over a fresh key and owner-bound handoff")
     cli.add_argument("--withdraw-issuer",action="store_true")
     args=cli.parse_args();private=args.environment.resolve()
     if args.rotation_assets and not args.rotation_web:cli.error("--rotation-assets needs --rotation-web")
+    if args.fence_live_work and (args.rotate_device or args.rotation_web or args.withdraw_issuer):cli.error("Select one live revocation scenario")
+    if args.fence_live_work:args.device_client=True
     if args.rotation_web:args.rotate_device=True
     if args.rotate_device:args.rotation_handoff=True
     if args.rotation_handoff:args.device_client=True
@@ -196,6 +199,23 @@ def main():
             second=str(uuid.uuid4())
             require(http(origin,"POST",redeem,dict(auth,**{"Idempotency-Key":second}),dict(rb,redemption_id=second))[0]==409,"Token activated a second identity")
             require(sql("SELECT count(*) FROM nodes")=="1" and sql("SELECT count(*) FROM worker_credentials WHERE active")=="1","Wrong authentication effects")
+            if args.fence_live_work:
+                # Give the real gateway its own serving key plus public roots. The test Worker reads the
+                # installed leaf/key through its own profile. No issuer signing key is present in either.
+                tls=root/"lease-fence";tls.mkdir(mode=0o700)
+                (tls/"ca.pem").write_bytes((root/"gateway-ca.pem").read_bytes()+(ca/"ca.pem").read_bytes())
+                for source,target in [(gw/"server.pem","server.pem"),(gw/"server.key","server.key"),(leaf,"issued.pem"),(device/(rid+".key.pem"),"issued.key")]:
+                    (tls/target).symlink_to(source)
+                fixture=config(root/"live-lease-fence.json",{"owner":owner,"node":node,"fingerprint":issued["certificate_sha256"],
+                    "request":rid,"revoke_url":origin+path,"origin":site,"cookie":headers["Cookie"],"csrf":csrf})
+                case="input_cases::renewal_cases::owner_withdrawal_fences_running_renewal_replay_and_further_assignment"
+                command_env=dict(env,ORANGE_TEST_USER_CONFIG_FILE=str(user_config),ORANGE_TEST_DATABASE_URL=url,
+                                 ORANGE_WORKER_TLS_DIR=str(tls),ORANGE_TEST_ENROLLED_EXECUTION=str(fixture))
+                result=subprocess.run([*client_test,case,"--exact"],env=command_env,cwd=ROOT,stdout=subprocess.PIPE,text=True,timeout=90)
+                print(result.stdout,end="",flush=True);result.check_returncode()
+                require("test "+case+" ... ok" in result.stdout,"Missing live lease fence qualification")
+                print("PASS actual owner revocation blocked replay, new renewal, work polling and reconnection on a started execution",flush=True)
+                return
             if args.rotate_device:
                 from device_rotation_activation_acceptance import exercise
                 exercise(worker=programs/"orange-worker",origin=origin,owner=owner,headers=headers,device=device,root=root,

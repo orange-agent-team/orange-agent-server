@@ -139,13 +139,30 @@ async fn setup_input_case(
     max_output_tokens: u32,
     admission: InputAdmission,
 ) -> InputFixture {
+    setup_input_for_device(
+        device(cert).await,
+        model_sha,
+        execution_digest,
+        prompt,
+        max_output_tokens,
+        admission,
+    )
+    .await
+}
+async fn setup_input_for_device(
+    d: Device,
+    model_sha: &str,
+    execution_digest: &str,
+    prompt: String,
+    max_output_tokens: u32,
+    admission: InputAdmission,
+) -> InputFixture {
     let InputAdmission {
         organization,
         meter,
         deadline_seconds,
     } = admission;
     assert!((1..=3600).contains(&deadline_seconds));
-    let d = device(cert).await;
     let pool = d.store.pool();
     let owner = Uuid::new_v4().to_string();
     let user = Uuid::new_v4().to_string();

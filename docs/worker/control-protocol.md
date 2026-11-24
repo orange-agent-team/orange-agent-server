@@ -34,3 +34,9 @@
 | 仅声明续约，缺少所需输入能力 | 已登记的设备收到 gRPC INVALID_ARGUMENT，原会话可继续心跳。 |
 
 `python3 scripts/check-worker-wire-vectors.py` 对照两个 schema 编码并解码固定字节。`cargo test --locked --offline -p orange-protocol --features grpc --test worker_wire_vectors` 使用实际 Rust 生成类型，`python3 scripts/check-worker-contract.py --section handshake` 使用独立开发数据库和双向 TLS 测试拒绝原因及原会话状态。
+
+## 运行中撤销凭据
+
+凭据已兑换且作业已获得 StartGrant 时，所有者仍可撤销原注册授权。服务端记录原授权请求编号和撤销时间，并在同一数据库事务中停用关联叶证书。持有旧 TLS 通道的设备重发已提交的续租请求、提交下一序号的续租或再次轮询工作时，网关重新检查当前权限。既有 StartGrant 的截止时间和已记录的续租不因这些请求延长。
+
+用 `python3.12 scripts/check-device-issuer.py --fence-live-work` 验证。验收使用真实注册授权、签发、设备私钥、用户撤销接口、mTLS、PostgreSQL、SQLite 和用户态 Broker。买方预算、报价、受审计算力能力与输入是本地测试数据，使用开发积分。测试先建立成功续租作为对照，再检查原授权撤销后的重放、跨节点密钥副本、独立连接及授权事件计数。真机执行和生产私钥保管另有验收。
