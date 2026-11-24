@@ -191,10 +191,67 @@ mod local {
         Ok(())
     }
 
+    fn template_descriptor() -> Result<Value> {
+        use orange_protocol::model_versions::{ModelInterface, RuntimePin};
+        let pin: Value = serde_json::from_slice(PIN)?;
+        let version = orange_model_runtime::manifest::find(MODEL)?.receipt();
+        let model = &version.manifest;
+        let template = &pin["template"];
+        let ModelInterface::Image {
+            width,
+            height,
+            steps,
+            max_prompt_utf8_bytes,
+            ..
+        } = &model.interface
+        else {
+            return Err("Expected the bundled image interface".into());
+        };
+        let RuntimePin::Python {
+            engine,
+            adapter_sha256,
+            ..
+        } = &model.runtime
+        else {
+            return Err("Expected the pinned Diffusers runtime".into());
+        };
+        if model.source.asset_lock_sha256 != hex::encode(Sha256::digest(PIN))
+            || pin["model_version"] != MODEL
+            || engine != "diffusers"
+            || *adapter_sha256 != hex::encode(Sha256::digest(RUNNER.as_bytes()))
+            || template["width"] != *width
+            || template["height"] != *height
+            || template["steps"] != *steps
+            || template["max_prompt_utf8_bytes"] != *max_prompt_utf8_bytes
+            || template["seed_min"] != 0
+            || template["seed_max"] != u32::MAX
+        {
+            return Err("Image template and bundled runtime manifest differ".into());
+        }
+        let request = json!({"type":"object","additionalProperties":false,"required":["prompt","seed"],
+            "properties":{"prompt":{"type":"string","minLength":1,"maxLength":max_prompt_utf8_bytes,
+                "description":"Nonblank UTF-8 text without NUL; the byte limit is template.max_prompt_utf8_bytes."},
+                "seed":{"type":"integer","minimum":0,"maximum":u32::MAX}}});
+        let digest = orange_protocol::request_digest(
+            "image-template.v1",
+            &(&version.manifest_sha256, &template, &request),
+        )?;
+        Ok(
+            json!({"model_version":MODEL,"manifest_sha256":version.manifest_sha256,"template_sha256":digest,
+            "template":template,"request_schema":request,"runtime":model.runtime,"resources":model.resources,
+            "pricing":model.pricing,"input_frame_bytes":8192}),
+        )
+    }
+
     pub async fn run() -> Result<()> {
         let args: Vec<_> = std::env::args_os().skip(1).map(PathBuf::from).collect();
+        let descriptor = template_descriptor()?;
+        if args.len() == 1 && args[0].as_os_str() == "--describe-template" {
+            println!("{}", serde_json::to_string(&descriptor)?);
+            return Ok(());
+        }
         let [python, cache, slot, destination] = args.as_slice() else {
-            return Err("Usage: orange-image <absolute venv python> <model cache> <private slot> <new PNG path>, JSON prompt and seed on stdin".into());
+            return Err("Usage: orange-image --describe-template | <absolute venv python> <model cache> <private slot> <new PNG path>, JSON prompt and seed on stdin".into());
         };
         let metadata = slot.symlink_metadata()?;
         if !python.is_absolute()
@@ -213,7 +270,13 @@ mod local {
             return Err("Input exceeds request limit".into());
         }
         let Request { prompt, seed } = serde_json::from_slice(&request)?;
-        if prompt.trim().is_empty() || prompt.len() > 2048 || prompt.contains('\0') {
+        if prompt.trim().is_empty()
+            || prompt.len() as u64
+                > descriptor["template"]["max_prompt_utf8_bytes"]
+                    .as_u64()
+                    .ok_or("Invalid prompt byte limit")?
+            || prompt.contains('\0')
+        {
             return Err("Invalid image prompt".into());
         }
         let id = uuid::Uuid::new_v4().to_string();

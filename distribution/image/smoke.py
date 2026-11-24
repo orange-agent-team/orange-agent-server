@@ -11,6 +11,10 @@ parser = argparse.ArgumentParser()
 parser.add_argument("venv", type=Path)
 parser.add_argument("model_cache", type=Path)
 args = parser.parse_args()
+template=json.loads(subprocess.check_output([root/"bin/orange-image","--describe-template"],timeout=15))
+locked=json.loads((root/"config/local-image.lock.json").read_bytes())
+if template["template"]!=locked["template"] or template["model_version"]!=locked["model_version"] or len(template["template_sha256"])!=64:
+    raise ValueError("Installed image template differs from the archived lock")
 with tempfile.TemporaryDirectory(prefix="orange-image-release-") as tmp:
     slot=Path(tmp)
     output=slot / "sample.png"
@@ -25,4 +29,4 @@ with tempfile.TemporaryDirectory(prefix="orange-image-release-") as tmp:
         or receipt["sha256"]!=hashlib.sha256(output.read_bytes()).hexdigest()
         or list(slot.glob("image-attempt-*"))):
         raise ValueError("Installed image profile failed verification or cleanup")
-    print(json.dumps({k:receipt[k] for k in ("model_version","width","height","steps","seed","sha256","rgb_sha256","bytes")}))
+    print(json.dumps({"template_sha256":template["template_sha256"],"manifest_sha256":template["manifest_sha256"],**{k:receipt[k] for k in ("model_version","width","height","steps","seed","sha256","rgb_sha256","bytes")}}))

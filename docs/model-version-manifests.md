@@ -24,3 +24,7 @@ target/debug/orange-model-manifest verify-proposed /absolute/path/to/cache < pro
 运行 `orange-model-manifest adapter VERSION` 可读取当前随包清单的运行时版本、清单摘要、接口和上限。文本适配器使用 GGUF 内嵌模板，通过私有引擎的模板计数接口检查输入和输出是否能放入上下文。Chat Completions 与 Responses 均逐次提交完整输入并关闭提示复用，Responses 同时关闭响应存储。嵌入适配器只接受文本输入，按实际清单限制批量、每项 token 数及向量维度。当前固定的 ONNX 版本允许每批 32 项、每项最多 512 个 token，返回 384 维有序向量。
 
 本地选择文本或向量传输需要匹配清单中的引擎与接口。平台已审核的私有文本别名沿用原有的显式文本配置。图像、转写和未知版本不会取得向量路由。读取清单不改变平台模型的审核、供给或价格状态。
+
+### SDXL 固定模板
+
+在解包后的 macOS 开发包中执行 `bin/orange-image --describe-template` 可离线读取模板。回执包含模型清单和模板各自的 SHA-256、执行环境锁、请求字段、精度、调度器、种子范围、设备类型及输入限制。生成入口核对同一份编译时模板及 Python 适配器。请求只提供提示词和种子；UTF-8 字节数及两个 CLIP 编码器的 token 上限分别校验。模板读取不启动 Python 或加载权重。

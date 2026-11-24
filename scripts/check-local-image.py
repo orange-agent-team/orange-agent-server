@@ -29,6 +29,17 @@ cargo=Path(subprocess.check_output([rustup,"which","--toolchain","1.97.1","cargo
 subprocess.run([cargo,"build","--offline","--locked","-p","orange-model-runtime","--features","image-host","--bin","orange-image"],
                cwd=ROOT,env=dict(os.environ,PATH=str(cargo.parent)+os.pathsep+os.environ["PATH"]),check=True)
 binary=Path(os.environ.get("CARGO_TARGET_DIR",ROOT/"target")).resolve()/"debug/orange-image"
+descriptor=json.loads(subprocess.check_output([binary,"--describe-template"],timeout=15))
+assert descriptor["model_version"]==PIN["model_version"] and descriptor["template"]==PIN["template"]
+pinned=json.loads((ROOT/"crates/model-runtime/model-manifests"/(descriptor["model_version"]+".json")).read_bytes())
+def canonical(value):return json.dumps(value,sort_keys=True,ensure_ascii=False,separators=(",",":")).encode()
+assert descriptor["manifest_sha256"]==hashlib.sha256(canonical(pinned)).hexdigest()
+schema=descriptor["request_schema"]
+assert not schema["additionalProperties"] and set(schema["required"])==set(schema["properties"])=={"prompt","seed"}
+assert descriptor["template_sha256"]==hashlib.sha256(b"orange-request-v1\0image-template.v1\0"+canonical([descriptor["manifest_sha256"],descriptor["template"],schema])).hexdigest()
+assert descriptor["runtime"]==pinned["runtime"] and descriptor["resources"]==pinned["resources"] and descriptor["pricing"]==pinned["pricing"]
+print(json.dumps({"template_sha256":descriptor["template_sha256"],"manifest_sha256":descriptor["manifest_sha256"],
+                  "seed_bounds":[PIN["template"]["seed_min"],PIN["template"]["seed_max"]],"request_fields":schema["required"]}),flush=True)
 case={"prompt":"Studio photograph of one ripe orange on a white ceramic plate, soft window light and a pale green background.","seed":7341}
 dest=ROOT/".local/image-evidence"
 dest.mkdir(mode=0o700,parents=True,exist_ok=True)
@@ -47,6 +58,10 @@ with tempfile.TemporaryDirectory(prefix="orange-image-qa-") as temp:
         assert list(slot.glob("image-attempt-*"))==[], "private attempt retained after normal shutdown"
     if args.only in ("all","negative"):
         target=temp/"invalid.png"
+        reject(dict(case,seed=4294967296),target,"invalid value")
+        reject(dict(case,prompt="橙"*683),target,"Invalid image prompt")
+        assert not target.exists()
+
         for request in [dict(case,steps=1),dict(case,pipeline="custom"),dict(case,prompt=""),dict(case,seed=-1),dict(case,seed=True)]:
             reject(request,target,"Error:")
         with (slot/"sdxl.lock").open("a") as held:
