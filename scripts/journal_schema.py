@@ -16,6 +16,9 @@ def verify_current_journal(db):
     required = {("table", "local_skill_packages"), ("table", "local_skill_selections"),
                 ("table", "local_run_skills"), ("trigger", "local_run_skill_owner"),
                 ("trigger", "immutable_local_run_skill"), ("view", "available_skill_versions")}
+    if expected >= 36:
+        required.update({("table","saved_knowledge_collections"),("index","saved_knowledge_pending"),
+                         ("trigger","retire_workspace_saved_knowledge")})
     objects = set(db.execute("SELECT type, name FROM sqlite_schema"))
     assert required <= objects, required - objects
     return actual

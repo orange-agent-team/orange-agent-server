@@ -209,6 +209,14 @@ mod tests {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .expect("version");
         assert_eq!(version, crate::JOURNAL_SCHEMA_VERSION);
+        let release: serde_json::Value =
+            serde_json::from_str(include_str!("../../../config/journal-schema.json"))
+                .expect("published Journal schema descriptor");
+        assert_eq!(
+            release["user_version"].as_i64(),
+            Some(version),
+            "The release expectation must match a real migrated database"
+        );
         assert_eq!(
             journal.state("alice", "op").expect("state").as_deref(),
             Some("unknown")

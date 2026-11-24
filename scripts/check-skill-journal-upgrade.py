@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Create real legacy journals and prove upgrade, exact bindings and downgrade refusal."""
+import argparse
 import hashlib
 import json
 import os
@@ -16,6 +17,7 @@ if not __debug__:
 
 ROOT = Path(__file__).resolve().parents[1]
 PRIOR = {
+    35: "f86310a8b5075fb5d71c544ebe9fc603c8dc9348",
     34: "2a82e8e018b696adc32e5bb66f1f39e73d558982",
     33: "7876359b73b86c54292e6231da32179556994299",
     29: "94cfd1fc3e27dd2fb43438757af6d6b863b6e98d",
@@ -71,7 +73,7 @@ def verify(base, prior, old, new):
 
     config["run"]["environment"] = run(old, "grant-info")["environment"]
     old_pin = None
-    if prior in (32,33,34):
+    if prior in (32,33,34,35):
         config["run"]["model_version"]="qwen7b-reviewed-cpu-v1"
         old_pin=next(x["pin"] for x in run(old,"skills") if x["pin"]["id"]=="orange.code-review")
     elif prior == 31:
@@ -94,6 +96,8 @@ def verify(base, prior, old, new):
     assert {x["pin"]["id"] for x in registry if x["enabled"]} == ({old_pin["id"]} if old_pin else set())
     destination = json.loads((ROOT / "config/journal-schema.json").read_bytes())["user_version"]
     assert snapshot(current=True) == (destination, before) and run(new, "skill-binding") == old_pin
+    with inspect_closed_journal(database) as db:
+        assert db.execute("SELECT count(*) FROM saved_knowledge_collections").fetchone()==(0,), "Migration invented named collection consent"
     assert run(new,"model-observation") is None
     config["skill"] = template["pin"]
     assert run(new, "enable-skill", "0")["revision"] == 1
@@ -118,12 +122,16 @@ def verify(base, prior, old, new):
 
 
 def main():
+    parser=argparse.ArgumentParser()
+    parser.add_argument("--prior",choices=tuple(PRIOR),type=int,help="Qualify one actual previous binary; the default verifies every listed revision.")
+    args=parser.parse_args()
     os.umask(0o077)
     with tempfile.TemporaryDirectory(prefix="orange-skills-migration-") as tmp:
         base = Path(tmp).resolve(strict=True)
         new = base / "new-agent"
         build(ROOT, new)
         for version, commit in PRIOR.items():
+            if args.prior is not None and version!=args.prior:continue
             case = base / str(version)
             source = case / "prior"
             source.mkdir(parents=True)
