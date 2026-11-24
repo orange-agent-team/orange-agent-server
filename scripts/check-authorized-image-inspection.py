@@ -39,7 +39,12 @@ def main():
     parser.add_argument("--api",type=Path,default=ROOT/"target/debug/orange-user-api")
     parser.add_argument("--png",type=Path)
     parser.add_argument("--rgb-sha256")
+    parser.add_argument("--browser-driver",type=Path,help="Optional Orange Web browser acceptance script")
+    parser.add_argument("--node",type=Path)
+    parser.add_argument("--static-root",type=Path)
+    parser.add_argument("--browser-tls",type=Path)
     args=parser.parse_args()
+    check(bool(args.node)==bool(args.browser_driver),"Browser driver requires its pinned Node executable")
     check(bool(args.png)==bool(args.rgb_sha256),"Real PNG and independently measured pixel digest must be supplied together")
     payload,pixel_hash=(args.png.read_bytes(),args.rgb_sha256) if args.png else sample()
     config=args.environment.resolve()/"identity/user-config.json"
@@ -107,6 +112,17 @@ def main():
                 target,version,_=create(data,media)
                 status,cache,error=wire("GET",endpoint(target,version["version_id"]))
                 check(status==422 and cache=="no-store" and "content" not in error,label+" incorrectly measured")
+            if args.browser_driver:
+                browser_token=secrets.token_hex(32)
+                browser_csrf=secrets.token_hex(32)
+                sql(f"""INSERT INTO user_sessions(token_hash,session_id,user_id,csrf_token,auth_time,idle_expires_at,absolute_expires_at)
+                    SELECT '{sha256(browser_token.encode()).hexdigest()}','{uuid4()}','{owner}','{browser_csrf}',t,t+600,t+3600
+                    FROM (SELECT floor(extract(epoch FROM now()))::bigint t) clock""")
+                data={"api":address,"authorityOrigin":origin,"owner":owner,"token":browser_token,"csrf":browser_csrf,"upload":view["upload_id"],
+                      "version":view["version_id"],"rgb":pixel_hash,"sha256":sha256(payload).hexdigest()}
+                if args.static_root:data["staticRoot"]=str(args.static_root.resolve(strict=True))
+                if args.browser_tls:data["tls"]=str(args.browser_tls.resolve(strict=True))
+                subprocess.run([args.node.resolve(strict=True),args.browser_driver.resolve(strict=True)],input=json.dumps(data),text=True,timeout=100,check=True)
             status,_,_=wire("DELETE",saved,fields=headers)
             check(status==200,"Delete must succeed")
             status,_,error=wire("GET",read)
