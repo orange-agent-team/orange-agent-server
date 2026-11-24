@@ -407,10 +407,16 @@ impl ArtifactStore {
                 Err(error) => return Err(error),
             };
             if let Some(mut writer) = stage.take() {
-                writer.close().await?;
-                self.inner.objects.finish_write(&t.stage)?;
+                let receipt = writer.close().await?;
+                self.inner.objects.finish_write(&t.stage, receipt).await?;
             }
-            if !t.replay {
+            if !t.replay
+                && !self
+                    .inner
+                    .objects
+                    .copy_pinned(&t.stage, &t.published, h.size_bytes, &h.sha256)
+                    .await?
+            {
                 let stored = self.inner.objects.read(&t.stage, h.size_bytes).await?;
                 if hex::encode(Sha256::digest(stored.to_vec())) != h.sha256 {
                     return Err(ArtifactError::Integrity);
@@ -421,12 +427,15 @@ impl ArtifactStore {
                     .ok_or(ArtifactError::Unavailable)?
                     .write(stored)
                     .await?;
-                published
+                let receipt = published
                     .take()
                     .ok_or(ArtifactError::Unavailable)?
                     .close()
                     .await?;
-                self.inner.objects.finish_write(&t.published)?;
+                self.inner
+                    .objects
+                    .finish_write(&t.published, receipt)
+                    .await?;
             }
             let actual = self.inner.objects.read(&t.published, h.size_bytes).await?;
             if hex::encode(Sha256::digest(actual.to_vec())) != h.sha256 {
@@ -450,10 +459,12 @@ impl ArtifactStore {
         let mut close_error = None;
         for (writer, key) in [(stage.take(), &t.stage), (published.take(), &t.published)] {
             if let Some(mut writer) = writer {
-                if let Err(e) = writer.close().await {
-                    close_error = Some(ArtifactError::Storage(e));
-                } else if let Err(e) = self.inner.objects.finish_write(key) {
-                    close_error = Some(e);
+                let closed = match writer.close().await {
+                    Ok(meta) => self.inner.objects.finish_write(key, meta).await,
+                    Err(e) => Err(ArtifactError::Storage(e)),
+                };
+                if let Err(error) = closed {
+                    close_error = Some(error);
                 }
             }
         }

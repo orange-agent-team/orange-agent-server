@@ -17,7 +17,7 @@ def digest(data):
     return base64.b64encode(hashlib.sha256(data).digest()).decode('ascii')
 
 
-def check(endpoint,bucket,credentials,folder):
+def private_requests(endpoint,bucket,credentials,folder):
     address=urlsplit(endpoint)
     require(address.scheme=="http" and address.hostname=="127.0.0.1" and address.port and not address.path,
             "Expected a private local test service")
@@ -49,6 +49,11 @@ def check(endpoint,bucket,credentials,folder):
                 mapped[name.lower()]=value.strip()
         return int(result.stdout),mapped,path_body.read_bytes()
 
+    return request
+
+
+def check(endpoint,bucket,credentials,folder):
+    request=private_requests(endpoint,bucket,credentials,folder)
     xml=b'<VersioningConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Status>Enabled</Status></VersioningConfiguration>'
     status,_,_=request("PUT",query={"versioning":""},data=xml,headers={"Content-Type":"application/xml"})
     require(status in (200,204),"Bucket versioning configuration failed: "+str(status))

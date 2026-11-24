@@ -118,6 +118,9 @@ prost.workspace = true
 percent-encoding = "=2.3.2"
 reqwest.workspace = true
 opendal = { workspace = true, features = ["services-s3"] }
+reqsign-core = "=3.3.2"
+reqsign-aws-v4 = "=3.3.1"
+quick-xml = { version = "=0.42.0", features = ["serialize"] }
 libc.workspace = true
 x509-parser = { version = "=0.18.1", features = ["verify"] }
 rcgen = { version = "=0.14.10", default-features = false, features = ["ring", "pem", "x509-parser"] }
@@ -126,8 +129,6 @@ rcgen = { version = "=0.14.10", default-features = false, features = ["ring", "p
 rustix.workspace = true
 
 [dev-dependencies]
-reqsign-core = "=3.3.2"
-reqsign-aws-v4 = "=3.3.1"
 tokio-tungstenite = "=0.29.0"
 futures-util = { version = "=0.3.34", features = ["sink"] }
 jsonschema.workspace = true

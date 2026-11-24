@@ -23,7 +23,31 @@ impl ArtifactReader {
     /// A separate Gateway process may open the immutable data root read-only;
     /// it never obtains the writer lock or exposes user mutation methods.
     pub async fn open_local(pool: PgPool, root: &Path) -> Result<Self, ArtifactError> {
-        let objects = storage::LocalObjects::open_read_only(root)?;
+        let objects = storage::LocalObjects::open_read_only(root)?.into();
+        Self::open_backend(pool, objects).await
+    }
+    pub async fn configured(
+        pool: PgPool,
+        local: Option<std::ffi::OsString>,
+        remote: Option<std::ffi::OsString>,
+    ) -> Result<Option<Self>, ArtifactError> {
+        match (local, remote) {
+            (None, None) => Ok(None),
+            (Some(path), None) => Ok(Some(Self::open_local(pool, Path::new(&path)).await?)),
+            (None, Some(path)) => Ok(Some(Self::open_versioned(pool, Path::new(&path)).await?)),
+            _ => Err(ArtifactError::StoragePolicy),
+        }
+    }
+    pub async fn open_versioned(pool: PgPool, config: &Path) -> Result<Self, ArtifactError> {
+        let objects = versioned_store::VersionedStore::open(pool.clone(), config, false)
+            .await?
+            .into();
+        Self::open_backend(pool, objects).await
+    }
+    async fn open_backend(
+        pool: PgPool,
+        objects: backend::ObjectBackend,
+    ) -> Result<Self, ArtifactError> {
         let known: bool =
             sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM artifact_capacity WHERE root_id=$1)")
                 .bind(&objects.root_id)

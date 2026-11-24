@@ -168,8 +168,11 @@ impl ArtifactStore {
                 return Err(ArtifactError::Integrity);
             }
             if let Some(mut w) = writer.take() {
-                w.close().await?;
-                self.inner.objects.finish_write(&transfer.stage)?;
+                let receipt = w.close().await?;
+                self.inner
+                    .objects
+                    .finish_write(&transfer.stage, receipt)
+                    .await?;
             }
             if transfer.replay {
                 let stored = self
@@ -185,9 +188,20 @@ impl ArtifactStore {
                     return Err(ArtifactError::Integrity);
                 }
             }
-            if !transfer.replay {
+            if !transfer.replay
+                && !self
+                    .inner
+                    .objects
+                    .copy_pinned(
+                        &transfer.stage,
+                        &transfer.published,
+                        expected,
+                        &transfer.view.sha256,
+                    )
+                    .await?
+            {
                 published = Some(self.inner.objects.writer(&transfer.published).await?);
-                let reader = self.inner.objects.op.reader(&transfer.stage).await?;
+                let reader = self.inner.objects.reader(&transfer.stage).await?;
                 let mut hash = Sha256::new();
                 let mut offset = 0;
                 while offset < expected {
@@ -210,12 +224,15 @@ impl ArtifactStore {
                         .await?;
                     offset = end;
                 }
-                published
+                let receipt = published
                     .take()
                     .ok_or(ArtifactError::Unavailable)?
                     .close()
                     .await?;
-                self.inner.objects.finish_write(&transfer.published)?;
+                self.inner
+                    .objects
+                    .finish_write(&transfer.published, receipt)
+                    .await?;
                 if hex::encode(hash.finalize()) != transfer.view.sha256 {
                     return Err(ArtifactError::Integrity);
                 }
@@ -234,9 +251,11 @@ impl ArtifactStore {
             (published.take(), &transfer.published),
         ] {
             if let Some(mut writer) = pending {
-                if let Err(error) = writer.close().await {
-                    close_error = Some(ArtifactError::Storage(error));
-                } else if let Err(error) = self.inner.objects.finish_write(key) {
+                let closed = match writer.close().await {
+                    Ok(meta) => self.inner.objects.finish_write(key, meta).await,
+                    Err(e) => Err(ArtifactError::Storage(e)),
+                };
+                if let Err(error) = closed {
                     close_error = Some(error);
                 }
             }
@@ -349,24 +368,7 @@ impl ArtifactStore {
         .await
         .map_err(|_| ArtifactError::Expired)?
         .map_err(|_| ArtifactError::Unavailable)?;
-        let mut tx = self.inner.pool.begin().await?;
-        authority::scope(&mut tx, actor, owner, false).await?;
-        let row = self.row_in(&mut tx, owner, upload).await?;
-        authority::resource(&mut tx, actor, owner, &row, false, false).await?;
-        let v = view(&row)?;
-        let stamp = authority::stamp(&mut tx, &row).await?;
-        if v.state != "available" {
-            return Err(if v.state == "deleted" {
-                ArtifactError::Deleted
-            } else {
-                ArtifactError::NotReady
-            });
-        }
-        if v.version_id != version {
-            return Err(ArtifactError::Conflict);
-        }
-        let key:String=sqlx::query_scalar("SELECT published_key FROM artifact_transfers WHERE transfer_id=$1 AND artifact_id=$2 AND state='attached' AND NOT published_deleted").bind(row.try_get::<Option<String>,_>("published_transfer_id")?).bind(&v.artifact_id).fetch_optional(&mut *tx).await?.ok_or(ArtifactError::Integrity)?;
-        authority::finish(tx, actor).await?;
+        let (v, stamp, key) = self.read_descriptor(actor, owner, upload, version).await?;
         if Instant::now() >= deadline {
             return Err(ArtifactError::Expired);
         }
@@ -403,6 +405,33 @@ impl ArtifactStore {
             return Err(ArtifactError::Expired);
         }
         Ok((v, data, stamp))
+    }
+    pub(super) async fn read_descriptor(
+        &self,
+        actor: &ArtifactActor,
+        owner: &str,
+        upload: &str,
+        version: &str,
+    ) -> Result<(ArtifactView, ReadStamp, String), ArtifactError> {
+        let mut tx = self.inner.pool.begin().await?;
+        authority::scope(&mut tx, actor, owner, false).await?;
+        let row = self.row_in(&mut tx, owner, upload).await?;
+        authority::resource(&mut tx, actor, owner, &row, false, false).await?;
+        let v = view(&row)?;
+        let stamp = authority::stamp(&mut tx, &row).await?;
+        if v.state != "available" {
+            return Err(if v.state == "deleted" {
+                ArtifactError::Deleted
+            } else {
+                ArtifactError::NotReady
+            });
+        }
+        if v.version_id != version {
+            return Err(ArtifactError::Conflict);
+        }
+        let key:String=sqlx::query_scalar("SELECT published_key FROM artifact_transfers WHERE transfer_id=$1 AND artifact_id=$2 AND state='attached' AND NOT published_deleted").bind(row.try_get::<Option<String>,_>("published_transfer_id")?).bind(&v.artifact_id).fetch_optional(&mut *tx).await?.ok_or(ArtifactError::Integrity)?;
+        authority::finish(tx, actor).await?;
+        Ok((v, stamp, key))
     }
     pub async fn check_read(
         &self,

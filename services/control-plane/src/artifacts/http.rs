@@ -57,6 +57,10 @@ pub fn build_router(
         )
         .route("/api/v1/agent/runs/{run}/model/history", get(cloud_history))
         .route(
+            "/api/v1/owners/{owner}/uploads/{upload}/download-authorizations",
+            axum::routing::post(download_authorization),
+        )
+        .route(
             "/api/v1/owners/{owner}/uploads/{upload}/image-output-inspection",
             get(image_inspection),
         )
@@ -333,6 +337,10 @@ impl From<ArtifactError> for Error {
                 Self(StatusCode::UNPROCESSABLE_ENTITY, "INTEGRITY_MISMATCH")
             }
             ArtifactError::Conflict => Self(StatusCode::CONFLICT, "IDEMPOTENCY_CONFLICT"),
+            ArtifactError::DirectUnavailable => Self(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "DIRECT_STORAGE_UNAVAILABLE",
+            ),
             ArtifactError::NotReady => Self(StatusCode::CONFLICT, "ARTIFACT_NOT_READY"),
             ArtifactError::RetentionExpired => Self(StatusCode::GONE, "ARTIFACT_RETENTION_EXPIRED"),
             ArtifactError::InUse => Self(StatusCode::CONFLICT, "ARTIFACT_IN_USE"),
@@ -485,6 +493,30 @@ async fn upload(
 struct Version {
     version_id: String,
 }
+async fn download_authorization(
+    State(api): State<Api>,
+    Path((owner, upload)): Path<(String, String)>,
+    headers: HeaderMap,
+    body: Result<Json<Version>, axum::extract::rejection::JsonRejection>,
+) -> Result<Response, Error> {
+    let actor = api.identity.artifact_actor(&headers, true).await?;
+    let request = headers
+        .get("idempotency-key")
+        .and_then(|v| v.to_str().ok())
+        .ok_or(ArtifactError::Invalid)?;
+    let Json(body) = body.map_err(|_| ArtifactError::Invalid)?;
+    let _permit = api
+        .downloads
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| ArtifactError::Busy)?;
+    let grant = api
+        .store
+        .authorize_download(&actor, &owner, &upload, &body.version_id, request)
+        .await?;
+    Ok(private(Json(grant).into_response()))
+}
+
 async fn image_inspection(
     State(api): State<Api>,
     Path((owner, upload)): Path<(String, String)>,

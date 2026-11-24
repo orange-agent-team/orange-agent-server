@@ -2240,6 +2240,7 @@ dependencies = [
  "prometheus",
  "prost",
  "prost-types",
+ "quick-xml",
  "rcgen",
  "reqsign-aws-v4",
  "reqsign-core",

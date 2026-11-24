@@ -61,8 +61,8 @@ impl ArtifactStore {
         tokio::time::timeout(Duration::from_secs(10), async {
             let mut writer = store.writer(&key).await?;
             writer.write(data).await?;
-            writer.close().await?;
-            store.finish_write(&key)?;
+            let receipt = writer.close().await?;
+            store.finish_write(&key, receipt).await?;
             let verified = store.read(&key, meta.bytes).await?;
             if hex::encode(Sha256::digest(verified.to_bytes())) != digest {
                 return Err(ArtifactError::Integrity);

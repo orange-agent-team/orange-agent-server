@@ -240,7 +240,7 @@ impl LocalObjects {
         Ok(())
     }
 }
-fn key_valid(key: &str) -> Result<(), ArtifactError> {
+pub(super) fn key_valid(key: &str) -> Result<(), ArtifactError> {
     let id = key
         .strip_prefix("staging-")
         .or_else(|| key.strip_prefix("published-"))

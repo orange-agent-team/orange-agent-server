@@ -50,17 +50,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let store = Store::connect(&env::var("DATABASE_URL")?).await?;
     store.migrate().await?;
     let sessions = WorkerSessionStore::new(store.pool().clone(), gateway_instance_id)?;
-    let artifacts = if let Some(root) = env::var_os("ORANGE_ARTIFACT_ROOT") {
-        Some(
-            orange_control_plane::artifacts::ArtifactReader::open_local(
-                store.pool().clone(),
-                Path::new(&root),
-            )
-            .await?,
-        )
-    } else {
-        None
-    };
+    let artifacts = orange_control_plane::artifacts::ArtifactReader::configured(
+        store.pool().clone(),
+        env::var_os("ORANGE_ARTIFACT_ROOT"),
+        env::var_os("ORANGE_ARTIFACT_S3_CONFIG"),
+    )
+    .await?;
     let reader = artifacts.clone();
     let listener = tokio::net::TcpListener::bind(address).await?;
     eprintln!(

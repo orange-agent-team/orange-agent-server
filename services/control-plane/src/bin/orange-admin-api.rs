@@ -35,12 +35,13 @@ async fn run() -> Result<(), Box<dyn Error>> {
         )?;
         identity = identity.with_model_review_trust(trust);
     }
-    if let Some(root) = env::var_os("ORANGE_ADMIN_SUPPORT_ROOT") {
-        let reader = orange_control_plane::artifacts::ArtifactReader::open_local(
-            store.pool().clone(),
-            std::path::Path::new(&root),
-        )
-        .await?;
+    if let Some(reader) = orange_control_plane::artifacts::ArtifactReader::configured(
+        store.pool().clone(),
+        env::var_os("ORANGE_ADMIN_SUPPORT_ROOT"),
+        env::var_os("ORANGE_ADMIN_SUPPORT_S3_CONFIG"),
+    )
+    .await?
+    {
         identity = identity.with_support_reader(reader);
     }
     let (app, _metrics) = telemetry::configure_listener(

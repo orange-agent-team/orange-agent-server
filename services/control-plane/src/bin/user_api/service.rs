@@ -93,7 +93,10 @@ async fn serve(
     config: UserOidcConfig,
     #[cfg(unix)] load_repository_sources: RepositoryLoader,
 ) -> Result<(), Box<dyn Error>> {
-    if meter.is_some() && env::var_os("ORANGE_ARTIFACT_ROOT").is_none() {
+    if meter.is_some()
+        && env::var_os("ORANGE_ARTIFACT_ROOT").is_none()
+        && env::var_os("ORANGE_ARTIFACT_S3_CONFIG").is_none()
+    {
         return Err("trusted pricing requires the private artifact writer".into());
     }
     let address = settings.bind;
@@ -150,23 +153,39 @@ async fn serve(
     } else {
         identity
     };
-    let artifacts = if let Some(root) = env::var_os("ORANGE_ARTIFACT_ROOT") {
+    let root = env::var_os("ORANGE_ARTIFACT_ROOT");
+    let remote = env::var_os("ORANGE_ARTIFACT_S3_CONFIG");
+    let artifacts = if root.is_some() || remote.is_some() {
         let bytes = env::var("ORANGE_ARTIFACT_BYTE_LIMIT")
             .unwrap_or_else(|_| "1073741824".into())
             .parse()?;
         let records = env::var("ORANGE_ARTIFACT_RECORD_LIMIT")
             .unwrap_or_else(|_| "10000".into())
             .parse()?;
-        Some(
-            orange_control_plane::artifacts::ArtifactStore::open_local_with_meter(
-                store.pool().clone(),
-                std::path::Path::new(&root),
-                bytes,
-                records,
-                meter,
-            )
-            .await?,
-        )
+        use orange_control_plane::artifacts::ArtifactStore;
+        Some(match (root, remote) {
+            (Some(root), None) => {
+                ArtifactStore::open_local_with_meter(
+                    store.pool().clone(),
+                    std::path::Path::new(&root),
+                    bytes,
+                    records,
+                    meter,
+                )
+                .await?
+            }
+            (None, Some(config)) => {
+                ArtifactStore::open_versioned_with_meter(
+                    store.pool().clone(),
+                    std::path::Path::new(&config),
+                    bytes,
+                    records,
+                    meter,
+                )
+                .await?
+            }
+            _ => return Err("Choose a single artifact backend".into()),
+        })
     } else {
         None
     };

@@ -7,6 +7,7 @@ mod audio_meter;
 #[cfg(unix)]
 pub use audio_meter::AudioMeter;
 pub(crate) mod authority;
+mod backend;
 mod cloud_followup;
 mod cloud_turn;
 mod connector_proposal;
@@ -21,6 +22,7 @@ mod pricing;
 mod quarantine;
 mod quote_funding;
 mod retention;
+mod versioned_store;
 pub(crate) use quarantine::QuarantineRequest;
 mod metering_retry;
 mod settlement;
@@ -76,6 +78,8 @@ pub enum ArtifactError {
     Integrity,
     #[error("artifact deadline expired")]
     Expired,
+    #[error("direct transfer backend is not configured")]
+    DirectUnavailable,
     #[error("private artifact storage policy required")]
     StoragePolicy,
     #[error("artifact input stream failed")]
@@ -122,7 +126,7 @@ struct Inner {
         )>,
     >,
     pool: PgPool,
-    objects: storage::LocalObjects,
+    objects: backend::ObjectBackend,
     slots: Arc<Semaphore>,
     pending: Arc<Semaphore>,
     closed: AtomicBool,
@@ -160,6 +164,12 @@ fn view(row: &sqlx::postgres::PgRow) -> Result<ArtifactView, ArtifactError> {
     })
 }
 impl ArtifactStore {
+    fn check_limits(byte_limit: u64, record_limit: u32) -> Result<(), ArtifactError> {
+        if byte_limit == 0 || byte_limit > i64::MAX as u64 || record_limit == 0 {
+            return Err(ArtifactError::Invalid);
+        }
+        Ok(())
+    }
     pub async fn open_local(
         pool: PgPool,
         root: &Path,
@@ -175,10 +185,30 @@ impl ArtifactStore {
         record_limit: u32,
         meter: Option<orange_model_runtime::meter_service::TrustedMeter>,
     ) -> Result<Self, ArtifactError> {
-        if byte_limit == 0 || byte_limit > i64::MAX as u64 || record_limit == 0 {
-            return Err(ArtifactError::Invalid);
-        }
-        let objects = storage::LocalObjects::open(root)?;
+        Self::check_limits(byte_limit, record_limit)?;
+        let objects = storage::LocalObjects::open(root)?.into();
+        Self::open_backend(pool, objects, byte_limit, record_limit, meter).await
+    }
+    pub async fn open_versioned_with_meter(
+        pool: PgPool,
+        config: &Path,
+        byte_limit: u64,
+        record_limit: u32,
+        meter: Option<orange_model_runtime::meter_service::TrustedMeter>,
+    ) -> Result<Self, ArtifactError> {
+        Self::check_limits(byte_limit, record_limit)?;
+        let objects = versioned_store::VersionedStore::open(pool.clone(), config, true)
+            .await?
+            .into();
+        Self::open_backend(pool, objects, byte_limit, record_limit, meter).await
+    }
+    async fn open_backend(
+        pool: PgPool,
+        objects: backend::ObjectBackend,
+        byte_limit: u64,
+        record_limit: u32,
+        meter: Option<orange_model_runtime::meter_service::TrustedMeter>,
+    ) -> Result<Self, ArtifactError> {
         let row=sqlx::query("INSERT INTO artifact_capacity(root_id,byte_limit,record_limit) VALUES($1,$2,$3) ON CONFLICT(root_id) DO UPDATE SET root_id=excluded.root_id RETURNING byte_limit,record_limit").bind(&objects.root_id).bind(byte_limit as i64).bind(i64::from(record_limit)).fetch_one(&pool).await?;
         if row.try_get::<i64, _>("byte_limit")? != byte_limit as i64
             || row.try_get::<i64, _>("record_limit")? != i64::from(record_limit)

@@ -27,10 +27,16 @@ parser.add_argument("--model-run", action="store_true")
 parser.add_argument("--artifact-versions",action="store_true",help="Check versioned artifact publication against the isolated private bucket")
 parser.add_argument("--model-runtime-root", type=Path)
 parser.add_argument("--signed-lifetimes",action="store_true",help="Observe actual 60-second GET and five-minute PUT expiry in the artifact fixture")
+parser.add_argument("--download-expiry",action="store_true",help="Check expiry of actual API-issued GET grants")
+parser.add_argument("--artifact-backend-api",type=Path,help="Run the real User API against the versioned private bucket")
 args = parser.parse_args()
+if args.download_expiry and not args.artifact_backend_api:
+    parser.error("--download-expiry requires --artifact-backend-api")
+if args.artifact_backend_api and not (args.artifact_versions and args.database_url_file and args.identity_config):
+    parser.error("The artifact backend requires --artifact-versions and an owned database/identity environment")
 if args.signed_lifetimes and not args.artifact_versions:
     parser.error("--signed-lifetimes requires --artifact-versions")
-if args.artifact_versions and (args.model_run or args.web_repo or args.database_url_file):
+if args.artifact_versions and (args.model_run or args.web_repo or (args.database_url_file and not args.artifact_backend_api)):
     parser.error("Artifact version qualification uses its own private bucket")
 if args.model_run and not (args.database_url_file and args.web_repo and args.model_runtime_root):
     raise SystemExit("Model workflow requires database, identity, Web and verified model runtime")
@@ -194,6 +200,12 @@ with tempfile.TemporaryDirectory(prefix="oa-s3-", dir="/tmp") as tmp:
                     subprocess.run(cmd+["--","--nocapture"],cwd=root,check=True,
                         env=dict(env,ORANGE_ARTIFACT_FIXTURE_PORT=str(port),ORANGE_ARTIFACT_FIXTURE_IDENTITY=str(identity_path),
                                  ORANGE_ARTIFACT_FIXTURE_VERSION=version))
+                if args.artifact_backend_api:
+                    from verify_versioned_backend import run
+                    from artifact_provider_relay import relay
+                    with relay(endpoint,bucket) as (address,fence):
+                        run(args.artifact_backend_api.resolve(strict=True),args.database_url_file.resolve(strict=True),args.identity_config.resolve(strict=True),
+                            folder,address,bucket,owner["credentials"][0],lambda method,path,data:call(owner,method,path,data),fence,args.download_expiry)
                 raise SystemExit(0)  # The enclosing finally always stops the private fixture.
             for name, content in [
                 ("a.txt", b"confirmed source data"),
