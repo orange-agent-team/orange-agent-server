@@ -6,13 +6,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     use std::io::Read;
     use std::path::Path;
     let args: Vec<_> = std::env::args().skip(1).collect();
+    if args.as_slice() == ["--describe-input"] {
+        serde_json::to_writer(
+            std::io::stdout().lock(),
+            &orange_model_runtime::transcription::input_contract()?,
+        )?;
+        println!();
+        return Ok(());
+    }
     if !(5..=7).contains(&args.len())
         || !matches!(args[0].as_str(), "measure" | "transcribe" | "confirm")
         || (args[0] == "measure" && args.len() != 5)
         || (args[0] == "transcribe" && args.len() > 6)
         || (args[0] == "confirm" && args.len() < 6)
     {
-        return Err("Usage: orange-transcribe measure|transcribe|confirm <venv python> <verified models> <private slot directory> <audio file> [accepted measurement JSON for confirm] [language]".into());
+        return Err("Usage: orange-transcribe --describe-input | measure|transcribe|confirm <venv python> <verified models> <private slot directory> <audio file> [accepted measurement JSON for confirm] [language]".into());
     }
     let client = Client::new(
         Path::new(&args[1]),

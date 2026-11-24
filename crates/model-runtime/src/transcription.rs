@@ -83,6 +83,58 @@ pub struct Candidate {
 fn language_ok(s: &str) -> bool {
     (2..=3).contains(&s.len()) && s.bytes().all(|c| c.is_ascii_lowercase())
 }
+const FORMATS: &[(&str, &[&str])] = &[
+    (
+        "wav",
+        &[
+            "pcm_s16le",
+            "pcm_s24le",
+            "pcm_s32le",
+            "pcm_u8",
+            "pcm_f32le",
+            "pcm_f64le",
+        ],
+    ),
+    ("flac", &["flac"]),
+    ("mp3", &["mp3", "mp3float"]),
+    ("ogg", &["opus", "vorbis", "flac"]),
+    ("mov", &["aac", "alac"]),
+];
+pub fn input_contract() -> Result<Value, Error> {
+    use orange_protocol::model_versions::{ModelInterface, RuntimePin};
+    let pin: Value = serde_json::from_str(PIN).map_err(|_| Error::Protocol)?;
+    let version = crate::manifest::find(MODEL)
+        .map_err(|_| Error::Protocol)?
+        .receipt();
+    let m = &version.manifest;
+    let ModelInterface::Transcription {
+        channels,
+        sample_rate,
+        max_input_bytes,
+        max_decoded_ms,
+        ..
+    } = &m.interface
+    else {
+        return Err(Error::Protocol);
+    };
+    if m.source.asset_lock_sha256 != hex::encode(Sha256::digest(PIN.as_bytes()))
+        || *channels != 1
+        || *sample_rate != 16000
+        || *max_input_bytes != MAX_INPUT as u64
+        || *max_decoded_ms != 600000
+        || !matches!(&m.runtime,RuntimePin::Python{engine,adapter_sha256,..} if engine=="faster_whisper" && *adapter_sha256==hex::encode(Sha256::digest(RUNNER.as_bytes())))
+    {
+        return Err(Error::Protocol);
+    }
+    let formats: std::collections::BTreeMap<_, _> = FORMATS.iter().copied().collect();
+    Ok(
+        json!({"model_version":MODEL,"manifest_sha256":version.manifest_sha256,"runtime":m.runtime,
+        "container_codecs":formats,"input_limit_bytes":max_input_bytes,"decoded_duration_limit_ms":max_decoded_ms,
+        "normalized_channels":channels,"normalized_sample_rate":sample_rate,"source_rate_range_hz":[8000,192000],
+        "language_codes":pin["language_codes"],"language_detection":"automatic_when_omitted","preprocessing":"mono-16khz-s16-f32-v1"}),
+    )
+}
+
 impl Measure {
     pub fn validate(&self) -> Result<(), Error> {
         let rate = u64::from(self.sample_rate);
@@ -96,17 +148,9 @@ impl Measure {
         {
             return Err(Error::Protocol);
         }
-        let supported = match self.format.as_str() {
-            "wav" => matches!(
-                self.codec.as_str(),
-                "pcm_s16le" | "pcm_s24le" | "pcm_s32le" | "pcm_u8" | "pcm_f32le" | "pcm_f64le"
-            ),
-            "flac" => self.codec == "flac",
-            "mp3" => matches!(self.codec.as_str(), "mp3" | "mp3float"),
-            "ogg" => matches!(self.codec.as_str(), "opus" | "vorbis" | "flac"),
-            "mov" => matches!(self.codec.as_str(), "aac" | "alac"),
-            _ => false,
-        };
+        let supported = FORMATS.iter().any(|(format, codecs)| {
+            *format == self.format && codecs.contains(&self.codec.as_str())
+        });
         if !supported {
             return Err(Error::Protocol);
         }
@@ -248,7 +292,13 @@ impl Client {
                 .read_until(b'\n', &mut first)
                 .await
                 .map_err(|_| Error::Unavailable)?;
-            let hello: Value = serde_json::from_slice(&first).map_err(|_| Error::Protocol)?;
+            if first.len() > 1024 || first.last() != Some(&b'\n') {
+                return Err(Error::Protocol);
+            }
+            let hello = orange_protocol::canonical::parse_tool_arguments(
+                std::str::from_utf8(&first).map_err(|_| Error::Protocol)?,
+            )
+            .map_err(|_| Error::Protocol)?;
             if let Some(a) = owner.as_deref_mut() {
                 a.bind(&hello, &self.slot, pid)?;
             } else if hello != json!({"ready":true,"protocol":1}) {
@@ -284,11 +334,7 @@ impl Client {
             {
                 return Err(Error::Unavailable);
             }
-            let v: Value = serde_json::from_slice(&data).map_err(|_| Error::Protocol)?;
-            if v.get("error").is_some() {
-                return Err(backend_error(&v));
-            }
-            let candidate: Candidate = serde_json::from_value(v).map_err(|_| Error::Protocol)?;
+            let candidate = decode_candidate(&data)?;
             if candidate.model_version != MODEL
                 || candidate.audio_sha256 != digest
                 || candidate.transcript.is_some() != measure.is_some()
@@ -324,14 +370,34 @@ impl Client {
         result
     }
 }
+fn decode_candidate(raw: &[u8]) -> Result<Candidate, Error> {
+    // Decode the original bytes into the wire structure so duplicate nested fields fail
+    // before they can be hidden by a serde_json::Value round-trip.
+    if let Ok(result) = serde_json::from_slice::<Candidate>(raw) {
+        return Ok(result);
+    }
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Rejection {
+        error: String,
+    }
+    let error: Rejection = serde_json::from_slice(raw).map_err(|_| Error::Protocol)?;
+    Err(error_code(&error.error))
+}
 fn backend_error(v: &Value) -> Error {
-    match v["error"].as_str() {
-        Some("limit") => Error::Limit,
-        Some("invalid_audio_request") => Error::Invalid,
-        Some("no_speech") => Error::NoSpeech,
-        Some("slot_busy") => Error::Busy,
-        Some("measurement_changed") => Error::Changed,
-        Some("transcription_backend_unavailable") => Error::Unavailable,
+    if v.as_object().is_none_or(|obj| obj.len() != 1) {
+        return Error::Protocol;
+    }
+    v["error"].as_str().map_or(Error::Protocol, error_code)
+}
+fn error_code(code: &str) -> Error {
+    match code {
+        "limit" => Error::Limit,
+        "invalid_audio_request" => Error::Invalid,
+        "no_speech" => Error::NoSpeech,
+        "slot_busy" => Error::Busy,
+        "measurement_changed" => Error::Changed,
+        "transcription_backend_unavailable" => Error::Unavailable,
         _ => Error::Protocol,
     }
 }
@@ -362,6 +428,35 @@ pub fn read_audio(path: &Path) -> Result<Vec<u8>, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn decode_original_bytes_rejects_ambiguous_receipts_and_mixed_errors() {
+        let frames = [
+            r#"{"error":"slot_busy","error":"no_speech"}"#,
+            r#"{"error":"measurement_changed","transcript":{}}"#,
+            r#"{"error":"new_unrecognized_error"}"#,
+            r#"{"model_version":"x","audio_sha256":"x","measure":{"preprocessing":"mono-16khz-s16-f32-v1","format":"wav","format":"mp3","codec":"mp3","sample_rate":16000,"source_samples":16,"normalized_samples":16,"normalized_sha256":"x","duration_ms":1}}"#,
+        ];
+        for frame in frames {
+            assert!(matches!(
+                decode_candidate(frame.as_bytes()),
+                Err(Error::Protocol)
+            ));
+        }
+        assert!(matches!(
+            decode_candidate(br#"{"error":"no_speech"}"#),
+            Err(Error::NoSpeech)
+        ));
+        assert!(matches!(
+            backend_error(&json!({"error":"slot_busy","ready":true})),
+            Error::Protocol
+        ));
+        let description = input_contract().expect("pinned audio manifest");
+        assert_eq!(description["decoded_duration_limit_ms"], 600000);
+        assert_eq!(
+            description["container_codecs"]["mp3"],
+            json!(["mp3", "mp3float"])
+        );
+    }
     fn transcript() -> Transcript {
         Transcript {
             compute_type: "int8_float32".into(),

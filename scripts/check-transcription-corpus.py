@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Qualify two reproducible 60-second speech fixtures and exact digital silence on macOS."""
+import argparse
 import hashlib
 import json
 import os
@@ -17,7 +18,6 @@ import wave
 ROOT = Path(__file__).resolve().parents[1]
 CORPUS = json.loads((ROOT / "config/transcription-qualification.json").read_text())
 MODEL = json.loads((ROOT / "config/local-transcription.lock.json").read_text())
-CACHE = ROOT / ".local/transcription-model"
 RATE = CORPUS["sample_rate"]
 FRAMES = CORPUS["duration_samples"]
 
@@ -27,9 +27,9 @@ def require(ok, message):
         raise ValueError(message)
 
 
-def make_fixture(folder, language):
+def make_fixture(folder, language, cache):
     spec = CORPUS["zh"] if language == "zh" else MODEL["qualification_sample"]
-    source = CACHE / spec.get("filename", "jfk.wav")
+    source = cache / spec.get("filename", "jfk.wav")
     require(hashlib.sha256(source.read_bytes()).hexdigest() == spec["sha256"], "Unrecognized source recording")
     with wave.open(str(source)) as stream:
         require((stream.getnchannels(), stream.getsampwidth(), stream.getframerate(), stream.getnframes())
@@ -57,8 +57,8 @@ def edit_distance(left, right):
     return row[-1]
 
 
-def transcribe(binary, python, slot, audio):
-    cmd = [binary, "transcribe", python, CACHE, slot, audio]
+def transcribe(binary, python, slot, audio, cache):
+    cmd = [binary, "transcribe", python, cache, slot, audio]
     with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                           env={"PATH": "/usr/bin:/bin"}) as proc:
         start = time.monotonic()
@@ -103,6 +103,11 @@ def transcribe(binary, python, slot, audio):
 
 
 def main():
+    parser=argparse.ArgumentParser()
+    parser.add_argument("--models",type=Path,default=ROOT/".local/transcription-model")
+    parser.add_argument("--python",type=Path,default=ROOT/".local/transcription-venv/bin/python")
+    args=parser.parse_args()
+    cache=args.models.resolve(strict=True)
     require(sys.platform == "darwin", "This RSS qualifier uses Darwin ps")
     rustup = shutil.which("rustup") or "/opt/homebrew/opt/rustup/bin/rustup"
     cargo = Path(subprocess.check_output([rustup, "which", "--toolchain", "1.97.1", "cargo"], text=True).strip())
@@ -115,7 +120,7 @@ def main():
         # exec preserves the pid and standard streams. The observer executes the
         # exact native host's runner, registering only an at-exit resource reading.
         python=folder/"observe-python"
-        interpreter=shlex.quote(str(ROOT/".local/transcription-venv/bin/python"))
+        interpreter=shlex.quote(str(args.python.absolute()))
         observer=shlex.quote(str(ROOT/"scripts/transcription_rss_observer.py"))
         python.write_text(f'#!/bin/sh\nexec {interpreter} -I -B {observer} "$@"\n')
         python.chmod(0o700)
@@ -124,13 +129,13 @@ def main():
             if language == "silence":
                 write_wav(audio, bytes(2 * FRAMES))
             else:
-                repeats = make_fixture(folder, language)
+                repeats = make_fixture(folder, language, cache)
             digest = hashlib.sha256(audio.read_bytes()).hexdigest()
             observations = []
             for run in range(2):
                 slot = folder / f"{language}-{run}"
                 slot.mkdir(mode=0o700)
-                code, out, err, metrics = transcribe(binary, python, slot, audio)
+                code, out, err, metrics = transcribe(binary, python, slot, audio, cache)
                 if language == "silence":
                     require(code != 0 and not out and "NoSpeech" in err, "Silence returned a transcript")
                 else:

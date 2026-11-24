@@ -24,6 +24,7 @@ parser.add_argument("--models", type=Path, default=ROOT / ".local/transcription-
 parser.add_argument(
     "--python", type=Path
 )
+parser.add_argument("--verify-decode-deadline",action="store_true",help="Exercise the real 60-second supervisor deadline with a stalled test-owned decoder")
 parser.add_argument("--uv-cache",type=Path,default=ROOT/".local/uv-cache")
 args = parser.parse_args()
 args.python = args.python or interpreter(ROOT,args.uv_cache)
@@ -94,11 +95,41 @@ def main():
         check=True,
     )
     binary = target / "debug/orange-transcribe"
+    contract=json.loads(subprocess.check_output([binary,"--describe-input"],timeout=10))
+    reference=json.loads((ROOT/"crates/model-runtime/model-manifests"/(PIN["model_version"]+".json")).read_bytes())
+    encoded=json.dumps(reference,sort_keys=True,separators=(",",":")).encode()
+    if contract["manifest_sha256"]!=hashlib.sha256(encoded).hexdigest() or contract["language_codes"]!=PIN["language_codes"] or contract["runtime"]!=reference["runtime"]:
+        raise ValueError("Different audio contract or language policy")
+    print(json.dumps({"audio_input_contract":contract["manifest_sha256"],"accepted_container_count":len(contract["container_codecs"]),
+                      "languages":len(contract["language_codes"])}),flush=True)
     with tempfile.TemporaryDirectory(prefix="orange-asr-qa-") as tmp:
         scratch = Path(tmp)
         slot = scratch / "slot"
         slot.mkdir(mode=0o700)
         receipt = scratch / "measurement.json"
+
+        if args.verify_decode_deadline:
+            hung=scratch/"stalled-decoder";pidfile=scratch/"decoder.pid"
+            hung.write_text("#!"+str(python)+"\n"+f"""import fcntl,os,time
+from pathlib import Path
+with Path({str(slot/'transcription.lock')!r}).open('a') as lock:
+    fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+    Path({str(pidfile)!r}).write_text(str(os.getpid()))
+    print('{{"ready":true,"protocol":1}}',flush=True)
+    time.sleep(180)
+""")
+            hung.chmod(0o700)
+            start=time.monotonic()
+            expired=subprocess.run([binary,"measure",hung,models,slot,sample],capture_output=True,text=True,timeout=95)
+            elapsed=time.monotonic()-start
+            if expired.returncode==0 or expired.stdout or "Timeout" not in expired.stderr or not pidfile.exists() or elapsed<59:
+                raise ValueError("No confirmed real decoder deadline: "+expired.stderr[:160])
+            try:os.kill(int(pidfile.read_text()),0)
+            except ProcessLookupError:pass
+            else:raise ValueError("Timed out decoder still holds a process")
+            import fcntl as file_lock
+            with (slot/"transcription.lock").open("a") as lock:file_lock.flock(lock,file_lock.LOCK_EX|file_lock.LOCK_NB)
+            print(json.dumps({"stalled_decoder_fixture":True,"timeout_elapsed_seconds":round(elapsed,3),"reaped_before_reuse":True,"partial_outputs":0}),flush=True)
 
         def cmd(action, path, rest=(), assets=models):
             return [binary, action, python, assets, slot, path, *rest]

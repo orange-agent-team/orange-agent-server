@@ -13,6 +13,9 @@ parser.add_argument("venv", type=Path)
 parser.add_argument("model_dir", type=Path)
 args = parser.parse_args()
 pin = json.loads((root / "config/local-transcription.lock.json").read_text())
+contract=json.loads(subprocess.check_output([root/"bin/orange-transcribe","--describe-input"],timeout=10))
+if contract["model_version"]!=pin["model_version"] or contract["language_codes"]!=pin["language_codes"]:
+    raise ValueError("Installed transcription policy differs from its immutable release")
 spec = pin["qualification_sample"]
 cache = args.model_dir.resolve()
 sample = cache / "jfk.wav"
@@ -35,6 +38,6 @@ with tempfile.TemporaryDirectory(prefix="orange-speech-") as tmp:
         or usage != quote["measure"] or (usage["duration_ms"],usage["normalized_samples"]) != (11000,176000)
         or t["language"] != "en" or not t["segments"] or re.findall(r"[a-z]+",t["text"].lower()) != reference):
         raise ValueError("Installed transcription profile returned unexpected speech or measurement")
-    print(json.dumps({"model": output["model_version"], "language": t["language"], "compute_type": t["compute_type"],
+    print(json.dumps({"manifest_sha256":contract["manifest_sha256"], "model": output["model_version"], "language": t["language"], "compute_type": t["compute_type"],
                       "samples": usage["normalized_samples"], "duration_ms": usage["duration_ms"],
                       "reference_words_matched": True, "segments": len(t["segments"])}))
