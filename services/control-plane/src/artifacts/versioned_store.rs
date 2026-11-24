@@ -249,6 +249,9 @@ impl VersionedStore {
         Ok(self
             .op
             .writer_with(key)
+            .content_type("application/octet-stream")
+            .content_disposition("attachment")
+            .cache_control("private, no-store")
             .if_not_exists(true)
             .user_metadata([
                 ("orange-root".to_owned(), self.root_id.clone()),

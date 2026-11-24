@@ -8,6 +8,9 @@ impl VersionedStore {
         key_valid(&t.stage)?;
         let mut headers = BTreeMap::new();
         headers.insert("content-length".into(), t.view.size_bytes.clone());
+        headers.insert("content-type".into(), "application/octet-stream".into());
+        headers.insert("content-disposition".into(), "attachment".into());
+        headers.insert("cache-control".into(), "private, no-store".into());
         headers.insert("if-none-match".into(), "*".into());
         headers.insert(
             "x-amz-checksum-sha256".into(),

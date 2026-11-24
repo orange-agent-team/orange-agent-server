@@ -75,6 +75,8 @@ def run(api,dbfile,identity,folder,endpoint,bucket,credentials,s3,fence,expiry,w
             try:
                 conn.request("GET",url.path+"?"+url.query);res=conn.getresponse();body=res.read()
                 require(res.status==200 and body==data and res.getheader("x-amz-version-id")==provider,"Wrong versioned signed bytes")
+                require(res.getheader("Content-Disposition")=="attachment" and res.getheader("Content-Type")=="application/octet-stream"
+                        and "no-store" in (res.getheader("Cache-Control") or ""),"Signed object response was not a private download")
             finally:conn.close()
         provider_call=private_requests(endpoint,bucket,credentials,folder)
         if old_api:
@@ -220,7 +222,7 @@ def run(api,dbfile,identity,folder,endpoint,bucket,credentials,s3,fence,expiry,w
                 expire_and_reclaim(direct,wire,sql,provider_call,prefix,author)
             if web:
                 # Configure the actual test bucket's CORS for this HTTPS application origin.
-                cors=f'<CORSConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><CORSRule><AllowedOrigin>{origin}</AllowedOrigin><AllowedMethod>GET</AllowedMethod><AllowedHeader>*</AllowedHeader><ExposeHeader>Content-Length</ExposeHeader></CORSRule></CORSConfiguration>'.encode()
+                cors=f'<CORSConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><CORSRule><AllowedOrigin>{origin}</AllowedOrigin><AllowedMethod>GET</AllowedMethod><AllowedMethod>PUT</AllowedMethod><AllowedHeader>*</AllowedHeader><ExposeHeader>Content-Length</ExposeHeader></CORSRule></CORSConfiguration>'.encode()
                 status,_,_=provider_call("PUT",query={"cors":""},data=cors,headers={"Content-Type":"application/xml"})
                 require(status in (200,204),"Private provider CORS registration failed: "+str(status))
                 pixels,rgb=(png.read_bytes(),rgb) if png else runpy.run_path(str(Path(__file__).with_name("check-authorized-image-inspection.py")))["sample"]()
@@ -229,7 +231,8 @@ def run(api,dbfile,identity,folder,endpoint,bucket,credentials,s3,fence,expiry,w
                 require(status==200,"Browser upload intent failed");image=json.loads(raw)
                 require(wire("PUT",base+"/"+picture+"/content",author,pixels,picture)[0]==200,"Browser upload failed")
                 web=web.resolve(strict=True)
-                case={"api":address,"origin":origin,"storage":endpoint,"site":str((site or web/"apps/web/dist").resolve(strict=True)),
+                browser_file=folder/"real-browser-input.png";browser_file.write_bytes(pixels)
+                case={"directUpload":direct_upload,"pngFile":str(browser_file),"api":address,"origin":origin,"storage":endpoint,"site":str((site or web/"apps/web/dist").resolve(strict=True)),
                       "tls":str(web/".local/tls"),"token":author[1],"csrf":author[2],"owner":author[0],"upload":picture,
                       "artifact":image["artifact_id"],"rgb":rgb,"sha256":image_sha,"bytes":len(pixels)}
                 subprocess.run([Path.home()/".nvm/versions/node/v22.23.2/bin/node",web/"apps/web/scripts/real-versioned-download.mjs"],

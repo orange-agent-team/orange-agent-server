@@ -4278,7 +4278,10 @@
                   "if-none-match",
                   "x-amz-checksum-sha256",
                   "x-amz-meta-orange-root",
-                  "x-amz-meta-orange-key"
+                  "x-amz-meta-orange-key",
+                  "content-type",
+                  "content-disposition",
+                  "cache-control"
                 ],
                 "properties": {
                   "content-length": {
@@ -4300,6 +4303,15 @@
                   "x-amz-meta-orange-key": {
                     "type": "string",
                     "pattern": "^staging-[a-f0-9-]{36}$"
+                  },
+                  "content-type": {
+                    "const": "application/octet-stream"
+                  },
+                  "content-disposition": {
+                    "const": "attachment"
+                  },
+                  "cache-control": {
+                    "const": "private, no-store"
                   }
                 }
               },

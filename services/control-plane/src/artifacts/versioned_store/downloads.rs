@@ -18,7 +18,11 @@ impl VersionedStore {
             .bucket_url
             .join(&format!("{}/{}", self.prefix, key))
             .map_err(|_| ArtifactError::StoragePolicy)?;
-        url.query_pairs_mut().append_pair("versionId", version);
+        url.query_pairs_mut()
+            .append_pair("versionId", version)
+            .append_pair("response-content-disposition", "attachment")
+            .append_pair("response-content-type", "application/octet-stream")
+            .append_pair("response-cache-control", "private, no-store");
         for _ in 0..2 {
             let now = now_seconds()?;
             let ttl = cutoff.saturating_sub(now);
