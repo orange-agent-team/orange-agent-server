@@ -24,8 +24,11 @@ parser.add_argument("--identity-config", type=Path)
 parser.add_argument("--web-repo", type=Path)
 parser.add_argument("--weed-binary", type=Path, help="Already installed executable matching the pinned fixture SHA-256")
 parser.add_argument("--model-run", action="store_true")
+parser.add_argument("--artifact-versions",action="store_true",help="Check versioned artifact publication against the isolated private bucket")
 parser.add_argument("--model-runtime-root", type=Path)
 args = parser.parse_args()
+if args.artifact_versions and (args.model_run or args.web_repo or args.database_url_file):
+    parser.error("Artifact version qualification uses its own private bucket")
 if args.model_run and not (args.database_url_file and args.web_repo and args.model_runtime_root):
     raise SystemExit("Model workflow requires database, identity, Web and verified model runtime")
 if args.web_repo and not args.database_url_file:
@@ -61,7 +64,8 @@ cmd = [
     "--test",
     "s3_source",
 ]
-subprocess.run(cmd + ["--no-run"], cwd=root, env=env, check=True)
+if not args.artifact_versions:
+    subprocess.run(cmd + ["--no-run"], cwd=root, env=env, check=True)
 with tempfile.TemporaryDirectory(prefix="oa-s3-", dir="/tmp") as tmp:
     folder = Path(tmp)
     bucket = "registered-data"
@@ -175,6 +179,10 @@ with tempfile.TemporaryDirectory(prefix="oa-s3-", dir="/tmp") as tmp:
                 )
             if call(owner, "PUT", bucket) != 200:
                 raise RuntimeError("Owned bucket creation failed")
+            if args.artifact_versions:
+                from artifact_object_versions import check
+                check(endpoint,bucket,owner["credentials"][0],folder)
+                raise SystemExit(0)  # The enclosing finally always stops the private fixture.
             for name, content in [
                 ("a.txt", b"confirmed source data"),
                 ("b.txt", b"b"),
