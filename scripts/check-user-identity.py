@@ -5,7 +5,8 @@ import argparse
 import json
 import tempfile
 from owned_postgres import database
-from urllib.parse import unquote,urlsplit
+from urllib.parse import urlsplit
+from identity_schema_version import schema_version
 import os
 from pathlib import Path
 import shutil
@@ -24,7 +25,7 @@ def main():
     parser.add_argument('--server-repo',type=Path,default=ROOT,help='Service sources and Rust tests to build, including a historical checkout')
     parser.add_argument('--web-driver',type=Path,help='Independent Playwright fixture checkout with the same user-session contract')
     args=parser.parse_args();server=args.server_repo.resolve(strict=True)
-    reserve_origins(43122)
+    reserve_origins(43112,43122)
     web=args.web_repo.resolve()
     driver=args.web_driver.resolve(strict=True) if args.web_driver else web
     if any((web/rel).read_bytes()!=(driver/rel).read_bytes() for rel in ('docs/contracts/user.schema.json','apps/web/src/api/contracts.ts')):
@@ -53,14 +54,7 @@ def main():
     run([cargo,'build','--bin','orange-user-api','--bin','orange-admin-api','--locked'])
     run([sys.executable,web/'scripts/local-tls.py'])
     env.pop('ORANGE_ARTIFACT_ROOT',None)  # identity-only tests must not open an operator's storage root
-    def schema_version(url):
-        parsed=urlsplit(url)
-        pg=dict(env,PGHOST=parsed.hostname,PGPORT=str(parsed.port),PGUSER=unquote(parsed.username),PGPASSWORD=unquote(parsed.password),PGDATABASE=parsed.path[1:])
-        psql=shutil.which('psql') or '/opt/homebrew/opt/postgresql@17/bin/psql'
-        def scalar(sql):return subprocess.check_output([psql,'-X','-w','-Atq','-v','ON_ERROR_STOP=1','-c',sql],env=pg,text=True).strip()
-        if scalar("SELECT to_regclass('public._sqlx_migrations') IS NULL")=='t':return 0
-        return int(scalar("SELECT COALESCE(max(version),0) FROM public._sqlx_migrations WHERE success"))
-    before=schema_version(database_url)
+    before=schema_version(database_url,env)
     with database(db_file,'orange_user_oidc_') as (name,owned_url),tempfile.TemporaryDirectory(prefix='orange-user-identity-') as temporary:
         owned_file=Path(temporary)/'database-url'
         with open(owned_file,'x',opener=lambda path,flags:os.open(path,flags,0o600)) as stream:
@@ -69,10 +63,10 @@ def main():
             ORANGE_IDENTITY_FIXTURE=str(private/'identity/fixture.json'),ORANGE_TEST_DATABASE_URL_FILE=str(owned_file),
             ORANGE_TEST_USER_OIDC_DATABASE=name,ORANGE_USER_TLS_DIR=str(web/'.local/tls'))
         verify_owned(env,cargo,server,web,driver,args.node,owned_url,user_cfg,admin_cfg)
-        installed=schema_version(owned_url)
+        installed=schema_version(owned_url,env)
         expected=len(list((server/'services/control-plane/migrations').glob('*.sql')))
         if installed!=expected:raise ValueError("Disposable schema did not match tested service source")
-    after=schema_version(database_url)
+    after=schema_version(database_url,env)
     print(json.dumps({"source":subprocess.check_output(["git","rev-parse","HEAD"],cwd=server,text=True).strip(),
                       "web":subprocess.check_output(["git","rev-parse","HEAD"],cwd=web,text=True).strip(),
                       "owned_schema":installed,"maintenance_schema_before":before,"maintenance_schema_after":after,
