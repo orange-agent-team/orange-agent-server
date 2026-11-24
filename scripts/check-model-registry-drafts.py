@@ -123,6 +123,13 @@ def main():
             require(sql("SELECT count(*) FROM admin_audit WHERE event_type='model.draft_registered'")=="1","Duplicate write audit")
             require(http("GET","model-drafts/"+name+query,reader)==(200,receipt),"Cannot reconcile registered manifest")
             require(http("GET","models/"+name+query,reader)==(200,receipt["model"]),"Summary mismatch")
+            require(http("GET","models/"+name+"?environment=dev",reader)==(200,receipt["model"]),
+                    "The original environment-only summary operation was not usable")
+            require(http("GET","model-drafts/"+name+"?environment=dev",reader)==(200,receipt),
+                    "Environment-only detail returned a different record")
+            require(http("GET","models/"+name+"?environment=dev",foreign)[0]==403,"Implicit platform scope expanded a regional grant")
+            require(http("GET","models/"+name+"?environment=dev&scope_id=platform",writer)[0]==422,"Half-specified scope accepted")
+
             require(http("GET","model-drafts/"+name+query,foreign)[0]==403,"Region granted platform read")
             changed=copy.deepcopy(template);changed["source"]["license"]="changed"
             require(post(changed)[0]==409 and post(template,key="different")[0]==409,"Mutable draft or key binding")

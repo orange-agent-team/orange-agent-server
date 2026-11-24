@@ -1891,6 +1891,31 @@
           },
           {
             "$ref": "#/components/parameters/Environment"
+          },
+          {
+            "name": "scope_kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "platform",
+                "region",
+                "tenant",
+                "resource"
+              ]
+            }
+          },
+          {
+            "name": "scope_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            }
           }
         ],
         "responses": {
@@ -1996,7 +2021,7 @@
           }
         },
         "x-implementation-status": "development-candidate",
-        "description": "Development platform scope. Returns entries registered through the model registry."
+        "description": "Development platform scope. Supplying only environment selects the platform scope. Optional scope_kind and scope_id must be supplied together."
       }
     },
     "/admin/v1/payments": {
@@ -8591,6 +8616,31 @@
           },
           {
             "$ref": "#/components/parameters/Environment"
+          },
+          {
+            "name": "scope_kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "platform",
+                "region",
+                "tenant",
+                "resource"
+              ]
+            }
+          },
+          {
+            "name": "scope_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            }
           }
         ],
         "responses": {
@@ -8696,7 +8746,7 @@
           }
         },
         "x-implementation-status": "development-candidate",
-        "description": "Development platform scope. Returns entries registered through the model registry."
+        "description": "Development platform scope. Supplying only environment selects the platform scope. Optional scope_kind and scope_id must be supplied together."
       }
     }
   },

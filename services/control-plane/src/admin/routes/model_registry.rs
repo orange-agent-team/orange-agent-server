@@ -197,16 +197,41 @@ pub(super) async fn list(
     audit::response(result, &req)
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct DetailQuery {
+    environment: String,
+    scope_kind: Option<String>,
+    scope_id: Option<String>,
+}
+impl DetailQuery {
+    fn scope(self) -> Result<Scope, AdminError> {
+        let (kind, scope_id) = match (self.scope_kind, self.scope_id) {
+            (None, None) => ("platform".to_owned(), "platform".to_owned()),
+            (Some(kind), Some(id)) => (kind, id),
+            _ => return Err(AdminError::Invalid),
+        };
+        let scope = ScopedQuery {
+            environment: self.environment,
+            scope_kind: kind,
+            scope_id,
+            limit: None,
+            cursor: None,
+        }
+        .scope()?;
+        platform(&scope)?;
+        Ok(scope)
+    }
+}
 async fn read_one(
     identity: Arc<AdminIdentity>,
     headers: HeaderMap,
     id: String,
-    q: ScopedQuery,
+    q: DetailQuery,
     full: bool,
 ) -> Result<Response, AdminError> {
     let scope = q.scope()?;
-    platform(&scope)?;
-    if !orange_protocol::valid_id(&id) || q.limit.is_some() || q.cursor.is_some() {
+    if !orange_protocol::valid_id(&id) {
         return Err(AdminError::Invalid);
     }
     let req = audit::request_id(&headers)?;
@@ -239,7 +264,7 @@ pub(super) async fn summary(
     State(i): State<Arc<AdminIdentity>>,
     headers: HeaderMap,
     Path(id): Path<String>,
-    q: Result<Query<ScopedQuery>, QueryRejection>,
+    q: Result<Query<DetailQuery>, QueryRejection>,
 ) -> Result<Response, AdminError> {
     read_one(i, headers, id, q.map_err(|_| AdminError::Invalid)?.0, false).await
 }
@@ -247,7 +272,7 @@ pub(super) async fn detail(
     State(i): State<Arc<AdminIdentity>>,
     headers: HeaderMap,
     Path(id): Path<String>,
-    q: Result<Query<ScopedQuery>, QueryRejection>,
+    q: Result<Query<DetailQuery>, QueryRejection>,
 ) -> Result<Response, AdminError> {
     read_one(i, headers, id, q.map_err(|_| AdminError::Invalid)?.0, true).await
 }
