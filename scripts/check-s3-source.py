@@ -28,13 +28,14 @@ parser.add_argument("--artifact-versions",action="store_true",help="Check versio
 parser.add_argument("--model-runtime-root", type=Path)
 parser.add_argument("--signed-lifetimes",action="store_true",help="Observe actual 60-second GET and five-minute PUT expiry in the artifact fixture")
 parser.add_argument("--download-expiry",action="store_true",help="Check expiry of actual API-issued GET grants")
+parser.add_argument("--artifact-old-api",type=Path,help="Prior packaged User API for the filesystem schema upgrade")
 parser.add_argument("--artifact-web",type=Path,help="Run the independent Web client against the real artifact issuer")
 parser.add_argument("--artifact-site",type=Path,help="Extracted Web site directory")
 parser.add_argument("--artifact-png",type=Path)
 parser.add_argument("--artifact-rgb-sha256")
 parser.add_argument("--artifact-backend-api",type=Path,help="Run the real User API against the versioned private bucket")
 args = parser.parse_args()
-if (args.artifact_web or args.artifact_site or args.artifact_png or args.artifact_rgb_sha256) and not args.artifact_backend_api:parser.error("Browser and image fixtures require --artifact-backend-api")
+if (args.artifact_old_api or args.artifact_web or args.artifact_site or args.artifact_png or args.artifact_rgb_sha256) and not args.artifact_backend_api:parser.error("Browser and image fixtures require --artifact-backend-api")
 if bool(args.artifact_png)!=bool(args.artifact_rgb_sha256):parser.error("Supply both real image and verified pixel digest")
 if args.download_expiry and not args.artifact_backend_api:
     parser.error("--download-expiry requires --artifact-backend-api")
@@ -212,7 +213,7 @@ with tempfile.TemporaryDirectory(prefix="oa-s3-", dir="/tmp") as tmp:
                     with relay(endpoint,bucket) as (address,fence):
                         run(args.artifact_backend_api.resolve(strict=True),args.database_url_file.resolve(strict=True),args.identity_config.resolve(strict=True),
                             folder,address,bucket,owner["credentials"][0],lambda method,path,data:call(owner,method,path,data),fence,args.download_expiry,
-                            args.artifact_web,args.artifact_site,args.artifact_png,args.artifact_rgb_sha256)
+                            args.artifact_web,args.artifact_site,args.artifact_png,args.artifact_rgb_sha256,args.artifact_old_api)
                 raise SystemExit(0)  # The enclosing finally always stops the private fixture.
             for name, content in [
                 ("a.txt", b"confirmed source data"),
