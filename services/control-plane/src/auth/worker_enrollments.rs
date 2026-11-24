@@ -12,9 +12,10 @@ use orange_protocol::{
 use sqlx::{Postgres, Row, Transaction, postgres::PgRow};
 
 type Tx<'a> = Transaction<'a, Postgres>;
-const SELECT:&str="SELECT request_id::text,owner_id,requested_by,spki_sha256,csr_sha256,exchange_token_sha256,
+macro_rules! enrollment_select { () => { "SELECT request_id::text,owner_id,requested_by,spki_sha256,csr_sha256,exchange_token_sha256,
     CASE WHEN state='authorized' AND expires_at<=clock_timestamp() THEN 'expired' WHEN state='authorized' AND EXISTS(SELECT FROM worker_enrollment_certificates c WHERE c.request_id=g.request_id AND c.redeemed_at IS NOT NULL) THEN 'redeemed' WHEN state='authorized' AND EXISTS(SELECT FROM worker_enrollment_certificates c WHERE c.request_id=g.request_id) THEN 'certificate_prepared' ELSE state END AS visible_state,
-    floor(extract(epoch FROM expires_at))::bigint AS expires FROM worker_enrollment_grants g WHERE owner_id=$1 AND request_id=$2::text::uuid";
+    floor(extract(epoch FROM expires_at))::bigint AS expires FROM worker_enrollment_grants g WHERE owner_id=$1 AND request_id=$2::text::uuid" }; }
+const SELECT: &str = enrollment_select!();
 
 async fn manager(
     identity: &UserIdentity,
@@ -191,12 +192,12 @@ pub(super) async fn inspect_rotation(
     headers: HeaderMap,
 ) -> Result<Json<orange_protocol::device_enrollment::WorkerRotationView>, UserApiError> {
     let mut guard = manager(&identity, &headers, &owner, &id, false).await?;
-    let statement=format!("WITH enrollment AS ({SELECT}) SELECT enrollment.*,r.node_id,r.previous_request_id::text,r.previous_certificate_sha256,r.intent_sha256,
+    let statement=concat!("WITH enrollment AS (",enrollment_select!(),") SELECT enrollment.*,r.node_id,r.previous_request_id::text,r.previous_certificate_sha256,r.intent_sha256,
         EXISTS(SELECT FROM renewable_worker_certificates src WHERE src.certificate_sha256=r.previous_certificate_sha256 AND src.node_id=r.node_id AND src.owner_id=enrollment.owner_id) AS eligible,
         floor(extract(epoch FROM a.activated_at))::bigint AS activated,floor(extract(epoch FROM a.overlap_until))::bigint AS cutoff
         FROM enrollment JOIN worker_certificate_rotation_requests r ON r.request_id=enrollment.request_id::uuid
         LEFT JOIN worker_certificate_rotation_receipts a ON a.request_id=r.request_id");
-    let row = sqlx::query(&statement)
+    let row = sqlx::query(statement)
         .bind(&owner)
         .bind(&id)
         .fetch_optional(&mut **guard.transaction())

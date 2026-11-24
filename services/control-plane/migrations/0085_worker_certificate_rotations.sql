@@ -95,13 +95,17 @@ END $$;
 CREATE TRIGGER retire_predecessor_on_worker_hello AFTER INSERT OR UPDATE OF certificate_sha256 ON worker_sessions
 FOR EACH ROW EXECUTE FUNCTION retire_predecessor_on_worker_hello();
 
+CREATE INDEX rotation_receipts_by_parent ON worker_certificate_rotation_receipts(previous_request_id);
 CREATE INDEX rotation_requests_by_parent ON worker_certificate_rotation_requests(previous_request_id);
 CREATE FUNCTION revoke_descendant_worker_rotations() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-    WITH RECURSIVE children(id) AS (
-        SELECT request_id FROM worker_certificate_rotation_requests WHERE previous_request_id=NEW.request_id
+    WITH RECURSIVE edges(parent,child) AS (
+        SELECT previous_request_id,request_id FROM worker_certificate_rotation_requests
+        UNION ALL SELECT previous_request_id,request_id FROM worker_certificate_rotation_receipts
+    ), children(id) AS (
+        SELECT child FROM edges WHERE parent=NEW.request_id
         UNION
-        SELECT r.request_id FROM worker_certificate_rotation_requests r JOIN children c ON r.previous_request_id=c.id
+        SELECT e.child FROM edges e JOIN children c ON e.parent=c.id
     )
     UPDATE worker_enrollment_grants g SET state='revoked',revoked_at=clock_timestamp()
        FROM children WHERE g.request_id=children.id AND g.state='authorized';
