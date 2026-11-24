@@ -76,14 +76,23 @@ with tempfile.TemporaryDirectory(prefix='orange-upgrade-') as folder, database(a
     evidence=root/'.local'/'turn-upgrade'/name;evidence.mkdir(mode=0o700,parents=True)
     prepare(tls);db_file=tls/'database-url';db_file.write_text(url+'\n');db_file.chmod(0o600)
     env=dict(os.environ,PATH=str(node.parent)+os.pathsep+str(cargo.parent)+os.pathsep+os.environ['PATH'],CARGO_NET_OFFLINE='true',CARGO_INCREMENTAL='0',
-             CARGO_TARGET_DIR=str(private/'historical-target'),CARGO_PROFILE_DEV_DEBUG='0',CARGO_PROFILE_TEST_DEBUG='0',PYTHONDONTWRITEBYTECODE='1',
+             CARGO_PROFILE_DEV_DEBUG='0',CARGO_PROFILE_TEST_DEBUG='0',PYTHONDONTWRITEBYTECODE='1',
              ORANGE_TEST_DATABASE_URL=url,ORANGE_TEST_USER_CONFIG_FILE=str(args.identity_config.resolve()),ORANGE_TEST_MODEL_RUNTIME_ROOT=str(args.model_runtime_root.resolve()),
              ORANGE_CLOUD_MODEL_BROWSER=str(web/'apps/web/scripts/real-cloud-model.mjs'),ORANGE_CLOUD_MODEL_QA_DIR=str(tls),
              ORANGE_CLOUD_DIRECTORY_TOOLS='1',ORANGE_CLOUD_MODEL_EVIDENCE=str(evidence),ORANGE_CLOUD_QA_PYTHON=sys.executable)
     cache=args.npm_cache or args.web_repo.resolve()/'.local/npm-cache'
     subprocess.run([node,node.parent/'../lib/node_modules/npm/bin/npm-cli.js','ci','--offline','--cache',cache,'--no-audit','--no-fund'],cwd=web/'apps/web',env=env,check=True)
     subprocess.run([node,web/'scripts/check.mjs'],cwd=web,env=env,check=True)
-    subprocess.run([sys.executable,old/'scripts/check-web-compute.py','--web-repo',web,'--node',node],env=env,cwd=old,check=True)
+    # The old binaries are used only to produce the durable historical facts. Keep
+    # their compiler cache out of the second build's disk peak, while retaining the
+    # source checkouts, database, original receipts and fixtures for comparison.
+    with tempfile.TemporaryDirectory(prefix="historical-target-",dir=private) as first_target:
+        env["CARGO_TARGET_DIR"]=first_target
+        subprocess.run([sys.executable,old/'scripts/check-web-compute.py','--web-repo',web,'--node',node],env=env,cwd=old,check=True)
+        scratch_kib=int(subprocess.check_output(["du","-sk",first_target],text=True).split()[0])
+    if Path(first_target).exists() or scratch_kib<=0:
+        raise RuntimeError("Historical compiler cache was not released before migration")
+    print("Released historical compiler output before the new build:",scratch_kib,"KiB",flush=True)
     original=json.loads((evidence/'cloud-model-result.json').read_text())
     if not original['original_operation_receipts_verified'] or len(original['directory_runs'])!=3:raise SystemExit('Incomplete prior release evidence')
     before=unchanged_facts(url)
@@ -92,6 +101,6 @@ with tempfile.TemporaryDirectory(prefix='orange-upgrade-') as folder, database(a
                    env=env,cwd=root,check=True)
     after=unchanged_facts(url)
     if before!=after:raise SystemExit('Historical records changed across migration')
-    report=json.loads((evidence/'upgrade.json').read_text());report.update(previous_server=server_base,previous_web=web_base,historical_table_sha256=before)
+    report=json.loads((evidence/'upgrade.json').read_text());report.update(previous_server=server_base,previous_web=web_base,historical_table_sha256=before,historical_compiler_cache_kib=scratch_kib,historical_compiler_cache_released_before_migration=True)
     (evidence/'upgrade.json').write_text(json.dumps(report,indent=2)+'\n')
     print('PASS actual historical records, matching input projections, settlements, withdrawals and unknown facts across schema upgrade: '+str(evidence.relative_to(root)))
