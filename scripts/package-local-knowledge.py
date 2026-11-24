@@ -62,12 +62,21 @@ def main():
         for key,content in files.items():
             if (installed/key).read_bytes()!=content:raise ValueError("Unpacked member differs")
         exe=installed/"bin"/PROGRAM
-        subprocess.run([sys.executable,ROOT/"scripts/check-local-knowledge.py","--binary",exe,"--cpu-runtime",args.cpu_runtime.resolve()],cwd=ROOT,check=True)
+        smoke=subprocess.check_output([sys.executable,ROOT/"scripts/check-local-knowledge.py","--binary",exe,"--cpu-runtime",args.cpu_runtime.resolve()],cwd=ROOT,text=True)
+        print(smoke,end="",flush=True)
+        rows=[json.loads(line) for line in smoke.splitlines() if line.startswith("{")]
+        [storage]=[v for v in rows if v.get("persistent_restart_read")]
+        [reopened]=[v for v in rows if v.get("reopened_after_actual_model_search")]
+        if not all(storage.get(key) for key in ("stale_cache_restore_rejected","authority_loss_refused","interrupted_write_recovered","revocation_survived_restart","unchanged_posting_segments_reused")):
+            raise ValueError("Incomplete extracted persistence verification")
+        if not reopened["answer_matched_unpublished_nonce"] or reopened["approved_tool_calls"]!=2:
+            raise ValueError("Recovered model call failed")
+
         subprocess.run([args.node.resolve(),ROOT/"scripts/knowledge-interop/check.mjs",exe],cwd=ROOT,check=True)
         final=dest/(PROGRAM+"-macos-arm64-"+sha[:16]+".tar.gz")
         result={"source":commit,"archive":final.name,"sha256":sha,"bytes":first.stat().st_size,"target":build["target"],
                 "identical_archives":2,"independent_builds":build["builds"],"locked_crates":total,"without_packaged_notice":missing,
-                "official_stdio_client":"@modelcontextprotocol/client@2.4.0","actual_local_cpu":True,"production_signed_or_notarized":False}
+                "official_stdio_client":"@modelcontextprotocol/client@2.4.0","persistent_qualification":storage,"reopened_model":reopened,"actual_local_cpu":True,"production_signed_or_notarized":False}
         receipt=work/"receipt.json"
         receipt.write_text(json.dumps(result,indent=2)+"\n")
         if final.exists():

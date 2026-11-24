@@ -13,7 +13,7 @@ import time
 def digest(path):
     with path.open("rb") as f:return hashlib.file_digest(f,"sha256").hexdigest()
 
-def exercise(repo,runtime,binary,peer_type):
+def exercise(repo,runtime,binary,peer_type,*,persistent=False):
     lock=json.loads((repo/"config/local-model.lock.json").read_bytes())
     build=json.loads((runtime/"build.json").read_bytes());engine=runtime/"build/bin/llama-server"
     model=runtime/(lock["model"]["sha256"]+".gguf")
@@ -52,7 +52,7 @@ def exercise(repo,runtime,binary,peer_type):
                     except (OSError,ValueError):pass
                     if time.monotonic()>=end:raise ValueError("CPU model readiness timeout")
                     time.sleep(.15)
-                client=peer_type(binary,"development-owner",workspace,private,["dispatch.txt","calendar.txt"]);client.start()
+                client=peer_type(binary,"development-owner",workspace,private,["dispatch.txt","calendar.txt"],persistent=persistent);client.start()
                 definitions={t["name"]:t for t in client.call("tools/list")["result"]["tools"]}
                 messages=[{"role":"system","content":"Use only the provided local tools and retrieved document text to answer. The collection is manuals."}]
                 operations=[]
@@ -86,6 +86,10 @@ def exercise(repo,runtime,binary,peer_type):
                          lambda a:a.get("collection_id")=="manuals" and a.get("query","").lower()=="harbor dispatch" and a.get("limit")==1)["hits"]
                 hit,=hits
                 if hit["path"]!="dispatch.txt":raise ValueError("Wrong source chosen")
+                if persistent:
+                    client.close();client=None
+                    client=peer_type(binary,"development-owner",workspace,private,["calendar.txt","dispatch.txt"],persistent=True)
+                    client.start()
                 selected={"collection_id":"manuals","hit_id":hit["hit_id"],"expected_sha256":hit["source_sha256"]}
                 body=run("knowledge_read","Read the entire returned hit. Pass collection_id manuals, hit_id "+hit["hit_id"]+" and expected_sha256 "+hit["source_sha256"]+". Do not add any other arguments.",
                          lambda args:args==selected,selected)
@@ -94,7 +98,7 @@ def exercise(repo,runtime,binary,peer_type):
                 answer=request("POST","/v1/chat/completions",{"model":alias,"messages":messages,"temperature":0,"seed":42,"max_tokens":64})
                 final=answer["choices"][0]
                 if final["finish_reason"]!="stop" or code not in final["message"]["content"] or "FORBIDDEN" in final["message"]["content"]:raise ValueError("Answer is not grounded in the selected passage")
-                return {"backend_commit":build["backend_commit"],"model_sha256":lock["model"]["sha256"],"model_calls":3,"approved_tool_calls":len(operations),
+                return {"backend_commit":build["backend_commit"],"model_sha256":lock["model"]["sha256"],"model_calls":3,"reopened_after_actual_model_search":persistent,"approved_tool_calls":len(operations),
                         "answer_matched_unpublished_nonce":True,"source_sha256":hit["source_sha256"],"approval":"explicit per-operation test owner; read offer pinned to the selected live citation","transport":"private Unix socket and stdio"}
             finally:
                 try:

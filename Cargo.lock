@@ -2194,6 +2194,7 @@ dependencies = [
  "cap-fs-ext",
  "cap-std",
  "hex",
+ "hmac 0.13.0",
  "jsonschema",
  "libc",
  "orange-domain",

@@ -14,8 +14,8 @@ def require(value,message):
     if not value:raise ValueError(message)
 
 class Peer:
-    def __init__(self,binary,owner,root,private,files,profile=None):
-        self.process=subprocess.Popen([binary,*(["--protocol",profile] if profile else []),owner,"manuals",root,private,*files],stdin=subprocess.PIPE,stdout=subprocess.PIPE,text=True)
+    def __init__(self,binary,owner,root,private,files,profile=None,persistent=False,authority=None):
+        self.process=subprocess.Popen([binary,*(["--protocol",profile] if profile else []),*(["--persist"] if persistent else []),*(["--authority-dir",authority] if authority else []),owner,"manuals",root,private,*files],stdin=subprocess.PIPE,stdout=subprocess.PIPE,text=True)
         self.serial=0
     def call(self,method,params=None,notice=False):
         msg={"jsonrpc":"2.0","method":method}
@@ -148,9 +148,14 @@ def main():
                           "selected_documents":len(corpus),"foreign_citation_rejected":True,"deleted_and_replaced_citations_rejected":True,
                           "unselected_and_linked_content_returned":0,"cancelled_call_returned_content":False,"progress_token_checked":True,"storage":"in-memory full-text index","external_model_calls":0}))
         print("PASS live local knowledge stdio, explicit file authority, bilingual retrieval and version-bound citations")
+    from persistent_knowledge_acceptance import verify_cache
+    verify_cache(binary,Peer)
     if a.cpu_runtime:
         from knowledge_model_acceptance import exercise
         result=exercise(ROOT,a.cpu_runtime.resolve(),binary,Peer)
         print(json.dumps(result),flush=True)
         print("PASS actual CPU model proposed both knowledge tools and returned the code from the authorized source")
+        recovered=exercise(ROOT,a.cpu_runtime.resolve(),binary,Peer,persistent=True)
+        print(json.dumps(recovered),flush=True)
+        print("PASS actual model search, process restart, reauthorized citation read and grounded answer")
 if __name__=="__main__":main()

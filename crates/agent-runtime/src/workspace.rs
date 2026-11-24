@@ -199,6 +199,7 @@ struct GrantInner {
     owner: String,
     environment: String,
     resource_identity: String,
+    private_directories: std::collections::BTreeMap<PathBuf, (u64, u64)>,
     persistent_identity: bool,
     workspace_revocation: Option<Arc<AtomicBool>>,
     origin_gate: Option<Arc<RwLock<()>>>,
@@ -314,6 +315,7 @@ impl WorkspaceGrant {
 
         let directory = Dir::open_ambient_dir(&root, cap_std::ambient_authority())?;
         let opened_identity = directory_identity(&directory)?;
+        let mut private_directories = std::collections::BTreeMap::new();
         for private in private_roots {
             let private = private.canonicalize()?;
             if private.starts_with(&root) || root.starts_with(&private) {
@@ -321,6 +323,7 @@ impl WorkspaceGrant {
             }
             let private_directory = Dir::open_ambient_dir(&private, cap_std::ambient_authority())?;
             let private_identity = directory_identity(&private_directory)?;
+            private_directories.insert(private.clone(), private_identity);
             if ancestor_identity_matches(&private, opened_identity)?
                 || ancestor_identity_matches(&root, private_identity)?
             {
@@ -386,6 +389,7 @@ impl WorkspaceGrant {
                 owner: owner.into(),
                 environment,
                 resource_identity,
+                private_directories,
                 persistent_identity,
                 workspace_revocation,
                 origin_gate: None,

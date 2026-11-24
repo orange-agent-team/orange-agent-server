@@ -13,6 +13,7 @@ thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+hmac = "=0.13.0"
 hex.workspace = true
 tokio.workspace = true
 uuid.workspace = true

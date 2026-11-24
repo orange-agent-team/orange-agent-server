@@ -99,6 +99,27 @@ fn allowed_params(params: &Value, keys: &[&str]) -> bool {
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args: Vec<_> = std::env::args_os().skip(1).collect();
+    if args.first().is_some_and(|x| x == "--withdraw-saved") {
+        if !(4..=5).contains(&args.len()) {
+            return Err(
+                "usage: orange-knowledge --withdraw-saved OWNER COLLECTION PRIVATE_DIRECTORY [AUTHORITY_DIRECTORY]"
+                    .into(),
+            );
+        }
+        let owner = args[1].to_str().ok_or("invalid owner")?;
+        let collection = args[2].to_str().ok_or("invalid collection")?;
+        orange_agent_runtime::workspace::knowledge::withdraw_closed_with_authority(
+            std::path::Path::new(&args[3]),
+            std::path::Path::new(args.get(4).unwrap_or(&args[3])),
+            owner,
+            collection,
+        )?;
+        println!(
+            "{}",
+            json!({"collection_id":collection,"state":"withdrawn"})
+        );
+        return Ok(());
+    }
     let version = if args.first().is_some_and(|x| x == "--protocol") {
         match args.get(1).and_then(|x| x.to_str()) {
             Some(LEGACY) => LEGACY,
@@ -112,9 +133,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         args.drain(..2);
     }
     let modern = version == MODERN;
+    let persistent = args.first().is_some_and(|x| x == "--persist");
+    if persistent {
+        args.remove(0);
+    }
+    let authority = if persistent && args.first().is_some_and(|x| x == "--authority-dir") {
+        let dir = PathBuf::from(args.get(1).ok_or("missing authority directory")?);
+        args.drain(..2);
+        Some(dir)
+    } else {
+        None
+    };
     if !(5..=36).contains(&args.len()) {
         return Err(
-            "usage: orange-knowledge [--protocol VERSION] OWNER COLLECTION WORKSPACE PRIVATE_DIRECTORY RELATIVE_FILE..."
+            "usage: orange-knowledge [--protocol VERSION] [--persist [--authority-dir PATH]] OWNER COLLECTION WORKSPACE PRIVATE_DIRECTORY RELATIVE_FILE..."
                 .into(),
         );
     }
@@ -130,14 +162,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .ok_or("invalid file selection")
         })
         .collect::<Result<Vec<_>, _>>()?;
+    let mut protected = vec![private.clone()];
+    if let Some(dir) = &authority
+        && dir != &private
+    {
+        protected.push(dir.clone());
+    }
     let grant = WorkspaceGrant::open(
         owner,
         collection,
         "selected-knowledge-v1",
         &workspace,
-        &[private],
+        &protected,
     )?;
-    let search = KnowledgeCollection::open(grant.clone(), collection, files)?;
+    let search = if persistent {
+        KnowledgeCollection::open_persistent_with_authority(
+            grant.clone(),
+            collection,
+            files,
+            &private,
+            authority.as_deref().unwrap_or(&private),
+        )?
+    } else {
+        KnowledgeCollection::open(grant.clone(), collection, files)?
+    };
     let (tx, mut frames) = tokio::sync::mpsc::channel(2);
     std::thread::spawn(move || {
         let mut input = BufReader::new(io::stdin().lock());

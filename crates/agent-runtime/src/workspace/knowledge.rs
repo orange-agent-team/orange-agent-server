@@ -1,6 +1,9 @@
-//! Session-local text retrieval over an explicit file selection. No terms or document bytes go to disk.
+//! Selected-file retrieval. Persistence is an explicit host choice, with live revalidation after reopening.
+mod persistence;
+mod private_directory;
 use super::*;
 use cap_fs_ext::MetadataExt;
+pub use persistence::{withdraw_closed, withdraw_closed_with_authority};
 use rusqlite::{Connection, params};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
@@ -19,6 +22,8 @@ pub enum KnowledgeError {
     Invalid,
     #[error("citation no longer available")]
     Stale,
+    #[error("local text index is in use")]
+    Busy,
     #[error("local text index unavailable")]
     Storage,
 }
@@ -36,7 +41,7 @@ impl Drop for StopOnDrop {
     }
 }
 fn check_live(collection: &KnowledgeCollection, stop: &AtomicBool) -> Result<(), KnowledgeError> {
-    if collection.grant.is_revoked() {
+    if collection.revoked.load(Ordering::Acquire) || collection.grant.is_revoked() {
         return Err(WorkspaceError::Revoked.into());
     }
     if stop.load(Ordering::Acquire) {
@@ -53,6 +58,7 @@ struct Source {
 struct Index {
     db: Connection,
     sources: BTreeMap<String, Source>,
+    private: Option<persistence::PrivateIndex>,
 }
 #[derive(Clone)]
 pub struct KnowledgeCollection {
@@ -60,6 +66,8 @@ pub struct KnowledgeCollection {
     paths: Arc<BTreeSet<String>>,
     grant: WorkspaceGrant,
     index: Arc<Mutex<Index>>,
+    revoked: Arc<AtomicBool>,
+    publication: Arc<RwLock<()>>,
 }
 impl KnowledgeCollection {
     /// Only the trusted host chooses files. A new grant/selection starts a new citation namespace.
@@ -67,6 +75,38 @@ impl KnowledgeCollection {
         grant: WorkspaceGrant,
         id: &str,
         paths: Vec<String>,
+    ) -> Result<Self, KnowledgeError> {
+        Self::open_mode(grant, id, paths, None)
+    }
+    /// The caller must select the same files under a fresh live workspace grant after every restart.
+    pub fn open_persistent(
+        grant: WorkspaceGrant,
+        id: &str,
+        paths: Vec<String>,
+        private_directory: &Path,
+    ) -> Result<Self, KnowledgeError> {
+        Self::open_persistent_with_authority(grant, id, paths, private_directory, private_directory)
+    }
+    /// Keep this authority directory current during index backup recovery.
+    pub fn open_persistent_with_authority(
+        grant: WorkspaceGrant,
+        id: &str,
+        paths: Vec<String>,
+        private_directory: &Path,
+        authority_directory: &Path,
+    ) -> Result<Self, KnowledgeError> {
+        Self::open_mode(
+            grant,
+            id,
+            paths,
+            Some((private_directory, authority_directory)),
+        )
+    }
+    fn open_mode(
+        grant: WorkspaceGrant,
+        id: &str,
+        paths: Vec<String>,
+        private_directory: Option<(&Path, &Path)>,
     ) -> Result<Self, KnowledgeError> {
         if !valid_id(id) || paths.is_empty() || paths.len() > MAX_DOCS {
             return Err(KnowledgeError::Invalid);
@@ -81,21 +121,40 @@ impl KnowledgeCollection {
         if grant.is_revoked() {
             return Err(WorkspaceError::Revoked.into());
         }
-        let db = Connection::open_in_memory()?;
-        db.execute_batch("PRAGMA temp_store=MEMORY;
-          CREATE TABLE docs(path TEXT PRIMARY KEY, sha TEXT NOT NULL);
-          CREATE INDEX docs_by_hash ON docs(sha,path);
-          CREATE VIRTUAL TABLE chunks USING fts5(terms, sha UNINDEXED, lo UNINDEXED, hi UNINDEXED);
-          CREATE TABLE issued(hit TEXT PRIMARY KEY, path TEXT NOT NULL, sha TEXT NOT NULL, lo INTEGER NOT NULL, hi INTEGER NOT NULL, UNIQUE(path,sha,lo,hi));")?;
+        let index = match private_directory {
+            Some((dir, authority_dir)) => {
+                persistence::open(dir, authority_dir, &grant, id, &allowed)?
+            }
+            None => persistence::transient()?,
+        };
         Ok(Self {
             id: id.into(),
             paths: Arc::new(allowed),
             grant,
-            index: Arc::new(Mutex::new(Index {
-                db,
-                sources: BTreeMap::new(),
-            })),
+            index: Arc::new(Mutex::new(index)),
+            revoked: Arc::new(AtomicBool::new(false)),
+            publication: Arc::new(RwLock::new(())),
         })
+    }
+    /// Explicitly withdraw this collection and drain any publication already in progress.
+    pub async fn withdraw(&self) -> Result<(), KnowledgeError> {
+        self.revoked.store(true, Ordering::Release);
+        let exclusive = self.publication.clone().write_owned().await;
+        let index = self.index.clone();
+        tokio::task::spawn_blocking(move || {
+            let _exclusive = exclusive;
+            let mut i = index.lock().map_err(|_| KnowledgeError::Storage)?;
+            if i.private.is_some() {
+                persistence::withdraw(&mut i)?;
+            } else {
+                i.db.execute_batch("DELETE FROM issued;DELETE FROM docs;DELETE FROM chunks;")?;
+            }
+            i.db.execute("DELETE FROM live", [])?;
+            i.sources.clear();
+            Ok(())
+        })
+        .await
+        .map_err(|_| WorkspaceError::Interrupted)?
     }
 
     /// Recheck caller authority on each search and read. Keep the lease through final publication.
@@ -107,10 +166,16 @@ impl KnowledgeCollection {
         request: KnowledgeRequest,
         publish: impl FnOnce(KnowledgeResult) -> T + Send + 'static,
     ) -> Result<T, KnowledgeError> {
-        if self.grant.is_revoked() {
+        if self.revoked.load(Ordering::Acquire) || self.grant.is_revoked() {
             return Err(WorkspaceError::Revoked.into());
         }
         let deadline = tokio::time::Instant::now() + self.grant.inner.deadline;
+        let _publication = tokio::time::timeout_at(deadline, self.publication.read())
+            .await
+            .map_err(|_| WorkspaceError::Timeout)?;
+        if self.revoked.load(Ordering::Acquire) {
+            return Err(WorkspaceError::Revoked.into());
+        }
         let slot = tokio::time::timeout_at(deadline, READ_SLOTS.clone().acquire_owned())
             .await
             .map_err(|_| WorkspaceError::Timeout)?
@@ -130,7 +195,7 @@ impl KnowledgeCollection {
             check_live(&this, &stop)?;
             let result = match request {
                 KnowledgeRequest::KnowledgeSearch(q) => index.search(&this, q, &stop)?,
-                KnowledgeRequest::KnowledgeRead(q) => index.read(&this, q)?,
+                KnowledgeRequest::KnowledgeRead(q) => index.read(&this, q, &stop)?,
             };
             check_live(&this, &stop)?;
             Ok::<_, KnowledgeError>((permit, result))
@@ -140,7 +205,7 @@ impl KnowledgeCollection {
             .map_err(|_| WorkspaceError::Timeout)?
             .map_err(|_| WorkspaceError::Interrupted)?;
         let (lease, result) = result?;
-        if lease.inner.is_revoked() {
+        if self.revoked.load(Ordering::Acquire) || lease.inner.is_revoked() {
             return Err(WorkspaceError::Revoked.into());
         }
         Ok(publish(result))
@@ -217,7 +282,11 @@ fn terms(text: &str) -> Vec<String> {
     let mut word = String::new();
     let mut tokens = Vec::new();
     let mut prior = None;
-    for c in text.nfkc().flat_map(char::to_lowercase) {
+    for c in text
+        .nfkd()
+        .filter(|c| !unicode_normalization::char::is_combining_mark(*c))
+        .flat_map(char::to_lowercase)
+    {
         let han = matches!(c,'\u{3400}'..='\u{9fff}'|'\u{20000}'..='\u{323af}');
         if !han && c.is_alphanumeric() {
             prior = None;
@@ -253,14 +322,42 @@ fn citation(row: &rusqlite::Row<'_>, sha: String) -> rusqlite::Result<Hit> {
 }
 
 impl Index {
+    fn initialized(
+        db: Connection,
+        private: Option<persistence::PrivateIndex>,
+    ) -> Result<Self, KnowledgeError> {
+        db.execute_batch("CREATE TEMP TABLE live(path TEXT PRIMARY KEY,sha TEXT NOT NULL); CREATE INDEX temp.live_by_hash ON live(sha,path);")?;
+        Ok(Self {
+            db,
+            private,
+            sources: BTreeMap::new(),
+        })
+    }
+    fn path_key(&self, path: &str) -> String {
+        self.private
+            .as_ref()
+            .map_or_else(|| path.to_owned(), |idx| idx.tag(b"path\0", path))
+    }
+    fn encode_term(private: Option<&persistence::PrivateIndex>, term: String) -> String {
+        match private {
+            Some(idx) => idx.tag(b"term\0", &term),
+            None => term,
+        }
+    }
+
     fn forget(&mut self, path: &str) -> Result<(), KnowledgeError> {
-        let Some(old) = self.sources.get(path) else {
-            return Ok(());
-        };
+        use rusqlite::OptionalExtension;
+        let key = self.path_key(path);
         let tx = self.db.transaction()?;
-        tx.execute("DELETE FROM issued WHERE path=?", [path])?;
-        tx.execute("DELETE FROM docs WHERE path=?", [path])?;
-        Self::purge_unreferenced(&tx, &old.sha)?;
+        let old: Option<String> = tx
+            .query_row("SELECT sha FROM docs WHERE path=?", [&key], |r| r.get(0))
+            .optional()?;
+        if let Some(sha) = old {
+            tx.execute("DELETE FROM issued WHERE path=?", [&key])?;
+            tx.execute("DELETE FROM docs WHERE path=?", [&key])?;
+            Self::purge_unreferenced(&tx, &sha)?;
+        }
+        tx.execute("DELETE FROM live WHERE path=?", [path])?;
         tx.commit()?;
         self.sources.remove(path);
         Ok(())
@@ -309,25 +406,65 @@ impl Index {
         {
             return Ok(());
         }
+        use rusqlite::OptionalExtension;
+        let key = self.path_key(path);
+        let birth = source
+            ._file
+            .metadata()
+            .map_err(WorkspaceError::Io)?
+            .created()
+            .ok()
+            .and_then(|v| v.into_std().duration_since(UNIX_EPOCH).ok())
+            .map(|v| v.as_nanos().to_string());
+        if self.private.is_some() && birth.is_none() {
+            self.forget(path)?;
+            return Err(WorkspaceError::PersistentIdentityUnavailable.into());
+        }
+        let stamp = request_digest(
+            "local-knowledge-file-stamp.v1",
+            &(
+                source.identity.0,
+                source.identity.1,
+                source.identity.2.to_string(),
+                birth,
+                &source.sha,
+            ),
+        )
+        .map_err(|_| KnowledgeError::Invalid)?;
         let tx = self.db.transaction()?;
+        let prior: Option<(String, String)> = tx
+            .query_row("SELECT sha,stamp FROM docs WHERE path=?", [&key], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .optional()?;
         let known: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM docs WHERE sha=?)",
             [&source.sha],
             |r| r.get(0),
         )?;
-        tx.execute("DELETE FROM issued WHERE path=?", [path])?;
-        tx.execute("INSERT INTO docs(path,sha) VALUES(?,?) ON CONFLICT(path) DO UPDATE SET sha=excluded.sha",params![path,source.sha])?;
-        if let Some(old) = self.sources.get(path)
-            && old.sha != source.sha
+        if prior
+            .as_ref()
+            .is_none_or(|(s, t)| s != &source.sha || t != &stamp)
         {
-            Self::purge_unreferenced(&tx, &old.sha)?;
+            tx.execute("DELETE FROM issued WHERE path=?", [&key])?;
+            tx.execute("INSERT INTO docs(path,sha,stamp) VALUES(?,?,?) ON CONFLICT(path) DO UPDATE SET sha=excluded.sha,stamp=excluded.stamp",params![key,source.sha,stamp])?;
+            if let Some((old, _)) = prior
+                && old != source.sha
+            {
+                Self::purge_unreferenced(&tx, &old)?;
+            }
         }
+        tx.execute("INSERT INTO live(path,sha) VALUES(?,?) ON CONFLICT(path) DO UPDATE SET sha=excluded.sha",params![path,source.sha])?;
         if !known {
             let mut add = tx.prepare("INSERT INTO chunks(terms,sha,lo,hi) VALUES(?,?,?,?)")?;
             for (lo, hi, chunk) in chunks(&text) {
                 check_live(c, stop)?;
                 add.execute(params![
-                    terms(chunk).join(" "),
+                    terms(chunk)
+                        .into_iter()
+                        .map(|t| Self::encode_term(self.private.as_ref(), t))
+                        .collect::<Vec<_>>()
+                        .join(" "),
                     source.sha,
                     lo as i64,
                     hi as i64
@@ -359,18 +496,20 @@ impl Index {
             return Err(KnowledgeError::Invalid);
         }
         let expression = words
-            .into_iter()
-            .map(|w| format!("\"{w}\""))
+            .iter()
+            .cloned()
+            .map(|w| format!("\"{}\"", Self::encode_term(self.private.as_ref(), w)))
             .collect::<Vec<_>>()
             .join(" AND ");
+        let refresh_all = self.private.is_some();
         let mut unavailable_sources = 0;
         for path in c
             .paths
             .iter()
-            .filter(|p| q.path.as_ref().is_none_or(|f| f == *p))
+            .filter(|p| refresh_all || q.path.as_ref().is_none_or(|f| f == *p))
         {
             self.refresh(c, path, stop)?;
-            if !self.sources.contains_key(path) {
+            if !self.sources.contains_key(path) && q.path.as_ref().is_none_or(|f| f == path) {
                 unavailable_sources += 1;
             }
         }
@@ -378,7 +517,7 @@ impl Index {
         let mut found = {
             // Apply the source filter before ranking/paging. Identical authorized versions share one posting list.
             let mut select=tx.prepare("WITH visible AS (
-                SELECT sha,min(path) AS path FROM docs WHERE (?1 IS NULL OR path=?1) GROUP BY sha)
+                SELECT sha,min(path) AS path FROM live WHERE (?1 IS NULL OR path=?1) GROUP BY sha)
                 SELECT visible.path,chunks.sha,chunks.lo,chunks.hi FROM chunks JOIN visible ON visible.sha=chunks.sha
                 WHERE chunks MATCH ?2 ORDER BY rank,visible.path,chunks.lo LIMIT ?3")?;
             select
@@ -394,23 +533,39 @@ impl Index {
         };
         let truncated = found.len() > limit;
         found.truncate(limit);
-        let mut verified = BTreeSet::new();
+        let mut verified = BTreeMap::new();
         let mut hits = Vec::with_capacity(found.len());
         for (path, sha, lo, hi) in found {
             check_live(c, stop)?;
-            if verified.insert(path.clone()) {
-                let (live, _) =
+            if !verified.contains_key(&path) {
+                let (live, text) =
                     snapshot(&c.grant.inner.directory, &path).map_err(|_| KnowledgeError::Stale)?;
                 let old = self.sources.get(&path).ok_or(KnowledgeError::Stale)?;
-                if old.identity != live.identity || sha != live.sha {
+                if old.identity != live.identity || old.sha != sha || live.sha != sha {
                     return Err(KnowledgeError::Stale);
                 }
+                verified.insert(path.clone(), text);
+            }
+            // A persistent posting may be corrupt. Verify the claimed range and literal terms against
+            // the live document before issuing any citation, even when the file digest is current.
+            let text = verified.get(&path).ok_or(KnowledgeError::Stale)?;
+            let chunk = chunks(text)
+                .find(|(l, h, _)| i64::try_from(*l) == Ok(lo) && i64::try_from(*h) == Ok(hi))
+                .map(|(_, _, v)| v)
+                .ok_or(KnowledgeError::Stale)?;
+            let present = terms(chunk).into_iter().collect::<BTreeSet<_>>();
+            if !words.is_subset(&present) {
+                return Err(KnowledgeError::Stale);
             }
             use rusqlite::OptionalExtension;
+            let path_key = self
+                .private
+                .as_ref()
+                .map_or_else(|| path.clone(), |idx| idx.tag(b"path\0", &path));
             let existing = tx
                 .query_row(
                     "SELECT hit FROM issued WHERE path=? AND sha=? AND lo=? AND hi=?",
-                    params![path, sha, lo, hi],
+                    params![path_key, sha, lo, hi],
                     |r| r.get::<_, String>(0),
                 )
                 .optional()?;
@@ -420,7 +575,7 @@ impl Index {
                 let id = Uuid::new_v4().to_string();
                 tx.execute(
                     "INSERT INTO issued(hit,path,sha,lo,hi) VALUES(?,?,?,?,?)",
-                    params![id, path, sha, lo, hi],
+                    params![id, path_key, sha, lo, hi],
                 )?;
                 id
             };
@@ -432,6 +587,7 @@ impl Index {
                 end_byte: hi.to_string(),
             });
         }
+        check_live(c, stop)?;
         tx.commit()?;
         Ok(KnowledgeResult::KnowledgeSearch {
             collection_id: c.id.clone(),
@@ -444,6 +600,7 @@ impl Index {
         &mut self,
         c: &KnowledgeCollection,
         q: Read,
+        stop: &AtomicBool,
     ) -> Result<KnowledgeResult, KnowledgeError> {
         use rusqlite::OptionalExtension;
         if q.collection_id != c.id {
@@ -452,7 +609,7 @@ impl Index {
         if Uuid::parse_str(&q.hit_id).is_err() || !valid_digest(&q.expected_sha256) {
             return Err(KnowledgeError::Invalid);
         }
-        let hit = self
+        let mut hit = self
             .db
             .query_row(
                 "SELECT hit,path,lo,hi,sha FROM issued WHERE hit=? AND sha=?",
@@ -461,6 +618,25 @@ impl Index {
             )
             .optional()?
             .ok_or(KnowledgeError::Stale)?;
+        // An on-disk path identifier is never interpreted as a filesystem path.
+        let path = c
+            .paths
+            .iter()
+            .find(|p| self.path_key(p) == hit.path)
+            .ok_or(KnowledgeError::Stale)?
+            .clone();
+        hit.path = path;
+        if !self.sources.contains_key(&hit.path) {
+            self.refresh(c, &hit.path, stop)?;
+            let retained: bool = self.db.query_row(
+                "SELECT EXISTS(SELECT 1 FROM issued WHERE hit=? AND sha=?)",
+                params![q.hit_id, q.expected_sha256],
+                |r| r.get(0),
+            )?;
+            if !retained {
+                return Err(KnowledgeError::Stale);
+            }
+        }
         let old = self.sources.get(&hit.path).ok_or(KnowledgeError::Stale)?;
         let (file, text) = match snapshot(&c.grant.inner.directory, &hit.path) {
             Ok(v) => v,
@@ -481,7 +657,10 @@ impl Index {
             .end_byte
             .parse::<usize>()
             .map_err(|_| KnowledgeError::Storage)?;
-        let chunk = text.get(lo..hi).ok_or(KnowledgeError::Stale)?;
+        let chunk = chunks(&text)
+            .find(|(l, h, _)| *l == lo && *h == hi)
+            .map(|(_, _, data)| data)
+            .ok_or(KnowledgeError::Stale)?;
         let start = q.start_byte.unwrap_or(0);
         let end = q.end_byte.unwrap_or(chunk.len());
         if start >= end {
@@ -596,6 +775,102 @@ mod tests {
         task.await.expect("join").expect("original delivery");
         grant.wait_drained().await;
     }
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
+    async fn saved_withdrawal_drains_current_delivery_and_is_sticky_after_reopen() {
+        use std::os::unix::fs::DirBuilderExt;
+        let base = tempdir().expect("fixture");
+        let work = base.path().join("docs");
+        let private = base.path().join("private");
+        let unrelated = base.path().join("other");
+        for dir in [&work, &private, &unrelated] {
+            std::fs::DirBuilder::new()
+                .mode(0o700)
+                .create(dir)
+                .expect("private directory");
+        }
+        std::fs::write(work.join("note.txt"), "cobalt").expect("fixture");
+        let grant = WorkspaceGrant::open(
+            "owner",
+            "stable-grant",
+            "policy",
+            &work,
+            std::slice::from_ref(&private),
+        )
+        .expect("grant");
+        assert!(matches!(
+            KnowledgeCollection::open_persistent(
+                grant.clone(),
+                "manual",
+                vec!["note.txt".into()],
+                &unrelated
+            ),
+            Err(KnowledgeError::Workspace(WorkspaceError::Forbidden))
+        ));
+        let open = || {
+            KnowledgeCollection::open_persistent(
+                grant.clone(),
+                "manual",
+                vec!["note.txt".into()],
+                &private,
+            )
+        };
+        let collection = open().expect("persistent collection");
+        let serving = collection.clone();
+        let access = grant.clone();
+        let (ready, entered) = tokio::sync::oneshot::channel();
+        let (release, finish) = std::sync::mpsc::channel();
+        let task = tokio::spawn(async move {
+            serving
+                .execute(
+                    access.owner(),
+                    access.environment(),
+                    access.policy(),
+                    search(),
+                    move |_| {
+                        ready.send(()).expect("enter");
+                        finish.recv_timeout(Duration::from_secs(10)).expect("leave");
+                    },
+                )
+                .await
+        });
+        entered.await.expect("entered");
+        let retiring = collection.clone();
+        let withdrawal = tokio::spawn(async move { retiring.withdraw().await });
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !collection.revoked.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("withdrawal began");
+        assert!(!withdrawal.is_finished());
+        assert!(matches!(
+            collection
+                .execute(
+                    grant.owner(),
+                    grant.environment(),
+                    grant.policy(),
+                    search(),
+                    |_| ()
+                )
+                .await,
+            Err(KnowledgeError::Workspace(WorkspaceError::Revoked))
+        ));
+        release.send(()).expect("unblock");
+        task.await.expect("join").expect("initial publication");
+        withdrawal.await.expect("join").expect("withdrawn");
+        drop(collection);
+        assert!(matches!(
+            open(),
+            Err(KnowledgeError::Workspace(WorkspaceError::Revoked))
+        ));
+        assert!(
+            !grant.is_revoked(),
+            "collection withdrawal should not revoke other workspace uses"
+        );
+    }
+
     #[test]
     fn chunk_ranges_reconstruct_unicode_without_losing_a_byte() {
         let text = "公共 transport 文档 🟠\n".repeat(165);
