@@ -1,0 +1,218 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:orange:knowledge-tools:v1",
+  "$defs": {
+    "SearchArguments": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "collection_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "query": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20
+        }
+      },
+      "required": [
+        "collection_id",
+        "query"
+      ]
+    },
+    "ReadArguments": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "collection_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "hit_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "expected_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "start_byte": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1023
+        },
+        "end_byte": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1024
+        }
+      },
+      "required": [
+        "collection_id",
+        "hit_id",
+        "expected_sha256"
+      ]
+    },
+    "SearchOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "knowledge_search"
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "collection_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "hits": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "hit_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "source_sha256": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "start_byte": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9][0-9]{0,9})$"
+                  },
+                  "end_byte": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9][0-9]{0,9})$"
+                  }
+                },
+                "required": [
+                  "hit_id",
+                  "path",
+                  "source_sha256",
+                  "start_byte",
+                  "end_byte"
+                ]
+              },
+              "maxItems": 20
+            },
+            "truncated": {
+              "type": "boolean"
+            },
+            "unavailable_sources": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 32
+            }
+          },
+          "required": [
+            "collection_id",
+            "hits",
+            "truncated",
+            "unavailable_sources"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "data"
+      ]
+    },
+    "ReadOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "knowledge_read"
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "citation": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "hit_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "path": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096
+                },
+                "source_sha256": {
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
+                },
+                "start_byte": {
+                  "type": "string",
+                  "pattern": "^(0|[1-9][0-9]{0,9})$"
+                },
+                "end_byte": {
+                  "type": "string",
+                  "pattern": "^(0|[1-9][0-9]{0,9})$"
+                }
+              },
+              "required": [
+                "hit_id",
+                "path",
+                "source_sha256",
+                "start_byte",
+                "end_byte"
+              ]
+            },
+            "start_byte": {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]{0,9})$"
+            },
+            "end_byte": {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]{0,9})$"
+            },
+            "text": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            }
+          },
+          "required": [
+            "citation",
+            "start_byte",
+            "end_byte",
+            "text"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "data"
+      ]
+    }
+  }
+}

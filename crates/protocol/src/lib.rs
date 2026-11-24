@@ -9,6 +9,7 @@ pub mod execution;
 #[cfg(feature = "grpc")]
 pub mod isolation;
 pub mod job_events;
+pub mod knowledge;
 pub mod local_model;
 pub mod marketplace;
 pub mod model;

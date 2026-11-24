@@ -1,6 +1,7 @@
 //! Explicit directory capabilities for TK-01/TK-02/TK-03. Never an ambient path or command executor.
 pub mod creation;
 mod historical;
+pub mod knowledge;
 pub mod patch;
 mod search;
 mod text_search;
@@ -691,7 +692,10 @@ fn read_bytes(
     maximum: usize,
     expected: Option<&str>,
 ) -> Result<(Vec<u8>, String), WorkspaceError> {
-    let maximum = maximum.min(MAX_FILE);
+    let mut file = open_regular(root, path)?.into_std();
+    read_open_bytes(&mut file, maximum, expected)
+}
+fn open_regular(root: &Dir, path: &str) -> Result<cap_std::fs::File, WorkspaceError> {
     let names = components(path, false)?;
     let (file_name, parents) = names.split_last().ok_or(WorkspaceError::Invalid)?;
     let directory = open_directory(root, parents)?;
@@ -702,7 +706,14 @@ fn read_bytes(
     options.read(true).follow(FollowSymlinks::No);
     #[cfg(unix)]
     options.nonblock(true);
-    let mut file = directory.open_with(file_name, &options)?.into_std();
+    Ok(directory.open_with(file_name, &options)?)
+}
+fn read_open_bytes(
+    file: &mut std::fs::File,
+    maximum: usize,
+    expected: Option<&str>,
+) -> Result<(Vec<u8>, String), WorkspaceError> {
+    let maximum = maximum.min(MAX_FILE);
     let before = file.metadata()?;
     if !before.is_file() {
         return Err(WorkspaceError::NotText);
@@ -718,7 +729,7 @@ fn read_bytes(
         return Err(WorkspaceError::FileTooLarge);
     }
     let mut bytes = Vec::new();
-    (&mut file)
+    Read::by_ref(file)
         .take((maximum + 1) as u64)
         .read_to_end(&mut bytes)?;
     if bytes.len() > maximum {
