@@ -57,6 +57,10 @@ pub fn build_router(
         )
         .route("/api/v1/agent/runs/{run}/model/history", get(cloud_history))
         .route(
+            "/api/v1/owners/{owner}/uploads/{upload}/image-output-inspection",
+            get(image_inspection),
+        )
+        .route(
             "/api/v1/owners/{owner}/uploads/{upload}/transcription-measurements",
             axum::routing::post(audio_measurement),
         )
@@ -481,6 +485,26 @@ async fn upload(
 struct Version {
     version_id: String,
 }
+async fn image_inspection(
+    State(api): State<Api>,
+    Path((owner, upload)): Path<(String, String)>,
+    headers: HeaderMap,
+    query: Result<Query<Version>, axum::extract::rejection::QueryRejection>,
+) -> Result<Response, Error> {
+    let actor = api.identity.artifact_actor(&headers, false).await?;
+    let Query(query) = query.map_err(|_| ArtifactError::Invalid)?;
+    let permit = api
+        .downloads
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| ArtifactError::Busy)?;
+    let result = api
+        .store
+        .inspect_image_output(&actor, &owner, &upload, &query.version_id, permit)
+        .await?;
+    Ok(private(Json(result).into_response()))
+}
+
 async fn download(
     State(api): State<Api>,
     Path((owner, upload)): Path<(String, String)>,

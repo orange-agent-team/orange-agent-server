@@ -1531,3 +1531,45 @@ async fn due_input_denies_read_and_repin_then_collects_bytes_and_accounting_once
     assert_eq!(count, 1);
     f.store.drain().await.expect("stop writer");
 }
+
+#[tokio::test]
+async fn revocation_after_read_suppresses_image_measurement_errors() {
+    let f = fixture().await;
+    let bytes = b"partial PNG";
+    let mut req = request(bytes);
+    req.media_type = "image/png".into();
+    f.store
+        .begin_upload(&f.actor, &f.owner, &req)
+        .await
+        .expect("intent");
+    let available = f
+        .store
+        .put(
+            f.actor.clone(),
+            f.owner.clone(),
+            req.upload_id.clone(),
+            input(bytes),
+        )
+        .await
+        .expect("publish input");
+    let (source, bytes, stamp) = f
+        .store
+        .read(&f.actor, &f.owner, &req.upload_id, &available.version_id)
+        .await
+        .expect("authorized bytes");
+    let decoded = orange_model_runtime::image_artifact::inspect(&bytes.to_bytes())
+        .map_err(|_| ArtifactError::Invalid);
+    assert!(decoded.is_err());
+    sqlx::query("UPDATE user_sessions SET revoked=TRUE WHERE session_id=$1")
+        .bind(&f.actor.session)
+        .execute(&f.store.inner.pool)
+        .await
+        .expect("revoke after bytes have been read");
+    assert!(matches!(
+        f.store
+            .finish_image_inspection(&f.actor, source, &stamp, decoded)
+            .await,
+        Err(ArtifactError::Forbidden)
+    ));
+    f.store.drain().await.expect("drain");
+}

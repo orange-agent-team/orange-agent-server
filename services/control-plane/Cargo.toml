@@ -91,7 +91,7 @@ opentelemetry_sdk.workspace = true
 opentelemetry-prometheus.workspace = true
 prometheus.workspace = true
 orange-agent-runtime = { path = "../../crates/agent-runtime", version = "=0.1.0" }
-orange-model-runtime.workspace = true
+orange-model-runtime = { workspace = true, features = ["image-artifact"] }
 orange-domain.workspace = true
 orange-protocol = { workspace = true, features = ["grpc"] }
 serde.workspace = true

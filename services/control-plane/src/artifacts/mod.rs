@@ -12,6 +12,7 @@ mod cloud_turn;
 mod connector_proposal;
 mod delivery;
 pub mod http;
+mod image_inspection;
 pub(crate) mod inputs;
 mod job_events;
 mod maintenance;
