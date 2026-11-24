@@ -16,7 +16,7 @@ from platform_package_smoke import check_running
 
 IDENTITY="sha256:3f3c5f8e03c614774b4bd9173b88391fefa4153bfc010d8012d59ad825377332"
 
-def smoke(docker,package,lock):
+def smoke(docker,package,lock,*,rotate_device=False):
     if not __debug__:raise RuntimeError("Verification assertions must be enabled")
     pg_image=local_image_id(docker,lock["test_database"])
     runtime=local_image_id(docker,lock["runtime_image"])
@@ -116,7 +116,7 @@ def smoke(docker,package,lock):
         helper=local_image_id(docker,lock["build_image"])
         if not helper:raise ValueError("Missing locked arm64 HTTP/2 fixture tools")
         device_check=enrolled_device(call,create,ready,group,package,helper,pg,namespace,"postgres://postgres:"+password+"@127.0.0.1:5432/orange_dev",
-            user,json.loads(configs[0].read_text())["user_origin"],sql)
+            user,json.loads(configs[0].read_text())["user_origin"],sql,rotate=rotate_device)
         # Execute all remaining Ubuntu ELF entry points without credentials and require a controlled refusal.
         from local_distribution_profiles import PLATFORM_PROGRAMS
         for program in PLATFORM_PROGRAMS:

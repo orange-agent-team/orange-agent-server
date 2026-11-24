@@ -16,7 +16,7 @@ def require(value,message):
     if not value:raise ValueError(message)
 
 
-def check(call,create,ready,group,package,tool_image,pg,namespace,dburl,user_port,origin,sql):
+def check(call,create,ready,group,package,tool_image,pg,namespace,dburl,user_port,origin,sql,*,rotate=False):
     # No DB credentials are set on the device. No device private material is copied to the issuer or gateway.
     def container(name,command,program,db=False):
         args=["--network",namespace,"--user","65532:65532","--read-only","--cap-drop","ALL","--memory","160m","--cpus","0.8",
@@ -81,9 +81,9 @@ def check(call,create,ready,group,package,tool_image,pg,namespace,dburl,user_por
     require(set(public)=={"request","exchange_token_sha256"} and public["request"]["request_id"]==rid and len(public["exchange_token_sha256"])==64,"Invalid public device handoff")
     require(execute(device,worker,"prepare-enrollment-handoff","/state",rid)==handoff,"Unstable device request")
     path=f"/api/v1/owners/{owner}/worker-enrollments/{rid}"
-    def manager(method,data=b""):
-        wire=(f"{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{user_port}\r\nOrigin: {origin}\r\nCookie: __Host-orange-user={login}\r\n"
-              f"X-CSRF-Token: {csrf}\r\nIdempotency-Key: {rid}\r\nContent-Type: application/json\r\nContent-Length: {len(data)}\r\nConnection: close\r\n\r\n").encode()+data
+    def manager(method,data=b"",*,target=path,request=rid):
+        wire=(f"{method} {target} HTTP/1.1\r\nHost: 127.0.0.1:{user_port}\r\nOrigin: {origin}\r\nCookie: __Host-orange-user={login}\r\n"
+              f"X-CSRF-Token: {csrf}\r\nIdempotency-Key: {request}\r\nContent-Type: application/json\r\nContent-Length: {len(data)}\r\nConnection: close\r\n\r\n").encode()+data
         raw=execute(pg,"bash","-ec",'exec 3<>/dev/tcp/127.0.0.1/"$1"; cat >&3; cat <&3',"user",str(user_port),raw=wire)
         class Socket:
             def makefile(self,*_):return io.BytesIO(raw)
@@ -107,9 +107,9 @@ def check(call,create,ready,group,package,tool_image,pg,namespace,dburl,user_por
         return subprocess.check_output(["protoc","--proto_path=.",f"--{method}=orange.worker.v1.{message}","worker.proto"],
                                        cwd=package/"contracts/proto",input=data)
     hello=proto("encode","WorkerFrame",f'hello {{ node_id: "{node}" protocol_version: 1 capabilities_digest: "{"a"*64}" }}'.encode())
-    def control():
+    def control(identity=installed):
         execute(device,"/usr/bin/curl","--silent","--show-error","--max-time","12","--noproxy","*","--http2","--cacert","/state/gateway-ca.pem",
-                "--cert",installed["certificate"],"--key",installed["private_key"],"--header","Content-Type: application/grpc","--header","te: trailers",
+                "--cert",identity["certificate"],"--key",identity["private_key"],"--header","Content-Type: application/grpc","--header","te: trailers",
                 "--dump-header","/state/headers","--output","/state/frame","--data-binary","@-","https://localhost:43104/orange.worker.v1.WorkerGateway/Control",
                 raw=b"\x00"+struct.pack(">I",len(hello))+hello)
         return execute(device,"cat","/state/headers").decode().lower(),execute(device,"cat","/state/frame")
@@ -118,10 +118,42 @@ def check(call,create,ready,group,package,tool_image,pg,namespace,dburl,user_por
     size=int.from_bytes(frame[1:5],"big");require(0<size<=len(frame)-5,"Incomplete real welcome")
     decoded=proto("decode","ServerFrame",frame[5:5+size]).decode()
     require("welcome {" in decoded and "connection_epoch: 1" in decoded and "session_id:" in decoded,"No real TLS control Welcome")
+    replacement=None
+    if rotate:
+        replacement_id=str(uuid.uuid4())
+        rotate_path=f"/api/v1/owners/{owner}/worker-certificate-rotations/{replacement_id}"
+        args=(device,worker,"prepare-certificate-rotation","/state/redeem.json",owner,replacement_id)
+        raw=execute(*args)
+        request=json.loads(raw)
+        require(raw==execute(*args) and request["intent"]["node_id"]==node and
+                request["intent"]["previous_certificate_sha256"]==installed["certificate_sha256"],"Linux rotation changed its signing scope")
+        require(manager("PUT",raw,target=rotate_path,request=replacement_id)["state"]=="authorized","Linux replacement authorization refused")
+        require(json.loads(execute(signer,gateway,"issue-one","/state/issuer.json"))["prepared_request"]==replacement_id,"Wrong replacement issuer receipt")
+        put_json(device,"rotate.json",dict(version=1,environment="development",api_origin=f"http://127.0.0.1:{user_port}",device_directory="/state",
+                request_id=replacement_id,exchange_token_file=f"/state/{replacement_id}.exchange-token",issuer_certificate="/state/issuer.pem",issuer_sha256=issuer_sha))
+        replacement=json.loads(execute(device,worker,"redeem-certificate-rotation","/state/rotate.json"))
+        require(replacement["node_id"]==node and replacement["spki_sha256"]!=installed["spki_sha256"] and replacement["source"]=="gateway_receipt",
+                "Replacement did not bind to the original Linux identity")
+        replay=json.loads(execute(device,worker,"redeem-certificate-rotation","/state/rotate.json"))
+        require(replay["source"]=="local_receipt" and replay["certificate_sha256"]==replacement["certificate_sha256"],"Linux redemption replay changed the credential")
+        receipt=manager("GET",target=rotate_path,request=replacement_id)
+        require(receipt["previous_certificate_sha256"]==installed["certificate_sha256"] and
+                int(receipt["overlap_until_unix"])-int(receipt["activated_unix"])==120,"Invalid Linux overlap receipt")
+        headers,frame=control(replacement)
+        require("http/2 200" in headers and len(frame)>5 and frame[0]==0,"Replacement did not open Linux control")
+        size=int.from_bytes(frame[1:5],"big")
+        require(0<size<=len(frame)-5 and "connection_epoch: 2" in proto("decode","ServerFrame",frame[5:5+size]).decode(),"Linux replacement did not fence the old epoch")
+        headers,frame=control()
+        require("grpc-status: 16" in headers and not frame,"Original Linux credential reconnected after takeover")
     require(manager("DELETE")["state"]=="revoked","Withdrawal failed")
     headers,frame=control()
     require("grpc-status: 16" in headers and not frame,"Old device reconnected after withdrawal")
-    require(sql(f"SELECT count(*) FROM worker_session_audit WHERE node_id='{node}' AND kind='session.claimed'")=="1","Unexpected accepted sessions")
+    if replacement is not None:
+        headers,frame=control(replacement)
+        require("grpc-status: 16" in headers and not frame,"Linux successor survived root revocation")
+    require(sql(f"SELECT count(*) FROM worker_session_audit WHERE node_id='{node}' AND kind='session.claimed'")==("2" if rotate else "1"),"Unexpected accepted sessions")
     require(sql(f"SELECT count(*) FROM worker_credentials WHERE node_id='{node}' AND active")=="0" and sql("SELECT count(*) FROM jobs")=="0","Unexpected execution authority")
-    return {"real_handoff":True,"prepared_certificates":1,"real_redemption":True,"repaired_pem_without_token":True,"verified_grpc_welcome":True,
+    result={"real_handoff":True,"prepared_certificates":2 if rotate else 1,"real_redemption":True,"repaired_pem_without_token":True,"verified_grpc_welcome":True,
             "revoked_reconnect_denied":True,"independent_device_and_signer_filesystems":True,"model_jobs":0}
+    if rotate:result.update(stable_node_rotation=True,previous_control_denied=True,successor_withdrawn=True,duplicate_redemption_reused=True)
+    return result
