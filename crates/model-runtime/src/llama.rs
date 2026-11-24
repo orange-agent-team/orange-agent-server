@@ -410,11 +410,15 @@ mod tests {
             tools: vec![],
             messages: vec![Message::plain(Role::User, "sample".into())],
         };
-        assert_eq!(text.request(&request, true).unwrap()["cache_prompt"], false);
+        assert_eq!(
+            text.request(&request, true)
+                .expect("valid Chat Completions payload")["cache_prompt"],
+            false
+        );
         let body = text
             .with_protocol(LocalTextProtocol::Responses)
             .request(&request, true)
-            .unwrap();
+            .expect("valid Responses payload");
         assert_eq!(body["cache_prompt"], false);
         assert_eq!(body["store"], false);
         assert!(body.get("previous_response_id").is_none());
