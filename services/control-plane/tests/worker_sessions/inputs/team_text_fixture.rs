@@ -7,6 +7,8 @@ const TEAM_CREDITS: i64 = 10_000_000;
 pub(super) struct Allocation {
     pub owner: String,
     pub budget: String,
+    creator: String,
+    member: String,
     original_personal: (i64, i64, i64, i64, i64, i64),
 }
 
@@ -56,6 +58,8 @@ impl Allocation {
         .expect("member submit permission");
         tx.commit().await.expect("commit allocation fixture");
         Self {
+            creator,
+            member: user.to_owned(),
             owner,
             budget,
             original_personal: wallet(pool, personal).await,
@@ -75,10 +79,62 @@ impl Allocation {
             (TEAM_CREDITS - charge, 0, 0, 0, 0, 0)
         );
         assert_eq!(wallet(pool, personal).await, self.original_personal);
+        let accounting = || async {
+            sqlx::query_scalar::<_,serde_json::Value>("SELECT jsonb_build_object(
+                 'job',jsonb_build_array(j.owner_id,j.root_budget_id,j.submitting_user_id,j.execution_state,j.settlement_state),
+                 'settlement',to_jsonb(s),'ledger_owner',t.owner_id,
+                 'entries',(SELECT jsonb_agg(jsonb_build_array(e.account,e.amount) ORDER BY e.account)
+                            FROM ledger_entries e WHERE e.transaction_id=s.transaction_id))
+                 FROM jobs j JOIN job_settlements s USING(job_id) JOIN ledger_transactions t USING(transaction_id)
+                 WHERE j.job_id=$1 AND t.business_key=$2")
+                .bind(job).bind(format!("settle:{job}")).fetch_one(pool).await.expect("immutable posted job and balanced ledger")
+        };
+        let before = accounting().await;
+        assert_eq!(before["ledger_owner"], self.owner);
+        assert_eq!(before["job"][2], self.member);
+        assert!(
+            before["entries"]
+                .as_array()
+                .is_some_and(|entries| !entries.is_empty())
+        );
+        let version: i64 =
+            sqlx::query_scalar("SELECT policy_version FROM organizations WHERE organization_id=$1")
+                .bind(&self.owner)
+                .fetch_one(pool)
+                .await
+                .expect("current role version");
+        orange_control_plane::team::TeamStore::new(pool.clone())
+            .set_membership(
+                &self.creator,
+                &self.owner,
+                "depart-after-posting",
+                &orange_protocol::team::ChangeMembership {
+                    user_id: self.member.clone(),
+                    role: None,
+                    expected_policy_version: version,
+                },
+            )
+            .await
+            .expect("remove the billed team member");
+        let active: bool = sqlx::query_scalar(
+            "SELECT active FROM memberships WHERE organization_id=$1 AND user_id=$2",
+        )
+        .bind(&self.owner)
+        .bind(&self.member)
+        .fetch_one(pool)
+        .await
+        .expect("actual departure");
+        assert!(!active);
+        assert_eq!(accounting().await, before);
+        assert_eq!(wallet(pool, personal).await, self.original_personal);
+        assert_eq!(
+            wallet(pool, &self.owner).await,
+            (TEAM_CREDITS - charge, 0, 0, 0, 0, 0)
+        );
         serde_json::json!({
             "organization":self.owner, "root_budget":self.budget,"job":job,
             "charged_microcredits":charge.to_string(), "remaining_team_hold":"0",
-            "member_personal_wallet_unchanged":true, "original_team_gift":TEAM_CREDITS.to_string(),
+            "departed_member":true,"posted_ownership_and_entries_preserved":true,"member_personal_wallet_unchanged":true, "original_team_gift":TEAM_CREDITS.to_string(),
             "remaining_team_gift":(TEAM_CREDITS-charge).to_string()
         })
     }

@@ -260,6 +260,83 @@ async fn competing_acceptances_respect_member_limit_and_expiry() {
     assert_eq!(count, 2);
 }
 
+// An actual lock dependency establishes the order. Neither request can claim a
+// result merely because an arbitrary delay elapsed.
+async fn waiting_backend(pool: &sqlx::PgPool, blocker: i32) -> i32 {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let waiting: Option<i32> = sqlx::query_scalar(
+                "SELECT pid FROM pg_stat_activity WHERE datname=current_database()
+                AND wait_event_type='Lock' AND $1=ANY(pg_blocking_pids(pid)) LIMIT 1",
+            )
+            .bind(blocker)
+            .fetch_optional(pool)
+            .await
+            .expect("read actual lock graph");
+            if let Some(pid) = waiting {
+                return pid;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("request must actually wait for its predecessor")
+}
+
+async fn remove_during_member_submission(owner: &Fixture, member: &Fixture, org: &str, root: &str) {
+    let quote = Uuid::new_v4().to_string();
+    let invocation = Uuid::new_v4().to_string();
+    let projection = "d".repeat(64);
+    sqlx::query("INSERT INTO quotes(quote_id,owner_id,root_budget_id,invocation_id,projection_digest,price_version,max_amount,expires_at)
+        VALUES($1,$2,$3,$4,$5,'team-removal-fixture',50,clock_timestamp()+interval '5 minutes')")
+        .bind(&quote).bind(org).bind(root).bind(&invocation).bind(&projection).execute(&owner.pool).await.expect("fresh quote");
+    let old_version = version(owner, org).await;
+    let snapshot = || async {
+        sqlx::query_scalar::<_,Value>("SELECT jsonb_build_array((SELECT to_jsonb(w) FROM wallets w WHERE owner_id=$1),
+            (SELECT to_jsonb(w) FROM wallets w WHERE owner_id=$2),
+            (SELECT jsonb_build_array(spent,reserved) FROM budget_roots WHERE root_budget_id=$3),
+            (SELECT count(*) FROM jobs WHERE owner_id=$1),(SELECT count(*) FROM ledger_transactions WHERE owner_id=$1),
+            (SELECT count(*) FROM idempotency WHERE owner_id=$1 AND operation='submit_job'))")
+            .bind(org).bind(&member.user).bind(root).fetch_one(&owner.pool).await.expect("trusted funding snapshot")
+    };
+    let before = snapshot().await;
+    let mut fixture = owner.pool.begin().await.expect("blocking transaction");
+    let blocker:i32=sqlx::query_scalar("SELECT pg_backend_pid() FROM memberships WHERE organization_id=$1 AND user_id=$2 FOR UPDATE")
+        .bind(org).bind(&member.user).fetch_one(&mut *fixture).await.expect("hold only target membership");
+    let (go, ready) = tokio::sync::oneshot::channel();
+    let remove_path = format!("/api/v1/organizations/{org}/members");
+    let job_path = format!("/api/v1/owners/{org}/jobs");
+    let removal = call(
+        owner,
+        "POST",
+        &remove_path,
+        "remove-while-submitting",
+        Some(json!({"user_id":member.user,"role":null,"expected_policy_version":old_version})),
+        200,
+    );
+    let submit = async {
+        ready.await.expect("removal already owns org lock");
+        call(member,"POST",&job_path,"departed-submission",
+            Some(json!({"root_budget_id":root,"invocation_id":invocation,"quote_id":quote,"purpose":"primary","request_projection_digest":projection})),403).await
+    };
+    let order = async {
+        let removal_pid = waiting_backend(&owner.pool, blocker).await;
+        go.send(()).expect("release member");
+        let submit_pid = waiting_backend(&owner.pool, removal_pid).await;
+        assert_ne!(removal_pid, submit_pid);
+        fixture
+            .commit()
+            .await
+            .expect("allow real removal to commit");
+    };
+    let (_, _, _) = tokio::join!(removal, submit, order);
+    assert_eq!(
+        snapshot().await,
+        before,
+        "a removal that wins cannot fund a late submission"
+    );
+}
+
 #[tokio::test]
 async fn team_hard_limit_applies_to_actual_member_jobs_and_never_copies_the_organization_wallet() {
     use std::os::unix::fs::PermissionsExt;
@@ -479,7 +556,7 @@ async fn team_hard_limit_applies_to_actual_member_jobs_and_never_copies_the_orga
     )
     .await;
     assert_eq!(v["allocated"], "500");
-    change(&owner, &team, &member, None, 200).await;
+    remove_during_member_submission(&owner, &member, &team, &root).await;
     let replay = invite(&owner, &team, &member, "member", 300, 200).await;
     accept(&member, &replay, 200).await;
     let revoked = call(
