@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "repository": "docker.io/library/python",
+  "source_tag": "3.12.13-bookworm",
+  "index_digest": "sha256:3cd9086bdb30f7c9bc08a3fa621d9842e0d3f6f9291aeb4677e0547817c10b12",
+  "platform": "linux/amd64",
+  "manifest_digest": "sha256:59a32f2866470624edbdde0e3e504bbbf46222fed2d4c2392bef3894e1b6334d",
+  "config_digest": "sha256:3eb66c6a8a2399cdf305afe7f680ea1e3aad64e9a6684cd6e46baf6b8b701ec8",
+  "compressed_layer_bytes": 380473421
+}

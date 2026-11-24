@@ -96,6 +96,9 @@ def import_image(docker,entry,cache):
     match=re.fullmatch(r"docker.io/library/([a-z0-9-]+)@(sha256:[0-9a-f]{64})",ref)
     if not match:raise ValueError("Expected pinned Docker Official Image")
     repo,manifest_hash=match.groups();config=entry["config_digest"];digest(config)
+    platform=entry.get("platform","linux/arm64")
+    if platform not in ("linux/arm64","linux/amd64"):raise ValueError("Unsupported platform")
+    architecture=platform.split("/")[1]
     if local_image_id(docker,entry):
         print("Verified local image",repo,manifest_hash,flush=True);return
     opener=urllib.request.build_opener(RegistryRedirect())
@@ -114,8 +117,11 @@ def import_image(docker,entry,cache):
     print("Fetching official",repo,len(sources),"blobs",sum(x["size"] for x in sources),"bytes",flush=True)
     with ThreadPoolExecutor(max_workers=2) as pool:
         files=list(pool.map(lambda d:locked_blob(opener,base+"/blobs/"+d["digest"],token,d,blobs),sources))
+    identity=json.loads((blobs/digest(config)).read_bytes())
+    if identity.get("os")!="linux" or identity.get("architecture")!=architecture:
+        raise ValueError("Base config does not match the locked target")
     display="docker.io/orange-dev-input/"+repo+":"+digest(manifest_hash)[:16]
-    desc={"mediaType":media,"digest":manifest_hash,"size":len(raw),"annotations":{"org.opencontainers.image.ref.name":display},"platform":{"architecture":"arm64","os":"linux"}}
+    desc={"mediaType":media,"digest":manifest_hash,"size":len(raw),"annotations":{"org.opencontainers.image.ref.name":display},"platform":{"architecture":architecture,"os":"linux"}}
     def member(tar,name,data):
         meta=tarfile.TarInfo(name);meta.size=len(data);meta.mode=0o644;tar.addfile(meta,io.BytesIO(data))
     with tempfile.TemporaryDirectory(prefix="image-import-",dir=cache) as tmp:
@@ -133,10 +139,13 @@ if __name__=="__main__":
     parser=argparse.ArgumentParser()
     parser.add_argument("--context",default="colima-orange-agent")
     parser.add_argument("--cache",type=Path,default=ROOT/".local/linux/oci")
-    parser.add_argument("--image",choices=["build_image","runtime_image","test_database","development_cache"],action="append")
+    parser.add_argument("--image",choices=["build_image","runtime_image","test_database","development_cache","sdxl_python"],action="append")
     args=parser.parse_args();lock=json.loads(LOCK.read_bytes())
     if "development_cache" in (args.image or []):
         lock["development_cache"]=json.loads((ROOT/"config/development-cache.lock.json").read_bytes())
+    if "sdxl_python" in (args.image or []):
+        base=json.loads((ROOT/"backends/environments/sdxl-linux-cuda/base-image.lock.json").read_bytes())
+        lock["sdxl_python"]={"image":base["repository"]+"@"+base["manifest_digest"],"config_digest":base["config_digest"],"platform":base["platform"]}
     args.cache.mkdir(mode=0o700,parents=True,exist_ok=True)
     with (args.cache/".import.lock").open("a") as lockfile:
         fcntl.flock(lockfile,fcntl.LOCK_EX)
