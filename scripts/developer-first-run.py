@@ -12,22 +12,15 @@ import sys
 import tarfile
 import tempfile
 from check_environment_tools import doctor,ToolIssue
+from environment_topology import topology
 
 ROOT=Path(__file__).resolve().parents[1]
 
 
 def mapping():
     values=json.loads((ROOT/"config/environment-names.json").read_bytes())
-    if set(values)!={"development","test","staging","production"}:
-        raise ValueError("Incomplete environment catalogue")
-    if len({v["object_prefix"] for v in values.values()})!=4 or len({v["account_scope"] for v in values.values()})!=4:
-        raise ValueError("Overlapping test and deployment namespaces")
-    for stage in ("development","test"):
-        if values[stage]["domain"]!="127.0.0.1" or values[stage]["database"]!="orange_dev" or values[stage]["database_role"]!="orange_local":
-            raise ValueError("Local application fixture points outside its isolated environment")
-    for stage in ("staging","production"):
-        if values[stage]["provision"]!="external" or not values[stage]["domain"].endswith(".invalid"):
-            raise ValueError("External environment requires explicit independent infrastructure")
+    regions=json.loads((ROOT/"config/service-regions.json").read_bytes())
+    topology(values,regions,"reference")
     return values
 
 
@@ -82,11 +75,18 @@ def rehearse(tooling,environment):
 
 def main():
     cli=argparse.ArgumentParser()
-    cli.add_argument("action",choices=["map","doctor","verify"])
+    cli.add_argument("action",choices=["map","topology","doctor","verify"])
     cli.add_argument("--environment",choices=["development","test","staging","production"],default="test")
+    cli.add_argument("--run-id",help="Substitute this test run in the read-only topology")
     args=cli.parse_args()
+    if args.run_id is not None and args.action!="topology":cli.error("--run-id is for topology only")
     values=mapping()
-    if args.action=="map":
+    if args.action=="topology":
+        try:
+            report=topology(values,json.loads((ROOT/"config/service-regions.json").read_bytes()),args.run_id if args.run_id is not None else "reference")
+        except ValueError as exc:
+            cli.error(str(exc))
+    elif args.action=="map":
         report=values
     else:
         if args.environment not in ("test","development") or (args.action=="verify" and args.environment!="test"):

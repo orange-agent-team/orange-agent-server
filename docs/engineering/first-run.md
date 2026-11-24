@@ -56,3 +56,9 @@ python3.12 scripts/local-postgres.py stop
 可用 `python3.12 scripts/check-developer-troubleshooting.py` 在一次性数据库实际演练端口冲突、迁移拒绝与恢复、开发凭据替换及旧凭据拒绝。该用例只修改它自己创建的数据库。
 
 更新时先保留已验证的提交、构建摘要和真实测试凭据，再运行[协议升级](protocol-upgrades.md)、工具链复现和本手册的首次启动。实际 GPU、商户、跨区域及生产签名仍按各自的资格检查执行。
+
+## 环境拓扑与区域名称
+
+在服务端仓库运行 `python3.12 scripts/developer-first-run.py topology --run-id acceptance-01` 可查看本地开发、本次测试及八组区域环境的具体名称。测试环境使用独立的一次性集群和身份服务，数据库及角色在该集群内沿用开发名称。容器名、账户作用域和对象前缀都包含本次运行标识。省略运行标识时，展示用的测试名称取 `reference`。
+
+区域键 `us`、`jp`、`cn`、`hk` 分别对应计划中的美国、日本、中国内地及香港区域。每个区域列出预发布和生产的逻辑账户作用域、身份域、数据库、角色、对象前缀与预留域名。所有外部域名使用 `.invalid`，实际经营主体、资源地址和驻留验证单独登记。修改环境或区域后，运行 `python3.12 scripts/check-environment-topology.py` 核对展开结果和命名冲突。原有 `map` 命令继续输出未展开的模板。
