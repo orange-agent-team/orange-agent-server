@@ -325,7 +325,7 @@ async fn owner_withdrawal_fences_running_renewal_replay_and_further_assignment()
     assert_eq!(active.0, "started");
     assert_eq!(count(&f).await, 1);
     assert!(first.expires_at.is_some());
-    let before:i64=sqlx::query_scalar("SELECT count(*) FROM worker_execution_events e JOIN worker_execution_attempts a USING(attempt_id) WHERE a.job_id=$1 AND e.kind IN ('execution.offered','execution.started','execution.renewed')")
+    let before:i64=sqlx::query_scalar("SELECT count(*) FROM worker_execution_events e JOIN worker_execution_attempts a USING(attempt_id) WHERE a.job_id=$1 AND e.kind<>'session_lost_unknown'")
         .bind(&f.job).fetch_one(f.d.store.pool()).await?;
     let result = reqwest::Client::new()
         .delete(field("revoke_url"))
@@ -382,21 +382,29 @@ async fn owner_withdrawal_fences_running_renewal_replay_and_further_assignment()
         ControlConnection::connect(copied).await,
         Err(orange_worker::control::ControlError::Unauthorized)
     ));
-    let after: (String, String) = sqlx::query_as(
-        "SELECT state,lease_expires_at::text FROM worker_execution_attempts WHERE command_id=$1",
-    )
-    .bind(&record.command_id)
-    .fetch_one(f.d.store.pool())
-    .await?;
+    control.close();
+    // Closing the revoked stream asynchronously quarantines the attempt. Observe that durable
+    // outcome before checking the unchanged deadline, instead of sampling a transient started state.
+    let cutoff=tokio::time::timeout(Duration::from_secs(7),async {
+        loop {
+            let row:(String,String)=sqlx::query_as("SELECT state,lease_expires_at::text FROM worker_execution_attempts WHERE command_id=$1")
+                .bind(&record.command_id).fetch_one(f.d.store.pool()).await?;
+            if row.0=="unknown" {return Ok::<_,sqlx::Error>(row.1);}
+            assert_eq!(row.0,"started","Unexpected terminal disposition for a lost session");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }).await??;
+    assert_eq!(cutoff, active.1, "Revocation extended a running lease");
+    let losses:i64=sqlx::query_scalar("SELECT count(*) FROM worker_execution_events e JOIN worker_execution_attempts a USING(attempt_id) WHERE a.job_id=$1 AND e.kind='session_lost_unknown'")
+        .bind(&f.job).fetch_one(f.d.store.pool()).await?;
     assert_eq!(
-        after, active,
-        "Rejected calls changed the existing grant or its deadline"
+        losses, 1,
+        "The disconnected execution must be quarantined and recorded exactly once"
     );
     assert_eq!(count(&f).await, 1);
-    let events:i64=sqlx::query_scalar("SELECT count(*) FROM worker_execution_events e JOIN worker_execution_attempts a USING(attempt_id) WHERE a.job_id=$1 AND e.kind IN ('execution.offered','execution.started','execution.renewed')")
+    let events:i64=sqlx::query_scalar("SELECT count(*) FROM worker_execution_events e JOIN worker_execution_attempts a USING(attempt_id) WHERE a.job_id=$1 AND e.kind<>'session_lost_unknown'")
         .bind(&f.job).fetch_one(f.d.store.pool()).await?;
     assert_eq!(before, events);
-    control.close();
     server.stop().await;
     f.objects.drain().await?;
     Ok(())
