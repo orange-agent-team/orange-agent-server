@@ -85,6 +85,12 @@ def main():
         require(output("validate",data=canonical)==r,"CLI validation changed the descriptor")
         seen=output("verify",model,args.asset_root.resolve()/CACHES[kind])
         require(seen=={"model_version":model,"manifest_sha256":sha,"verified_bytes":doc["resources"]["artifact_bytes"],"verified_files":len(doc["artifacts"])},"Incorrect asset measurements")
+        changed=copy.deepcopy(doc)
+        original=changed["artifacts"][0]["sha256"]
+        changed["artifacts"][0]["sha256"]=("a" if original[0]!="a" else "b")+original[1:]
+        mismatch=subprocess.run([tool,"verify-proposed",str(args.asset_root.resolve()/CACHES[kind])],input=json.dumps(changed).encode(),
+                                capture_output=True,timeout=360)
+        require(mismatch.returncode!=0 and not mismatch.stdout and b"Integrity" in mismatch.stderr,"Tampered manifest measured successfully: "+kind)
         receipts[model]=r;measured[kind]=seen
     require(set(measured)==set(CACHES),"Missing model modality")
     base=receipts["qwen-local-test-v1"]["manifest"]
@@ -130,7 +136,7 @@ def main():
             sql(f"UPDATE user_sessions SET revoked=true WHERE session_id='{sid}'")
             http("/qwen-local-test-v1",401)
             require(sql(counts)==before,"Manifest inspection changed admission, quote or Job state")
-    print(json.dumps({"measured":measured,"invalid_descriptors_refused":len(invalid),"authenticated_http_records":4,
+    print(json.dumps({"measured":measured,"invalid_descriptors_refused":len(invalid),"tampered_modality_digests_refused":4,"authenticated_http_records":4,
                       "session_revocation_enforced":True,"market_state_mutations":0}),flush=True)
     print("PASS original ML-001.01 real pinned model assets, immutable reference contract and authenticated catalogue",flush=True)
 

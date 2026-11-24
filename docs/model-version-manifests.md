@@ -14,6 +14,7 @@ target/debug/orange-model-manifest list
 target/debug/orange-model-manifest show whisper-small-ct2-int8-cpu-v1
 target/debug/orange-model-manifest verify whisper-small-ct2-int8-cpu-v1 .local/transcription-model
 target/debug/orange-model-manifest validate < proposed-manifest.json
+target/debug/orange-model-manifest verify-proposed /absolute/path/to/cache < proposed-manifest.json
 ```
 
 `verify` 从操作员选定的目录读取真实文件，以文件句柄核对大小和摘要并拒绝符号链接，返回本次观测到的文件数与字节数。`validate` 只回传格式及引用验证通过的描述符。发布清单由 `scripts/generate-model-manifests.py` 从固定锁核对，显式传入 `--write` 才更新快照。运行 `python3.12 scripts/check-model-version-manifests.py` 可以检查四份真实缓存、篡改样例和一次性本地数据库上的用户接口。

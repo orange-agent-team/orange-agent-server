@@ -40,7 +40,7 @@ def main():
     binary=native/PROGRAM
     if build["source_commit"]!=commit or build["target"]!="aarch64-apple-darwin" or not build["reproducible"] or build["builds"]!=[{PROGRAM:sha(binary)}]*2:
         raise ValueError("Invalid native build receipts")
-    files={"bin/"+PROGRAM:binary.read_bytes(),"README.md":source("docs/model-version-manifests.md"),"Cargo.lock":source("Cargo.lock")}
+    files={"bin/"+PROGRAM:binary.read_bytes(),"README.md":source("distribution/model-manifest/README.md"),"docs/model-version-manifests.md":source("docs/model-version-manifests.md"),"Cargo.lock":source("Cargo.lock")}
     for name in ("contracts/json-schema/model-version.v1.json","contracts/json-schema/user.schema.json","contracts/openapi/model-manifests.v1.json"):
         files[name]=source(name)
     versions={}
