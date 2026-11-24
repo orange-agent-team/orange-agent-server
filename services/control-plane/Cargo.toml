@@ -6,6 +6,7 @@ rust-version.workspace = true
 publish.workspace = true
 
 [features]
+model-registry-upgrade-tests = ["integration-tests"]
 oidc-rollover-tests = []
 personal-key-browser-tests=["integration-tests"]
 job-revision-browser-tests=["integration-tests"]

@@ -15,6 +15,7 @@ use std::sync::Arc;
 pub(super) mod audit;
 mod cases;
 mod device_issuers;
+mod model_registry;
 mod statements;
 
 pub fn router(identity: AdminIdentity) -> Router {
@@ -23,6 +24,15 @@ pub fn router(identity: AdminIdentity) -> Router {
             "/admin/v1/device-issuer-keys/{key}",
             get(super::actions::device_issuers::review),
         )
+        .route("/admin/v1/models", get(model_registry::list))
+        .route("/admin/v1/models/{id}", get(model_registry::summary))
+        .route(
+            "/admin/v1/model-drafts",
+            post(model_registry::create).layer(DefaultBodyLimit::max(
+                orange_model_runtime::manifest::MAX_MANIFEST_BYTES + 4096,
+            )),
+        )
+        .route("/admin/v1/model-drafts/{id}", get(model_registry::detail))
         .route("/admin/v1/device-issuers", get(device_issuers::list))
         .route(
             "/admin/v1/support-authorizations/{id}",

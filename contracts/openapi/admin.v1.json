@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Orange Admin API",
-    "version": "0.1.18",
+    "version": "0.1.19",
     "description": "Candidate contract for the independent Admin origin. Development implementation includes OIDC sessions, scoped reads, selected node and reconciliation case actions, and development text and transcription price governance. Availability of each other action depends on its backend implementation."
   },
   "servers": [
@@ -1860,7 +1860,8 @@
             }
           }
         },
-        "x-implementation-status": "planned"
+        "x-implementation-status": "development-candidate",
+        "description": "Development platform scope. Returns entries registered through the model registry."
       }
     },
     "/admin/v1/models/{model_version_id}": {
@@ -1994,7 +1995,8 @@
             }
           }
         },
-        "x-implementation-status": "planned"
+        "x-implementation-status": "development-candidate",
+        "description": "Development platform scope. Returns entries registered through the model registry."
       }
     },
     "/admin/v1/payments": {
@@ -8407,6 +8409,295 @@
           "device_issuers.read"
         ]
       }
+    },
+    "/admin/v1/model-drafts": {
+      "post": {
+        "operationId": "registerModelDraft",
+        "summary": "Register one immutable development-platform model manifest",
+        "x-permission": "models.draft",
+        "security": [
+          {
+            "AdminSessionCookie": [],
+            "CsrfToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RequestId"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterModelDraft"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Immutable draft created and audited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelDraftReceipt"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Original draft receipt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelDraftReceipt"
+                }
+              }
+            }
+          }
+        },
+        "x-implementation-status": "development-candidate",
+        "x-step-up-required": true
+      }
+    },
+    "/admin/v1/model-drafts/{model_version_id}": {
+      "get": {
+        "operationId": "getModelDraftReceipt",
+        "summary": "Read an immutable registered model manifest",
+        "x-permission": "models.read",
+        "security": [
+          {
+            "AdminSessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RequestId"
+          },
+          {
+            "name": "model_version_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/Environment"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "State/projection, not a promise that external effects or resource cleanup have completed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelDraftReceipt"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Typed error; no domain effect when validation/auth fails. Query original action after an uncertain dispatch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "x-implementation-status": "development-candidate",
+        "description": "Development platform scope. Returns entries registered through the model registry."
+      }
     }
   },
   "components": {
@@ -13645,6 +13936,591 @@
           "live_unattributed_sessions"
         ],
         "additionalProperties": false
+      },
+      "RegistryDigestV1": {
+        "type": "string",
+        "minLength": 64,
+        "maxLength": 64,
+        "pattern": "^[a-f0-9]{64}$",
+        "not": {
+          "const": "0000000000000000000000000000000000000000000000000000000000000000"
+        }
+      },
+      "RegistryRevisionV1": {
+        "type": "string",
+        "minLength": 40,
+        "maxLength": 40,
+        "pattern": "^[a-f0-9]{40}$",
+        "not": {
+          "const": "0000000000000000000000000000000000000000"
+        }
+      },
+      "RegistryIdV1": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+        "minLength": 1,
+        "maxLength": 128,
+        "not": {
+          "pattern": "^[Ll][Aa][Tt][Ee][Ss][Tt]$"
+        }
+      },
+      "RegistryPathV1": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)*$",
+        "minLength": 1,
+        "maxLength": 240
+      },
+      "RegistrySourceV1": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "repository": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$",
+            "minLength": 1,
+            "maxLength": 192
+          },
+          "revision": {
+            "$ref": "#/components/schemas/RegistryRevisionV1"
+          },
+          "license": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9.+() /:-]*$",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "asset_lock_sha256": {
+            "$ref": "#/components/schemas/RegistryDigestV1"
+          }
+        },
+        "required": [
+          "repository",
+          "revision",
+          "license",
+          "asset_lock_sha256"
+        ]
+      },
+      "RegistryArtifactV1": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "source_path": {
+            "$ref": "#/components/schemas/RegistryPathV1"
+          },
+          "cache_path": {
+            "$ref": "#/components/schemas/RegistryPathV1"
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1099511627776
+          },
+          "sha256": {
+            "$ref": "#/components/schemas/RegistryDigestV1"
+          }
+        },
+        "required": [
+          "source_path",
+          "cache_path",
+          "bytes",
+          "sha256"
+        ]
+      },
+      "RegistryRuntimeV1": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "engine": {
+                "const": "llama_cpp"
+              },
+              "source_revision": {
+                "$ref": "#/components/schemas/RegistryRevisionV1"
+              },
+              "build_recipe_sha256": {
+                "$ref": "#/components/schemas/RegistryDigestV1"
+              }
+            },
+            "required": [
+              "engine",
+              "source_revision",
+              "build_recipe_sha256"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "engine": {
+                "enum": [
+                  "onnx_runtime",
+                  "diffusers",
+                  "faster_whisper"
+                ]
+              },
+              "dependency_lock_sha256": {
+                "$ref": "#/components/schemas/RegistryDigestV1"
+              },
+              "adapter_sha256": {
+                "$ref": "#/components/schemas/RegistryDigestV1"
+              }
+            },
+            "required": [
+              "engine",
+              "dependency_lock_sha256",
+              "adapter_sha256"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "engine": {
+                "enum": [
+                  "vllm",
+                  "sglang",
+                  "diffusers",
+                  "faster_whisper"
+                ]
+              },
+              "image_digest": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "minLength": 71,
+                "maxLength": 71,
+                "not": {
+                  "const": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                }
+              }
+            },
+            "required": [
+              "engine",
+              "image_digest"
+            ]
+          }
+        ]
+      },
+      "RegistryInterfaceV1": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "modality": {
+                "const": "text"
+              },
+              "input": {
+                "const": "chat_messages"
+              },
+              "output": {
+                "const": "generated_text"
+              },
+              "context_tokens": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 16777216
+              }
+            },
+            "required": [
+              "modality",
+              "input",
+              "output",
+              "context_tokens"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "modality": {
+                "const": "embedding"
+              },
+              "input": {
+                "const": "text_batch"
+              },
+              "output": {
+                "const": "float_vectors"
+              },
+              "max_batch": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65536
+              },
+              "max_tokens_per_text": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 16777216
+              },
+              "dimensions": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1048576
+              }
+            },
+            "required": [
+              "modality",
+              "input",
+              "output",
+              "max_batch",
+              "max_tokens_per_text",
+              "dimensions"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "modality": {
+                "const": "image"
+              },
+              "input": {
+                "const": "text_prompt"
+              },
+              "output": {
+                "const": "png"
+              },
+              "width": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65536
+              },
+              "height": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65536
+              },
+              "steps": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 4096
+              },
+              "max_prompt_utf8_bytes": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 16777216
+              }
+            },
+            "required": [
+              "modality",
+              "input",
+              "output",
+              "width",
+              "height",
+              "steps",
+              "max_prompt_utf8_bytes"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "modality": {
+                "const": "transcription"
+              },
+              "input": {
+                "const": "audio_file"
+              },
+              "output": {
+                "const": "transcript"
+              },
+              "channels": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 32
+              },
+              "sample_rate": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 768000
+              },
+              "max_input_bytes": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1099511627776
+              },
+              "max_decoded_ms": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 86400000
+              }
+            },
+            "required": [
+              "modality",
+              "input",
+              "output",
+              "channels",
+              "sample_rate",
+              "max_input_bytes",
+              "max_decoded_ms"
+            ]
+          }
+        ]
+      },
+      "RegistryResourcesV1": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "device": {
+            "enum": [
+              "cpu",
+              "metal",
+              "nvidia_gpu"
+            ]
+          },
+          "artifact_bytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4398046511104
+          },
+          "min_memory_bytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4398046511104
+          },
+          "min_vram_bytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4398046511104
+          }
+        },
+        "required": [
+          "device",
+          "artifact_bytes"
+        ]
+      },
+      "RegistryPricingV1": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "policy": {
+                "const": "local_unpriced"
+              }
+            },
+            "required": [
+              "policy"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "policy": {
+                "const": "price_version"
+              },
+              "price_version": {
+                "$ref": "#/components/schemas/RegistryIdV1"
+              }
+            },
+            "required": [
+              "policy",
+              "price_version"
+            ]
+          }
+        ]
+      },
+      "RegistryManifestV1": {
+        "title": "Orange Agent ModelVersion v1",
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "schema_version": {
+            "const": 1
+          },
+          "model_version": {
+            "$ref": "#/components/schemas/RegistryIdV1"
+          },
+          "source": {
+            "$ref": "#/components/schemas/RegistrySourceV1"
+          },
+          "artifacts": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 256,
+            "items": {
+              "$ref": "#/components/schemas/RegistryArtifactV1"
+            }
+          },
+          "runtime": {
+            "$ref": "#/components/schemas/RegistryRuntimeV1"
+          },
+          "interface": {
+            "$ref": "#/components/schemas/RegistryInterfaceV1"
+          },
+          "resources": {
+            "$ref": "#/components/schemas/RegistryResourcesV1"
+          },
+          "pricing": {
+            "$ref": "#/components/schemas/RegistryPricingV1"
+          }
+        },
+        "required": [
+          "schema_version",
+          "model_version",
+          "source",
+          "artifacts",
+          "runtime",
+          "interface",
+          "resources",
+          "pricing"
+        ],
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "interface": {
+                  "properties": {
+                    "modality": {
+                      "const": "text"
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "runtime": {
+                  "properties": {
+                    "engine": {
+                      "enum": [
+                        "llama_cpp",
+                        "sglang",
+                        "vllm"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "interface": {
+                  "properties": {
+                    "modality": {
+                      "const": "embedding"
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "runtime": {
+                  "properties": {
+                    "engine": {
+                      "enum": [
+                        "onnx_runtime",
+                        "vllm",
+                        "sglang"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "interface": {
+                  "properties": {
+                    "modality": {
+                      "const": "image"
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "runtime": {
+                  "properties": {
+                    "engine": {
+                      "enum": [
+                        "diffusers"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "interface": {
+                  "properties": {
+                    "modality": {
+                      "const": "transcription"
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "runtime": {
+                  "properties": {
+                    "engine": {
+                      "enum": [
+                        "faster_whisper"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "description": "A release descriptor. Artifacts are sorted by source_path. Source and cache names must be distinct portable relative file paths and artifact_bytes must equal the total. The manifest SHA-256 is over RFC 8785 canonical JSON. Admission requires separate review evidence."
+      },
+      "RegisterModelDraft": {
+        "type": "object",
+        "properties": {
+          "scope": {
+            "$ref": "#/components/schemas/Scope"
+          },
+          "manifest": {
+            "$ref": "#/components/schemas/RegistryManifestV1"
+          }
+        },
+        "required": [
+          "scope",
+          "manifest"
+        ],
+        "additionalProperties": false
+      },
+      "ModelDraftReceipt": {
+        "type": "object",
+        "properties": {
+          "model": {
+            "$ref": "#/components/schemas/ModelVersion"
+          },
+          "manifest_sha256": {
+            "$ref": "#/components/schemas/RegistryDigestV1"
+          },
+          "manifest": {
+            "$ref": "#/components/schemas/RegistryManifestV1"
+          },
+          "registered_by": {
+            "$ref": "#/components/schemas/RegistryIdV1"
+          },
+          "registration_sha256": {
+            "$ref": "#/components/schemas/RegistryDigestV1"
+          }
+        },
+        "required": [
+          "model",
+          "manifest_sha256",
+          "manifest",
+          "registered_by",
+          "registration_sha256"
+        ],
+        "additionalProperties": false
       }
     }
   },
@@ -13709,7 +14585,8 @@
       "models.disable",
       "actions.approve",
       "nodes.resume.approve",
-      "models.activate.approve"
+      "models.activate.approve",
+      "models.draft"
     ],
     "finance_operator": [
       "session.read",

@@ -281,7 +281,7 @@ async fn now(tx: &mut Tx<'_>) -> Result<i64, AdminError> {
             .await?,
     )
 }
-async fn begin(identity: &AdminIdentity) -> Result<Tx<'_>, AdminError> {
+pub(super) async fn begin(identity: &AdminIdentity) -> Result<Tx<'_>, AdminError> {
     let mut tx = identity.pool.begin().await?;
     sqlx::query("SET LOCAL lock_timeout='2s'")
         .execute(&mut *tx)
@@ -296,7 +296,7 @@ async fn begin(identity: &AdminIdentity) -> Result<Tx<'_>, AdminError> {
         .await?;
     Ok(tx)
 }
-async fn actor(
+pub(super) async fn actor(
     tx: &mut Tx<'_>,
     principal: &str,
     scope: &Scope,
@@ -330,7 +330,7 @@ async fn actor(
     }
     Ok(deadline)
 }
-async fn authenticate(
+pub(super) async fn authenticate(
     identity: &AdminIdentity,
     headers: &HeaderMap,
     tx: &mut Tx<'_>,
@@ -343,7 +343,7 @@ async fn authenticate(
     }
     Ok(session)
 }
-async fn finish(
+pub(super) async fn finish(
     identity: &AdminIdentity,
     headers: &HeaderMap,
     tx: &mut Tx<'_>,
@@ -357,7 +357,7 @@ async fn finish(
     }
     Ok(())
 }
-fn key(headers: &HeaderMap) -> Result<&str, AdminError> {
+pub(super) fn key(headers: &HeaderMap) -> Result<&str, AdminError> {
     let key = headers
         .get("idempotency-key")
         .and_then(|v| v.to_str().ok())

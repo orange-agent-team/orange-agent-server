@@ -901,3 +901,56 @@ mod price_drafts;
 
 #[path = "admin_actions/roles.rs"]
 mod role_bindings;
+
+#[cfg(feature = "model-registry-upgrade-tests")]
+#[tokio::test]
+async fn legacy_model_profiles_keep_their_identity_and_review_state_at_registry_upgrade()
+-> Result<(), Box<dyn std::error::Error>> {
+    let url = std::env::var("ORANGE_MODEL_DRAFT_UPGRADE_URL")?;
+    assert!(url.rsplit('/').next().is_some_and(|n| {
+        n.strip_prefix("orange_model_prev_")
+            .is_some_and(|id| id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit()))
+    }));
+    let store = orange_control_plane::store::Store::connect(&url).await?;
+    let history = sqlx::migrate!();
+    sqlx::migrate::Migrator::with_migrations(
+        history
+            .iter()
+            .filter(|v| v.version <= 85)
+            .cloned()
+            .collect(),
+    )
+    .run(store.pool())
+    .await?;
+    let old: i64 = sqlx::query_scalar("SELECT max(version) FROM _sqlx_migrations WHERE success")
+        .fetch_one(store.pool())
+        .await?;
+    assert_eq!(old, 85);
+    sqlx::query("INSERT INTO reviewed_execution_profiles(execution_profile_id,model_version_id,model_sha256,execution_profile_digest,enabled)
+        VALUES('p1','legacy-id',repeat('a',64),repeat('b',64),true),('p2','legacy-id',repeat('a',64),repeat('c',64),false)")
+        .execute(store.pool()).await?;
+    store.migrate().await?;
+    store.migrate().await?;
+    let records:Vec<(String,String,String,bool)>=sqlx::query_as("SELECT execution_profile_id,model_sha256,execution_profile_digest,enabled
+        FROM reviewed_execution_profiles WHERE model_version_id='legacy-id' ORDER BY execution_profile_id").fetch_all(store.pool()).await?;
+    assert_eq!(
+        records,
+        vec![
+            ("p1".into(), "a".repeat(64), "b".repeat(64), true),
+            ("p2".into(), "a".repeat(64), "c".repeat(64), false)
+        ]
+    );
+    let authority: String = sqlx::query_scalar(
+        "SELECT authority FROM model_version_names WHERE model_version_id='legacy-id'",
+    )
+    .fetch_one(store.pool())
+    .await?;
+    assert_eq!(authority, "execution_profile");
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM admin_model_drafts")
+            .fetch_one(store.pool())
+            .await?,
+        0
+    );
+    Ok(())
+}
