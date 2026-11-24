@@ -66,10 +66,14 @@ def main():
     cli.add_argument("--environment",type=Path,default=ROOT/".local")
     cli.add_argument("--installed",action="store_true")
     cli.add_argument("--device-client",action="store_true",help="Run the real Worker CLI through ambiguous and corrupted redemption responses")
+    cli.add_argument("--rotation-web",type=Path,help="Explicit independent web checkout for native browser rotation approval")
+    cli.add_argument("--rotation-assets",type=Path,help="Serve these previously verified static files during browser qualification")
     cli.add_argument("--rotate-device",action="store_true",help="Activate competing replacements and test bounded overlap through the real mTLS gateway")
     cli.add_argument("--rotation-handoff",action="store_true",help="Verify current-key ownership over a fresh key and owner-bound handoff")
     cli.add_argument("--withdraw-issuer",action="store_true")
     args=cli.parse_args();private=args.environment.resolve()
+    if args.rotation_assets and not args.rotation_web:cli.error("--rotation-assets needs --rotation-web")
+    if args.rotation_web:args.rotate_device=True
     if args.rotate_device:args.rotation_handoff=True
     if args.rotation_handoff:args.device_client=True
     rustup=shutil.which("rustup") or "/opt/homebrew/opt/rustup/bin/rustup"
@@ -91,6 +95,9 @@ def main():
         context=nullcontext(Path(meta["target_directory"])/"debug")
     openssl="/opt/homebrew/opt/openssl@3/bin/openssl"
     if not Path(openssl).is_file():openssl=shutil.which("openssl")
+    if args.rotation_web:
+        from acceptance_origins import reserve_origins
+        reserve_origins(43122)
     with context as programs, tempfile.TemporaryDirectory(prefix="orange-real-issuer-") as temp, database(private/"database-url","orange_issuer_") as (_,url):
         root=Path(temp);ca=root/"signer";device=root/"device";gw=root/"gateway"
         for folder in (ca,device,gw):folder.mkdir(mode=0o700)
@@ -193,7 +200,8 @@ def main():
                 from device_rotation_activation_acceptance import exercise
                 exercise(worker=programs/"orange-worker",origin=origin,owner=owner,headers=headers,device=device,root=root,
                          gw_cfg=gw_cfg,programs=programs,base=base,old=issued,old_config=device/"redeem-config.json",new_handoff=new_rotation,
-                         issue=issue,sql=sql,http=http,config=config,gateway=gateway,client_test=client_test,env=env,require=require)
+                         issue=issue,sql=sql,http=http,config=config,gateway=gateway,client_test=client_test,env=env,require=require,
+                         web=args.rotation_web,assets=args.rotation_assets,site=site,login=session)
                 return
             # Losing the authorizing role after signing permanently withdraws the grant, even after regrant.
             team,team_req=str(uuid.uuid4()),str(uuid.uuid4())

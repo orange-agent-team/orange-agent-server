@@ -8,9 +8,19 @@ import uuid
 
 
 def exercise(*,worker,origin,owner,headers,device,root,gw_cfg,programs,base,old,old_config,
-             new_handoff,issue,sql,http,config,gateway,client_test,env,require):
+             new_handoff,issue,sql,http,config,gateway,client_test,env,require,web=None,assets=None,site=None,login=None):
     old_request=old["request_id"]
     scope=f"/api/v1/owners/{owner}"
+    def browser(mode,**values):
+        node=Path.home()/".nvm/versions/node/v22.23.2/bin/node"
+        project=web.resolve(strict=True)
+        files=(assets or project/"apps/web/dist").resolve(strict=True)
+        require(site=="https://127.0.0.1:43122" and (files/"index.html").is_file(),"Expected configured development origin and static site")
+        data={"api":origin,"origin":site,"login":login,"assets":str(files),"mode":mode,**values}
+        result=subprocess.run([node,project/"apps/web/scripts/real-worker-rotation.mjs"],input=json.dumps(data),text=True,cwd=project,
+                              stdout=subprocess.PIPE,timeout=100)
+        print(result.stdout,end="",flush=True);result.check_returncode()
+        require("PASS real owner rotation browser "+mode in result.stdout.splitlines(),"No real browser receipt")
     def handoff(cfg):
         request=str(uuid.uuid4())
         return json.loads(subprocess.check_output([worker,"prepare-certificate-rotation",cfg,owner,request],timeout=20))
@@ -58,6 +68,10 @@ def exercise(*,worker,origin,owner,headers,device,root,gw_cfg,programs,base,old,
     forged=copy.deepcopy(new_handoff);forged["previous_key_signature"]="A"*86
     require(authorize(forged)[0] in (409,422),"Invalid old-key proof admitted")
     require(sql("SELECT count(*) FROM worker_enrollment_grants")==before,"Invalid proof left a grant")
+    if web:
+        browser("authorize",handoff=new_handoff)
+        require(status(new_handoff["intent"]["replacement"]["request"]["request_id"])["activated_unix"] is None,
+                "Browser did not persist original owner authorization")
     first=prepare(new_handoff);second=prepare(handoff(old_config))
     require(sql("SELECT count(*) FROM nodes")=="1" and sql("SELECT count(*) FROM worker_credentials")=="1","Preparation activated a new device")
     # Both authorized replacements existed before either one was redeemed.
@@ -89,6 +103,9 @@ def exercise(*,worker,origin,owner,headers,device,root,gw_cfg,programs,base,old,
     deadline=int(sql(f"SELECT ceil(extract(epoch FROM overlap_until))::bigint FROM worker_certificate_rotation_receipts WHERE request_id='{next_req}'"))
     require(sql(f"SELECT c.expires_at=r.overlap_until AND r.overlap_until<r.activated_at+interval '16 seconds' FROM worker_credentials c JOIN worker_certificate_rotation_receipts r ON r.previous_certificate_sha256=c.certificate_sha256 WHERE r.request_id='{next_req}'")=="t","Rotation extended a preexisting expiration")
     session("real-expired-predecessor",current,newest,deadline)
+    if web:
+        browser("revoke",request=req)
+        require(status(next_req)["enrollment"]["state"]=="revoked","Browser withdrawal failed to propagate to the next generation")
     require(http(origin,"DELETE",scope+"/worker-enrollments/"+old_request,dict(headers,**{"Idempotency-Key":old_request}))[0]==200,"Original consent withdrawal failed")
     require(sql("SELECT count(*) FROM worker_credentials WHERE active")=="0","A rotated credential survived root consent withdrawal")
     require(sql("SELECT count(*) FROM nodes")=="1" and sql("SELECT count(*) FROM jobs")=="0","Rotation allocated resources")
