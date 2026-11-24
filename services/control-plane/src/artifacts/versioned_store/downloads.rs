@@ -22,7 +22,7 @@ impl VersionedStore {
             .append_pair("versionId", version)
             .append_pair("response-content-disposition", "attachment")
             .append_pair("response-content-type", "application/octet-stream")
-            .append_pair("response-cache-control", "private, no-store");
+            .append_pair("response-cache-control", "no-store");
         for _ in 0..2 {
             let now = now_seconds()?;
             let ttl = cutoff.saturating_sub(now);

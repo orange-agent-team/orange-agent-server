@@ -74,7 +74,12 @@ def run(api,dbfile,identity,folder,endpoint,bucket,credentials,s3,fence,expiry,w
             conn=HTTPConnection("127.0.0.1",target.port,timeout=12)
             try:
                 conn.request("GET",url.path+"?"+url.query);res=conn.getresponse();body=res.read()
-                require(res.status==200 and body==data and res.getheader("x-amz-version-id")==provider,"Wrong versioned signed bytes")
+                if res.status!=200:
+                    from xml.etree import ElementTree
+                    try:code=next((v.text for v in ElementTree.fromstring(body).iter() if v.tag.split("}")[-1]=="Code"),None)
+                    except ElementTree.ParseError:code=None
+                    raise RuntimeError("Signed GET denied: "+str((res.status,code)))
+                require(body==data and res.getheader("x-amz-version-id")==provider,"Wrong versioned signed bytes")
                 require(res.getheader("Content-Disposition")=="attachment" and res.getheader("Content-Type")=="application/octet-stream"
                         and "no-store" in (res.getheader("Cache-Control") or ""),"Signed object response was not a private download")
             finally:conn.close()

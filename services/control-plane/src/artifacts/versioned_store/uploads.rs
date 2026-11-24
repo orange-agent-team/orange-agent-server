@@ -129,9 +129,12 @@ impl ArtifactStore {
             .bind(lock)
             .execute(&mut *tx)
             .await?;
-        let existing:Option<String>=sqlx::query_scalar("SELECT transfer_id FROM artifact_s3_upload_grants WHERE owner_id=$1 AND requester_id=$2 AND request_key=$3")
+        let existing:Option<(String,String)>=sqlx::query_as("SELECT transfer_id,upload_id FROM artifact_s3_upload_grants WHERE owner_id=$1 AND requester_id=$2 AND request_key=$3")
             .bind(owner).bind(&actor.user).bind(key).fetch_optional(&mut *tx).await?;
-        let (t, until) = if let Some(id) = existing {
+        let (t, until) = if let Some((id, original_upload)) = existing {
+            if original_upload != upload {
+                return Err(ArtifactError::Conflict);
+            }
             let g = self
                 .direct_scope(&mut tx, actor, owner, upload, &id, true)
                 .await?;
@@ -179,6 +182,7 @@ impl ArtifactStore {
         let mut tx = self.inner.pool.begin().await?;
         let row = self.row_in(&mut tx, owner, upload).await?;
         authority::resource(&mut tx, actor, owner, &row, false, false).await?;
+        self.inner.objects.remote()?;
         let id:String=sqlx::query_scalar("SELECT g.transfer_id FROM artifact_s3_upload_grants g JOIN artifact_transfers t USING(transfer_id)
             WHERE g.owner_id=$1 AND g.upload_id=$2 AND g.requester_id=$3 AND t.artifact_id=$4 ORDER BY t.created_at DESC,g.transfer_id DESC LIMIT 1")
             .bind(owner).bind(upload).bind(&actor.user).bind(row.try_get::<&str,_>("artifact_id")?).fetch_optional(&mut *tx).await?.ok_or(ArtifactError::NotFound)?;

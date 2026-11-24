@@ -34,6 +34,11 @@ def prepare(wire,sql,author,other):
         first,second=threads.map(lambda _:issue(),range(2))
     require(first[0]==200 and second[0]==200,"Concurrent staging issuance failed: "+str([first[0],second[0]])+" "+str(json.loads(first[1]).get("code")))
     cap=json.loads(first[1]);again=json.loads(second[1]);transfer=cap["transfer_id"]
+    extra=str(uuid4())
+    st,body=wire("POST",collection,author,{"upload_id":extra,"size_bytes":str(len(payload)),"media_type":"text/plain","sha256":sha},extra)
+    require(st==200,"Secondary intent missing");extra_version=json.loads(body)["version_id"]
+    require(wire("POST",collection+"/"+extra+"/upload-authorizations",author,{"version_id":extra_version},grant_key)[0]==409,
+            "Same grant key bound to two uploads")
     require(cap["state"]=="authorized" and cap["artifact_id"]==v["artifact_id"] and cap["version_id"]==version and cap["upload_id"]==upload and
             cap["expires_at_unix"]==again["expires_at_unix"] and again["transfer_id"]==transfer,"Wrong grant identity")
     headers=cap["required_headers"]
