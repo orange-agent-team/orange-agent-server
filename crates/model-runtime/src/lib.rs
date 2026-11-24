@@ -1,4 +1,5 @@
 //! Model adapters produce uncommitted candidates. Only the owning host may commit a response.
+pub mod adapter_contract;
 pub mod cache;
 pub mod embeddings;
 pub mod llama;

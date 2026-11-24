@@ -18,3 +18,9 @@ target/debug/orange-model-manifest verify-proposed /absolute/path/to/cache < pro
 ```
 
 `verify` 从操作员选定的目录读取真实文件，以文件句柄核对大小和摘要并拒绝符号链接，返回本次观测到的文件数与字节数。`validate` 只回传格式及引用验证通过的描述符。发布清单由 `scripts/generate-model-manifests.py` 从固定锁核对，显式传入 `--write` 才更新快照。运行 `python3.12 scripts/check-model-version-manifests.py` 可以检查四份真实缓存、篡改样例和一次性本地数据库上的用户接口。
+
+### 本地文本和嵌入适配器
+
+运行 `orange-model-manifest adapter VERSION` 可读取当前随包清单的运行时版本、清单摘要、接口和上限。文本适配器使用 GGUF 内嵌模板，通过私有引擎的模板计数接口检查输入和输出是否能放入上下文。Chat Completions 与 Responses 均逐次提交完整输入并关闭提示复用，Responses 同时关闭响应存储。嵌入适配器只接受文本输入，按实际清单限制批量、每项 token 数及向量维度。当前固定的 ONNX 版本允许每批 32 项、每项最多 512 个 token，返回 384 维有序向量。
+
+本地选择文本或向量传输需要匹配清单中的引擎与接口。平台已审核的私有文本别名沿用原有的显式文本配置。图像、转写和未知版本不会取得向量路由。读取清单不改变平台模型的审核、供给或价格状态。

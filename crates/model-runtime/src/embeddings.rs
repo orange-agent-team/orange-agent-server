@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 pub const PROFILE: &str = "multilingual-e5-small-onnx-cpu-v1";
 pub const DIMENSIONS: usize = 384;
 pub const MAX_BATCH: usize = 32;
+pub const MAX_TOKENS_PER_TEXT: u32 = 512;
 
 #[derive(Deserialize)]
 #[serde(untagged)]
@@ -90,7 +91,8 @@ impl BatchResult {
             || self.object != "list"
             || !(1..=MAX_BATCH).contains(&count)
             || self.data.len() != count
-            || !(count as u64..=count as u64 * 512).contains(&self.usage.prompt_tokens)
+            || !(count as u64..=count as u64 * u64::from(MAX_TOKENS_PER_TEXT))
+                .contains(&self.usage.prompt_tokens)
             || self.usage.prompt_tokens != self.usage.total_tokens
         {
             return Err(ModelError::Protocol);
@@ -114,7 +116,9 @@ impl BatchResult {
         count: usize,
     ) -> Result<Self, ModelError> {
         if lengths.len() != count
-            || lengths.iter().any(|n| !(1..=512).contains(n))
+            || lengths
+                .iter()
+                .any(|n| !(1..=u64::from(MAX_TOKENS_PER_TEXT)).contains(n))
             || !(1..=MAX_BATCH).contains(&count)
         {
             return Err(ModelError::Protocol);

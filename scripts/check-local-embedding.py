@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise the real private MP-03 HTTP endpoint and the normal Rust client."""
 
+import argparse
 import errno
 import http.client
 import json
@@ -15,8 +16,6 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 PIN = json.loads((ROOT / "config/local-embedding.lock.json").read_text())
-MODELS = ROOT / ".local/embedding-model"
-PYTHON = ROOT / "backends/.venv/bin/python"
 CARGO = shutil.which("rustup") or "/opt/homebrew/opt/rustup/bin/rustup"
 CARGO = Path(
     subprocess.check_output(
@@ -166,7 +165,14 @@ def check(session):
 def main():
     if not __debug__:
         raise SystemExit("Verification requires Python assertions")
-    if not PYTHON.is_file() or not (MODELS / "model.onnx").is_file():
+    parser=argparse.ArgumentParser()
+    parser.add_argument("--asset-root",type=Path,default=ROOT/".local/embedding-model")
+    parser.add_argument("--python",type=Path,default=ROOT/"backends/.venv/bin/python")
+    parser.add_argument("--report",type=Path,help="Explicit output for an independent checkout")
+    args=parser.parse_args()
+    models=args.asset_root.resolve()
+    python=args.python.absolute()
+    if not python.is_file() or not (models / "model.onnx").is_file():
         raise SystemExit(
             "Install the locked embedding extra and verify the two pinned model assets first"
         )
@@ -193,15 +199,15 @@ def main():
         assets = Path(scratch) / "assets"
         assets.mkdir(mode=0o700)
         # Copy the tokenizer because this test deliberately damages its private copy.
-        shutil.copyfile(MODELS / "tokenizer.json", assets / "tokenizer.json")
+        shutil.copyfile(models / "tokenizer.json", assets / "tokenizer.json")
         try:
-            os.link(MODELS / "model.onnx", assets / "model.onnx")
+            os.link(models / "model.onnx", assets / "model.onnx")
         except OSError as error:
             if error.errno != errno.EXDEV:
                 raise
-            shutil.copyfile(MODELS / "model.onnx", assets / "model.onnx")
+            shutil.copyfile(models / "model.onnx", assets / "model.onnx")
         proc = subprocess.Popen(
-            [TARGET / "debug/orange-embedding-host", PYTHON, assets],
+            [TARGET / "debug/orange-embedding-host", python, assets],
             env={"TMPDIR": scratch, "PATH": "/usr/bin:/bin"},
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -237,7 +243,7 @@ def main():
         assets=PIN["files"],
         scope="Actual local CPU, private Unix HTTP, unbilled development",
     )
-    (MODELS / "integration.json").write_text(json.dumps(report, indent=2) + "\n")
+    (args.report or models / "integration.json").write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report))
 
 

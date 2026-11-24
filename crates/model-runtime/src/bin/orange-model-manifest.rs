@@ -36,11 +36,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .collect();
             serde_json::to_value(versions)?
         }
+        [op, id] if op == "adapter" => {
+            let manifest = manifest::find(id)?.receipt();
+            let adapter = orange_model_runtime::adapter_contract::LocalAdapterSpec::bundled(id)?;
+            json!({"model_version":id,"manifest_sha256":manifest.manifest_sha256,"runtime":manifest.manifest.runtime,"adapter":adapter})
+        }
         [op, id] if op == "show" => serde_json::to_value(manifest::find(id)?.receipt())?,
         [op] if op == "validate" => serde_json::to_value(proposed_manifest()?.receipt())?,
         [op, id, cache] if op == "verify" => measured(manifest::find(id)?, cache)?,
         [op, cache] if op == "verify-proposed" => measured(&proposed_manifest()?, cache)?,
-        _ => return Err("usage: orange-model-manifest list | show VERSION | validate < FILE | verify VERSION CACHE | verify-proposed CACHE < FILE".into())
+        _ => return Err("usage: orange-model-manifest list | show VERSION | adapter VERSION | validate < FILE | verify VERSION CACHE | verify-proposed CACHE < FILE".into())
     };
     serde_json::to_writer(io::stdout().lock(), &output)?;
     println!();

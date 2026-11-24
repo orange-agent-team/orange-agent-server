@@ -18,7 +18,7 @@ pub(crate) fn request_body(request: &GenerateRequest, stream: bool) -> Value {
         }
     }
     let tools: Vec<_> = request.tools.iter().map(|tool| json!({"type":"function","name":tool.name,"description":tool.description,"parameters":tool.parameters})).collect();
-    json!({"model":request.model_version,"input":input,"tools":tools,"store":false,
+    json!({"model":request.model_version,"input":input,"tools":tools,"store":false,"cache_prompt":false,
           "stream":stream,"max_output_tokens":request.max_output_tokens,"temperature":0})
 }
 

@@ -1,4 +1,5 @@
 //! Fixed-profile local llama.cpp adapter. No arbitrary URL, remote media, tool execution or paid calls.
+use crate::adapter_contract::{CHAT_PATH, EMBEDDINGS_PATH, LocalAdapterSpec, RESPONSES_PATH};
 use crate::{
     GenerateRequest, ModelError, ResponseCandidate,
     stream::{ChatAssembler, SseDecoder},
@@ -18,8 +19,8 @@ pub enum LocalTextProtocol {
 impl LocalTextProtocol {
     fn path(self) -> &'static str {
         match self {
-            Self::ChatCompletions => "v1/chat/completions",
-            Self::Responses => "v1/responses",
+            Self::ChatCompletions => CHAT_PATH,
+            Self::Responses => RESPONSES_PATH,
         }
     }
 }
@@ -118,6 +119,17 @@ impl LlamaClient {
             context_tokens,
         })
     }
+    fn require_text(&self) -> Result<(), ModelError> {
+        match crate::manifest::find(&self.model) {
+            // Additional private text profiles (including the reviewed code model) have a separate
+            // operator pin and select this text transport explicitly. They never gain a vector route.
+            Err(crate::manifest::ManifestError::NotFound) => Ok(()),
+            Ok(version) if matches!(LocalAdapterSpec::for_version(&version.receipt().manifest)?, LocalAdapterSpec::Text { context_tokens, .. } if self.context_tokens <= context_tokens) => {
+                Ok(())
+            }
+            _ => Err(ModelError::Invalid),
+        }
+    }
     fn url(&self, path: &str) -> Result<Url, ModelError> {
         self.endpoint.join(path).map_err(|_| ModelError::Invalid)
     }
@@ -151,6 +163,7 @@ impl LlamaClient {
         serde_json::from_slice(&bounded(response).await?).map_err(|_| ModelError::Protocol)
     }
     fn request(&self, request: &GenerateRequest, stream: bool) -> Result<Value, ModelError> {
+        self.require_text()?;
         request.validate()?;
         if request.model_version != self.model {
             return Err(ModelError::Invalid);
@@ -200,7 +213,10 @@ impl LlamaClient {
         mut cancellation: watch::Receiver<bool>,
     ) -> Result<crate::embeddings::BatchResult, ModelError> {
         crate::embeddings::validate_texts(texts)?;
-        if self.model != crate::embeddings::PROFILE {
+        if !matches!(
+            LocalAdapterSpec::bundled(&self.model)?,
+            LocalAdapterSpec::Embedding { .. }
+        ) {
             return Err(ModelError::Invalid);
         }
         if *cancellation.borrow() {
@@ -208,7 +224,7 @@ impl LlamaClient {
         }
         let body = json!({"model":self.model,"input":texts,"encoding_format":"float"});
         let fetch = async {
-            let response = self.post("v1/embeddings", &body).await?;
+            let response = self.post(EMBEDDINGS_PATH, &body).await?;
             match response.status().as_u16() {
                 400 => return Err(ModelError::Invalid),
                 413 | 422 => return Err(ModelError::Limit),
@@ -226,6 +242,7 @@ impl LlamaClient {
     }
     /// Whole-content retokenization; caller chooses a versioned canonical projection.
     pub async fn tokenize(&self, content: &str) -> Result<Vec<i64>, ModelError> {
+        self.require_text()?;
         if content.len() > 1024 * 1024 {
             return Err(ModelError::Limit);
         }
@@ -345,6 +362,76 @@ async fn bounded(mut response: Response) -> Result<Vec<u8>, ModelError> {
 mod tests {
     use super::*;
     use orange_protocol::model::{Message, Role, ToolCall};
+    #[tokio::test]
+    async fn bundled_capabilities_reject_cross_modality_before_any_http_request() {
+        let local = |model: &str, context| {
+            LlamaClient::new("http://127.0.0.1:1/", "k".repeat(32), model.into(), context)
+                .expect("local transport")
+        };
+        let (_, cancel) = watch::channel(false);
+        let strings = vec!["query: sample".into()];
+        for id in [
+            "qwen-local-test-v1",
+            "looks-like-an-embedding-model",
+            "sdxl-base-1.0-euler-fp16-mps-v1",
+        ] {
+            assert!(matches!(
+                local(id, 512).embed(&strings, cancel.clone()).await,
+                Err(ModelError::Invalid)
+            ));
+        }
+        for (id, ctx) in [
+            (crate::embeddings::PROFILE, 512),
+            ("whisper-small-ct2-int8-cpu-v1", 4096),
+            ("qwen-local-test-v1", 8192),
+        ] {
+            let client = local(id, ctx);
+            assert!(matches!(
+                client.tokenize("sample").await,
+                Err(ModelError::Invalid)
+            ));
+            let request = GenerateRequest {
+                invocation_id: "one".into(),
+                model_version: id.into(),
+                max_output_tokens: 10,
+                tools: vec![],
+                messages: vec![Message::plain(Role::User, "sample".into())],
+            };
+            assert!(matches!(
+                client.input_tokens(&request).await,
+                Err(ModelError::Invalid)
+            ));
+        }
+        let text = local("qwen-local-test-v1", 4096);
+        let request = GenerateRequest {
+            invocation_id: "privacy".into(),
+            model_version: "qwen-local-test-v1".into(),
+            max_output_tokens: 10,
+            tools: vec![],
+            messages: vec![Message::plain(Role::User, "sample".into())],
+        };
+        assert_eq!(text.request(&request, true).unwrap()["cache_prompt"], false);
+        let body = text
+            .with_protocol(LocalTextProtocol::Responses)
+            .request(&request, true)
+            .unwrap();
+        assert_eq!(body["cache_prompt"], false);
+        assert_eq!(body["store"], false);
+        assert!(body.get("previous_response_id").is_none());
+        assert!(
+            local("private-reviewed-text-alias", 4096)
+                .require_text()
+                .is_ok()
+        );
+        assert!(matches!(
+            LocalAdapterSpec::bundled(crate::embeddings::PROFILE),
+            Ok(LocalAdapterSpec::Embedding {
+                dimensions: 384,
+                ..
+            })
+        ));
+    }
+
     #[test]
     fn internal_tool_calls_map_to_native_function_history() {
         let client = LlamaClient::new(

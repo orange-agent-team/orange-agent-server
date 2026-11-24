@@ -65,12 +65,19 @@ def main():
         def execute(*argv,data=None):return json.loads(subprocess.check_output([installed/"bin"/PROGRAM,*argv],input=data,timeout=360))
         ids=execute("list")
         if [k for k,_ in ids]!=sorted(versions):raise ValueError("Packaged catalogue differs from source")
-        checks={}
+        checks={};adapters={}
         for id_,digest in ids:
             raw=(installed/"models"/(id_+".json")).read_bytes()
             result=execute("validate",data=raw)
             if result!={"manifest":versions[id_],"manifest_sha256":digest} or result!=execute("show",id_):raise ValueError("Packaged version differs")
             kind=result["manifest"]["interface"]["modality"]
+            if kind in ("text","embedding"):
+                capability=execute("adapter",id_)
+                if capability["manifest_sha256"]!=digest or capability["runtime"]!=result["manifest"]["runtime"] or capability["adapter"]["modality"]!=kind:
+                    raise ValueError("Installed adapter is not bound to its version")
+                adapters[kind]=capability["adapter"]
+            elif subprocess.run([installed/"bin"/PROGRAM,"adapter",id_],capture_output=True).returncode==0:
+                raise ValueError("Unsupported local HTTP capability was advertised")
             checks[kind]=execute("verify",id_,args.asset_root.resolve()/CACHES[kind])
             if checks[kind]["manifest_sha256"]!=digest or checks[kind]["verified_bytes"]!=result["manifest"]["resources"]["artifact_bytes"]:
                 raise ValueError("Packaged verifier did not measure exact declared assets")
@@ -81,7 +88,7 @@ def main():
         else:os.link(first,final)
         report={"source":commit,"archive":final.name,"bytes":first.stat().st_size,"sha256":checksum,"native_builds":build["builds"],
                 "identical_archives":2,"target":build["target"],"locked_crates":total,"missing_notices":missing,
-                "measured":checks,"production_signed_or_notarized":False}
+                "measured":checks,"local_http_adapters":adapters,"production_signed_or_notarized":False}
         receipt=work/"receipt.json";receipt.write_text(json.dumps(report,indent=2)+"\n")
         os.replace(receipt,final.with_suffix(".json"));print(json.dumps(report),flush=True)
 
