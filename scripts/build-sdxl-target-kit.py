@@ -13,7 +13,7 @@ import zipfile
 ROOT=Path(__file__).resolve().parents[1]
 FILES=("scripts/benchmark-sdxl-device.py","scripts/check-sdxl-target-benchmark.py","scripts/check-sdxl-device-recovery.py",
        "scripts/run-linux-sdxl-attempt.py","scripts/sdxl_device_recovery.py","scripts/sdxl_progress.py","scripts/sdxl_png.py","scripts/linux_platform_inputs.py",
-       "distribution/sdxl-linux/runner.py","distribution/sdxl-linux/README.md","distribution/sdxl-linux/qualification.json")
+       "distribution/sdxl-linux/runner.py","distribution/sdxl-linux/model-version.json","distribution/sdxl-linux/README.md","distribution/sdxl-linux/qualification.json")
 
 
 def build(entries):
@@ -54,8 +54,11 @@ def main():
             entries["notices/"+item.split(".dist-info/licenses/",1)[1]]=wheel.read(item)
     authority=entries["distribution/sdxl-linux/qualification.json"]
     q=json.loads(authority)
+    draft=entries["distribution/sdxl-linux/model-version.json"]
+    if json.loads(draft)["runtime"]!={"engine":"diffusers","image_digest":q["image"]}:
+        raise ValueError("Packaged draft differs from the qualified runtime")
     entries["source.json"]=json.dumps({"server":revision,"image_source":q["source"],"image":q["image"],
-        "qualification_sha256":hashlib.sha256(authority).hexdigest(),"pillow_sha256":pillow["sha256"],"hardware_certified":False},sort_keys=True).encode()
+        "model_version_file_sha256":hashlib.sha256(draft).hexdigest(),"qualification_sha256":hashlib.sha256(authority).hexdigest(),"pillow_sha256":pillow["sha256"],"hardware_certified":False},sort_keys=True).encode()
     first=build(entries)
     if first!=build(entries):raise RuntimeError("Two reproducible builds differ")
     digest=hashlib.sha256(first).hexdigest()

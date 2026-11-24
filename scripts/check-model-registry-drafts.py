@@ -42,6 +42,7 @@ def main():
     cli.add_argument("--environment",type=Path,default=ROOT/".local")
     cli.add_argument("--admin-repo",type=Path,help="Explicit Admin checkout for Chrome acceptance")
     cli.add_argument("--assets",type=Path,help="Previously verified static files, optionally extracted from a package")
+    cli.add_argument("--sdxl-oci",action="store_true",help="Verify actual CUDA image identity and fixed weight set, then register an unapproved draft")
     cli.add_argument("--all-modalities",action="store_true",help="Measure all four local model caches and exercise draft/admission boundaries")
     cli.add_argument("--asset-root",type=Path,help="Directory containing the locked local model caches")
     cli.add_argument("--installed",action="store_true",help="Use the extracted native release matching this checkout")
@@ -51,7 +52,7 @@ def main():
     origin=json.loads(config.read_bytes())["admin_origin"]
     check_contract(json.loads((ROOT/"contracts/openapi/admin.v1.json").read_bytes()),json.loads((ROOT/"contracts/json-schema/admin.schema.json").read_bytes()))
     program,cargo,build_env=native()
-    if args.all_modalities:
+    if args.all_modalities or args.sdxl_oci:
         if not __debug__:raise ValueError("Matrix checks require Python assertions")
         subprocess.run([cargo,"build","--locked","--offline","-p","orange-model-runtime","--bin","orange-model-manifest"],cwd=ROOT,env=build_env,check=True)
         manifest_tool=program.parent/"orange-model-manifest"
@@ -184,6 +185,10 @@ def main():
                 print(proc.stdout,end="",flush=True);proc.check_returncode()
                 require("PASS actual Admin browser registered a draft once" in proc.stdout,"Missing real browser")
                 require(sql("SELECT count(*) FROM admin_audit WHERE event_type='model.draft_registered' AND entity_id='browser-draft'")=="1","Browser performed more than one mutation")
+            if args.sdxl_oci:
+                from sdxl_draft_acceptance import check as check_cuda
+                check_cuda(ROOT,(args.asset_root or args.environment).resolve(strict=True),manifest_tool,post,
+                           lambda path:http("GET",path,writer),sql,query)
             if args.all_modalities:
                 from model_admission_matrix import check
                 check(ROOT,(args.asset_root or args.environment).resolve(strict=True),manifest_tool,post,

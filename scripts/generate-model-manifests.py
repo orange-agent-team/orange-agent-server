@@ -52,6 +52,22 @@ def compile_manifest(kind):
             "pricing":{"policy":"local_unpriced"}}
 
 
+def cuda_draft():
+    # Weights and content specification are identical to the reviewed SDXL lock. The
+    # deployment target, image identity and model version are separate from the MPS model.
+    candidate=compile_manifest("image")
+    profile=json.loads((ROOT/"distribution/sdxl-linux/qualification.json").read_bytes())
+    if (profile["platform"]!="linux/amd64" or not profile["no_device_denied"] or
+        profile["wheel_lock_sha256"]!=sha("backends/environments/sdxl-linux-cuda/wheels.lock.json") or
+        profile["system_lock_sha256"]!=sha("backends/environments/sdxl-linux-cuda/debian-libs.lock.json") or
+        len(profile["runner_installations"])!=2 or not all(r["runner_sha256"]==sha("distribution/sdxl-linux/runner.py") for r in profile["runner_installations"])):
+        raise ValueError("Qualified runtime differs from tracked runner or dependency locks")
+    candidate["model_version"]="sdxl-base-1.0-euler-fp16-cuda-v1"
+    candidate["runtime"]={"engine":"diffusers","image_digest":profile["image"]}
+    candidate["resources"]["device"]="nvidia_gpu"
+    return candidate
+
+
 def main():
     parser=argparse.ArgumentParser()
     parser.add_argument("--write",action="store_true",help="Update the checked-in manifest inputs; default is to verify")
@@ -65,6 +81,11 @@ def main():
         for name,payload in expected.items():(DEST/name).write_bytes(payload)
     if set(expected)!={f.name for f in DEST.iterdir()} or any((DEST/k).is_symlink() or (DEST/k).read_bytes()!=v for k,v in expected.items()):
         raise ValueError("Shipped model descriptors differ from reviewed local source and engine locks")
+    path=ROOT/"distribution/sdxl-linux/model-version.json"
+    payload=(json.dumps(cuda_draft(),indent=2,ensure_ascii=False)+"\n").encode()
+    if args.write:path.write_bytes(payload)
+    if path.is_symlink() or path.read_bytes()!=payload:raise ValueError("CUDA draft differs from qualified OCI and weight inputs")
+    print("PASS unpriced CUDA model draft binds locked assets and immutable OCI manifest")
     print("PASS four bundled ModelVersion descriptors match immutable asset, engine and adapter inputs")
 
 
