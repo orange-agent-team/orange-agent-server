@@ -1,5 +1,6 @@
 """Measure a local interpreter and selected loaded engine components without exporting paths."""
 import hashlib
+from importlib.machinery import PathFinder
 import importlib.metadata
 import importlib.util
 import json
@@ -21,6 +22,22 @@ def sha(path):
         return hashlib.file_digest(f, "sha256").hexdigest()
 
 
+def static_spec(name):
+    # Resolve only regular on-disk packages using the isolated interpreter's import paths.
+    # Unlike find_spec("parent.child"), this does not execute parent/__init__.py.
+    locations = None
+    parts = name.split(".")
+    for end in range(1, len(parts) + 1):
+        spec = PathFinder.find_spec(".".join(parts[:end]), locations)
+        if spec is None or spec.origin is None:
+            raise ValueError("critical module is not a filesystem module")
+        if end < len(parts):
+            locations = spec.submodule_search_locations
+            if not locations:
+                raise ValueError("critical module has no package location")
+    return spec
+
+
 pin = json.loads(sys.stdin.buffer.read(32769))
 versions = {n: importlib.metadata.version(n) for n in pin["packages"]}
 if versions != pin["packages"] or sys.implementation.name != "cpython":
@@ -29,9 +46,13 @@ os_name = {"darwin": "macos", "linux": "linux"}.get(sys.platform)
 cpu = {"arm64": "aarch64", "aarch64": "aarch64", "x86_64": "x86_64"}.get(platform.machine())
 if not os_name or not cpu or os_name+"-"+cpu != pin["target"] or sys.version_info[:2] != (3,12):
     raise ValueError("unqualified target")
+mode = sys.argv[1:] or ["imported"]
+if mode not in (["files"], ["imported"]):
+    raise ValueError("unsupported observation mode")
+resolve = static_spec if mode == ["files"] else importlib.util.find_spec
 components = {}
 for name in pin["critical_modules"]:
-    spec = importlib.util.find_spec(name)
+    spec = resolve(name)
     if not spec or not spec.origin:
         raise ValueError("missing engine module")
     components[name] = sha(spec.origin)

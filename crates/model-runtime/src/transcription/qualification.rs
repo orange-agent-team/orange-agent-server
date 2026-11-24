@@ -45,13 +45,27 @@ pub struct Qualification {
 impl Client {
     pub(super) async fn observe(
         &self,
+        cancel: watch::Receiver<bool>,
+    ) -> Result<ObservedRuntime, Error> {
+        self.observe_modules(false, cancel).await
+    }
+
+    async fn observe_modules(
+        &self,
+        files_only: bool,
         mut cancel: watch::Receiver<bool>,
     ) -> Result<ObservedRuntime, Error> {
         if *cancel.borrow() || cancel.has_changed().is_err() {
             return Err(Error::Cancelled);
         }
         let mut child = Command::new(&self.python)
-            .args(["-I", "-B", "-c", PROBE])
+            .args([
+                "-I",
+                "-B",
+                "-c",
+                PROBE,
+                if files_only { "files" } else { "imported" },
+            ])
             .env_clear()
             .env("HF_HUB_OFFLINE", "1")
             .stdin(Stdio::piped())
@@ -130,7 +144,10 @@ impl Client {
         if expected_digest.is_some_and(|s| !orange_protocol::valid_digest(s)) {
             return Err(Error::Invalid);
         }
-        let runtime = self.observe(cancel.clone()).await?;
+        // A fresh wheel installation can spend the entire observation budget importing native
+        // parent packages. First hash the resolved files. The real ASR qualification then runs
+        // the engine and the normal import-based observation must independently agree.
+        let runtime = self.observe_modules(true, cancel.clone()).await?;
         let encoded = read_audio(&self.model.join("jfk.wav"))?;
         let pin: Value = serde_json::from_str(PIN).map_err(|_| Error::Protocol)?;
         let sample = &pin["qualification_sample"];
