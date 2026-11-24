@@ -778,7 +778,7 @@ async fn mutate(
                     device_issuers::target(&mut tx, &m.request, p).await?;
                 }
                 check_preview(&m.doc, &decision.payload_digest, &decision.policy_version)?;
-                target(&mut tx, &m.request, &identity).await?;
+                target(&mut tx, &m.request, identity).await?;
                 let time = now(&mut tx).await?;
                 if matches!(m.request.payload, ActionPayload::Role(_))
                     && decision.decision == "approve"
@@ -807,7 +807,7 @@ async fn mutate(
                 if state != "ready" {
                     return Err(AdminError::Conflict);
                 }
-                let (version, node_state) = target(&mut tx, &m.request, &identity).await?;
+                let (version, node_state) = target(&mut tx, &m.request, identity).await?;
                 match &m.request.payload {
                     ActionPayload::ModelActivate(p) => {
                         let maker = text(&m.doc, "requested_by")?;
