@@ -27,8 +27,10 @@
     "orange-agent-runtime": ["orange-model-runtime"]
   },
   "processes": {
+    "orange-knowledge": ["orange-agent-runtime","owner-scoped local knowledge inspection and maintenance CLI"],
+    "orange-model-manifest": ["orange-model-runtime","offline validation and measurement of versioned model artifacts"],
     "orange-model-host": ["orange-model-runtime","local private model supervisor"],
-    "orange-image": ["orange-model-runtime","managed CPU image backend client"],
+    "orange-image": ["orange-model-runtime","managed fixed-template local image host"],
     "orange-embedding-host": ["orange-model-runtime","managed CPU embedding host"],
     "orange-transcribe": ["orange-model-runtime","managed CPU transcription host"],
     "model-fetch": ["orange-model-runtime","local model cache provisioning CLI"],
