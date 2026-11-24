@@ -122,7 +122,7 @@ def main():
         with tempfile.TemporaryDirectory(prefix=".build-",dir=dest) as tmp,ExitStack() as cleanup:
             tmp=Path(tmp);nonce=uuid.uuid4().hex
             cmd=[*docker,"create","--pull=never","--platform","linux/amd64","--network","none","--cap-drop","ALL","--security-opt","no-new-privileges",
-                 "--user","65532:65532","--pids-limit","128","--memory","4g","--cpus","3","--label","orange.owned="+nonce,
+                 "--user","65532:65532","--pids-limit","128","--memory","2600m","--cpus","1.25","--label","orange.owned="+nonce,
                  "-e","HOME=/tmp","-e","SOURCE_DATE_EPOCH=946684800","-e","PYTHONDONTWRITEBYTECODE=1",image,"python","-I","-B","/tmp/input/install.py"]
             cid=subprocess.check_output(cmd,text=True).strip()
             def dispose():
