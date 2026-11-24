@@ -85,6 +85,7 @@ name = "worker_sessions"
 required-features = ["integration-tests"]
 
 [dependencies]
+ring = "=0.17.14"
 opentelemetry.workspace = true
 opentelemetry_sdk.workspace = true
 opentelemetry-prometheus.workspace = true

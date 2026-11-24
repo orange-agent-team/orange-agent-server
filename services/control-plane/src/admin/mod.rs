@@ -1,6 +1,7 @@
 pub mod actions;
 pub use actions::prices::activate_due as activate_due_text_prices;
 pub mod identity;
+pub mod model_review;
 pub mod routes;
 
 pub use crate::auth::{hash_secret, random_secret};
@@ -52,7 +53,10 @@ impl From<crate::auth::AuthError> for AdminError {
     }
 }
 impl From<sqlx::Error> for AdminError {
-    fn from(_: sqlx::Error) -> Self {
+    fn from(e: sqlx::Error) -> Self {
+        if e.as_database_error().and_then(|v| v.code()).as_deref() == Some("OA086") {
+            return Self::Conflict;
+        }
         Self::Unavailable
     }
 }

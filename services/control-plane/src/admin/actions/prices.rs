@@ -36,6 +36,25 @@ macro_rules! catalog_sql{
 fn is_audio(price: &str) -> bool {
     price.starts_with("asr-price-")
 }
+async fn draft_price_id(tx: &mut Tx<'_>, profile: &str, audio: bool) -> Result<String, AdminError> {
+    let fixed:Option<Value>=sqlx::query_scalar("SELECT s.manifest->'pricing' FROM registry_model_states s JOIN reviewed_execution_profiles p USING(model_version_id)
+        WHERE p.execution_profile_id=$1").bind(profile).fetch_optional(&mut **tx).await?;
+    let prefix = if audio { "asr-price-" } else { "price-" };
+    if let Some(pricing) = fixed {
+        let id = pricing["price_version"]
+            .as_str()
+            .filter(|id| pricing["policy"] == "price_version" && id.starts_with(prefix))
+            .ok_or(AdminError::Conflict)?;
+        let exists:bool=sqlx::query_scalar("SELECT EXISTS(SELECT FROM admin_text_price_drafts WHERE price_version=$1 UNION ALL SELECT FROM admin_transcription_price_drafts WHERE price_version=$1
+            UNION ALL SELECT FROM text_prices WHERE price_version=$1 UNION ALL SELECT FROM transcription_prices WHERE price_version=$1)")
+            .bind(id).fetch_one(&mut **tx).await?;
+        if exists {
+            return Err(AdminError::Conflict);
+        }
+        return Ok(id.to_owned());
+    }
+    Ok(format!("{prefix}{}", uuid::Uuid::new_v4()))
+}
 fn scope_of(row: &sqlx::postgres::PgRow) -> Result<Scope, AdminError> {
     Ok(Scope {
         environment: "dev".into(),
@@ -269,7 +288,7 @@ pub async fn create(
         price
     } else {
         let (owner, descriptor) = binding(&mut tx, &t).await?;
-        let price = format!("price-{}", uuid::Uuid::new_v4());
+        let price = draft_price_id(&mut tx, &t.execution_profile_id, false).await?;
         let hash = digest("admin-price-terms.v1", &(&price, &owner, &t))?;
         let report = digest("admin-price-review.v1", &(&hash, &descriptor))?;
         sqlx::query("INSERT INTO admin_text_price_drafts(price_version,created_by,request_key,request_digest,scope_kind,scope_id,provider_owner_id,node_id,execution_profile_id,meter_profile_digest,input_price,output_price,output_limit,fee_bps,terms_digest,review_report_id,created_at)

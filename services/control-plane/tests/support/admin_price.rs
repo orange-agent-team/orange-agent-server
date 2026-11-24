@@ -22,7 +22,7 @@ pub async fn seed(pool: &PgPool, owner: &str, node: &str) -> Value {
     ] {
         descriptor[key] = value;
     }
-    sqlx::query("INSERT INTO reviewed_execution_profiles(execution_profile_id,model_version_id,model_sha256,execution_profile_digest) VALUES($1,'fixture',$2,$3)").bind(&profile).bind(model).bind(execution).execute(pool).await.expect("admit execution fixture");
+    sqlx::query("WITH explicit_legacy_review AS (INSERT INTO model_legacy_profile_pins(execution_profile_id,model_version_id,model_sha256,execution_profile_digest) VALUES($1,'fixture',$2,$3) RETURNING execution_profile_id,model_version_id,model_sha256,execution_profile_digest) INSERT INTO reviewed_execution_profiles(execution_profile_id,model_version_id,model_sha256,execution_profile_digest) SELECT execution_profile_id,model_version_id,model_sha256,execution_profile_digest FROM explicit_legacy_review").bind(&profile).bind(model).bind(execution).execute(pool).await.expect("admit execution fixture");
     sqlx::query("INSERT INTO reviewed_cpu_profiles(execution_profile_id,executable_sha256,model_bytes,context_tokens,startup_timeout_ms) VALUES($1,$2,1024,4096,5000)").bind(&profile).bind(executable).execute(pool).await.expect("admit CPU fixture");
     sqlx::query("INSERT INTO trusted_meter_profiles(profile_digest,descriptor) VALUES($1,$2)")
         .bind(&meter)
@@ -46,7 +46,7 @@ pub async fn seed_audio(pool: &PgPool, owner: &str, node: &str) -> Value {
         .execute(pool)
         .await
         .expect("provider wallet");
-    sqlx::query("INSERT INTO reviewed_execution_profiles(execution_profile_id,model_version_id,model_sha256,execution_profile_digest) VALUES($1,$2,$3,$4)").bind(&profile)
+    sqlx::query("WITH explicit_legacy_review AS (INSERT INTO model_legacy_profile_pins(execution_profile_id,model_version_id,model_sha256,execution_profile_digest) VALUES($1,$2,$3,$4) RETURNING execution_profile_id,model_version_id,model_sha256,execution_profile_digest) INSERT INTO reviewed_execution_profiles(execution_profile_id,model_version_id,model_sha256,execution_profile_digest) SELECT execution_profile_id,model_version_id,model_sha256,execution_profile_digest FROM explicit_legacy_review").bind(&profile)
         .bind(fixed["model_version"].as_str().expect("model")).bind(fixed["model_sha256"].as_str().expect("model digest")).bind(hash_secret(&profile)).execute(pool).await.expect("ASR admission fixture");
     sqlx::query("INSERT INTO worker_transcription_profile_observations(observation_id,node_id,session_id,connection_epoch,request_id,execution_profile_id,execution_profile_digest,observation_digest,model_version,model_sha256,sample_sha256,transcript_sha256,duration_ms,normalized_samples,compute_type)
       SELECT $1,$2,$1,1,$1,p.execution_profile_id,p.execution_profile_digest,$3,p.model_version_id,p.model_sha256,$5,$6,11000,176000,'int8' FROM reviewed_execution_profiles p WHERE p.execution_profile_id=$4")

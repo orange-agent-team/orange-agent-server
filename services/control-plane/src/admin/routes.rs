@@ -24,6 +24,16 @@ pub fn router(identity: AdminIdentity) -> Router {
             "/admin/v1/device-issuer-keys/{key}",
             get(super::actions::device_issuers::review),
         )
+        .route(
+            "/admin/v1/model-drafts/{id}/certifications",
+            get(super::actions::models::list_reports)
+                .post(super::actions::models::register)
+                .layer(DefaultBodyLimit::max(256 * 1024)),
+        )
+        .route(
+            "/admin/v1/model-drafts/{id}/certifications/{report}",
+            get(super::actions::models::read_report),
+        )
         .route("/admin/v1/models", get(model_registry::list))
         .route("/admin/v1/models/{id}", get(model_registry::summary))
         .route(
@@ -264,6 +274,8 @@ fn readable_actions(permissions: &BTreeSet<String>) -> Vec<String> {
     [
         ("run.cancel", "runs.read"),
         ("case.update", "cases.read"),
+        ("model.activate", "models.read"),
+        ("model.disable", "models.read"),
         ("device_issuer.withdraw", "device_issuers.read"),
         ("node.drain", "nodes.read"),
         ("node.quarantine", "nodes.read"),

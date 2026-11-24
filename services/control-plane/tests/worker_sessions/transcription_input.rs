@@ -428,7 +428,7 @@ async fn run_for(mode: Scenario, participants: Option<Participants>) {
     .expect("negotiated transport");
     let w = conn.identity().clone();
     let profile = Uuid::new_v4().to_string();
-    sqlx::query("INSERT INTO reviewed_execution_profiles(execution_profile_id,model_version_id,model_sha256,execution_profile_digest) VALUES($1,$2,$3,$4)")
+    sqlx::query("WITH explicit_legacy_review AS (INSERT INTO model_legacy_profile_pins(execution_profile_id,model_version_id,model_sha256,execution_profile_digest) VALUES($1,$2,$3,$4) RETURNING execution_profile_id,model_version_id,model_sha256,execution_profile_digest) INSERT INTO reviewed_execution_profiles(execution_profile_id,model_version_id,model_sha256,execution_profile_digest) SELECT execution_profile_id,model_version_id,model_sha256,execution_profile_digest FROM explicit_legacy_review")
       .bind(&profile).bind(fact.profile.model_version).bind(&fact.profile.model_sha256).bind(&fact.execution_profile_digest).execute(db.pool()).await.expect("independent review fixture");
     let mut observation = conn
         .report_transcription_profile(&profile, &fact)

@@ -22,10 +22,12 @@ fn platform(scope: &Scope) -> Result<(), AdminError> {
     }
 }
 fn summary_value(row: &sqlx::postgres::PgRow) -> Result<Value, AdminError> {
-    Ok(
-        json!({"model_version_id":row.try_get::<&str,_>("model_version_id")?,"version":row.try_get::<&str,_>("manifest_sha256")?,
-        "modality":row.try_get::<&str,_>("modality")?,"status":"draft"}),
-    )
+    let mut out = json!({"model_version_id":row.try_get::<&str,_>("model_version_id")?,"version":row.try_get::<&str,_>("version")?,
+        "modality":row.try_get::<&str,_>("modality")?,"status":row.try_get::<&str,_>("status")?});
+    if let Some(report) = row.try_get::<Option<String>, _>("certification_report_id")? {
+        out["certification_report_id"] = json!(report);
+    }
+    Ok(out)
 }
 fn receipt(row: &sqlx::postgres::PgRow) -> Result<Value, AdminError> {
     let manifest: Value = row.try_get("manifest")?;
@@ -52,8 +54,11 @@ async fn one(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     version: &str,
 ) -> Result<sqlx::postgres::PgRow, AdminError> {
-    sqlx::query("SELECT model_version_id,manifest_sha256,created_by,request_key,manifest,manifest#>>'{interface,modality}' AS modality
-       FROM admin_model_drafts WHERE model_version_id=$1").bind(version).fetch_optional(&mut **tx).await?.ok_or(AdminError::NotFound)
+    sqlx::query("SELECT * FROM registry_model_states WHERE model_version_id=$1")
+        .bind(version)
+        .fetch_optional(&mut **tx)
+        .await?
+        .ok_or(AdminError::NotFound)
 }
 pub(super) async fn create(
     State(identity): State<Arc<AdminIdentity>>,
@@ -164,8 +169,7 @@ pub(super) async fn list(
             id
         }
     };
-    let rows=sqlx::query("SELECT model_version_id,manifest_sha256,manifest#>>'{interface,modality}' AS modality
-        FROM admin_model_drafts WHERE model_version_id COLLATE \"C\">$1 ORDER BY model_version_id COLLATE \"C\" LIMIT $2")
+    let rows=sqlx::query("SELECT model_version_id,version,modality,status,certification_report_id FROM registry_model_states WHERE model_version_id COLLATE \"C\">$1 ORDER BY model_version_id COLLATE \"C\" LIMIT $2")
         .bind(after).bind(i64::from(limit)+1).fetch_all(&mut *tx).await?;
     let page = rows
         .iter()

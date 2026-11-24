@@ -544,9 +544,7 @@
                 },
                 "certification_report_id": {
                   "type": "string",
-                  "minLength": 1,
-                  "maxLength": 128,
-                  "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+                  "pattern": "^[0-9a-f]{64}$"
                 }
               },
               "required": [
@@ -5719,6 +5717,407 @@
         "manifest",
         "registered_by",
         "registration_sha256"
+      ],
+      "additionalProperties": false
+    },
+    "ModelQualificationReport": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "purpose": {
+          "const": "model-qualification.v1"
+        },
+        "environment": {
+          "const": "dev"
+        },
+        "model_version_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "manifest_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "model_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "execution_profile_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "execution_profile_digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "issued_unix": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18})$"
+        },
+        "expires_unix": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18})$"
+        },
+        "license": {
+          "type": "object",
+          "properties": {
+            "identifier": {
+              "type": "string",
+              "minLength": 1
+            },
+            "source_revision": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{40}$"
+            },
+            "notice_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "permitted_use": {
+              "const": "development-inference"
+            }
+          },
+          "required": [
+            "identifier",
+            "source_revision",
+            "notice_sha256",
+            "permitted_use"
+          ],
+          "additionalProperties": false
+        },
+        "measurement": {
+          "type": "object",
+          "properties": {
+            "runtime_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "verified_asset_count": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "verified_asset_bytes": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "probe_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "input_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "expected_result_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "observed_result_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          },
+          "required": [
+            "runtime_sha256",
+            "verified_asset_count",
+            "verified_asset_bytes",
+            "probe_id",
+            "input_sha256",
+            "expected_result_sha256",
+            "observed_result_sha256"
+          ],
+          "additionalProperties": false
+        },
+        "hardware": {
+          "type": "object",
+          "properties": {
+            "device": {
+              "type": "string",
+              "minLength": 1
+            },
+            "operating_system": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "architecture": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+            },
+            "memory_bytes": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "logical_processors": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "vram_bytes": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "device",
+            "operating_system",
+            "architecture",
+            "memory_bytes",
+            "logical_processors"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "version",
+        "purpose",
+        "environment",
+        "model_version_id",
+        "manifest_sha256",
+        "model_sha256",
+        "execution_profile_id",
+        "execution_profile_digest",
+        "issued_unix",
+        "expires_unix",
+        "license",
+        "measurement",
+        "hardware"
+      ],
+      "additionalProperties": false
+    },
+    "SignedModelCertification": {
+      "type": "object",
+      "properties": {
+        "report": {
+          "$ref": "#/$defs/ModelQualificationReport"
+        },
+        "signing_key_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "signature": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{86}$"
+        },
+        "license_notice": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 131072,
+          "description": "At most 131072 UTF-8 bytes."
+        }
+      },
+      "required": [
+        "report",
+        "signing_key_sha256",
+        "signature",
+        "license_notice"
+      ],
+      "additionalProperties": false
+    },
+    "RegisterModelCertification": {
+      "type": "object",
+      "properties": {
+        "scope": {
+          "type": "object",
+          "properties": {
+            "environment": {
+              "const": "dev"
+            },
+            "kind": {
+              "const": "platform"
+            },
+            "scope_id": {
+              "const": "platform"
+            }
+          },
+          "required": [
+            "environment",
+            "kind",
+            "scope_id"
+          ],
+          "additionalProperties": false
+        },
+        "certification": {
+          "$ref": "#/$defs/SignedModelCertification"
+        }
+      },
+      "required": [
+        "scope",
+        "certification"
+      ],
+      "additionalProperties": false
+    },
+    "ModelCertificationSummary": {
+      "type": "object",
+      "properties": {
+        "report_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "model_version_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "manifest_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "signing_key_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "execution_profile_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "execution_profile_digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "model_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "issued_unix": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18})$"
+        },
+        "expires_unix": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18})$"
+        },
+        "registered_by": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        }
+      },
+      "required": [
+        "report_id",
+        "model_version_id",
+        "manifest_sha256",
+        "signing_key_sha256",
+        "execution_profile_id",
+        "execution_profile_digest",
+        "model_sha256",
+        "issued_unix",
+        "expires_unix",
+        "registered_by"
+      ],
+      "additionalProperties": false
+    },
+    "ModelCertificationDetail": {
+      "type": "object",
+      "properties": {
+        "report_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "model_version_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "manifest_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "signing_key_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "execution_profile_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "execution_profile_digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "model_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "issued_unix": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18})$"
+        },
+        "expires_unix": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18})$"
+        },
+        "registered_by": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        },
+        "report": {
+          "$ref": "#/$defs/ModelQualificationReport"
+        },
+        "signature": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{86}$"
+        },
+        "license_notice": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 131072,
+          "description": "At most 131072 UTF-8 bytes."
+        }
+      },
+      "required": [
+        "report_id",
+        "model_version_id",
+        "manifest_sha256",
+        "signing_key_sha256",
+        "execution_profile_id",
+        "execution_profile_digest",
+        "model_sha256",
+        "issued_unix",
+        "expires_unix",
+        "registered_by",
+        "report",
+        "signature",
+        "license_notice"
+      ],
+      "additionalProperties": false
+    },
+    "ModelCertificationPage": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "$ref": "#/$defs/ModelCertificationSummary"
+          }
+        },
+        "next_cursor": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "data"
       ],
       "additionalProperties": false
     }

@@ -335,6 +335,11 @@ impl From<ArtifactError> for Error {
             ArtifactError::Busy => Self(StatusCode::CONFLICT, "TRANSFER_BUSY"),
             ArtifactError::Capacity => Self(StatusCode::INSUFFICIENT_STORAGE, "STORAGE_CAPACITY"),
             ArtifactError::Budget => Self(StatusCode::CONFLICT, "BUDGET_EXCEEDED"),
+            ArtifactError::Database(ref e)
+                if e.as_database_error().and_then(|v| v.code()).as_deref() == Some("OA086") =>
+            {
+                Self(StatusCode::CONFLICT, "PRICING_UNAVAILABLE")
+            }
             ArtifactError::PricingUnavailable => {
                 Self(StatusCode::SERVICE_UNAVAILABLE, "PRICING_UNAVAILABLE")
             }

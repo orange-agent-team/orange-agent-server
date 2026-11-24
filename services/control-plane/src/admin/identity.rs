@@ -18,6 +18,7 @@ pub struct AdminIdentity {
     pub pool: PgPool,
     pub config: Arc<OidcConfig>,
     provider: OidcProvider,
+    pub(super) review_trust: Option<super::model_review::ModelReviewTrust>,
     pub(super) support_reader: Option<crate::artifacts::ArtifactReader>,
 }
 pub struct LoginStart {
@@ -26,6 +27,10 @@ pub struct LoginStart {
 }
 
 impl AdminIdentity {
+    pub fn with_model_review_trust(mut self, trust: super::model_review::ModelReviewTrust) -> Self {
+        self.review_trust = Some(trust);
+        self
+    }
     pub fn with_support_reader(mut self, reader: crate::artifacts::ArtifactReader) -> Self {
         self.support_reader = Some(reader);
         self
@@ -93,6 +98,7 @@ impl AdminIdentity {
             config: Arc::new(config),
             provider,
             support_reader: None,
+            review_trust: None,
         })
     }
     pub async fn start(&self, existing: Option<&CurrentSession>) -> Result<LoginStart, AdminError> {

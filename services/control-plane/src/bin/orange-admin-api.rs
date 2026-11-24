@@ -29,6 +29,12 @@ async fn run() -> Result<(), Box<dyn Error>> {
     let store = Store::connect(&settings.database_url).await?;
     store.migrate().await?;
     let mut identity = AdminIdentity::discover(store.pool().clone(), config).await?;
+    if let Some(path) = env::var_os("ORANGE_MODEL_REVIEW_PUBLIC_KEY_FILE") {
+        let trust = orange_control_plane::admin::model_review::ModelReviewTrust::load(
+            std::path::Path::new(&path),
+        )?;
+        identity = identity.with_model_review_trust(trust);
+    }
     if let Some(root) = env::var_os("ORANGE_ADMIN_SUPPORT_ROOT") {
         let reader = orange_control_plane::artifacts::ArtifactReader::open_local(
             store.pool().clone(),

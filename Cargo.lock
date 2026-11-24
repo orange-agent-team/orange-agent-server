@@ -2242,6 +2242,7 @@ dependencies = [
  "prost-types",
  "rcgen",
  "reqwest",
+ "ring",
  "rusqlite",
  "rustix",
  "rustls-pki-types",

@@ -39,7 +39,7 @@ async fn binding(tx: &mut Tx<'_>, t: &AudioTerms) -> Result<sqlx::postgres::PgRo
       JOIN nodes n USING(node_id) JOIN owners b ON b.owner_id=n.owner_id JOIN wallets w ON w.owner_id=n.owner_id
       JOIN reviewed_execution_profiles p USING(execution_profile_id)
       WHERE o.observation_id=$1 AND n.environment='dev' AND n.state<>'revoked' AND b.state='active' AND ($2::text IS NULL OR n.owner_id=$2)
-      AND p.enabled AND p.model_version_id=o.model_version AND p.model_sha256=o.model_sha256 AND p.execution_profile_digest=o.execution_profile_digest FOR SHARE OF n,b,p")
+      AND p.enabled AND registry_profile_current(p.execution_profile_id) AND p.model_version_id=o.model_version AND p.model_sha256=o.model_sha256 AND p.execution_profile_digest=o.execution_profile_digest FOR SHARE OF n,b,p")
       .bind(&t.observation_id).bind((t.scope.kind=="tenant").then_some(&t.scope.scope_id)).fetch_optional(&mut **tx).await?.ok_or(AdminError::NotFound)
 }
 fn hashes(
@@ -96,7 +96,7 @@ pub async fn create(
         price
     } else {
         let row = binding(&mut tx, &t).await?;
-        let price = format!("asr-price-{}", uuid::Uuid::new_v4());
+        let price = draft_price_id(&mut tx, row.try_get("execution_profile_id")?, true).await?;
         let (target, review) = hashes(&price, &t, &row)?;
         sqlx::query("INSERT INTO admin_transcription_price_drafts(price_version,created_by,request_key,request_digest,scope_kind,scope_id,provider_owner_id,node_id,execution_profile_id,observation_id,price_per_minute,fee_bps,terms_digest,review_report_id,created_at)
             VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,floor(extract(epoch FROM clock_timestamp()))::bigint)")

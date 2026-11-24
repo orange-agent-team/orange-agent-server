@@ -50,7 +50,7 @@ impl From<sqlx::Error> for StoreError {
             .and_then(|error| error.code())
             .as_deref()
         {
-            Some("23505") => Self::Conflict,
+            Some("23505" | "OA086") => Self::Conflict,
             Some("OA031") => Self::SpendingPaused,
             _ => Self::Database(e),
         }

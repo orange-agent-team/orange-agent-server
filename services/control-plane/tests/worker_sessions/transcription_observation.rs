@@ -33,8 +33,8 @@ async fn actual_profile_registration_is_idempotent_current_and_has_no_execution_
             .is_err(),
         "device cannot approve its own model"
     );
-    sqlx::query("INSERT INTO reviewed_execution_profiles(execution_profile_id,model_version_id,model_sha256,execution_profile_digest)
-        VALUES($1,$2,$3,$4)").bind(&profile).bind(fact.profile.model_version).bind(&fact.profile.model_sha256)
+    sqlx::query("WITH explicit_legacy_review AS (INSERT INTO model_legacy_profile_pins(execution_profile_id,model_version_id,model_sha256,execution_profile_digest)
+        VALUES($1,$2,$3,$4) RETURNING execution_profile_id,model_version_id,model_sha256,execution_profile_digest) INSERT INTO reviewed_execution_profiles(execution_profile_id,model_version_id,model_sha256,execution_profile_digest) SELECT execution_profile_id,model_version_id,model_sha256,execution_profile_digest FROM explicit_legacy_review").bind(&profile).bind(fact.profile.model_version).bind(&fact.profile.model_sha256)
         .bind(&fact.execution_profile_digest).execute(d.store.pool()).await.expect("separate development review fixture");
     let receipt = connection
         .report_transcription_profile(&profile, &fact)
@@ -120,7 +120,7 @@ async fn actual_profile_registration_is_idempotent_current_and_has_no_execution_
         tonic::Code::AlreadyExists
     );
     let alias = Uuid::new_v4().to_string();
-    sqlx::query("INSERT INTO reviewed_execution_profiles(execution_profile_id,model_version_id,model_sha256,execution_profile_digest) VALUES($1,$2,$3,$4)")
+    sqlx::query("WITH explicit_legacy_review AS (INSERT INTO model_legacy_profile_pins(execution_profile_id,model_version_id,model_sha256,execution_profile_digest) VALUES($1,$2,$3,$4) RETURNING execution_profile_id,model_version_id,model_sha256,execution_profile_digest) INSERT INTO reviewed_execution_profiles(execution_profile_id,model_version_id,model_sha256,execution_profile_digest) SELECT execution_profile_id,model_version_id,model_sha256,execution_profile_digest FROM explicit_legacy_review")
         .bind(&alias).bind(fact.profile.model_version).bind(&fact.profile.model_sha256).bind(&fact.execution_profile_digest)
         .execute(d.store.pool()).await.expect("second approved profile fixture");
     let mut changed_id = req.clone();
@@ -254,7 +254,7 @@ async fn foreground_worker_reports_only_after_explicit_configuration() {
         .expect("separate local review sample");
     let d = device("client-t").await;
     let profile = Uuid::new_v4().to_string();
-    sqlx::query("INSERT INTO reviewed_execution_profiles(execution_profile_id,model_version_id,model_sha256,execution_profile_digest) VALUES($1,$2,$3,$4)")
+    sqlx::query("WITH explicit_legacy_review AS (INSERT INTO model_legacy_profile_pins(execution_profile_id,model_version_id,model_sha256,execution_profile_digest) VALUES($1,$2,$3,$4) RETURNING execution_profile_id,model_version_id,model_sha256,execution_profile_digest) INSERT INTO reviewed_execution_profiles(execution_profile_id,model_version_id,model_sha256,execution_profile_digest) SELECT execution_profile_id,model_version_id,model_sha256,execution_profile_digest FROM explicit_legacy_review")
         .bind(&profile).bind(reviewed.profile.model_version).bind(reviewed.profile.model_sha256)
         .bind(&reviewed.execution_profile_digest).execute(d.store.pool()).await.expect("approved fixture profile");
     let private = tempfile::tempdir().expect("workspace");

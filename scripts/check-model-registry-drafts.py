@@ -136,9 +136,7 @@ def main():
             require(profile(name).returncode!=0 and sql(counts)==before,"Draft could act as a reviewed execution profile")
             require(sql("UPDATE admin_model_drafts SET manifest_sha256=repeat('a',64)",must_pass=False).returncode!=0,"Mutable historical manifest")
             require(sql("DELETE FROM admin_model_drafts",must_pass=False).returncode!=0,"Deleted draft")
-            require(profile("already-reviewed").returncode==0,"Existing trusted provisioner was blocked")
-            conflict=dict(template,model_version="already-reviewed")
-            require(post(conflict,key="legacy-conflict")[0]==409,"Draft appropriated a reviewed identity")
+            require(profile("unreviewed-new-name").returncode!=0,"Unreviewed new name was admitted by the legacy provisioner")
             second=dict(template,model_version="z-second")
             require(post(second,key="second")[0]==201,"Second model rejected")
             page=http("GET","models"+query+"&limit=1",writer)[1]
@@ -168,7 +166,7 @@ def main():
                 with ThreadPoolExecutor(max_workers=2) as pool:
                     old=pool.submit(profile,race);new=pool.submit(post,dict(template,model_version=race),writer,race)
                     permitted=old.result().returncode==0;status=new.result()[0]
-                    require((permitted and status==409) or (not permitted and status==201),"Racing provisioners disagreed about the model namespace")
+                    require(not permitted and status==201,"A race admitted an unreviewed provider or lost its draft")
             require(sql("SELECT count(*) FROM admin_model_drafts d JOIN reviewed_execution_profiles p USING(model_version_id)")=="0","Draft visible to the legacy dispatch planner")
             if args.admin_repo:
                 browser_doc=dict(template,model_version="browser-draft")
