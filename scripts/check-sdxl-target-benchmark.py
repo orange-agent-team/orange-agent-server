@@ -57,6 +57,7 @@ def main():
     with tempfile.TemporaryDirectory() as tmp:
         png=Path(tmp)/"result.png"
         image=Image.new("RGB",(1024,1024),(235,116,40))
+        image.putpixel((512,512),(50,25,0))
         image.save(png)
         request={"attempt_id":"fixture","seed":6}
         receipt={**request,"model_version":benchmark.PROFILE,"steps":25,"gpu_release_observed":True,"media_type":"image/png",

@@ -320,6 +320,11 @@ impl Store {
             .await
             .map_err(artifact_error)?;
         }
+        // Existing submissions above may be queried idempotently even when older versions
+        // admitted a mismatched purpose. Never create a new hold with those terms.
+        if priced_requester.is_some() && !req.purpose.uses_text_price() {
+            return Err(StoreError::QuoteMismatch);
+        }
         let invalid_price:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM quote_metering m JOIN text_prices p USING(price_version) JOIN trusted_meter_profiles mp ON mp.profile_digest=m.meter_profile_digest WHERE m.quote_id=$1 AND (NOT p.enabled OR NOT mp.enabled))").bind(&req.quote_id).fetch_one(&mut *tx).await?;
         if invalid_price {
             return Err(StoreError::QuoteMismatch);

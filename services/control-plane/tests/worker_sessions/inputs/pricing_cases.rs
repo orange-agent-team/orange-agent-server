@@ -441,6 +441,62 @@ async fn disabled_price_cannot_create_a_new_quote_or_reservation() {
     c.meter.shutdown().await.expect("counter exited");
 }
 
+async fn rejects_non_text_use_of_text_quote(c: &Case, q: &TextQuoteView) {
+    let app =
+        orange_control_plane::artifacts::http::router(c.f.identity.clone(), c.f.objects.clone());
+    let snapshot = || async {
+        sqlx::query_scalar::<_, serde_json::Value>(
+            "SELECT jsonb_build_array(
+            (SELECT to_jsonb(w) FROM wallets w WHERE owner_id=$1),
+            (SELECT to_jsonb(b) FROM budget_roots b WHERE root_budget_id=$2),
+            (SELECT count(*) FROM jobs WHERE owner_id=$1),
+            (SELECT count(*) FROM idempotency WHERE owner_id=$1 AND operation='submit_job'),
+            (SELECT count(*) FROM ledger_transactions WHERE owner_id=$1))",
+        )
+        .bind(&c.f.owner)
+        .bind(&q.root_budget_id)
+        .fetch_one(c.f.d.store.pool())
+        .await
+        .expect("funding snapshot")
+    };
+    let before = snapshot().await;
+    for purpose in [InvocationPurpose::Image, InvocationPurpose::Embedding] {
+        let key = Uuid::new_v4().to_string();
+        let request = SubmitJob {
+            root_budget_id: q.root_budget_id.clone(),
+            invocation_id: q.invocation_id.clone(),
+            purpose,
+            quote_id: q.quote_id.clone(),
+            request_projection_digest: q.request_projection_digest.clone(),
+        };
+        for _ in 0..2 {
+            let mut http = axum::http::Request::builder()
+                .method("POST")
+                .uri(format!("/api/v1/owners/{}/jobs", c.f.owner))
+                .body(axum::body::Body::from(
+                    serde_json::to_vec(&request).expect("JSON"),
+                ))
+                .expect("request");
+            *http.headers_mut() = c.f.headers.clone();
+            http.headers_mut()
+                .insert("content-type", "application/json".parse().unwrap());
+            http.headers_mut()
+                .insert("idempotency-key", key.parse().unwrap());
+            let response = app.clone().oneshot(http).await.expect("submit");
+            assert_eq!(response.status(), 409);
+            let body = axum::body::to_bytes(response.into_body(), 16384)
+                .await
+                .expect("error");
+            assert!(
+                std::str::from_utf8(&body)
+                    .unwrap()
+                    .contains("QUOTE_INPUT_CHANGED")
+            );
+        }
+    }
+    assert_eq!(snapshot().await, before);
+}
+
 #[tokio::test]
 async fn concurrent_quote_is_one_snapshot_and_equal_bytes_cannot_replace_quoted_version() {
     let mut c = setup_priced("client-cr").await;
@@ -452,6 +508,7 @@ async fn concurrent_quote_is_one_snapshot_and_equal_bytes_cannot_replace_quoted_
         c.f.objects.create_text_quote(&c.f.actor, &c.f.owner, &req)
     );
     let q = a.expect("first quote");
+    rejects_non_text_use_of_text_quote(&c, &q).await;
     assert_eq!(q.quote_id, b.expect("concurrent same quote").quote_id);
     let events:i64=sqlx::query_scalar("SELECT count(*) FROM durable_events e JOIN event_streams s USING(stream_id) WHERE s.entity_id=$1 AND e.event_type='quote.created'").bind(&q.quote_id).fetch_one(c.f.d.store.pool()).await.expect("one event");
     assert_eq!(events, 1);

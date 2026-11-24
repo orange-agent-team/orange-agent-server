@@ -93,6 +93,14 @@ pub enum InvocationPurpose {
     Image,
     Transcription,
 }
+impl InvocationPurpose {
+    pub fn uses_text_price(&self) -> bool {
+        matches!(
+            self,
+            Self::Primary | Self::Summary | Self::Memory | Self::Title | Self::Continuation
+        )
+    }
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct JobView {

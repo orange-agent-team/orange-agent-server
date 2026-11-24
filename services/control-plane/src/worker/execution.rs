@@ -144,8 +144,16 @@ pub(crate) async fn eligible_plan(
     job: &str,
     node: &str,
 ) -> Result<sqlx::postgres::PgRow, SessionError> {
-    let row = sqlx::query("SELECT p.*,j.root_budget_id,j.invocation_id,j.purpose,j.request_digest,r.model_version_id,r.model_sha256,r.execution_profile_digest,floor(extract(epoch FROM p.job_deadline))::bigint AS deadline FROM jobs j JOIN quotes q USING(quote_id) JOIN quote_execution_plans p USING(quote_id) JOIN reviewed_execution_profiles r USING(execution_profile_id) WHERE j.job_id=$1 AND p.target_node_id=$2 AND q.owner_id=j.owner_id AND q.root_budget_id=j.root_budget_id AND q.invocation_id=j.invocation_id AND q.max_amount=j.reserved AND p.request_projection_digest=q.projection_digest AND r.enabled AND registry_profile_current(r.execution_profile_id) AND NOT EXISTS(SELECT 1 FROM quote_metering qm JOIN text_prices tp ON tp.price_version=qm.price_version JOIN trusted_meter_profiles mp ON mp.profile_digest=qm.meter_profile_digest WHERE qm.quote_id=j.quote_id AND (NOT tp.enabled OR NOT mp.enabled OR qm.price_version<>q.price_version OR tp.execution_profile_id<>p.execution_profile_id OR tp.node_id<>p.target_node_id OR qm.provider_owner_id<>(SELECT owner_id FROM nodes WHERE node_id=p.target_node_id) OR mp.descriptor->>'execution_digest'<>r.execution_profile_digest)) AND p.job_deadline>clock_timestamp()+interval '1 second' FOR SHARE OF r")
+    let row = sqlx::query("SELECT p.*,EXISTS(SELECT 1 FROM quote_metering qm WHERE qm.quote_id=j.quote_id) AS priced_text,j.root_budget_id,j.invocation_id,j.purpose,j.request_digest,r.model_version_id,r.model_sha256,r.execution_profile_digest,floor(extract(epoch FROM p.job_deadline))::bigint AS deadline FROM jobs j JOIN quotes q USING(quote_id) JOIN quote_execution_plans p USING(quote_id) JOIN reviewed_execution_profiles r USING(execution_profile_id) WHERE j.job_id=$1 AND p.target_node_id=$2 AND q.owner_id=j.owner_id AND q.root_budget_id=j.root_budget_id AND q.invocation_id=j.invocation_id AND q.max_amount=j.reserved AND p.request_projection_digest=q.projection_digest AND r.enabled AND registry_profile_current(r.execution_profile_id) AND NOT EXISTS(SELECT 1 FROM quote_metering qm JOIN text_prices tp ON tp.price_version=qm.price_version JOIN trusted_meter_profiles mp ON mp.profile_digest=qm.meter_profile_digest WHERE qm.quote_id=j.quote_id AND (NOT tp.enabled OR NOT mp.enabled OR qm.price_version<>q.price_version OR tp.execution_profile_id<>p.execution_profile_id OR tp.node_id<>p.target_node_id OR qm.provider_owner_id<>(SELECT owner_id FROM nodes WHERE node_id=p.target_node_id) OR mp.descriptor->>'execution_digest'<>r.execution_profile_digest)) AND p.job_deadline>clock_timestamp()+interval '1 second' FOR SHARE OF r")
         .bind(job).bind(node).fetch_optional(&mut **tx).await?.ok_or(SessionError::Stale)?;
+    if row.try_get::<bool, _>("priced_text")? {
+        let purpose: orange_protocol::InvocationPurpose =
+            serde_json::from_value(serde_json::Value::String(row.try_get("purpose")?))
+                .map_err(|_| SessionError::Stale)?;
+        if !purpose.uses_text_price() {
+            return Err(SessionError::Stale);
+        }
+    }
     if row.try_get::<&str, _>("purpose")? == "transcription" {
         let terms=sqlx::query("SELECT j.quote_id,j.reserved,j.owner_id,j.submitting_user_id,
                 EXISTS(SELECT 1 FROM transcription_quote_terms t WHERE t.quote_id=j.quote_id) AS priced FROM jobs j WHERE j.job_id=$1")

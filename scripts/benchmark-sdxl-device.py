@@ -78,19 +78,19 @@ def execute(command, request, cancel_at_step):
 
 
 def validate_receipt(value, request, output):
-    from PIL import Image
+    from sdxl_png import inspect_png, MAX_PNG
     require(value["attempt_id"] == request["attempt_id"] and value["model_version"] == PROFILE and value["seed"] == request["seed"]
             and value["gpu_release_observed"] is True and value["steps"] == 25 and value["media_type"] == "image/png"
             and (value["width"],value["height"]) == (1024,1024), "Wrong output receipt")
     require(type(value["peak_allocated_bytes"]) is int and type(value["peak_reserved_bytes"]) is int
             and 0 < value["peak_allocated_bytes"] <= value["peak_reserved_bytes"], "Missing GPU memory measurements")
     with output.open("rb") as stream:
-        require(os.fstat(stream.fileno()).st_size == value["bytes"] and hashlib.file_digest(stream,"sha256").hexdigest() == value["sha256"],
-                "Published PNG changed")
-        stream.seek(0)
-        with Image.open(stream) as decoded:
-            require(decoded.format == "PNG" and decoded.mode == "RGB" and decoded.size == (1024,1024)
-                    and hashlib.sha256(decoded.tobytes()).hexdigest() == value["rgb_sha256"], "Published pixels changed")
+        require(0 < os.fstat(stream.fileno()).st_size == value["bytes"] <= MAX_PNG, "Unexpected published size")
+        try:
+            content=inspect_png(stream.read(MAX_PNG+1))
+        except (OSError,ValueError) as error:
+            raise RuntimeError("Published PNG could not be verified") from error
+        require(all(value[key]==measured for key,measured in content.items()),"Published pixels or bytes changed")
 
 
 def main():

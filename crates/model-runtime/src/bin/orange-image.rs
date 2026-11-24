@@ -2,12 +2,36 @@
 #[cfg(unix)]
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if std::env::args_os()
+        .skip(1)
+        .eq([std::ffi::OsStr::new("--inspect-artifact")])
+    {
+        return inspect_stdin();
+    }
     local::run().await
 }
 #[cfg(not(unix))]
-fn main() {
-    eprintln!("No qualified SDXL image runtime for this target");
-    std::process::exit(1);
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if std::env::args_os()
+        .skip(1)
+        .eq([std::ffi::OsStr::new("--inspect-artifact")])
+    {
+        return inspect_stdin();
+    }
+    Err("No qualified SDXL image runtime for this target".into())
+}
+
+fn inspect_stdin() -> Result<(), Box<dyn std::error::Error>> {
+    use orange_model_runtime::image_artifact::{MAX_PNG, inspect};
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    std::io::stdin()
+        .lock()
+        .take(MAX_PNG as u64 + 1)
+        .read_to_end(&mut bytes)?;
+    let result = inspect(&bytes)?;
+    println!("{}", serde_json::to_string(&result)?);
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -17,7 +41,7 @@ mod local {
     use sha2::{Digest, Sha256};
     use std::error::Error;
     use std::fs::File;
-    use std::io::{BufReader as SyncReader, Cursor, Read, Write};
+    use std::io::{Read, Write};
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
     use std::path::{Path, PathBuf};
     use std::process::Stdio;
@@ -29,7 +53,7 @@ mod local {
     const RUNNER: &str = include_str!("../../../../backends/orange_inference_backends/image.py");
     const PIN: &[u8] = include_bytes!("../../../../config/local-image.lock.json");
     const MODEL: &str = "sdxl-base-1.0-euler-fp16-mps-v1";
-    const MAX_PNG: usize = 16 * 1024 * 1024;
+    use orange_model_runtime::image_artifact::MAX_PNG;
     type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
     #[derive(Deserialize)]
@@ -146,48 +170,13 @@ mod local {
     }
 
     fn verified_png(data: &[u8], receipt: &Receipt) -> Result<()> {
-        if data.len() != receipt.bytes
-            || hex::encode(Sha256::digest(data)) != receipt.sha256
-            || !data.starts_with(b"\x89PNG\r\n\x1a\n")
+        let verified = orange_model_runtime::image_artifact::inspect(data)?;
+        if verified.bytes != receipt.bytes
+            || verified.sha256 != receipt.sha256
+            || verified.rgb_sha256 != receipt.rgb_sha256
         {
-            return Err("PNG identity mismatch".into());
+            return Err("Image receipt differs from decoded bytes".into());
         }
-        let mut pos = 8;
-        let mut count = 0;
-        let mut end = false;
-        while pos < data.len() {
-            let header = data.get(pos..pos + 8).ok_or("Short PNG chunk")?;
-            let size = u32::from_be_bytes(header[..4].try_into()?) as usize;
-            match &header[4..] {
-                b"IHDR" if pos == 8 && size == 13 => {}
-                b"IDAT" if pos > 8 && !end => count += 1,
-                b"IEND" if count > 0 && size == 0 && pos + 12 == data.len() => end = true,
-                _ => return Err("Unexpected PNG chunk".into()),
-            }
-            pos = pos.checked_add(12 + size).ok_or("Oversized PNG chunk")?;
-            if pos > data.len() {
-                return Err("Truncated PNG chunk".into());
-            }
-        }
-        if !end {
-            return Err("Missing PNG end".into());
-        }
-        let mut reader = png::Decoder::new(SyncReader::new(Cursor::new(data))).read_info()?;
-        let info = reader.info();
-        if (info.width, info.height, info.color_type, info.bit_depth)
-            != (1024, 1024, png::ColorType::Rgb, png::BitDepth::Eight)
-        {
-            return Err("PNG pixel format mismatch".into());
-        }
-        let mut pixels = vec![0; 1024 * 1024 * 3];
-        let actual = reader.next_frame(&mut pixels)?;
-        if actual.buffer_size() != pixels.len()
-            || hex::encode(Sha256::digest(&pixels)) != receipt.rgb_sha256
-            || pixels.chunks_exact(3).all(|pixel| pixel == &pixels[..3])
-        {
-            return Err("Decoded pixel verification failed".into());
-        }
-        reader.finish()?;
         Ok(())
     }
 

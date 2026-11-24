@@ -2,6 +2,8 @@
 pub mod adapter_contract;
 pub mod cache;
 pub mod embeddings;
+#[cfg(feature = "image-artifact")]
+pub mod image_artifact;
 pub mod llama;
 pub mod manifest;
 pub mod meter_service;

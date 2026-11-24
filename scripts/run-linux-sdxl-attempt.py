@@ -157,13 +157,9 @@ def main():
             with os.fdopen(fd,"rb") as inp:
                 m=os.fstat(fd);require(stat.S_ISREG(m.st_mode) and m.st_nlink==1 and 0<m.st_size==done["bytes"]<=MAX_PNG,"Invalid result file")
                 data=inp.read(MAX_PNG+1)
-            require(len(data)==done["bytes"] and hashlib.sha256(data).hexdigest()==done["sha256"],"Changed PNG")
-            # The host independently decodes the exact bytes before publishing them.
-            import io
-            from PIL import Image
-            with Image.open(io.BytesIO(data)) as decoded:
-                require(decoded.format=="PNG" and decoded.size==(1024,1024) and decoded.mode=="RGB","Invalid image structure")
-                require(hashlib.sha256(decoded.tobytes()).hexdigest()==done["rgb_sha256"],"Decoded pixels differ")
+            from sdxl_png import inspect_png
+            measured=inspect_png(data)
+            require(all(done[key]==value for key,value in measured.items()),"Decoded image differs from completion receipt")
             gpu_released=recovered_gpu(args.gpu_uuid,baseline)
             require(gpu_released,"Device memory/compute quiescence not confirmed")
             save("release_confirmed",cid)

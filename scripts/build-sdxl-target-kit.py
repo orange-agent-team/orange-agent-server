@@ -12,7 +12,7 @@ import zipfile
 
 ROOT=Path(__file__).resolve().parents[1]
 FILES=("scripts/benchmark-sdxl-device.py","scripts/check-sdxl-target-benchmark.py","scripts/check-sdxl-device-recovery.py",
-       "scripts/run-linux-sdxl-attempt.py","scripts/sdxl_device_recovery.py","scripts/sdxl_progress.py","scripts/linux_platform_inputs.py",
+       "scripts/run-linux-sdxl-attempt.py","scripts/sdxl_device_recovery.py","scripts/sdxl_progress.py","scripts/sdxl_png.py","scripts/linux_platform_inputs.py",
        "distribution/sdxl-linux/runner.py","distribution/sdxl-linux/README.md","distribution/sdxl-linux/qualification.json")
 
 

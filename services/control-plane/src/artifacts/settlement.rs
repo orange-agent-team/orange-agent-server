@@ -60,6 +60,12 @@ pub(super) async fn post_measured(tx: &mut Tx<'_>, job: &str) -> Result<bool, Ar
     let (charge, fee_bps) = if identity.try_get::<&str, _>("modality")? == "transcription" {
         super::transcription_pricing::committed_charge(tx, job, held).await?
     } else {
+        let purpose: orange_protocol::InvocationPurpose =
+            serde_json::from_value(serde_json::Value::String(row.try_get("purpose")?))
+                .map_err(|_| ArtifactError::Integrity)?;
+        if identity.try_get::<&str, _>("modality")? != "text" || !purpose.uses_text_price() {
+            return Err(ArtifactError::Integrity);
+        }
         let quote=sqlx::query("SELECT q.*,m.price_version AS snapshot_price_version,m.input_units,m.output_limit,m.input_price,m.output_price,m.fee_bps,m.provider_owner_id,m.meter_profile_digest,m.owner_id AS snapshot_owner FROM quotes q JOIN quote_metering m USING(quote_id) WHERE q.quote_id=$1").bind(row.try_get::<String,_>("quote_id")?).fetch_one(&mut **tx).await?;
         let fact=sqlx::query("SELECT u.*,c.response_digest AS committed_digest FROM job_usage_facts u JOIN job_response_commits c USING(job_id) WHERE u.job_id=$1").bind(job).fetch_one(&mut **tx).await?;
         if quote.try_get::<String, _>("snapshot_price_version")?

@@ -8,7 +8,8 @@ publish.workspace = true
 [features]
 process-test-fixture = []
 embedding-host = ["dep:axum", "dep:tempfile"]
-image-host = ["dep:png", "dep:tempfile"]
+image-artifact = ["dep:png", "dep:crc32fast"]
+image-host = ["image-artifact", "dep:tempfile"]
 
 [[bin]]
 name = "orange-image"
@@ -29,6 +30,7 @@ required-features = ["process-test-fixture"]
 [dependencies]
 cap-std.workspace = true
 cap-fs-ext.workspace = true
+crc32fast = { version = "=1.5.5", optional = true }
 png = { version = "=0.18.1", optional = true }
 axum = { workspace = true, optional = true }
 jsonschema.workspace = true

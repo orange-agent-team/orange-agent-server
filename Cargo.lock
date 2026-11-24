@@ -2275,6 +2275,7 @@ dependencies = [
  "axum",
  "cap-fs-ext",
  "cap-std",
+ "crc32fast",
  "hex",
  "jsonschema",
  "libc",

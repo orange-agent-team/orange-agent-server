@@ -65,3 +65,9 @@ python3.12 -m venv .venv
 .venv/bin/python scripts/check-sdxl-target-benchmark.py
 .venv/bin/python scripts/check-sdxl-device-recovery.py
 ```
+
+### 产物校验
+
+开发机可以用 Rust 组件 `orange-image --inspect-artifact < result.png` 独立读取产物。输入限 16 MiB，固定规格为 1024 × 1024 的 8 位 RGB PNG。检查包括每个块的 CRC、最后一个 IEND 的位置、完整解码、非常量像素和 SHA-256。返回字节数、媒体类型、宽高、原始字节摘要和像素摘要。解出同样像素的不同 PNG 可以有不同的文件摘要。
+
+Linux 设备宿主在发布文件前使用独立的 Python 实现检查同一规格，并与本次完成回执比较。该检查只证明文件内容；平台还需独立核对请求人、作业、尝试、可读版本、成功终态和固定的图像报价，才能认定一次计费交付。开发环境中的本地校验不会写入平台账本。
