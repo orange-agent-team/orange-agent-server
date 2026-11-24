@@ -6,6 +6,8 @@ import json
 import os
 from pathlib import Path
 import secrets
+import socket
+import runpy
 import shutil
 import subprocess
 import time
@@ -21,13 +23,20 @@ def require(ok,msg):
     if not ok: raise RuntimeError(msg)
 
 
-def run(api,dbfile,identity,folder,endpoint,bucket,credentials,s3,fence,expiry):
+def run(api,dbfile,identity,folder,endpoint,bucket,credentials,s3,fence,expiry,web,site,png,rgb):
     def secret(path,value):
         with os.fdopen(os.open(path,os.O_CREAT|os.O_EXCL|os.O_WRONLY,0o600),"w") as stream:json.dump(value,stream)
     prefix="orange-fixture";cfg=folder/"artifact-config.json";keys=folder/"artifact-identity.json"
     secret(keys,{"access_key":credentials["accessKey"],"secret_key":credentials["secretKey"]})
     secret(cfg,{"endpoint":endpoint,"bucket":bucket,"region":"us-east-1","prefix":prefix,"credentials_file":str(keys)})
-    origin=json.loads(identity.read_bytes())["user_origin"]
+    client_config=json.loads(identity.read_bytes())
+    if web:
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1",0));port=probe.getsockname()[1]
+        client_config["user_origin"]=f"https://127.0.0.1:{port}"
+        identity=folder/"api-user-config.json";secret(identity,client_config)
+    origin=client_config["user_origin"]
+    del client_config
     with database(dbfile,"orange_object_versions_") as (_,url):
         db=urlsplit(url)
         pg=dict(os.environ,PGHOST=db.hostname,PGPORT=str(db.port or 5432),PGUSER=unquote(db.username),PGPASSWORD=unquote(db.password),PGDATABASE=db.path[1:])
@@ -173,6 +182,23 @@ def run(api,dbfile,identity,folder,endpoint,bucket,credentials,s3,fence,expiry):
             get_signed(g)
             n=sql("SELECT (SELECT count(*) FROM artifact_download_grants),(SELECT count(*) FROM jobs),(SELECT count(*) FROM ledger_transactions)")
             require(n=="1|0|0","Repeated or denied reads changed grant/accounting state")
+            if web:
+                # Configure the actual test bucket's CORS for this HTTPS application origin.
+                cors=f'<CORSConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><CORSRule><AllowedOrigin>{origin}</AllowedOrigin><AllowedMethod>GET</AllowedMethod><AllowedHeader>*</AllowedHeader><ExposeHeader>Content-Length</ExposeHeader></CORSRule></CORSConfiguration>'.encode()
+                status,_,_=provider_call("PUT",query={"cors":""},data=cors,headers={"Content-Type":"application/xml"})
+                require(status in (200,204),"Private provider CORS registration failed: "+str(status))
+                pixels,rgb=(png.read_bytes(),rgb) if png else runpy.run_path(str(Path(__file__).with_name("check-authorized-image-inspection.py")))["sample"]()
+                picture=str(uuid4());image_sha=sha256(pixels).hexdigest()
+                status,raw=wire("POST",base,author,{"upload_id":picture,"sha256":image_sha,"size_bytes":str(len(pixels)),"media_type":"image/png"},picture)
+                require(status==200,"Browser upload intent failed");image=json.loads(raw)
+                require(wire("PUT",base+"/"+picture+"/content",author,pixels,picture)[0]==200,"Browser upload failed")
+                web=web.resolve(strict=True)
+                case={"api":address,"origin":origin,"storage":endpoint,"site":str((site or web/"apps/web/dist").resolve(strict=True)),
+                      "tls":str(web/".local/tls"),"token":author[1],"csrf":author[2],"owner":author[0],"upload":picture,
+                      "artifact":image["artifact_id"],"rgb":rgb,"sha256":image_sha,"bytes":len(pixels)}
+                subprocess.run([Path.home()/".nvm/versions/node/v22.23.2/bin/node",web/"apps/web/scripts/real-versioned-download.mjs"],
+                               input=json.dumps(case),text=True,check=True,timeout=110)
+                require(sql("SELECT (SELECT count(*) FROM jobs),(SELECT count(*) FROM ledger_transactions)")=="0|0","Browser transfer changed financial facts")
             if expiry:
                 extra_key=str(uuid4());empty_route=path+"/download-authorizations"
                 status,raw=wire("POST",empty_route,author,{"version_id":ev},extra_key);empty_grant=json.loads(raw)

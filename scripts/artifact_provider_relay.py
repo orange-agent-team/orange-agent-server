@@ -46,7 +46,7 @@ def relay(endpoint,bucket):
                 self.end_headers()
                 if self.command!="HEAD":self.wfile.write(content)
             finally:upstream.close()
-        do_GET=do_HEAD=do_PUT=do_POST=do_DELETE=forward
+        do_GET=do_HEAD=do_PUT=do_POST=do_DELETE=do_OPTIONS=forward
     with ThreadingHTTPServer(("127.0.0.1",0),Handler) as server:
         thread=Thread(target=server.serve_forever,daemon=True);thread.start()
         try:yield f"http://127.0.0.1:{server.server_port}",fence
