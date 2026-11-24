@@ -70,6 +70,7 @@ impl ModelCache {
         {
             return Err(CacheError::Quota);
         }
+        let result=async {
         let destination = Arc::new(Mutex::new(private_file(&staged, true)?));
         disk_io(destination.clone(), lock.clone(), |file| {
             file.set_len(0)?;
@@ -85,7 +86,7 @@ impl ModelCache {
         loop {
             check_cancel(&cancel)?;
             let read = tokio::select! {
-                _=cancel.changed()=>return Err(CacheError::Cancelled),
+                _=cancel.wait_for(|flag|*flag)=>return Err(CacheError::Cancelled),
                 result=source.read(&mut buffer)=>result?,
             };
             if read == 0 {
@@ -121,12 +122,20 @@ impl ModelCache {
         drop(destination);
         // Re-read our staging inode; the active model is never an alias of the
         // caller-selected file and never accepts only a claimed source digest.
-        let file = verify(&staged, spec).await?;
+        let file=tokio::select!{biased;_=cancel.wait_for(|flag|*flag)=>return Err(CacheError::Cancelled),result=verify(&staged,spec)=>result?};
         check_cancel(&cancel)?;
         fs::rename(&staged, &ready)?;
         #[cfg(unix)]
         File::open(&self.root)?.sync_all()?;
         artifact(&ready, spec, false, file)
+        }.await;
+        if matches!(result, Err(CacheError::Cancelled)) && exists(&staged)? {
+            // The cache writer lock is still held. Only the local import staging file belongs to this operation.
+            fs::remove_file(&staged)?;
+            #[cfg(unix)]
+            File::open(&self.root)?.sync_all()?;
+        }
+        result
     }
 }
 

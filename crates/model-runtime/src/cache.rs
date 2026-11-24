@@ -12,6 +12,8 @@ use std::{
 };
 use tokio::io::AsyncReadExt;
 mod import;
+mod subscriptions;
+pub use subscriptions::StagingCleanup;
 mod observation;
 mod resume;
 #[cfg(test)]
@@ -20,8 +22,10 @@ pub use observation::{CacheObservation, CacheState};
 
 #[derive(Debug, thiserror::Error)]
 pub enum CacheError {
-    #[error("artifact import cancelled before publication")]
+    #[error("artifact request cancelled before publication")]
     Cancelled,
+    #[error("artifact request cancelled; staging cleanup awaits an active writer")]
+    CleanupPending,
     #[error("this pinned artifact requires an explicitly selected local file")]
     LocalFileRequired,
     #[error("invalid artifact descriptor")]
@@ -188,37 +192,7 @@ impl ModelCache {
             }
             return artifact(&ready, spec, true, verify(&ready, spec).await?);
         }
-        let hosts = spec.allowed_hosts.clone();
-        let client = Client::builder()
-            .https_only(true)
-            .user_agent(concat!(
-                "orange-agent-artifact-cache/",
-                env!("CARGO_PKG_VERSION")
-            ))
-            .referer(false)
-            .no_gzip()
-            .no_brotli()
-            .no_zstd()
-            .no_deflate()
-            .connect_timeout(Duration::from_secs(20))
-            .timeout(Duration::from_secs(600))
-            .redirect(reqwest::redirect::Policy::custom(move |attempt| {
-                if attempt.previous().len() >= 5 || !allowed_url(attempt.url(), &hosts) {
-                    // Never print signed query strings or URL credentials.
-                    eprintln!(
-                        "artifact redirect denied scheme={} host={} hops={}",
-                        attempt.url().scheme(),
-                        attempt.url().host_str().unwrap_or("none"),
-                        attempt.previous().len()
-                    );
-                    attempt.error("artifact redirect denied")
-                } else {
-                    attempt.follow()
-                }
-            }))
-            .build()
-            .map_err(network)?;
-        self.ensure_with(spec, &HttpTransport { client }).await
+        self.ensure_with(spec, &http_transport(spec)?).await
     }
     async fn ensure_with<T: Transport>(
         &self,
@@ -370,8 +344,13 @@ impl Drop for CacheLease {
     }
 }
 fn cache_lease(path: &Path) -> Result<Arc<CacheLease>, CacheError> {
-    let file = private_file(path, true)?;
-    file.try_lock().map_err(|_| CacheError::LockUnavailable)?;
+    exclusive_lease(private_file(path, true)?)
+}
+fn exclusive_lease(file: File) -> Result<Arc<CacheLease>, CacheError> {
+    file.try_lock().map_err(|e| match e {
+        fs::TryLockError::WouldBlock => CacheError::LockUnavailable,
+        fs::TryLockError::Error(err) => CacheError::Io(err),
+    })?;
     Ok(Arc::new(CacheLease { file }))
 }
 fn exists(path: &Path) -> Result<bool, CacheError> {
@@ -520,6 +499,39 @@ trait Transport {
 }
 struct HttpTransport {
     client: Client,
+}
+fn http_transport(spec: &ArtifactSpec) -> Result<HttpTransport, CacheError> {
+    let hosts = spec.allowed_hosts.clone();
+    Client::builder()
+        .https_only(true)
+        .user_agent(concat!(
+            "orange-agent-artifact-cache/",
+            env!("CARGO_PKG_VERSION")
+        ))
+        .referer(false)
+        .no_gzip()
+        .no_brotli()
+        .no_zstd()
+        .no_deflate()
+        .connect_timeout(Duration::from_secs(20))
+        .timeout(Duration::from_secs(600))
+        .redirect(reqwest::redirect::Policy::custom(move |attempt| {
+            if attempt.previous().len() >= 5 || !allowed_url(attempt.url(), &hosts) {
+                // Never print signed query strings or URL credentials.
+                eprintln!(
+                    "artifact redirect denied scheme={} host={} hops={}",
+                    attempt.url().scheme(),
+                    attempt.url().host_str().unwrap_or("none"),
+                    attempt.previous().len()
+                );
+                attempt.error("artifact redirect denied")
+            } else {
+                attempt.follow()
+            }
+        }))
+        .build()
+        .map(|client| HttpTransport { client })
+        .map_err(network)
 }
 struct HttpBody(reqwest::Response);
 impl DownloadBody for HttpBody {

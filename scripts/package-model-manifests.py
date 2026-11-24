@@ -30,6 +30,7 @@ def main():
     cli=argparse.ArgumentParser()
     cli.add_argument("--vendor",required=True,type=Path,help="Verified Cargo vendor tree")
     cli.add_argument("--asset-root",type=Path,default=ROOT/".local")
+    cli.add_argument("--check-volume",action="store_true",help="Also qualify real ENOSPC in a private macOS disk image using the installed cache binary")
     args=cli.parse_args()
     if git("status","--porcelain"):raise ValueError("Clean committed source required")
     commit=git("rev-parse","HEAD").decode().strip()
@@ -97,6 +98,12 @@ def main():
             status=observe(cache)
         if status["state"]!="verified" or status["read_lease_observed"] is not True or status["sha256"]!=spec_data["sha256"] or status["expected_bytes"]!=spec_data["bytes"]:
             raise ValueError("Installed cache inspector did not verify the real locked artifact")
+        volume=None
+        if args.check_volume:
+            volume=json.loads(subprocess.check_output([sys.executable,ROOT/"scripts/check-cache-volume-recovery.py",
+                    "--binary",installed/"bin/model-fetch","--sha256",binaries["model-fetch"]],cwd=work,text=True,timeout=220))
+            if volume.get("real_enospc") is not True or volume.get("private_volume_detached") is not True:
+                raise ValueError("Installed cache did not recover on the bounded test image")
         final=dest/(PROGRAM+"-macos-arm64-"+checksum[:16]+".tar.gz")
         if final.exists():
             if final.is_symlink() or sha(final)!=checksum:raise ValueError("Conflicting release")
@@ -104,6 +111,7 @@ def main():
         report={"source":commit,"archive":final.name,"bytes":first.stat().st_size,"sha256":checksum,"native_builds":build["builds"],
                 "identical_archives":2,"target":build["target"],"locked_crates":total,"missing_notices":missing,
                 "measured":checks,"local_http_adapters":adapters,"observed_cache":status,"production_signed_or_notarized":False}
+        if volume is not None:report["cache_volume_recovery"]=volume
         receipt=work/"receipt.json";receipt.write_text(json.dumps(report,indent=2)+"\n")
         os.replace(receipt,final.with_suffix(".json"));print(json.dumps(report),flush=True)
 

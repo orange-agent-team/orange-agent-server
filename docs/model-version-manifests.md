@@ -36,3 +36,7 @@ target/debug/orange-model-manifest verify-proposed /absolute/path/to/cache < pro
 `read_lease_observed` 表示是否观测到该已发布文件上的协作锁。通过 ModelCache 取得的 VerifiedArtifact 在持有期间保留共享锁。这个字段不能作为全机推理进程数或 GPU 已卸载的依据。
 
 断点下载将已批准的源地址、重定向白名单、内容摘要、大小及文件头绑定到私有暂存记录。记录中只保存哈希。重新启动时，只有匹配的分片才会发送 Range 请求。远端返回不同对象标签、失效范围或新的完整对象时，缓存从零重新校验。旧版缺少来源信息的不完整分片会重新获取，完整的旧暂存文件可通过文件头和完整 SHA-256 离线恢复。已验证的权重仍可在断网时使用。
+
+在 `model-fetch` 中按 Ctrl-C 只撤销本次下载订阅。其他订阅者可以接手已校验来源的分片。最后一个订阅者离开时清理属于该下载的分片和恢复记录；仍有写入未结束时会明确返回待清理。显式执行 `model-fetch MANIFEST CACHE --discard-staging` 可重试并查看实际回收的下载和导入字节数，已有订阅或占用写锁时返回未完成状态。此操作保留已发布权重和其他模型的分片。持有 VerifiedArtifact 的调用方释放各自的共享读锁，设备进程退出由执行宿主另行确认。
+
+`model-fetch MANIFEST CACHE --import-file /absolute/file.gguf` 只从选定文件导入，完整校验后原子发布。使用 `python3.12 scripts/check-cache-volume-recovery.py` 可在 macOS 创建一次性 24 MiB 磁盘镜像，实际产生空间不足错误，清理暂存并在同一缓存成功重试。脚本检查挂载身份和容量后才写入，最后卸载镜像。

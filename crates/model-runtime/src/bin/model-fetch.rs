@@ -1,6 +1,6 @@
 //! Fetch an identical pinned public artifact from an explicitly selected official
 //! distribution. No automatic mirror fallback or floating revision is allowed.
-use orange_model_runtime::cache::{ArtifactSpec, ModelCache};
+use orange_model_runtime::cache::{ArtifactSpec, ModelCache, StagingCleanup};
 use serde::Deserialize;
 use std::{env, error::Error, io::Read, path::PathBuf};
 #[derive(Deserialize)]
@@ -93,12 +93,14 @@ fn source_url(
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = env::args().skip(1).collect();
-    if !(2..=3).contains(&args.len()) {
-        return Err("Usage: model-fetch <pinned-manifest.json> <private-cache-directory> [--inspect|--source=huggingface|modelscope]".into());
+    let importing = args.len() == 4 && args[2] == "--import-file";
+    if !(2..=3).contains(&args.len()) && !importing {
+        return Err("Usage: model-fetch <pinned-manifest.json> <private-cache-directory> [--inspect|--discard-staging|--import-file <absolute-local-gguf>|--source=huggingface|modelscope]".into());
     }
     let inspect = args.get(2).is_some_and(|arg| arg == "--inspect");
+    let discard = args.get(2).is_some_and(|opt| opt == "--discard-staging");
     let source = match args.get(2) {
-        Some(_) if inspect => "huggingface",
+        Some(_) if inspect || discard || importing => "huggingface",
         None => "huggingface",
         Some(value) => value
             .strip_prefix("--source=")
@@ -123,11 +125,36 @@ async fn main() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
     let cache = ModelCache::new(&PathBuf::from(&args[1]), 4 * 1024 * 1024 * 1024)?;
-    let artifact = cache.ensure(&spec).await?;
-    println!(
-        "{}",
-        serde_json::json!({"sha256":artifact.sha256(),"bytes":artifact.bytes(),"cache_hit":artifact.is_cached(),"verified":true,"official_source":source})
-    );
+    if discard {
+        let cleanup = cache.discard_staging(&spec)?;
+        println!("{}", serde_json::to_string(&cleanup)?);
+        if !matches!(cleanup, StagingCleanup::Released { .. }) {
+            return Err("cache staging retained by an active operation".into());
+        }
+        return Ok(());
+    }
+    let (stop, signal) = tokio::sync::watch::channel(false);
+    let interrupt = tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            stop.send_replace(true);
+        }
+    });
+    let result = if importing {
+        cache
+            .import_file_with_cancel(&spec, std::path::Path::new(&args[3]), signal)
+            .await
+    } else {
+        cache.ensure_with_cancel(&spec, signal).await
+    };
+    interrupt.abort();
+    let artifact = result?;
+    let mut receipt = serde_json::json!({"sha256":artifact.sha256(),"bytes":artifact.bytes(),"cache_hit":artifact.is_cached(),"verified":true});
+    if importing {
+        receipt["source_kind"] = "selected_local_file".into();
+    } else {
+        receipt["official_source"] = source.into();
+    }
+    println!("{}", serde_json::to_string(&receipt)?);
     Ok(())
 }
 
