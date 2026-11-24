@@ -40,3 +40,5 @@ schema 67 为个人与组织任务提供状态版本，旧客户端可以继续�
 设备端可运行 `bin/orange-worker redeem-enrollment`。包内的 `config/worker-redemption.example.json` 列出私有配置字段。[设备证书安装](docs/worker/device-certificate-install.md)
 
 包内 `licenses/inventory.json` 按 Cargo.lock 列出注册表依赖、校验和、声明许可及实际通知文件。缺少包内许可原文时使用发布提交中内容可核对的上游补充，实际文本与来源一同归档。
+
+For model registration and activation on the development platform, follow `docs/model-registry-drafts.md`. Set `ORANGE_MODEL_REVIEW_PUBLIC_KEY_FILE` on the Admin process to the absolute path of the trusted Ed25519 public key. The reviewer can sign an inspected report offline using `python3.12 scripts/sign-model-certification.py --help` from the unpacked archive. Supply the signed report through the Admin model directory. Activation requires independent approval; existing jobs retain their original accounting when a model is withdrawn.
