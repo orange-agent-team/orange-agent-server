@@ -23,7 +23,7 @@ def require(ok,msg):
     if not ok: raise RuntimeError(msg)
 
 
-def run(api,dbfile,identity,folder,endpoint,bucket,credentials,s3,fence,expiry,web,site,png,rgb,old_api,direct_upload,direct_expiry):
+def run(api,dbfile,identity,folder,endpoint,bucket,credentials,s3,fence,expiry,web,site,png,rgb,old_api,direct_upload,direct_expiry,upgrade_remote):
     def secret(path,value):
         with os.fdopen(os.open(path,os.O_CREAT|os.O_EXCL|os.O_WRONLY,0o600),"w") as stream:json.dump(value,stream)
     prefix="orange-fixture";cfg=folder/"artifact-config.json";keys=folder/"artifact-identity.json"
@@ -85,10 +85,13 @@ def run(api,dbfile,identity,folder,endpoint,bucket,credentials,s3,fence,expiry,w
             finally:conn.close()
         provider_call=private_requests(endpoint,bucket,credentials,folder)
         if old_api:
-            previous=dict(settings);del previous["ORANGE_ARTIFACT_S3_CONFIG"]
-            disk=folder/"old-private-root";disk.mkdir(mode=0o700);previous["ORANGE_ARTIFACT_ROOT"]=str(disk)
+            previous=dict(settings)
+            expected_schema="88" if upgrade_remote else "87"
+            if not upgrade_remote:
+                del previous["ORANGE_ARTIFACT_S3_CONFIG"]
+                disk=folder/"old-private-root";disk.mkdir(mode=0o700);previous["ORANGE_ARTIFACT_ROOT"]=str(disk)
             with listening(old_api.resolve(strict=True),previous,"User API") as address:
-                require(sql("SELECT max(version) FROM _sqlx_migrations WHERE success")=="87","Prior executable did not produce schema 87")
+                require(sql("SELECT max(version) FROM _sqlx_migrations WHERE success")==expected_schema,"Unexpected schema from the prior executable")
                 prior_user=member();prior_upload=str(uuid4());prior_bytes=b"retained private object from schema 87"
                 prior_base="/api/v1/owners/"+prior_user[0]+"/uploads"
                 status,raw=wire("POST",prior_base,prior_user,{"upload_id":prior_upload,"media_type":"text/plain","size_bytes":str(len(prior_bytes)),"sha256":sha256(prior_bytes).hexdigest()},prior_upload)
@@ -97,17 +100,33 @@ def run(api,dbfile,identity,folder,endpoint,bucket,credentials,s3,fence,expiry,w
                 require(wire("PUT",prior_path+"/content",prior_user,prior_bytes,prior_upload)[0]==200,"Prior file not available")
                 original=sql("SELECT jsonb_agg(to_jsonb(a) ORDER BY a.artifact_id) FROM artifacts a")
                 old_read=prior_path+"/content?"+urlencode({"version_id":prior_version})
+                if upgrade_remote:
+                    prior_key=str(uuid4());download=prior_path+"/download-authorizations"
+                    status,raw=wire("POST",download,prior_user,{"version_id":prior_version},prior_key);require(status==200,"Pre-upgrade signed read unavailable")
+                    old_cut=json.loads(raw)["expires_at_unix"]
+                    pins=sql("SELECT jsonb_agg(to_jsonb(p) ORDER BY p.storage_key) FROM artifact_s3_versions p")
             with listening(api,previous,"User API") as address:
                 require(sql("SELECT max(version) FROM _sqlx_migrations WHERE success")=="89" and sql("SELECT jsonb_agg(to_jsonb(a) ORDER BY a.artifact_id) FROM artifacts a")==original,
                         "Migration changed the original artifact row")
                 require(wire("GET",old_read,prior_user)==(200,prior_bytes),"Existing filesystem content changed across upgrade")
-                status,raw=wire("POST",prior_path+"/download-authorizations",prior_user,{"version_id":prior_version},str(uuid4()))
-                require(status==503 and json.loads(raw).get("code")=="DIRECT_STORAGE_UNAVAILABLE","Filesystem root issued an S3 address")
-                require(wire("PUT",prior_path+"/content",prior_user,prior_bytes,prior_upload)[0]==200 and sql("SELECT count(*) FROM artifact_s3_versions")=="0",
-                        "Existing filesystem retry created a remote pin")
-                print("PASS actual schema 87 to 89 upgrade, unchanged owned object, filesystem replay and explicit direct-download unavailability",flush=True)
+                if upgrade_remote:
+                    status,raw=wire("POST",download,prior_user,{"version_id":prior_version},prior_key)
+                    require(status==200 and json.loads(raw)["expires_at_unix"]==old_cut and sql("SELECT jsonb_agg(to_jsonb(p) ORDER BY p.storage_key) FROM artifact_s3_versions p")==pins,
+                            "Migration changed a provider pin or extended an outstanding signed authority")
+                else:
+                    status,raw=wire("POST",prior_path+"/download-authorizations",prior_user,{"version_id":prior_version},str(uuid4()))
+                    require(status==503 and json.loads(raw).get("code")=="DIRECT_STORAGE_UNAVAILABLE","Filesystem root issued an S3 address")
+                require(wire("PUT",prior_path+"/content",prior_user,prior_bytes,prior_upload)[0]==200,"Existing upload retry failed")
+                print("PASS actual schema "+expected_schema+" to 89 upgrade; preserved original bytes and previous transfer authority",flush=True)
+            if upgrade_remote:
+                probe=subprocess.Popen([old_api.resolve(strict=True)],env=previous,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
+                try:_,why=probe.communicate(timeout=15)
+                except subprocess.TimeoutExpired:
+                    probe.terminate();probe.wait(timeout=10);raise RuntimeError("Old writer started on the upgraded DB")
+                require(probe.returncode!=0 and b"STARTUP_MIGRATION_FAILED" in why,"Downgrade did not reject the unknown storage migration")
+                print("PASS schema-88 writer refuses the schema-89 database",flush=True)
         with listening(api,settings,"User API") as address:
-            if old_api:
+            if old_api and not upgrade_remote:
                 require(wire("GET",old_read,prior_user)[0]!=200,"A different root exposed a prior filesystem object")
             author,other=member(),member()
             upload=str(uuid4());base="/api/v1/owners/"+author[0]+"/uploads";saved=base+"/"+upload
@@ -217,7 +236,7 @@ def run(api,dbfile,identity,folder,endpoint,bucket,credentials,s3,fence,expiry,w
             status,denied=grant(author,req);require(status in (403,409,410) and "url" not in denied,"Deleted object issued a new URL")
             # Previously issued capability may still read during its original TTL.
             get_signed(g)
-            n=sql("SELECT (SELECT count(*) FROM artifact_download_grants),(SELECT count(*) FROM jobs),(SELECT count(*) FROM ledger_transactions)")
+            n=sql(f"SELECT (SELECT count(*) FROM artifact_download_grants WHERE owner_id='{author[0]}'),(SELECT count(*) FROM jobs),(SELECT count(*) FROM ledger_transactions)")
             require(n=="1|0|0","Repeated or denied reads changed grant/accounting state")
             if direct_upload:
                 from verify_direct_ingress import deletion_during_copy

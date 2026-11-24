@@ -30,6 +30,7 @@ parser.add_argument("--signed-lifetimes",action="store_true",help="Observe actua
 parser.add_argument("--direct-upload-expiry",action="store_true",help="Wait for the API-issued PUT to expire and prove exact storage recovery")
 parser.add_argument("--direct-upload",action="store_true",help="Verify the platform issued scoped PUT and crash recovery")
 parser.add_argument("--download-expiry",action="store_true",help="Check expiry of actual API-issued GET grants")
+parser.add_argument("--upgrade-versioned-root",action="store_true",help="Use the prior schema 88 S3 release to create the data upgraded by this run")
 parser.add_argument("--artifact-old-api",type=Path,help="Prior packaged User API for the filesystem schema upgrade")
 parser.add_argument("--artifact-web",type=Path,help="Run the independent Web client against the real artifact issuer")
 parser.add_argument("--artifact-site",type=Path,help="Extracted Web site directory")
@@ -39,6 +40,7 @@ parser.add_argument("--artifact-backend-api",type=Path,help="Run the real User A
 args = parser.parse_args()
 if (args.artifact_old_api or args.artifact_web or args.artifact_site or args.artifact_png or args.artifact_rgb_sha256) and not args.artifact_backend_api:parser.error("Browser and image fixtures require --artifact-backend-api")
 if bool(args.artifact_png)!=bool(args.artifact_rgb_sha256):parser.error("Supply both real image and verified pixel digest")
+if args.upgrade_versioned_root and not args.artifact_old_api:parser.error("Supply the actual prior packaged API for the S3 upgrade")
 if args.direct_upload_expiry and not args.direct_upload:parser.error("Use --direct-upload for its expiry observation")
 if (args.direct_upload or args.download_expiry) and not args.artifact_backend_api:
     parser.error("--download-expiry requires --artifact-backend-api")
@@ -216,7 +218,7 @@ with tempfile.TemporaryDirectory(prefix="oa-s3-", dir="/tmp") as tmp:
                     with relay(endpoint,bucket) as (address,fence):
                         run(args.artifact_backend_api.resolve(strict=True),args.database_url_file.resolve(strict=True),args.identity_config.resolve(strict=True),
                             folder,address,bucket,owner["credentials"][0],lambda method,path,data:call(owner,method,path,data),fence,args.download_expiry,
-                            args.artifact_web,args.artifact_site,args.artifact_png,args.artifact_rgb_sha256,args.artifact_old_api,args.direct_upload,args.direct_upload_expiry)
+                            args.artifact_web,args.artifact_site,args.artifact_png,args.artifact_rgb_sha256,args.artifact_old_api,args.direct_upload,args.direct_upload_expiry,args.upgrade_versioned_root)
                 raise SystemExit(0)  # The enclosing finally always stops the private fixture.
             for name, content in [
                 ("a.txt", b"confirmed source data"),
