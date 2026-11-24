@@ -500,7 +500,7 @@ impl WorkspaceSourceLease {
     }
 }
 impl Journal {
-    fn workspace_origin_gate(&self, id: &str) -> Arc<tokio::sync::RwLock<()>> {
+    pub(crate) fn workspace_origin_gate(&self, id: &str) -> Arc<tokio::sync::RwLock<()>> {
         let mut gates = self.workspace_gates.borrow_mut();
         gates.retain(|_, g| g.strong_count() > 0);
         if let Some(gate) = gates.get(id).and_then(std::sync::Weak::upgrade) {

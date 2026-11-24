@@ -104,15 +104,19 @@ impl Authority {
         )?;
         let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
         if info == (0, 0, 0) {
-            let binding = scope.filter(|_| create).ok_or(KnowledgeError::Storage)?;
+            if !create {
+                return Err(KnowledgeError::Storage);
+            }
+            // A registered selection may be withdrawn before initialization finished.
+            let binding = scope.unwrap_or("retired-before-initialization");
             tx.execute_batch("CREATE TABLE authority(singleton INTEGER PRIMARY KEY CHECK(singleton=1),namespace TEXT NOT NULL,scope TEXT NOT NULL,secret BLOB,
                  CHECK(secret IS NULL OR (typeof(secret)='blob' AND length(secret)=32)));
                 CREATE TRIGGER immutable_retirement BEFORE UPDATE ON authority
                 WHEN OLD.secret IS NULL OR NEW.secret IS NOT NULL OR NEW.namespace!=OLD.namespace OR NEW.scope!=OLD.scope
                 BEGIN SELECT RAISE(ABORT,'invalid authority transition');END;")?;
             tx.execute(
-                "INSERT INTO authority VALUES(1,?,?,randomblob(32))",
-                params![ns, binding],
+                "INSERT INTO authority VALUES(1,?,?,CASE WHEN ? THEN randomblob(32) ELSE NULL END)",
+                params![ns, binding, scope.is_some()],
             )?;
             tx.pragma_update(None, "application_id", AUTHORITY_ID)?;
             tx.pragma_update(None, "user_version", 1)?;
@@ -296,16 +300,28 @@ pub fn withdraw_closed_with_authority(
     owner: &str,
     id: &str,
 ) -> Result<(), KnowledgeError> {
+    retire_closed(directory, authority_dir, owner, id, false)
+}
+pub(super) fn retire_closed(
+    directory: &Path,
+    authority_dir: &Path,
+    owner: &str,
+    id: &str,
+    registered: bool,
+) -> Result<(), KnowledgeError> {
     let ns = namespace(owner, id)?;
     let path = file(directory, owner, id)?;
     // Lock order matches open(). The authoritative tombstone outlives the cached index.
     if path.try_exists().map_err(WorkspaceError::Io)? {
         let (mut db, _owner) = connect(&path)?;
-        let mut authority = Authority::open(authority_dir, &ns, None, false)?;
+        let mut authority = Authority::open(authority_dir, &ns, None, registered)?;
         authority.revoke()?;
+        if registered && format(&db)? == (0, 0, 0) {
+            return Ok(());
+        }
         purge_if_matching(&mut db, &ns)
     } else {
-        let mut authority = Authority::open(authority_dir, &ns, None, false)?;
+        let mut authority = Authority::open(authority_dir, &ns, None, registered)?;
         authority.revoke()
     }
 }

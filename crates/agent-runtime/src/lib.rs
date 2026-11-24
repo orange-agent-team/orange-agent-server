@@ -14,7 +14,7 @@ use orange_protocol::{valid_digest, valid_id};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::path::Path;
 
-const JOURNAL_SCHEMA_VERSION: i64 = 35;
+const JOURNAL_SCHEMA_VERSION: i64 = 36;
 
 #[derive(Debug, thiserror::Error)]
 pub enum JournalError {
@@ -44,6 +44,8 @@ pub enum JournalError {
 
 pub struct Journal {
     connection: Connection,
+    saved_knowledge_signals:
+        std::collections::HashMap<String, std::sync::Weak<std::sync::atomic::AtomicBool>>,
     memory_session: String,
     memory_cursors: std::cell::RefCell<std::collections::HashMap<String, memory::ManagementCursor>>,
     _host_lock: storage::HostLock,
@@ -331,6 +333,12 @@ impl Journal {
             tx.execute_batch(include_str!("schema_v35.sql"))?;
             tx.commit()?;
         }
+        if version < 36 {
+            let tx =
+                connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            tx.execute_batch(include_str!("schema_v36.sql"))?;
+            tx.commit()?;
+        }
         connection.execute_batch("BEGIN IMMEDIATE;
             UPDATE export_restorations SET state='unknown' WHERE state='dispatching';
             UPDATE export_retirements SET state='unknown' WHERE state='dispatching';
@@ -348,6 +356,7 @@ impl Journal {
             COMMIT;")?;
         Ok(Self {
             connection,
+            saved_knowledge_signals: Default::default(),
             memory_session: uuid::Uuid::new_v4().to_string(),
             memory_cursors: std::cell::RefCell::new(std::collections::HashMap::new()),
             _host_lock: lock,

@@ -1,10 +1,12 @@
 //! Selected-file retrieval. Persistence is an explicit host choice, with live revalidation after reopening.
 mod persistence;
 mod private_directory;
+mod saved_collections;
 use super::*;
 use cap_fs_ext::MetadataExt;
 pub use persistence::{withdraw_closed, withdraw_closed_with_authority};
 use rusqlite::{Connection, params};
+pub use saved_collections::SavedKnowledgeError;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
 use uuid::Uuid;
@@ -68,8 +70,26 @@ pub struct KnowledgeCollection {
     index: Arc<Mutex<Index>>,
     revoked: Arc<AtomicBool>,
     publication: Arc<RwLock<()>>,
+    journal_lease: Option<Arc<crate::storage::HostEffectLease>>,
 }
+fn selected_paths(paths: &[String]) -> Result<BTreeSet<&String>, KnowledgeError> {
+    if paths.is_empty() || paths.len() > MAX_DOCS {
+        return Err(KnowledgeError::Invalid);
+    }
+    let mut allowed = BTreeSet::new();
+    for path in paths {
+        components(path, false)?;
+        if !allowed.insert(path) {
+            return Err(KnowledgeError::Invalid);
+        }
+    }
+    Ok(allowed)
+}
+
 impl KnowledgeCollection {
+    pub fn collection_id(&self) -> &str {
+        &self.id
+    }
     /// Only the trusted host chooses files. A new grant/selection starts a new citation namespace.
     pub fn open(
         grant: WorkspaceGrant,
@@ -108,16 +128,10 @@ impl KnowledgeCollection {
         paths: Vec<String>,
         private_directory: Option<(&Path, &Path)>,
     ) -> Result<Self, KnowledgeError> {
-        if !valid_id(id) || paths.is_empty() || paths.len() > MAX_DOCS {
+        if !valid_id(id) {
             return Err(KnowledgeError::Invalid);
         }
-        let mut allowed = BTreeSet::new();
-        for path in paths {
-            components(&path, false)?;
-            if !allowed.insert(path) {
-                return Err(KnowledgeError::Invalid);
-            }
-        }
+        let allowed = selected_paths(&paths)?.into_iter().cloned().collect();
         if grant.is_revoked() {
             return Err(WorkspaceError::Revoked.into());
         }
@@ -134,10 +148,15 @@ impl KnowledgeCollection {
             index: Arc::new(Mutex::new(index)),
             revoked: Arc::new(AtomicBool::new(false)),
             publication: Arc::new(RwLock::new(())),
+            journal_lease: None,
         })
     }
     /// Explicitly withdraw this collection and drain any publication already in progress.
     pub async fn withdraw(&self) -> Result<(), KnowledgeError> {
+        // Registered names must retire through the same Journal transition as workspace consent.
+        if self.journal_lease.is_some() {
+            return Err(KnowledgeError::Invalid);
+        }
         self.revoked.store(true, Ordering::Release);
         let exclusive = self.publication.clone().write_owned().await;
         let index = self.index.clone();
