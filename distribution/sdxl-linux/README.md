@@ -55,3 +55,13 @@ python3.12 scripts/benchmark-sdxl-device.py --qualification "$QUALIFICATION" \
 ```
 
 基准依次执行固定输入、同种子重放、无效输入、第一次去噪进度后的实际取消，以及取消后的再生成。每次成功都独立验证 PNG 和像素摘要，记录用时及显存峰值。失败和中断保留部分报告，未测过的设备不会获得公共调度资格。恢复及基准均需本机真实驱动读数。
+
+
+目标工具包包含固定版本的 Linux AMD64 Pillow wheel、许可证和带哈希的 requirements.txt。解包后可在目标宿主创建独立 Python 环境，离线安装并先运行进度、取消、产物格式和恢复测试。驱动观测由随后的真实基准单独采集。
+
+```sh
+python3.12 -m venv .venv
+.venv/bin/python -m pip install --no-index --find-links wheelhouse --require-hashes -r requirements.txt
+.venv/bin/python scripts/check-sdxl-target-benchmark.py
+.venv/bin/python scripts/check-sdxl-device-recovery.py
+```

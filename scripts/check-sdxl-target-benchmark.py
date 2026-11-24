@@ -52,6 +52,25 @@ def main():
     cmd=[sys.executable,"-c","import sys,time;sys.stdin.read();print("+repr(json.dumps(step(1)))+",file=sys.stderr,flush=True);time.sleep(30)"]
     status,raw,steps,terminated,_=benchmark.execute(cmd,request,True)
     assert status!=0 and not raw and steps==1 and terminated
+    import hashlib
+    from PIL import Image
+    with tempfile.TemporaryDirectory() as tmp:
+        png=Path(tmp)/"result.png"
+        image=Image.new("RGB",(1024,1024),(235,116,40))
+        image.save(png)
+        request={"attempt_id":"fixture","seed":6}
+        receipt={**request,"model_version":benchmark.PROFILE,"steps":25,"gpu_release_observed":True,"media_type":"image/png",
+                 "width":1024,"height":1024,"bytes":png.stat().st_size,"sha256":hashlib.sha256(png.read_bytes()).hexdigest(),
+                 "rgb_sha256":hashlib.sha256(image.tobytes()).hexdigest(),"peak_allocated_bytes":1,"peak_reserved_bytes":2}
+        benchmark.validate_receipt(receipt,request,png)
+        for field,value in (("rgb_sha256","0"*64),("peak_allocated_bytes",0),("steps",24),("width",1000),("media_type","image/jpeg")):
+            try:benchmark.validate_receipt({**receipt,field:value},request,png)
+            except RuntimeError:pass
+            else:raise AssertionError("Unqualified PNG or sample accepted")
+        png.write_bytes(png.read_bytes()[:-7])
+        try:benchmark.validate_receipt(receipt,request,png)
+        except RuntimeError:pass
+        else:raise AssertionError("Damaged output accepted")
     print("PASS mount namespace policies, partial progress reads, fixed step identity and real process cancellation after a fixture step; no GPU benchmark claimed")
 
 

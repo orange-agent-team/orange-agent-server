@@ -68,8 +68,8 @@ print(json.dumps({'case':test,'candidate_png':False,'private_staging_remaining':
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--qualification",type=Path,required=True)
-    parser.add_argument("--qualification-sha256",required=True)
+    parser.add_argument("--qualification",type=Path,default=ROOT/"distribution/sdxl-linux/qualification.json")
+    parser.add_argument("--qualification-sha256",default="3134f8d884184cec7b189ab1577acf3ab33139de838f81bc68d923c2045b7fd9")
     parser.add_argument("--context", default="colima-orange-agent")
     parser.add_argument("--weights", type=Path, default=ROOT/".local/image-model")
     args = parser.parse_args()

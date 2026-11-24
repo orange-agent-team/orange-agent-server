@@ -1,0 +1,67 @@
+{
+  "base_digest": "sha256:59a32f2866470624edbdde0e3e504bbbf46222fed2d4c2392bef3894e1b6334d",
+  "config_digest": "sha256:4be61c33afe427ee8b12435d780ebfff41bcf0a3727f02d636cfda1aaf01c7ad",
+  "dependencies": 72,
+  "dependency_source": "cdad5d375fd394251a29a062e0311c2696de917c",
+  "hardware_certified": false,
+  "image": "sha256:be9998807ac1712b832459b7f9830a76e456f268dc3713f8ed11aea4b81f1fa2",
+  "local_tag": "orange-dev-input/sdxl-cuda:24a6bc12b751",
+  "offline_installs": [
+    {
+      "bytes": 3281475214,
+      "diff_id": "sha256:e68a426b9e8372a4823766ed9cf4a32e0a5a22187468ea9aa4087a02a2090b06",
+      "layer": "sha256:929492aa5b0f3ec5eefe8bae7820d8e85a2086330f4b020763fa1a499d808879",
+      "regular_files": 25912
+    },
+    {
+      "bytes": 3281475214,
+      "diff_id": "sha256:e68a426b9e8372a4823766ed9cf4a32e0a5a22187468ea9aa4087a02a2090b06",
+      "layer": "sha256:929492aa5b0f3ec5eefe8bae7820d8e85a2086330f4b020763fa1a499d808879",
+      "regular_files": 25912
+    }
+  ],
+  "parent_image": "sha256:17cf5d78b56a62d7f8d87f5976995b76fb335ed4016a6e935ac0804804b88070",
+  "platform": "linux/amd64",
+  "previous_runner_image": "sha256:b01f7baed816b97294e079f8a77493e0049d70c8c553cffff183b696a642fd33",
+  "previous_runner_source": "f8882a6d2d8b4f94f6e64fff092e85aacd1894c8",
+  "published": false,
+  "runner_installations": [
+    {
+      "bytes": 3792,
+      "diff_id": "sha256:b96739a8ae4dc395053f90a54b7d08838cd0f5ec2cef0b9cf94a350a54cd926f",
+      "layer": "sha256:94f6dfdca48d955b38f7a192d0039b6b7b084db470388a267376d6314b8b3c5b",
+      "runner_sha256": "0e2f1cf0cbeb5bd07c5ccd531e45c822b7069ea9370b95987f22e30dbee0eb16"
+    },
+    {
+      "bytes": 3792,
+      "diff_id": "sha256:b96739a8ae4dc395053f90a54b7d08838cd0f5ec2cef0b9cf94a350a54cd926f",
+      "layer": "sha256:94f6dfdca48d955b38f7a192d0039b6b7b084db470388a267376d6314b8b3c5b",
+      "runner_sha256": "0e2f1cf0cbeb5bd07c5ccd531e45c822b7069ea9370b95987f22e30dbee0eb16"
+    }
+  ],
+  "source": "24a6bc12b75124b2560026f36176f151a06d042b",
+  "system_installations": [
+    {
+      "bytes": 62570320,
+      "diff_id": "sha256:79a8afefd953097aeb2cbd3de9d165ab572beb09bce48ab6d95523848c6f5f8d",
+      "layer": "sha256:e8888899a98eca6bd8e0da2faf92965105b461b76381488b1f121deb32d595e4",
+      "packages": 28
+    },
+    {
+      "bytes": 62570320,
+      "diff_id": "sha256:79a8afefd953097aeb2cbd3de9d165ab572beb09bce48ab6d95523848c6f5f8d",
+      "layer": "sha256:e8888899a98eca6bd8e0da2faf92965105b461b76381488b1f121deb32d595e4",
+      "packages": 28
+    }
+  ],
+  "system_lock_sha256": "635c64d700751b8958bcd26b1ca11f47ee1c715904608d3eb3bf643cc7d2f157",
+  "wheel_lock_sha256": "90f2837e21ed12b730050b0a2275fdd81c4e1c1aabeb9b5128e4e2127dd53ef6",
+  "archive": "orange-sdxl-cuda-amd64-be9998807ac1712b.tar",
+  "sha256": "c0a10a9c75a2edb7cd231847c62d2e140dc814e985c7ac8a42d109267acc7156",
+  "bytes": 3724544000,
+  "no_device_denied": true,
+  "malformed_requests_denied": 4,
+  "cpu_emulated_target": "linux/amd64 CPython 3.12.13",
+  "generated_image": false,
+  "public_worker_admission": false
+}

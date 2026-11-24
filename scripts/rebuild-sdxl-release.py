@@ -38,17 +38,22 @@ def main():
     args = parser.parse_args()
     cache = args.cache.resolve()
     cache.mkdir(mode=0o700, exist_ok=True, parents=True)
-    runner_source=subprocess.check_output(["git","rev-parse","HEAD"],cwd=ROOT,text=True).strip()
+    authority=json.loads((ROOT/"distribution/sdxl-linux/qualification.json").read_bytes())
+    runner_source=authority["source"]
     if subprocess.check_output(["git","status","--porcelain"],cwd=ROOT):
         raise RuntimeError("Build from a clean tagged or detached checkout")
     with tempfile.TemporaryDirectory(prefix="orange-sdxl-build-") as tmp:
         py = checkout(Path(tmp), "python", PYTHON_SOURCE)
         sysroot = checkout(Path(tmp), "debian", IMAGE_SOURCE)
+        runner=checkout(Path(tmp),"runner",runner_source)
         if args.verify_inputs:
             for tree, folder in [(py, "wheels.lock.json"), (sysroot, "debian-libs.lock.json")]:
                 data = tree / "backends/environments/sdxl-linux-cuda" / folder
                 print(folder, hashlib.sha256(data.read_bytes()).hexdigest())
-            print("runner.py",hashlib.sha256((ROOT/"distribution/sdxl-linux/runner.py").read_bytes()).hexdigest())
+            runner_hash=hashlib.sha256((runner/"distribution/sdxl-linux/runner.py").read_bytes()).hexdigest()
+            if runner_hash!=authority["runner_installations"][0]["runner_sha256"]:
+                raise RuntimeError("Reviewed runtime source differs from image")
+            print("runner.py",runner_hash)
             return
         wheels, base, out = (cache / name for name in ("wheels", "base-oci", "outputs"))
         if args.fetch:
@@ -62,11 +67,11 @@ def main():
         final = out / IMAGE_SOURCE
         if json.loads((final / "receipt.json").read_bytes())["image"] != IMAGE:
             raise RuntimeError("Rebuilt OCI manifest differs from the qualified image")
-        run(sys.executable, "scripts/assemble-sdxl-runner-layer.py", "--base", final, "--output", out, cwd=ROOT)
+        run(sys.executable, "scripts/assemble-sdxl-runner-layer.py", "--base", final, "--output", out, cwd=runner)
         final = out / runner_source
-        run(sys.executable, "scripts/check-linux-sdxl-image.py", "--receipt", final / "receipt.json", "--context", args.context, cwd=ROOT)
+        run(sys.executable, "scripts/check-linux-sdxl-image.py", "--receipt", final / "receipt.json", "--context", args.context, cwd=runner)
         proof = json.loads((final / "qualification.json").read_bytes())
-        if (args.expected_sha256 and proof["sha256"] != args.expected_sha256) or proof["hardware_certified"] or not proof["no_device_denied"]:
+        if proof!=authority or (args.expected_sha256 and proof["sha256"]!=args.expected_sha256) or proof["hardware_certified"] or not proof["no_device_denied"]:
             raise RuntimeError("Archive or local qualification differs")
         print(final / proof["archive"])
 
