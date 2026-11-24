@@ -12,6 +12,8 @@ mod personal_keys;
 mod team_budgets;
 #[path = "team_management.rs"]
 mod team_management;
+#[path = "team_sharing.rs"]
+mod team_sharing;
 pub async fn reconcile_cloud_models(pool: &sqlx::PgPool) -> Result<usize, sqlx::Error> {
     let mut count = 0;
     while count < 32 && crate::cloud_model::reconcile_one(pool).await? {
@@ -208,6 +210,10 @@ pub fn router(identity: UserIdentity) -> Router {
         .route(
             "/api/v1/account/support-authorizations/{id}",
             get(support::get_one).delete(support::revoke),
+        )
+        .route(
+            "/api/v1/organizations/{id}/resources/{resource}/sharing",
+            get(team_sharing::list).post(team_sharing::change),
         )
         .route(
             "/api/v1/organizations/{id}/members",

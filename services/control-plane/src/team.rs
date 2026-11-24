@@ -372,53 +372,63 @@ impl TeamStore {
         key: &str,
         request: &ChangeResourceAcl,
     ) -> Result<ResourceView, TeamError> {
+        let mut tx = self.pool.begin().await?;
+        let result = Self::set_acl_in(&mut tx, actor, organization, resource, key, request).await?;
+        tx.commit().await?;
+        Ok(result)
+    }
+
+    pub(crate) async fn set_acl_in(
+        tx: &mut Transaction<'_, Postgres>,
+        actor: &str,
+        organization: &str,
+        resource: &str,
+        key: &str,
+        request: &ChangeResourceAcl,
+    ) -> Result<ResourceView, TeamError> {
         identifiers(&[actor, organization, resource, key, &request.user_id])?;
         let digest =
             request_digest("resource.acl", &(resource, request)).map_err(|_| TeamError::Invalid)?;
-        let mut tx = self.pool.begin().await?;
-        user(&mut tx, actor, false).await?;
-        organization_row(&mut tx, organization, true).await?;
-        let role = membership(&mut tx, organization, actor).await?;
-        let row = resource_row(&mut tx, organization, resource, true).await?;
-        resource_permission(&mut tx, actor, resource, role, ResourceAccess::Write).await?;
+        user(tx, actor, false).await?;
+        organization_row(tx, organization, true).await?;
+        let role = membership(tx, organization, actor).await?;
+        let row = resource_row(tx, organization, resource, true).await?;
+        resource_permission(tx, actor, resource, role, ResourceAccess::Write).await?;
         if row.try_get::<String, _>("creator_id")? != actor {
             return Err(TeamError::Forbidden);
         }
-        if let Some(value) =
-            prior(&mut tx, actor, organization, "resource.acl", key, &digest).await?
-        {
-            tx.commit().await?;
+        if let Some(value) = prior(tx, actor, organization, "resource.acl", key, &digest).await? {
             return Ok(value);
         }
         if row.try_get::<i64, _>("acl_version")? != request.expected_acl_version {
             return Err(TeamError::Version);
         }
         if let Some(access) = request.access {
-            user(&mut tx, &request.user_id, false).await?;
-            membership(&mut tx, organization, &request.user_id).await?;
-            sqlx::query("INSERT INTO resource_acl(resource_id,user_id,access) VALUES($1,$2,$3) ON CONFLICT(resource_id,user_id) DO UPDATE SET access=EXCLUDED.access,revoked=FALSE").bind(resource).bind(&request.user_id).bind(access.as_str()).execute(&mut *tx).await?;
+            user(tx, &request.user_id, false).await?;
+            membership(tx, organization, &request.user_id).await?;
+            sqlx::query("INSERT INTO resource_acl(resource_id,user_id,access) VALUES($1,$2,$3) ON CONFLICT(resource_id,user_id) DO UPDATE SET access=EXCLUDED.access,revoked=FALSE").bind(resource).bind(&request.user_id).bind(access.as_str()).execute(&mut **tx).await?;
         } else {
             sqlx::query("UPDATE resource_acl SET revoked=TRUE WHERE resource_id=$1 AND user_id=$2")
                 .bind(resource)
                 .bind(&request.user_id)
-                .execute(&mut *tx)
+                .execute(&mut **tx)
                 .await?;
         }
         let row = sqlx::query(
             "UPDATE team_resources SET acl_version=acl_version+1 WHERE resource_id=$1 RETURNING *",
         )
         .bind(resource)
-        .fetch_one(&mut *tx)
+        .fetch_one(&mut **tx)
         .await?;
         sqlx::query(
             "UPDATE organizations SET policy_version=policy_version+1 WHERE organization_id=$1",
         )
         .bind(organization)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
         let result = resource_view(&row)?;
         record(
-            &mut tx,
+            tx,
             actor,
             organization,
             "resource.acl",
@@ -428,7 +438,7 @@ impl TeamStore {
         )
         .await?;
         audit(
-            &mut tx,
+            tx,
             organization,
             actor,
             "resource.acl_changed",
@@ -436,7 +446,6 @@ impl TeamStore {
             &digest,
         )
         .await?;
-        tx.commit().await?;
         Ok(result)
     }
 }
@@ -520,7 +529,7 @@ pub(crate) async fn membership(
         .parse()
         .map_err(|_| TeamError::Forbidden)
 }
-async fn resource_row(
+pub(crate) async fn resource_row(
     tx: &mut Transaction<'_, Postgres>,
     org: &str,
     id: &str,
