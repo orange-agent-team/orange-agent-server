@@ -42,6 +42,8 @@ def main():
     cli.add_argument("--environment",type=Path,default=ROOT/".local")
     cli.add_argument("--admin-repo",type=Path,help="Explicit Admin checkout for Chrome acceptance")
     cli.add_argument("--assets",type=Path,help="Previously verified static files, optionally extracted from a package")
+    cli.add_argument("--all-modalities",action="store_true",help="Measure all four local model caches and exercise draft/admission boundaries")
+    cli.add_argument("--asset-root",type=Path,help="Directory containing the locked local model caches")
     cli.add_argument("--installed",action="store_true",help="Use the extracted native release matching this checkout")
     args=cli.parse_args()
     if args.assets and not args.admin_repo:cli.error("--assets requires --admin-repo")
@@ -49,6 +51,10 @@ def main():
     origin=json.loads(config.read_bytes())["admin_origin"]
     check_contract(json.loads((ROOT/"contracts/openapi/admin.v1.json").read_bytes()),json.loads((ROOT/"contracts/json-schema/admin.schema.json").read_bytes()))
     program,cargo,build_env=native()
+    if args.all_modalities:
+        if not __debug__:raise ValueError("Matrix checks require Python assertions")
+        subprocess.run([cargo,"build","--locked","--offline","-p","orange-model-runtime","--bin","orange-model-manifest"],cwd=ROOT,env=build_env,check=True)
+        manifest_tool=program.parent/"orange-model-manifest"
     with database(args.environment.resolve()/"database-url","orange_model_prev_") as (_,previous):
         case="legacy_model_profiles_keep_their_identity_and_review_state_at_registry_upgrade"
         test=subprocess.run([cargo,"test","--locked","--offline","-p","orange-control-plane","--features","model-registry-upgrade-tests",
@@ -178,6 +184,10 @@ def main():
                 print(proc.stdout,end="",flush=True);proc.check_returncode()
                 require("PASS actual Admin browser registered a draft once" in proc.stdout,"Missing real browser")
                 require(sql("SELECT count(*) FROM admin_audit WHERE event_type='model.draft_registered' AND entity_id='browser-draft'")=="1","Browser performed more than one mutation")
+            if args.all_modalities:
+                from model_admission_matrix import check
+                check(ROOT,(args.asset_root or args.environment).resolve(strict=True),manifest_tool,post,
+                      lambda path:http("GET",path,writer),sql,query)
             sql(f"UPDATE admin_sessions SET auth_time=extract(epoch FROM now())::bigint-310 WHERE principal_id='{writer[0]}'")
             status,reason=post(dict(template,model_version="requires-mfa"),key="stale")
             require(status==403 and reason.get("code")=="STEP_UP_REQUIRED" and sql("SELECT count(*) FROM admin_model_drafts WHERE model_version_id='requires-mfa'")=="0","Stale authentication had a write effect")
