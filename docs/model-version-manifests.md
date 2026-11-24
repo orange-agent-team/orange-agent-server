@@ -34,3 +34,5 @@ target/debug/orange-model-manifest verify-proposed /absolute/path/to/cache < pro
 在模型检查工具包中运行 `bin/model-fetch config/local-model.lock.json /path/to/private-cache --inspect`，可以只读检查内容寻址的 GGUF。没有缓存目录时返回 `absent`；下载或导入的暂存文件按各自的字节数列出；只有重新核对固定大小、文件头、完整 SHA-256 和当前文件身份后才返回 `verified`。查询不创建缓存、不发起下载，也不修复损坏的权重。
 
 `read_lease_observed` 表示是否观测到该已发布文件上的协作锁。通过 ModelCache 取得的 VerifiedArtifact 在持有期间保留共享锁。这个字段不能作为全机推理进程数或 GPU 已卸载的依据。
+
+断点下载将已批准的源地址、重定向白名单、内容摘要、大小及文件头绑定到私有暂存记录。记录中只保存哈希。重新启动时，只有匹配的分片才会发送 Range 请求。远端返回不同对象标签、失效范围或新的完整对象时，缓存从零重新校验。旧版缺少来源信息的不完整分片会重新获取，完整的旧暂存文件可通过文件头和完整 SHA-256 离线恢复。已验证的权重仍可在断网时使用。

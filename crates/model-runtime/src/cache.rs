@@ -13,6 +13,9 @@ use std::{
 use tokio::io::AsyncReadExt;
 mod import;
 mod observation;
+mod resume;
+#[cfg(test)]
+mod resume_tests;
 pub use observation::{CacheObservation, CacheState};
 
 #[derive(Debug, thiserror::Error)]
@@ -39,6 +42,8 @@ pub enum CacheError {
     Redirect,
     #[error("artifact HTTP status {0}")]
     Http(u16),
+    #[error("remote artifact changed during resume")]
+    RepresentationChanged,
     #[error("invalid artifact range or length response")]
     Protocol,
     #[error("artifact transfer incomplete")]
@@ -57,6 +62,7 @@ impl CacheError {
             Self::Timeout
                 | Self::Connection
                 | Self::Transport
+                | Self::RepresentationChanged
                 | Self::Incomplete
                 | Self::Integrity
                 | Self::Http(408 | 429 | 500..=599)
@@ -230,7 +236,21 @@ impl ModelCache {
             return artifact(&ready, spec, true, verify(&ready, spec).await?);
         }
         let previous = if exists(&partial)? {
-            private_file(&partial, false)?.metadata()?.len()
+            let f = private_file(&partial, true)?;
+            let len = f.metadata()?.len();
+            // A complete legacy staging object may be verified without a network request.
+            // Only a prefix with a matching durable source binding is eligible for Range.
+            if len != 0
+                && len != spec.bytes
+                && resume::prior(&partial.with_extension("resume"), &resume::source(spec)?)?
+                    .is_none()
+            {
+                f.set_len(0)?;
+                f.sync_all()?;
+                0
+            } else {
+                len
+            }
         } else {
             0
         };
@@ -263,6 +283,10 @@ impl ModelCache {
             };
             match result {
                 Ok(verified) => {
+                    let marker = partial.with_extension("resume");
+                    if exists(&marker)? {
+                        fs::remove_file(marker)?;
+                    }
                     fs::rename(&partial, &ready)?;
                     #[cfg(unix)]
                     {
@@ -480,6 +504,7 @@ struct DownloadResponse<B> {
     status: u16,
     length: Option<u64>,
     range: Option<String>,
+    representation: String,
     body: B,
 }
 trait DownloadBody {
@@ -559,6 +584,10 @@ impl Transport for HttpTransport {
                 .get(reqwest::header::CONTENT_RANGE)
                 .and_then(|v| v.to_str().ok())
                 .map(str::to_owned),
+            representation: resume::representation(
+                response.url(),
+                response.headers().get(reqwest::header::ETAG),
+            ),
             body: HttpBody(response),
         })
     }
@@ -584,6 +613,15 @@ async fn transfer_once<T: Transport>(
     if length > spec.bytes {
         return Err(CacheError::TooLarge);
     }
+    let marker = path.with_extension("resume");
+    let source = resume::source(spec)?;
+    let prior = resume::prior(&marker, &source)?;
+    if length > 0 && prior.is_none() {
+        // Never label old bytes with a different source. Persist the reset before the replacement marker.
+        original.set_len(0)?;
+        original.sync_all()?;
+        length = 0;
+    }
     let file = Arc::new(Mutex::new(original));
     let mut response = transport
         .open(
@@ -591,38 +629,52 @@ async fn transfer_once<T: Transport>(
             length,
         )
         .await?;
-    match response.status {
-        200 => {
-            if response.range.is_some() {
-                return Err(CacheError::Protocol);
-            }
-            disk_io(file.clone(), lock.clone(), |file| {
-                file.set_len(0)?;
-                file.seek(io::SeekFrom::Start(0))?;
-                Ok(())
-            })
-            .await?;
-            length = 0;
+    let expected = match response.status {
+        200 if response.range.is_none() => spec.bytes,
+        206 if response
+            .range
+            .as_deref()
+            .and_then(|v| range_start(v, spec.bytes))
+            == Some(length) =>
+        {
+            spec.bytes - length
         }
-        206 => {
-            if response
-                .range
-                .as_deref()
-                .and_then(|v| range_start(v, spec.bytes))
-                != Some(length)
-            {
-                return Err(CacheError::Protocol);
-            }
-            disk_io(file.clone(), lock.clone(), move |file| {
-                file.seek(io::SeekFrom::Start(length))?;
-                Ok(())
+        200 | 206 => return Err(CacheError::Protocol),
+        416 if length > 0 => {
+            disk_io(file, lock, |f| {
+                f.set_len(0)?;
+                f.sync_all()
             })
             .await?;
+            return Err(CacheError::RepresentationChanged);
         }
         code => return Err(CacheError::Http(code)),
-    }
-    if response.length.is_some_and(|n| n != spec.bytes - length) {
+    };
+    if response.length.is_some_and(|n| n != expected) {
         return Err(CacheError::Protocol);
+    }
+    if response.status == 206 && length > 0 && prior.as_deref() != Some(&response.representation) {
+        disk_io(file, lock, |f| {
+            f.set_len(0)?;
+            f.sync_all()
+        })
+        .await?;
+        return Err(CacheError::RepresentationChanged);
+    }
+    if response.status == 200 {
+        length = 0;
+    }
+    disk_io(file.clone(), lock.clone(), move |f| {
+        if length == 0 {
+            f.set_len(0)?;
+            f.sync_all()?;
+        }
+        f.seek(io::SeekFrom::Start(length))?;
+        Ok(())
+    })
+    .await?;
+    if length == 0 {
+        resume::publish(&marker, &source, &response.representation)?;
     }
     let mut last_report = length;
     loop {
@@ -728,7 +780,7 @@ mod tests {
         type Body = FakeBody;
         async fn open(
             &self,
-            _url: &Url,
+            url: &Url,
             offset: u64,
         ) -> Result<DownloadResponse<FakeBody>, CacheError> {
             self.offsets.lock().expect("offset lock").push(offset);
@@ -743,6 +795,7 @@ mod tests {
                 status: script.status,
                 length: script.length,
                 range: script.range,
+                representation: resume::representation(url, None),
                 body: FakeBody(script.chunks.into()),
             })
         }
@@ -846,6 +899,13 @@ mod tests {
         let cache = cache(directory.path(), 1024);
         let partial = directory.path().join(format!("{}.part", spec.digest));
         fs::write(&partial, &data[..4]).expect("prefix");
+        // A valid prior response was received for this origin; exercise the malformed Range response.
+        resume::publish(
+            &partial.with_extension("resume"),
+            &resume::source(&spec).expect("source"),
+            &resume::representation(spec.url.as_ref().expect("origin"), None),
+        )
+        .expect("prior response");
         let bad = fake(vec![Script {
             offset: 4,
             status: 206,
