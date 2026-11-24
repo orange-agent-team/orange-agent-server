@@ -1,12 +1,11 @@
 //! Actual HTTP/PG cancellation; cleanup evidence here is a declared CPU fixture.
 use super::*;
-async fn cancel(
+fn cancel_request(
     f: &InputFixture,
     key: &str,
     headers: axum::http::HeaderMap,
     body: serde_json::Value,
-) -> (u16, serde_json::Value) {
-    let app = orange_control_plane::artifacts::http::router(f.identity.clone(), f.objects.clone());
+) -> axum::http::Request<axum::body::Body> {
     let mut request = axum::http::Request::builder()
         .method("POST")
         .uri(format!("/api/v1/owners/{}/jobs/{}/cancel", f.owner, f.job))
@@ -19,6 +18,13 @@ async fn cancel(
     request
         .headers_mut()
         .insert("idempotency-key", key.parse().expect("key"));
+    request
+}
+async fn send_cancel(
+    f: &InputFixture,
+    request: axum::http::Request<axum::body::Body>,
+) -> (u16, serde_json::Value) {
+    let app = orange_control_plane::artifacts::http::router(f.identity.clone(), f.objects.clone());
     let response = app.oneshot(request).await.expect("actual route");
     assert_eq!(response.headers()["cache-control"], "no-store");
     let status = response.status().as_u16();
@@ -26,6 +32,14 @@ async fn cancel(
         .await
         .expect("body");
     (status, serde_json::from_slice(&body).expect("JSON"))
+}
+async fn cancel(
+    f: &InputFixture,
+    key: &str,
+    headers: axum::http::HeaderMap,
+    body: serde_json::Value,
+) -> (u16, serde_json::Value) {
+    send_cancel(f, cancel_request(f, key, headers, body)).await
 }
 async fn balance(f: &InputFixture) -> (i64, i64) {
     sqlx::query_as("SELECT gift,reserved_gift FROM wallets WHERE owner_id=$1")
@@ -59,6 +73,35 @@ async fn queued_cancel_checks_current_actor_csrf_and_strict_body_then_releases_o
         .0,
         422
     );
+    assert_eq!(balance(&f).await, (900, 100));
+    for (name, status, code) in [
+        ("origin", 403, "CSRF_INVALID"),
+        ("x-csrf-token", 403, "CSRF_INVALID"),
+        ("idempotency-key", 422, "VALIDATION_ERROR"),
+    ] {
+        for duplicate in [None, Some("another-value")] {
+            let mut request = cancel_request(&f, "cancel-queued", f.headers.clone(), empty.clone());
+            let value = duplicate
+                .map(|s| s.parse().expect("header"))
+                .unwrap_or_else(|| request.headers()[name].clone());
+            request.headers_mut().append(name, value);
+            let rejected = send_cancel(&f, request).await;
+            assert_eq!(rejected.0, status);
+            assert_eq!(rejected.1["code"], code);
+        }
+    }
+    let unchanged: (String, String, i64, i64, i64) = sqlx::query_as(
+        "SELECT execution_state,settlement_state,
+        (SELECT count(*) FROM idempotency WHERE owner_id=j.owner_id AND key='cancel-queued'),
+        (SELECT count(*) FROM ledger_transactions WHERE business_key='release:'||j.job_id),
+        (SELECT count(*) FROM outbox WHERE entity_id=j.job_id AND event_type='job.cancelled')
+        FROM jobs j WHERE job_id=$1",
+    )
+    .bind(&f.job)
+    .fetch_one(f.d.store.pool())
+    .await
+    .expect("malformed requests have zero effects");
+    assert_eq!(unchanged, ("queued".into(), "pending".into(), 0, 0, 0));
     assert_eq!(balance(&f).await, (900, 100));
     bind(&f).await;
     let (refused, issue) = delete_input(&f).await;

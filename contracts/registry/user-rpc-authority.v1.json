@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "browser_cookie": "__Host-orange-user",
+  "browser_write_singletons": ["Origin", "X-CSRF-Token", "Idempotency-Key"],
+  "authorities": {
+    "model_catalog": {"family":"models","scope":"live_user_session","operations":["listReviewedMarketModels"]},
+    "version_metadata": {"family":"model-manifests","scope":"live_user_session","operations":["listBundledModelManifests","getBundledModelManifest"]},
+    "text_offers": {"family":"pricing","scope":"live_user_session","operations":["listAdmittedTextPrices"]},
+    "text_funding": {"family":"pricing","scope":"current_owner_budget","operations":["createTrustedTextQuote","getOriginalQuoteFunding"]},
+    "objects": {"family":"artifacts","scope":"current_owner_artifact_grant","operations":["createArtifactUpload","artifactUploadStatus","deleteArtifact","putArtifactBytes","readArtifactVersion","measureTranscriptionArtifact","getArtifactRetention"]},
+    "jobs": {"family":"artifacts","scope":"current_owner_budget_and_invocation","operations":["submitTextJob","bindTextJobInput","withdrawOriginalUserInvocation"]},
+    "job_history": {"family":"artifacts","scope":"current_owner_original_submitter","operations":["listOriginatingUserJobs","originatingUserJobStatus","findOriginatingUserJobByInvocation","requestOriginatingUserJobCancellation","readOwnedJobHistory","streamOwnedJobHistory"]},
+    "job_output": {"family":"artifacts","scope":"current_owner_submitter_and_content_access","operations":["currentAuthorizedCommittedJobResult"]},
+    "audio_consent": {"family":"artifacts","scope":"current_owner_version_and_target_grant","operations":["authorizeRemoteTranscriptionInput","getTranscriptionInputConsent","withdrawRemoteTranscriptionInput","getDevelopmentTranscriptionPrices","createDevelopmentTranscriptionQuote"]},
+    "audio_target": {"family":"artifacts","scope":"live_user_session","operations":["inspectTranscriptionTarget"]},
+    "personal_account": {"family":"account","scope":"session_personal_owner","operations":["personalWallet","listPersonalBudgets","personalBudget","createPersonalBudget"]},
+    "wallet_key": {"family":"account","scope":"wallet:read","operations":["readAutomationWallet"],"frb":"readPersonalWallet"},
+    "budget_key": {"family":"account","scope":"budgets:read","operations":["readAutomationBudgets"],"frb":"readPersonalBudgets"}
+  }
+}

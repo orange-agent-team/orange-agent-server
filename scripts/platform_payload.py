@@ -18,6 +18,8 @@ def service_files(repository,commit,readme,extra=()):
     put("distribution/platform/reconcile-wallets.py","reconcile-wallets.py")
     put("scripts/sign-model-certification.py","scripts/sign-model-certification.py")
     put("docs/model-registry-drafts.md")
+    put("contracts/registry/user-rpc-authority.v1.json")
+    put("docs/engineering/user-rpc-boundaries.md")
     put("distribution/platform/recover-private-artifacts.py","recover-private-artifacts.py")
     put("distribution/platform/sql/replay-artifact-redactions.sql","sql/replay-artifact-redactions.sql")
     put("distribution/platform/sql/reconcile-wallets.sql","sql/reconcile-wallets.sql")

@@ -83,22 +83,22 @@ pub fn set_cookie(name: &str, value: &str, max_age: i64) -> Result<HeaderValue, 
         .map_err(|_| AuthError::Invalid)
 }
 
+fn single_write_header<'a>(headers: &'a HeaderMap, name: &'static str) -> Option<&'a str> {
+    let mut values = headers.get_all(name).iter();
+    let only = values.next()?.to_str().ok()?;
+    values.next().is_none().then_some(only)
+}
+
+/// A mutation must have one unambiguous browser origin, CSRF proof and logical request identity.
 pub fn check_write(headers: &HeaderMap, origin: &str, csrf: &str) -> Result<(), AuthError> {
-    if headers.get("origin").and_then(|h| h.to_str().ok()) != Some(origin.trim_end_matches('/')) {
+    if single_write_header(headers, "origin") != Some(origin.trim_end_matches('/')) {
         return Err(AuthError::Csrf);
     }
-    let supplied = headers
-        .get("x-csrf-token")
-        .and_then(|h| h.to_str().ok())
-        .ok_or(AuthError::Csrf)?;
+    let supplied = single_write_header(headers, "x-csrf-token").ok_or(AuthError::Csrf)?;
     if supplied.len() > 512 || hash_secret(supplied) != hash_secret(csrf) {
         return Err(AuthError::Csrf);
     }
-    if !headers
-        .get("idempotency-key")
-        .and_then(|h| h.to_str().ok())
-        .is_some_and(orange_protocol::valid_id)
-    {
+    if !single_write_header(headers, "idempotency-key").is_some_and(orange_protocol::valid_id) {
         return Err(AuthError::Invalid);
     }
     Ok(())
