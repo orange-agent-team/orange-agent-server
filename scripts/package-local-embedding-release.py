@@ -154,6 +154,15 @@ with tempfile.TemporaryDirectory(dir=dest,prefix='.verify-') as temp:
     venv=scratch/'new-venv'
     subprocess.run([sys.executable,'-I',unpacked/'install.py',venv],cwd=scratch,env=env,check=True)
     answer=json.loads(subprocess.check_output([sys.executable,'-I',unpacked/'smoke.py',venv,args.model_cache.resolve()],cwd=scratch,env=env))
+    if profile=="embedding" and "scripts/check-embedding-request-recovery.py" in subprocess.check_output(["git","ls-tree","--name-only","-r",commit,"--","scripts/check-embedding-request-recovery.py"],cwd=root,text=True).splitlines():
+        # Run the source-matched verifier with the installed program and the new offline venv.
+        verifier=scratch/"check-recovery.py"
+        verifier.write_bytes(tracked(commit,"scripts/check-embedding-request-recovery.py"))
+        command=[sys.executable,"-I",verifier,"--asset-root",args.model_cache.resolve(),"--python",venv/"bin/python",
+                 "--host",unpacked/"bin/orange-embedding-host","--host-sha256",native["builds"][0]["orange-embedding-host"]]
+        receipt=subprocess.check_output(command,cwd=scratch,env=env,text=True,timeout=150).splitlines()
+        if not receipt[-1].startswith("PASS real disconnect"):raise ValueError("Installed embedding recovery did not finish")
+        answer["request_recovery"]=json.loads(receipt[-2])
     published=dest/('orange-'+profile+'-macos-arm64-'+digest[:16]+'.tar.gz')
     if published.exists():
         if sha(published.read_bytes())!=digest:

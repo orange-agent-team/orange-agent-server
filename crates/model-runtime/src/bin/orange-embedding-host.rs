@@ -27,7 +27,7 @@ mod local {
         io::{AsyncReadExt, AsyncWriteExt},
         net::UnixListener,
         process::Command,
-        sync::Semaphore,
+        sync::{Semaphore, oneshot},
     };
 
     const RUNNER: &str =
@@ -99,7 +99,31 @@ mod local {
         },
     }
 
-    async fn run(host: Host, texts: Vec<String>, count_only: bool) -> Result<Output, Failure> {
+    // The permit lives in the supervising task. Any unwind or unconfirmed wait closes admission.
+    struct ReapFence {
+        slot: Arc<Semaphore>,
+        reaped: bool,
+    }
+    impl Drop for ReapFence {
+        fn drop(&mut self) {
+            if !self.reaped {
+                self.slot.close();
+            }
+        }
+    }
+
+    async fn run(
+        host: Host,
+        texts: Vec<String>,
+        count_only: bool,
+        mut abandoned: oneshot::Receiver<()>,
+    ) -> Result<Output, Failure> {
+        if !matches!(
+            abandoned.try_recv(),
+            Err(oneshot::error::TryRecvError::Empty)
+        ) {
+            return Err(Failure(StatusCode::CONFLICT, "embedding_request_cancelled"));
+        }
         let count = texts.len();
         let projection_digest =
             orange_protocol::request_digest("embedding.input.v1", &(&host.pin, &texts))
@@ -121,6 +145,10 @@ mod local {
             .kill_on_drop(true)
             .spawn()
             .map_err(|_| unavailable())?;
+        let mut fence = ReapFence {
+            slot: host.slot,
+            reaped: false,
+        };
         let work = async {
             let mut input = child.stdin.take().ok_or_else(unavailable)?;
             input.write_all(&frame).await.map_err(|_| unavailable())?;
@@ -165,12 +193,26 @@ mod local {
                 _ => Err(unavailable()),
             }
         };
-        let result = tokio::time::timeout(Duration::from_secs(90), work)
-            .await
-            .unwrap_or_else(|_| Err(unavailable()));
-        if result.is_err() && child.try_wait().map_err(|_| unavailable())?.is_none() {
-            child.kill().await.map_err(|_| unavailable())?;
+        let result = tokio::select! {
+            _ = &mut abandoned => Err(Failure(StatusCode::CONFLICT,"embedding_request_cancelled")),
+            outcome = tokio::time::timeout(Duration::from_secs(90),work) =>
+                outcome.unwrap_or(Err(Failure(StatusCode::GATEWAY_TIMEOUT,"embedding_runner_timeout"))),
+        };
+        let unresolved = || {
+            Failure(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "embedding_cleanup_unconfirmed",
+            )
+        };
+        if child.try_wait().map_err(|_| unresolved())?.is_none() {
+            // kill waits for the same owned child to exit. Keep the slot closed if the kernel
+            // cannot confirm termination in the bounded wait.
+            tokio::time::timeout(Duration::from_secs(10), child.kill())
+                .await
+                .map_err(|_| unresolved())?
+                .map_err(|_| unresolved())?;
         }
+        fence.reaped = true;
         result
     }
 
@@ -188,15 +230,24 @@ mod local {
             .slot
             .clone()
             .try_acquire_owned()
-            .map_err(|_| Failure(StatusCode::TOO_MANY_REQUESTS, "embedding_slot_busy"))?;
+            .map_err(|err| match err {
+                tokio::sync::TryAcquireError::Closed => Failure(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "embedding_cleanup_unconfirmed",
+                ),
+                tokio::sync::TryAcquireError::NoPermits => {
+                    Failure(StatusCode::TOO_MANY_REQUESTS, "embedding_slot_busy")
+                }
+            })?;
         // A disconnected HTTP client cannot return a still-running slot to the host.
-        tokio::spawn(async move {
+        let (request, abandoned) = oneshot::channel();
+        let task = tokio::spawn(async move {
             let _permit = permit;
-            run(host, texts, path.as_str() == COUNT_ROUTE).await
-        })
-        .await
-        .map_err(|_| unavailable())?
-        .map(Json)
+            run(host, texts, path.as_str() == COUNT_ROUTE, abandoned).await
+        });
+        let result = task.await.map_err(|_| unavailable())?;
+        drop(request);
+        result.map(Json)
     }
 
     pub async fn serve() -> Result<(), Box<dyn std::error::Error>> {
@@ -244,6 +295,24 @@ mod local {
             .await?;
         let _drained = host.slot.acquire().await?;
         Ok(())
+    }
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        #[test]
+        fn only_confirmed_exit_reopens_the_last_cpu_slot() {
+            for reaped in [false, true] {
+                let slot = Arc::new(Semaphore::new(1));
+                let permit = slot.clone().try_acquire_owned().expect("unused CPU slot");
+                drop(ReapFence {
+                    slot: slot.clone(),
+                    reaped,
+                });
+                drop(permit);
+                assert_eq!(slot.try_acquire().is_ok(), reaped);
+                assert_eq!(slot.is_closed(), !reaped);
+            }
+        }
     }
 }
 #[cfg(unix)]
