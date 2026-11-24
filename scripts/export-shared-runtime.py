@@ -3,6 +3,7 @@
 import argparse
 import gzip
 import hashlib
+import sys
 import io
 import json
 import os
@@ -17,6 +18,28 @@ parser=argparse.ArgumentParser();parser.add_argument('--commit',required=True);p
 if not re.fullmatch('[0-9a-f]{40}',args.commit):raise SystemExit('A complete immutable Git commit is required')
 def git(*argv):return subprocess.check_output(['git',*argv],cwd=ROOT)
 if git('cat-file','-t',args.commit).strip()!=b'commit':raise SystemExit('Origin must be a commit')
+# Release recipes evolve with their source inventory. Reproducing a consumer pin must run
+# that revision's exporter, including its own supporting files, without changing a live checkout.
+if git("rev-parse","HEAD").decode().strip()!=args.commit or Path(__file__).read_bytes()!=git("show",args.commit+":scripts/export-shared-runtime.py"):
+    objects=Path(git("rev-parse","--path-format=absolute","--git-path","objects").decode().strip()).resolve(strict=True)
+    if "\n" in str(objects):raise ValueError("Unsupported Git object directory")
+    destination=Path(args.output).resolve()
+    private=ROOT/".local/shared-runtime"
+    private.mkdir(parents=True,exist_ok=True)
+    clean_env={k:v for k,v in os.environ.items() if k not in {"GIT_DIR","GIT_WORK_TREE","GIT_INDEX_FILE","GIT_OBJECT_DIRECTORY","GIT_ALTERNATE_OBJECT_DIRECTORIES"}}
+    with tempfile.TemporaryDirectory(prefix="pinned-recipe-",dir=private) as tmp:
+        checkout=Path(tmp)
+        subprocess.run(["git","-c","core.hooksPath=/dev/null","init","-q",checkout],env=clean_env,check=True)
+        (checkout/".git/objects/info/alternates").write_text(str(objects)+"\n")
+        subprocess.run(["git","-c","core.hooksPath=/dev/null","checkout","--quiet","--detach",args.commit],cwd=checkout,env=clean_env,check=True)
+        exporter=checkout/"scripts/export-shared-runtime.py"
+        if exporter.is_symlink() or exporter.read_bytes()!=git("show",args.commit+":scripts/export-shared-runtime.py"):
+            raise ValueError("Unexpected historical release recipe")
+        print("Using exact shared-runtime export recipe",args.commit,hashlib.sha256(exporter.read_bytes()).hexdigest(),flush=True)
+        subprocess.run([sys.executable,exporter,"--commit",args.commit,"--output",destination,*(["--verify"] if args.verify else [])],
+                       cwd=checkout,env=clean_env,check=True)
+    raise SystemExit(0)
+
 members=['crates/domain','crates/protocol','crates/agent-runtime','crates/model-runtime']
 # E03's native metadata boundary is an internal package, not a fifth core
 # project. Historical commits must still export their original four members.

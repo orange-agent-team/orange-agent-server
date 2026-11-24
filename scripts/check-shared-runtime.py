@@ -11,11 +11,17 @@ import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 parser=argparse.ArgumentParser();parser.add_argument('--desktop-repo',required=True);args=parser.parse_args()
 desktop=Path(args.desktop_repo).resolve();lock=json.loads((desktop/'config/runtime.lock.json').read_text())
-output=ROOT/'.local/shared-runtime'/('verify-'+lock['origin_commit']+'.tar.gz')
-subprocess.run([sys.executable,str(ROOT/'scripts/export-shared-runtime.py'),'--commit',lock['origin_commit'],'--output',str(output),'--verify'],cwd=ROOT,check=True)
-if output.stat().st_size!=lock['archive_bytes'] or hashlib.sha256(output.read_bytes()).hexdigest()!=lock['archive_sha256']:
-    raise SystemExit('Reproduced source release differs from fixed consumer artifact')
-with tempfile.TemporaryDirectory(prefix='consumer-check-',dir=ROOT/'.local/shared-runtime') as directory:
+release=ROOT/'.local/shared-runtime'
+release.mkdir(parents=True,exist_ok=True)
+with tempfile.TemporaryDirectory(prefix='consumer-check-',dir=release) as directory:
+    # A failed historical verification may have retained different bytes at the old output path.
+    # Keep that forensic artifact and measure a fresh, isolated export for every qualification.
+    output=Path(directory)/('runtime-'+lock['origin_commit']+'.tar.gz')
+    subprocess.run([sys.executable,str(ROOT/'scripts/export-shared-runtime.py'),'--commit',lock['origin_commit'],'--output',str(output),'--verify'],cwd=ROOT,check=True)
+    if output.stat().st_size!=lock['archive_bytes'] or hashlib.sha256(output.read_bytes()).hexdigest()!=lock['archive_sha256']:
+        raise SystemExit('Reproduced source release differs from fixed consumer artifact')
+    print(json.dumps({"consumer_commit":subprocess.check_output(["git","rev-parse","HEAD"],cwd=desktop,text=True).strip(),
+                      "runtime_commit":lock["origin_commit"],"archive_sha256":lock["archive_sha256"],"archive_bytes":output.stat().st_size}),flush=True)
     isolated=Path(directory);(isolated/'scripts').mkdir();(isolated/'config').mkdir()
     shutil.copyfile(desktop/'scripts/import-runtime.py',isolated/'scripts/import-runtime.py')
     shutil.copyfile(desktop/'config/runtime.lock.json',isolated/'config/runtime.lock.json')

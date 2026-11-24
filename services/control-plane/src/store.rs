@@ -215,23 +215,7 @@ impl Store {
         // PostgreSQL 40001 and 40P01 both confirm that the transaction aborted.
         // Retry all authorization and funding checks with a fresh snapshot and the same key.
         // A lost response or connection carries no such proof and is returned for reconciliation.
-        let retry_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
-        for attempt in 0..7 {
-            match self.submit_once(owner, key, req, actor, origin).await {
-                Err(error)
-                    if error.retryable()
-                        && attempt < 6
-                        && tokio::time::Instant::now() < retry_deadline =>
-                {
-                    retry_backoff(attempt.min(3)).await;
-                    if tokio::time::Instant::now() >= retry_deadline {
-                        return Err(error);
-                    }
-                }
-                result => return result,
-            }
-        }
-        unreachable!("bounded loop returns")
+        retry_serializable(|| self.submit_once(owner, key, req, actor, origin)).await
     }
     async fn submit_once(
         &self,
@@ -492,13 +476,7 @@ impl Store {
         if ![owner, id, key].iter().all(|s| valid_id(s)) {
             return Err(StoreError::Invalid);
         }
-        for attempt in 0..3 {
-            match self.cancel_once(owner, id, key, actor, expected).await {
-                Err(e) if e.retryable() && attempt < 2 => retry_backoff(attempt).await,
-                result => return result,
-            }
-        }
-        unreachable!("bounded loop returns")
+        retry_serializable(|| self.cancel_once(owner, id, key, actor, expected)).await
     }
     async fn cancel_once(
         &self,
@@ -614,6 +592,29 @@ impl Store {
         finish_submit(tx, actor).await?;
         Ok(view)
     }
+}
+
+async fn retry_serializable<T, F>(mut operation: impl FnMut() -> F) -> Result<T, StoreError>
+where
+    F: std::future::Future<Output = Result<T, StoreError>>,
+{
+    let retry_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+    for attempt in 0..7 {
+        match operation().await {
+            Err(error)
+                if error.retryable()
+                    && attempt < 6
+                    && tokio::time::Instant::now() < retry_deadline =>
+            {
+                retry_backoff(attempt.min(3)).await;
+                if tokio::time::Instant::now() >= retry_deadline {
+                    return Err(error);
+                }
+            }
+            result => return result,
+        }
+    }
+    unreachable!("bounded transaction retry returns")
 }
 
 async fn retry_backoff(attempt: u32) {
