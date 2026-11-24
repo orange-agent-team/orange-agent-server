@@ -70,12 +70,12 @@ def main():
     programs=build();tool=programs/"orange-model-manifest"
     scope={"environment":"dev","kind":"platform","scope_id":"platform"};query="?environment=dev&scope_kind=platform&scope_id=platform"
     with tempfile.TemporaryDirectory() as tmp,database(envroot/"database-url","orange_model_review_") as (_,url),ExitStack() as running:
-        signer=ROOT/"scripts/sign-model-certification.py"
+        signing_tool=ROOT/"scripts/sign-model-certification.py"
         if args.installed:
             from verified_platform_archive import binaries
             programs=running.enter_context(binaries(None))
-            signer=programs.parent/"scripts/sign-model-certification.py"
-            require(signer.is_file() and (programs.parent/"docs/model-registry-drafts.md").is_file(),"Installed governance tools missing")
+            signing_tool=programs.parent/"scripts/sign-model-certification.py"
+            require(signing_tool.is_file() and (programs.parent/"docs/model-registry-drafts.md").is_file(),"Installed governance tools missing")
         work=Path(tmp);objects=work/"objects";objects.mkdir(mode=0o700)
         parsed=urlsplit(url);pg=dict(os.environ,PGHOST=parsed.hostname,PGPORT=str(parsed.port or 5432),PGUSER=unquote(parsed.username),PGPASSWORD=unquote(parsed.password),PGDATABASE=parsed.path[1:])
         psql=shutil.which("psql") or "/opt/homebrew/opt/postgresql@17/bin/psql"
@@ -132,7 +132,7 @@ def main():
                 "measurement":measurement,"hardware":hardware}
         def envelope(value,signer=key):
             file=work/"report.json";file.write_text(json.dumps(value))
-            return json.loads(subprocess.check_output([sys.executable,signer,"--report",file,
+            return json.loads(subprocess.check_output([sys.executable,signing_tool,"--report",file,
                           "--license-notice",notice_file,"--signing-key",signer],cwd=ROOT,timeout=20))
         bundle=envelope(report);rid=request_hash("model-qualification-report.v1",report)
         upload="model-drafts/"+model+"/certifications"
