@@ -430,3 +430,106 @@ async fn browsers_review_personal_and_organization_job_versions_before_cancellin
         println!("verified_conditional_portal {evidence}");
     }
 }
+
+/// Inject faults after all financial writes, so a second release or a partial commit is observable.
+#[tokio::test]
+async fn cancellation_retries_only_confirmed_rollbacks_and_releases_once() {
+    let f = setup("client-cancel-serialization").await;
+    let pool = f.d.store.pool();
+    let suffix = Uuid::new_v4().simple().to_string();
+    let permanent = format!("permanent-{suffix}");
+    let exhausted = format!("exhausted-{suffix}");
+    let recovered = format!("recovered-{suffix}");
+    let ddl = format!(
+        "CREATE SEQUENCE cancel_{suffix};
+        CREATE FUNCTION cancel_fault_{suffix}() RETURNS trigger LANGUAGE plpgsql AS $$
+        DECLARE n bigint;
+        BEGIN
+          n := nextval('cancel_{suffix}');
+          IF NEW.key='{permanent}' THEN
+            RAISE EXCEPTION 'fixture permanent rejection' USING ERRCODE='P0001';
+          ELSIF NEW.key='{exhausted}' OR n<=3 THEN
+            RAISE EXCEPTION 'fixture confirmed rollback' USING ERRCODE='40001';
+          END IF;
+          RETURN NEW;
+        END $$;
+        CREATE TRIGGER cancel_fault_{suffix} BEFORE INSERT ON idempotency FOR EACH ROW
+          WHEN (NEW.key IN ('{permanent}','{exhausted}','{recovered}'))
+          EXECUTE FUNCTION cancel_fault_{suffix}();"
+    );
+    sqlx::raw_sql(sqlx::AssertSqlSafe(ddl))
+        .execute(pool)
+        .await
+        .expect("scoped test fault");
+    let attempts = || {
+        sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(format!(
+            "SELECT last_value FROM cancel_{suffix}"
+        )))
+        .fetch_one(pool)
+    };
+    let reset = || {
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "ALTER SEQUENCE cancel_{suffix} RESTART WITH 1"
+        )))
+        .execute(pool)
+    };
+    let facts = || {
+        sqlx::query_as::<_, (String, String, i64, i64, i64)>(
+            "SELECT execution_state,settlement_state,
+           (SELECT count(*) FROM ledger_transactions WHERE business_key='release:'||j.job_id),
+           (SELECT count(*) FROM outbox WHERE entity_id=j.job_id AND event_type='job.cancelled'),
+           (SELECT count(*) FROM idempotency WHERE owner_id=j.owner_id AND key IN ($2,$3,$4))
+         FROM jobs j WHERE job_id=$1",
+        )
+        .bind(&f.job)
+        .bind(&permanent)
+        .bind(&exhausted)
+        .bind(&recovered)
+        .fetch_one(pool)
+    };
+    for (key, retryable) in [(&permanent, false), (&exhausted, true)] {
+        reset().await.expect("reset test sequence");
+        let rejected = cancel(&f, key, f.headers.clone(), serde_json::json!({})).await;
+        assert_eq!(rejected.0, 503);
+        let count = attempts()
+            .await
+            .expect("attempts outside transaction rollback");
+        if retryable {
+            assert!((1..=7).contains(&count));
+        } else {
+            assert_eq!(count, 1);
+        }
+        assert_eq!(
+            facts().await.expect("no partial cancellation"),
+            ("queued".into(), "pending".into(), 0, 0, 0)
+        );
+        assert_eq!(balance(&f).await, (900, 100));
+    }
+    reset().await.expect("reset test sequence");
+    let first = cancel(&f, &recovered, f.headers.clone(), serde_json::json!({})).await;
+    assert_eq!(first.0, 200);
+    assert_eq!(first.1["charge"], "0");
+    assert_eq!(
+        cancel(&f, &recovered, f.headers.clone(), serde_json::json!({})).await,
+        first
+    );
+    assert_eq!(
+        attempts()
+            .await
+            .expect("three rollbacks, one success, no replay write"),
+        4
+    );
+    assert_eq!(
+        facts().await.expect("one committed financial effect"),
+        ("cancelled".into(), "settled".into(), 1, 1, 1)
+    );
+    assert_eq!(balance(&f).await, (1000, 0));
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "DROP TRIGGER cancel_fault_{suffix} ON idempotency;
+        DROP FUNCTION cancel_fault_{suffix}(); DROP SEQUENCE cancel_{suffix};"
+    )))
+    .execute(pool)
+    .await
+    .expect("remove test fault");
+    f.objects.drain().await.expect("drain");
+}
