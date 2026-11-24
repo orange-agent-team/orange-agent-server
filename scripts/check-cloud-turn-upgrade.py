@@ -26,6 +26,7 @@ parser.add_argument('--archive',type=Path,default=root/'.local/gvisor-download/g
 parser.add_argument('--npm-cache',type=Path)
 parser.add_argument('--node',type=Path,default=shutil.which('node'))
 args=parser.parse_args()
+if args.npm_cache is not None:args.npm_cache=args.npm_cache.resolve(strict=True)
 identity=json.loads(args.identity_config.read_text())
 if identity.get('environment')!='dev' or urlsplit(identity['issuer']).hostname not in ('localhost','127.0.0.1','::1'):
     raise SystemExit('Local development issuer required')
