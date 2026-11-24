@@ -43,7 +43,10 @@ CREATE TRIGGER keep_all_model_disables BEFORE TRUNCATE ON model_registry_disable
 -- A single row serializes new certification effects, provider admission and withdrawal for one version.
 CREATE FUNCTION guard_model_decision() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-    PERFORM model_version_id FROM model_version_names WHERE model_version_id=NEW.model_version_id AND authority='manifest' FOR UPDATE;
+    -- Advance the row's MVCC version. A reader holding an older repeatable snapshot
+    -- must abort before it can admit work from a withdrawn certificate.
+    UPDATE model_version_names SET model_version_id=NEW.model_version_id
+        WHERE model_version_id=NEW.model_version_id AND authority='manifest';
     IF NOT FOUND OR EXISTS(SELECT FROM model_registry_disables WHERE model_version_id=NEW.model_version_id) THEN
         RAISE EXCEPTION 'unknown or withdrawn model' USING ERRCODE='23514'; END IF;
     IF NOT EXISTS(SELECT FROM admin_actions a WHERE a.action_id=NEW.action_id AND a.environment='dev'
@@ -122,7 +125,8 @@ CREATE FUNCTION require_registry_price(profile text, price text) RETURNS timesta
 DECLARE name text; cutoff timestamptz;
 BEGIN
     SELECT model_version_id INTO name FROM reviewed_execution_profiles WHERE execution_profile_id=profile;
-    IF NOT FOUND OR NOT EXISTS(SELECT FROM admin_model_drafts WHERE model_version_id=name) THEN RETURN NULL; END IF;
+    IF NOT FOUND THEN RAISE EXCEPTION 'unknown model profile' USING ERRCODE='OA086'; END IF;
+    IF NOT EXISTS(SELECT FROM admin_model_drafts WHERE model_version_id=name) THEN RETURN NULL; END IF;
     PERFORM model_version_id FROM model_version_names WHERE model_version_id=name FOR SHARE;
     SELECT to_timestamp(c.expires_unix) INTO cutoff FROM registry_model_states d JOIN reviewed_execution_profiles p USING(model_version_id)
         JOIN model_certifications c ON c.report_id=d.certification_report_id AND c.execution_profile_id=p.execution_profile_id
@@ -160,6 +164,6 @@ CREATE TRIGGER check_registry_job BEFORE INSERT ON jobs FOR EACH ROW EXECUTE FUN
 -- Older gateways already honor job_deadline when issuing and renewing a lease.
 -- New catalogue queries also stop advertising a managed profile as soon as its report expires.
 CREATE FUNCTION registry_profile_current(profile text) RETURNS boolean LANGUAGE sql VOLATILE AS $$
-    SELECT NOT EXISTS(SELECT FROM reviewed_execution_profiles p JOIN registry_model_states d USING(model_version_id)
-        WHERE p.execution_profile_id=profile AND d.status<>'active')
+    SELECT EXISTS(SELECT FROM reviewed_execution_profiles p LEFT JOIN registry_model_states d USING(model_version_id)
+        WHERE p.execution_profile_id=profile AND p.enabled AND (d.model_version_id IS NULL OR d.status='active'))
 $$;

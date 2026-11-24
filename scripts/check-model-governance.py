@@ -19,6 +19,7 @@ import uuid
 
 from model_certification_probe import measure,request_hash,sha
 from owned_postgres import database
+from acceptance_origins import reserve_origins
 from platform_package_smoke import listening
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -54,7 +55,15 @@ def http(origin,method,path,headers=None,body=None):
 def main():
     cli=argparse.ArgumentParser();cli.add_argument("--environment",type=Path,default=ROOT/".local")
     cli.add_argument("--runtime",type=Path,default=ROOT/".local/model-runtime")
-    args=cli.parse_args();envroot=args.environment.resolve();runtime=args.runtime.resolve()
+    cli.add_argument("--admin-repo",type=Path)
+    cli.add_argument("--assets",type=Path,help="Optional extracted Admin static assets")
+    args=cli.parse_args()
+    if args.assets and not args.admin_repo:cli.error("--assets requires --admin-repo")
+    if args.admin_repo:
+        admin=args.admin_repo.resolve(strict=True)
+        reserve_origins(43112)
+        subprocess.run([sys.executable,admin/"scripts/local-tls.py"],cwd=admin,check=True)
+    envroot=args.environment.resolve();runtime=args.runtime.resolve()
     aconf=envroot/"identity/admin-config.json";uconf=envroot/"identity/user-config.json"
     admin_site=json.loads(aconf.read_bytes())["admin_origin"];user_site=json.loads(uconf.read_bytes())["user_origin"]
     programs=build();tool=programs/"orange-model-manifest"
@@ -195,7 +204,15 @@ def main():
         before=financial();require(before.startswith("959|41|41|1|"),"Unexpected development hold")
         retire=expect_code(create_action("model.disable",current["version"],{"model_version_id":model}),201)
         require(retire["state"]=="ready","Wrong withdrawal policy")
+        old_reader=running.enter_context(subprocess.Popen([psql,"-X","-w","-Atq","-v","ON_ERROR_STOP=1","-v","VERBOSITY=verbose"],
+                         env=pg,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True))
+        running.callback(lambda:old_reader.kill() if old_reader.poll() is None else None)
+        old_reader.stdin.write(f"BEGIN ISOLATION LEVEL REPEATABLE READ; SELECT registry_profile_current('{profile}');\n")
+        old_reader.stdin.flush()
+        require(old_reader.stdout.readline().strip()=="t","Old transaction did not read the active profile")
         expect_code(execute(retire),202)
+        stdout,stderr=old_reader.communicate(f"SELECT require_registry_price('{profile}','{price}'); COMMIT;\n",timeout=10)
+        require(old_reader.returncode!=0 and "40001" in stderr,"Old snapshot admitted a withdrawn model: "+stdout[:100])
         require(expect_code(get(endpoint),200)["status"]=="disabled","Withdrawal not visible")
         require(sql(f"SELECT enabled FROM reviewed_execution_profiles WHERE execution_profile_id='{profile}'")=="f","Old provider profile still enabled")
         require(sql(f"UPDATE reviewed_execution_profiles SET enabled=true WHERE execution_profile_id='{profile}'",False).returncode!=0,"Withdrawn profile reenabled")
@@ -203,8 +220,55 @@ def main():
         again,res=submit(live,jobkey);require(again in (200,201) and res['job_id']==job['job_id'] and financial()==before,"Old Job or original hold lost")
         quote(price,False)
         expect_code(create_action("model.activate",fingerprint,payload),409)
+        def additional_model():
+            catalog=dict(doc,model_version="local-only-"+new_id(),pricing={"policy":"local_unpriced"})
+            registration=expect_code(post("model-drafts",mh,{"scope":scope,"manifest":catalog}),201)
+            digest=registration["manifest_sha256"]
+            probe,target,exact=measure(ROOT,runtime,catalog,digest,tool)
+            return dict(report,model_version_id=catalog["model_version"],manifest_sha256=digest,execution_profile_id="profile-"+new_id(),
+                        execution_profile_digest=exact,measurement=probe,hardware=target)
+        # A real clock cutoff must stop work even without an explicit disable row or background sweep.
+        expiring=additional_model();expiry=int(time.time())+12
+        expiring["expires_unix"]=str(expiry)
+        em=expiring["model_version_id"];ep=expiring["execution_profile_id"];ed=expiring["execution_profile_digest"]
+        cert_path="model-drafts/"+em+"/certifications"
+        exp_id=expect_code(post(cert_path,mh,{"scope":scope,"certification":envelope(expiring)}),201)["report_id"]
+        # With two reports, pagination must bind the model, principal and scope.
+        alternate=dict(expiring,expires_unix=str(expiry+60))
+        expect_code(post(cert_path,mh,{"scope":scope,"certification":envelope(alternate)}),201)
+        first=expect_code(get(cert_path+query+"&limit=1"),200);cursor=first["next_cursor"]
+        second=expect_code(get(cert_path+query+"&limit=1&cursor="+cursor),200)
+        require(len(first["data"])==len(second["data"])==1 and first["data"][0]["report_id"]<second["data"][0]["report_id"] and "next_cursor" not in second,"Evidence pagination lost a report")
+        expect_code(get(cert_path+query+"&limit=1&cursor="+cursor,ch),422)
+        ar=expect_code(create_action("model.activate",expiring["manifest_sha256"],{"model_version_id":em,"certification_report_id":exp_id}),201)
+        accepted=expect_code(post("actions/"+ar["action_id"]+"/approvals",ch,dict(preview(ar),decision="approve",reason="Approve expiring local CPU evidence"),version=ar["version"]),200)
+        expect_code(execute(accepted),202)
+        sql(f"INSERT INTO reviewed_execution_profiles(execution_profile_id,model_version_id,model_sha256,execution_profile_digest) VALUES('{ep}','{em}','{weight}','{ed}')")
+        require(sql(f"SELECT registry_profile_current('{ep}')")=="t","Newly activated local-only certification unavailable")
+        no_bill=sql(f"""BEGIN; INSERT INTO quotes(quote_id,owner_id,root_budget_id,invocation_id,projection_digest,price_version,max_amount,expires_at)
+            VALUES('unpriced-quote','{buyer}','{budget}','{new_id()}','{'b'*64}','{price}',41,now()+interval '10 minutes');
+            INSERT INTO quote_execution_plans(quote_id,target_node_id,execution_profile_id,request_projection_digest,job_deadline)
+            VALUES('unpriced-quote','{node}','{ep}','{'b'*64}',now()+interval '10 minutes'); COMMIT;""",False)
+        require(no_bill.returncode!=0 and "model" in no_bill.stderr.lower() and before==financial(),"Local-only model received a price")
+        until=time.monotonic()+18
+        while get("models/"+em+query)[1].get("status")!="disabled":
+            if time.monotonic()>=until:raise ValueError("Certificate did not expire")
+            time.sleep(.15)
+        require(sql(f"SELECT registry_profile_current('{ep}')")=="f" and before==financial(),"Expired proof still permits work")
+        if args.admin_repo:
+            browser_report=additional_model()
+            program=Path.home()/".nvm/versions/node/v22.23.2/bin/node"
+            def cookie(headers):return headers["Cookie"].split("=",1)[1]
+            fixture={"api":api,"origin":admin_site,"assets":str((args.assets or admin/"apps/admin/dist").resolve(strict=True)),
+                     "maker":cookie(mh),"checker":cookie(ch),"model":browser_report["model_version_id"],"envelope":envelope(browser_report)}
+            browser=subprocess.run([program,admin/"apps/admin/scripts/real-model-governance.mjs"],cwd=admin,input=json.dumps(fixture),
+                                   stdout=subprocess.PIPE,text=True,timeout=150)
+            print(browser.stdout,end="",flush=True);browser.check_returncode()
+            require("PASS actual Admin Chrome" in browser.stdout,"No browser evidence")
+            bm=browser_report["model_version_id"]
+            require(sql(f"SELECT (SELECT count(*) FROM model_certifications WHERE model_version_id='{bm}'),(SELECT count(*) FROM model_registry_activations WHERE model_version_id='{bm}' AND maker_id<>checker_id),(SELECT count(*) FROM model_registry_disables WHERE model_version_id='{bm}')")=="1|1|1","Repeated or missing browser effects")
         print(json.dumps({"cpu_completion_checked":True,"weight_sha256":weight,"report_id":rid,"unauthorized_evidence_persisted":0,
-                         "approved_activations":1,"disable_actions":1,"jobs_before_and_after_disable":1,"development_hold_preserved":41,
+                         "original_model_activations":1,"original_model_disables":1,"expired_local_profile_denied":True,"unpriced_quote_denied":True,"jobs_before_and_after_disable":1,"development_hold_preserved":41,
                          "physical_cpu_target":hardware,"license_legal_review":"development fixture; no production determination"}),flush=True)
     print("PASS signed model evidence, independent activation, profile binding, live Job admission and withdrawal without duplicate holds",flush=True)
 
