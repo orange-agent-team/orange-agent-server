@@ -153,6 +153,7 @@ mod tests {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
 
+    type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
     struct Fixture {
         _tmp: tempfile::TempDir,
         db: PathBuf,
@@ -161,22 +162,21 @@ mod tests {
         id: String,
     }
     impl Fixture {
-        fn new() -> (Self, Journal, WorkspaceGrant) {
-            let tmp = tempfile::tempdir().unwrap();
+        fn new() -> TestResult<(Self, Journal, WorkspaceGrant)> {
+            let tmp = tempfile::tempdir()?;
             let docs = tmp.path().join("manuals");
             let private = tmp.path().join("private");
-            fs::create_dir(&docs).unwrap();
-            fs::create_dir(&private).unwrap();
-            fs::set_permissions(&private, fs::Permissions::from_mode(0o700)).unwrap();
-            fs::write(docs.join("manual.txt"), "Orchard opens in April").unwrap();
+            fs::create_dir(&docs)?;
+            fs::create_dir(&private)?;
+            fs::set_permissions(&private, fs::Permissions::from_mode(0o700))?;
+            fs::write(docs.join("manual.txt"), "Orchard opens in April")?;
             let db = private.join("journal.sqlite");
-            let mut journal = Journal::open(&db).unwrap();
+            let mut journal = Journal::open(&db)?;
             let id = journal
-                .authorize_workspace("owner", "consent", &docs, "read")
-                .unwrap()
+                .authorize_workspace("owner", "consent", &docs, "read")?
                 .workspace_id;
-            let grant = journal.open_workspace("owner", &id).unwrap();
-            (
+            let grant = journal.open_workspace("owner", &id)?;
+            Ok((
                 Self {
                     _tmp: tmp,
                     db,
@@ -186,7 +186,7 @@ mod tests {
                 },
                 journal,
                 grant,
-            )
+            ))
         }
     }
     fn paths() -> Vec<String> {
@@ -212,43 +212,45 @@ mod tests {
         .await
     }
     #[test]
-    fn upgrades_schema_35_without_reauthorizing_or_changing_existing_workspace_consent() {
-        let (f, j, g) = Fixture::new();
-        let before = j.workspace("owner", &f.id).unwrap();
+    fn upgrades_schema_35_without_reauthorizing_or_changing_existing_workspace_consent()
+    -> TestResult {
+        let (f, j, g) = Fixture::new()?;
+        let before = j.workspace("owner", &f.id)?;
         drop(g);
         drop(j);
         // Reconstruct the direct predecessor on a test-owned database. v36 adds exactly this table and trigger.
-        let connection = Connection::open(&f.db).unwrap();
-        connection.execute_batch("DROP TRIGGER retire_workspace_saved_knowledge; DROP TABLE saved_knowledge_collections; PRAGMA user_version=35;").unwrap();
+        let connection = Connection::open(&f.db)?;
+        connection.execute_batch("DROP TRIGGER retire_workspace_saved_knowledge; DROP TABLE saved_knowledge_collections; PRAGMA user_version=35;")?;
         drop(connection);
-        let mut j = Journal::open(&f.db).unwrap();
-        let after = j.workspace("owner", &f.id).unwrap();
+        let mut j = Journal::open(&f.db)?;
+        let after = j.workspace("owner", &f.id)?;
         assert_eq!(
             (before.version, before.environment),
             (after.version, after.environment)
         );
-        let g = j.open_workspace("owner", &f.id).unwrap();
-        assert!(j.saved_knowledge_names(&f.id, &g).unwrap().is_empty());
+        let g = j.open_workspace("owner", &f.id)?;
+        assert!(j.saved_knowledge_names(&f.id, &g)?.is_empty());
+        Ok(())
     }
 
     #[tokio::test]
-    async fn durable_name_needs_fresh_journal_grant_and_keeps_workspace_revoke_across_restart() {
-        let (f, mut j, g) = Fixture::new();
+    async fn durable_name_needs_fresh_journal_grant_and_keeps_workspace_revoke_across_restart()
+    -> TestResult {
+        let (f, mut j, g) = Fixture::new()?;
         let forged = WorkspaceGrant::open(
             "owner",
             &f.id,
             "read",
             &f.docs,
             std::slice::from_ref(&f.private),
-        )
-        .unwrap();
+        )?;
         assert_eq!(forged.environment(), g.environment());
         assert!(
             j.open_saved_knowledge(&f.id, &forged, "notes", paths())
                 .is_err()
         );
-        let c = j.open_saved_knowledge(&f.id, &g, "notes", paths()).unwrap();
-        let found = search(&c).await.unwrap();
+        let c = j.open_saved_knowledge(&f.id, &g, "notes", paths())?;
+        let found = search(&c).await?;
         assert_eq!(found.len(), 1);
         assert!(matches!(c.withdraw().await, Err(KnowledgeError::Invalid)));
         let old_id = c.id.clone();
@@ -258,90 +260,77 @@ mod tests {
             Err(crate::JournalError::Busy)
         ));
         drop(c);
-        let mut j = Journal::open(&f.db).unwrap();
+        let mut j = Journal::open(&f.db)?;
         assert!(j.saved_knowledge_names(&f.id, &g).is_err());
-        let fresh = j.open_workspace("owner", &f.id).unwrap();
-        assert_eq!(j.saved_knowledge_names(&f.id, &fresh).unwrap(), ["notes"]);
+        let fresh = j.open_workspace("owner", &f.id)?;
+        assert_eq!(j.saved_knowledge_names(&f.id, &fresh)?, ["notes"]);
         assert!(
             j.open_saved_knowledge(&f.id, &fresh, "notes", vec!["other.txt".into()])
                 .is_err()
         );
-        let c = j
-            .open_saved_knowledge(&f.id, &fresh, "notes", paths())
-            .unwrap();
+        let c = j.open_saved_knowledge(&f.id, &fresh, "notes", paths())?;
         assert_eq!(c.id, old_id);
-        assert_eq!(search(&c).await.unwrap()[0].hit_id, found[0].hit_id);
-        let view = j.revoke_workspace("owner", &f.id, "1").unwrap();
+        assert_eq!(search(&c).await?[0].hit_id, found[0].hit_id);
+        let view = j.revoke_workspace("owner", &f.id, "1")?;
         assert!(!view.active);
         assert!(search(&c).await.is_err());
         assert!(j.reconcile_saved_knowledge().is_err());
         drop(c);
         drop(j);
-        let mut j = Journal::open(&f.db).unwrap();
-        j.reconcile_saved_knowledge().unwrap();
-        let state: String = j
-            .connection
-            .query_row(
-                "SELECT state FROM saved_knowledge_collections WHERE store_id=?",
-                [&old_id],
-                |r| r.get(0),
-            )
-            .unwrap();
+        let mut j = Journal::open(&f.db)?;
+        j.reconcile_saved_knowledge()?;
+        let state: String = j.connection.query_row(
+            "SELECT state FROM saved_knowledge_collections WHERE store_id=?",
+            [&old_id],
+            |r| r.get(0),
+        )?;
         assert_eq!(state, "retired");
         assert!(
             KnowledgeCollection::open_persistent(forged, &old_id, paths(), &f.private).is_err()
         );
         let new = j
-            .authorize_workspace("owner", "new-consent", &f.docs, "read")
-            .unwrap()
+            .authorize_workspace("owner", "new-consent", &f.docs, "read")?
             .workspace_id;
-        let grant = j.open_workspace("owner", &new).unwrap();
-        let replacement = j
-            .open_saved_knowledge(&new, &grant, "notes", paths())
-            .unwrap();
-        assert_ne!(
-            search(&replacement).await.unwrap()[0].hit_id,
-            found[0].hit_id
-        );
+        let grant = j.open_workspace("owner", &new)?;
+        let replacement = j.open_saved_knowledge(&new, &grant, "notes", paths())?;
+        assert_ne!(search(&replacement).await?[0].hit_id, found[0].hit_id);
+        Ok(())
     }
     #[tokio::test]
-    async fn named_withdrawal_drains_only_one_collection_and_recovers_incomplete_initialization() {
-        let (f, mut j, g) = Fixture::new();
-        let a = j
-            .open_saved_knowledge(&f.id, &g, "retire", paths())
-            .unwrap();
-        let b = j.open_saved_knowledge(&f.id, &g, "keep", paths()).unwrap();
+    async fn named_withdrawal_drains_only_one_collection_and_recovers_incomplete_initialization()
+    -> TestResult {
+        let (f, mut j, g) = Fixture::new()?;
+        let a = j.open_saved_knowledge(&f.id, &g, "retire", paths())?;
+        let b = j.open_saved_knowledge(&f.id, &g, "keep", paths())?;
         assert!(j.retire_saved_knowledge("other", &f.id, "retire").is_err());
-        assert_eq!(search(&a).await.unwrap().len(), 1);
+        assert_eq!(search(&a).await?.len(), 1);
         assert!(matches!(
             j.retire_saved_knowledge("owner", &f.id, "retire"),
             Err(SavedKnowledgeError::Knowledge(KnowledgeError::Busy))
         ));
         assert!(search(&a).await.is_err());
-        assert_eq!(search(&b).await.unwrap().len(), 1);
+        assert_eq!(search(&b).await?.len(), 1);
         // This is the intermediate durable state after registration and before creation of either store.
-        j.connection.execute("INSERT INTO saved_knowledge_collections VALUES(?,'interrupted','cold-id',1,'retiring')",[&f.id]).unwrap();
+        j.connection.execute("INSERT INTO saved_knowledge_collections VALUES(?,'interrupted','cold-id',1,'retiring')",[&f.id])?;
         assert!(j.reconcile_saved_knowledge().is_err());
-        let state: String = j
-            .connection
-            .query_row(
-                "SELECT state FROM saved_knowledge_collections WHERE store_id='cold-id'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
+        let state: String = j.connection.query_row(
+            "SELECT state FROM saved_knowledge_collections WHERE store_id='cold-id'",
+            [],
+            |r| r.get(0),
+        )?;
         assert_eq!(state, "retired");
         assert!(
             KnowledgeCollection::open_persistent(g.clone(), "cold-id", paths(), &f.private)
                 .is_err()
         );
         drop(a);
-        j.reconcile_saved_knowledge().unwrap();
-        j.retire_saved_knowledge("owner", &f.id, "retire").unwrap();
+        j.reconcile_saved_knowledge()?;
+        j.retire_saved_knowledge("owner", &f.id, "retire")?;
         assert!(matches!(
             j.open_saved_knowledge(&f.id, &g, "retire", paths()),
             Err(SavedKnowledgeError::Retired)
         ));
-        assert_eq!(j.saved_knowledge_names(&f.id, &g).unwrap(), ["keep"]);
+        assert_eq!(j.saved_knowledge_names(&f.id, &g)?, ["keep"]);
+        Ok(())
     }
 }
