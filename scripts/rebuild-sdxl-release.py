@@ -12,7 +12,6 @@ ROOT = Path(__file__).resolve().parents[1]
 PYTHON_SOURCE = "cdad5d375fd394251a29a062e0311c2696de917c"
 IMAGE_SOURCE = "f8882a6d2d8b4f94f6e64fff092e85aacd1894c8"
 IMAGE = "sha256:b01f7baed816b97294e079f8a77493e0049d70c8c553cffff183b696a642fd33"
-ARCHIVE_SHA256 = "6a217d75aeea6dc0f596ecd406996e2e9ab960ecade21a73bd12f0b758b0940b"
 
 
 def run(*cmd, cwd):
@@ -32,12 +31,16 @@ def checkout(root, name, commit):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--cache", type=Path, required=True, help="Private directory for base-oci, wheels, debian and outputs")
+    parser.add_argument("--expected-sha256",help="Check the final tar against the independent release receipt")
     parser.add_argument("--context", default="default")
     parser.add_argument("--fetch", action="store_true", help="Fetch verified missing public inputs before the offline installations")
     parser.add_argument("--verify-inputs", action="store_true", help="Only check that both complete source snapshots are available")
     args = parser.parse_args()
     cache = args.cache.resolve()
     cache.mkdir(mode=0o700, exist_ok=True, parents=True)
+    runner_source=subprocess.check_output(["git","rev-parse","HEAD"],cwd=ROOT,text=True).strip()
+    if subprocess.check_output(["git","status","--porcelain"],cwd=ROOT):
+        raise RuntimeError("Build from a clean tagged or detached checkout")
     with tempfile.TemporaryDirectory(prefix="orange-sdxl-build-") as tmp:
         py = checkout(Path(tmp), "python", PYTHON_SOURCE)
         sysroot = checkout(Path(tmp), "debian", IMAGE_SOURCE)
@@ -45,6 +48,7 @@ def main():
             for tree, folder in [(py, "wheels.lock.json"), (sysroot, "debian-libs.lock.json")]:
                 data = tree / "backends/environments/sdxl-linux-cuda" / folder
                 print(folder, hashlib.sha256(data.read_bytes()).hexdigest())
+            print("runner.py",hashlib.sha256((ROOT/"distribution/sdxl-linux/runner.py").read_bytes()).hexdigest())
             return
         wheels, base, out = (cache / name for name in ("wheels", "base-oci", "outputs"))
         if args.fetch:
@@ -58,9 +62,11 @@ def main():
         final = out / IMAGE_SOURCE
         if json.loads((final / "receipt.json").read_bytes())["image"] != IMAGE:
             raise RuntimeError("Rebuilt OCI manifest differs from the qualified image")
-        run(sys.executable, "scripts/check-linux-sdxl-image.py", "--receipt", final / "receipt.json", "--context", args.context, cwd=sysroot)
+        run(sys.executable, "scripts/assemble-sdxl-runner-layer.py", "--base", final, "--output", out, cwd=ROOT)
+        final = out / runner_source
+        run(sys.executable, "scripts/check-linux-sdxl-image.py", "--receipt", final / "receipt.json", "--context", args.context, cwd=ROOT)
         proof = json.loads((final / "qualification.json").read_bytes())
-        if proof["sha256"] != ARCHIVE_SHA256 or proof["hardware_certified"] or not proof["no_device_denied"]:
+        if (args.expected_sha256 and proof["sha256"] != args.expected_sha256) or proof["hardware_certified"] or not proof["no_device_denied"]:
             raise RuntimeError("Archive or local qualification differs")
         print(final / proof["archive"])
 

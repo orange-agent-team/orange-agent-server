@@ -15,6 +15,7 @@ import tempfile
 import time
 
 from linux_platform_inputs import local_image_id
+from sdxl_progress import StepObserver
 from sdxl_device_recovery import DockerInventory, reconcile, store_journal, sync_directory
 
 PROFILE="sdxl-base-1.0-euler-fp16-cuda-v1"
@@ -60,6 +61,7 @@ def main():
     cli.add_argument("--qualification",required=True,type=Path,help="Verified local OCI qualification receipt")
     cli.add_argument("--qualification-sha256",required=True,help="Digest from the operator-approved release registry")
     cli.add_argument("--gpu-uuid",required=True)
+    cli.add_argument("--observe-progress",action="store_true",help="Emit verified denoising counters on stderr")
     cli.add_argument("--reconcile", action="store_true", help="Confirm a previously stopped owned attempt and release its local device fence")
     cli.add_argument("--weights",type=Path)
     cli.add_argument("--work-root",required=True,type=Path)
@@ -80,7 +82,7 @@ def main():
     image=local_image_id(engine,{"image":"orange-dev-input/sdxl-cuda@"+proof["image"],"config_digest":proof["config_digest"],"platform":"linux/amd64"})
     require(image,"Target image must already be imported and verified")
     if args.reconcile:
-        require(args.output is None and args.weights is None,"Reconciliation accepts no output or model mount")
+        require(args.output is None and args.weights is None and not args.observe_progress,"Reconciliation accepts no output or model mount")
         print(json.dumps(reconcile(local_dir(slot),args.gpu_uuid,proof,DockerInventory(engine),recovered_gpu)),flush=True)
         return
     require(args.weights is not None and args.output is not None and args.output.is_absolute() and args.output.suffix==".png"
@@ -133,7 +135,11 @@ def main():
                 try:
                     child.stdin.write(raw);child.stdin.close()
                     deadline=time.monotonic()+1815
+                    observer=StepObserver(nonce) if args.observe_progress else None
                     while child.poll() is None:
+                        if observer:
+                            for progress in observer.read(stream.fileno()):
+                                print(json.dumps(progress),file=sys.stderr,flush=True)
                         require(time.monotonic()<deadline and os.fstat(stream.fileno()).st_size<=65536,"Deadline or frame limit")
                         time.sleep(.2)
                     state=checked_state();require(not state["Running"] and state["Status"]=="exited","Missing exit confirmation")
@@ -161,11 +167,6 @@ def main():
             gpu_released=recovered_gpu(args.gpu_uuid,baseline)
             require(gpu_released,"Device memory/compute quiescence not confirmed")
             save("release_confirmed",cid)
-            with tempfile.NamedTemporaryFile(dir=output.parent,delete=False) as out:
-                temp=Path(out.name)
-                try:
-                    out.write(data);out.flush();os.fsync(out.fileno());os.link(temp,output)
-                finally:temp.unlink(missing_ok=True)
             receipt={**done,"device_uuid":args.gpu_uuid,"baseline_used_mib":baseline,"gpu_release_observed":True}
         finally:
             for sig,handler in old.items():signal.signal(sig,handler)
@@ -192,6 +193,13 @@ def main():
                 if reaped and not gpu_released:save("recovery_required",cid)
             if receipt is not None:
                 require(reaped and gpu_released and not journal.exists(),"Device release is unconfirmed")
+                # Publish only after the owned container is gone and the durable device fence was cleared.
+                with tempfile.NamedTemporaryFile(dir=output.parent,delete=False) as out:
+                    temp=Path(out.name)
+                    try:
+                        out.write(data);out.flush();os.fsync(out.fileno());os.link(temp,output)
+                    finally:temp.unlink(missing_ok=True)
+                sync_directory(output.parent)
                 print(json.dumps(receipt),flush=True)
 
 

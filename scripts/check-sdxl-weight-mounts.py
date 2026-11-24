@@ -11,8 +11,6 @@ import uuid
 from linux_platform_inputs import local_image_id
 
 ROOT = Path(__file__).resolve().parents[1]
-MANIFEST = "sha256:b01f7baed816b97294e079f8a77493e0049d70c8c553cffff183b696a642fd33"
-CONFIG = "sha256:6fd1865677d5b1ac8ae9efd121a2585d7b5db1ac33f38878e50648514c00bc49"
 SEED = """
 import base64,json,os,sys
 from pathlib import Path
@@ -42,7 +40,7 @@ test=sys.argv[1]
 weights=Path('/weights')
 work=Path('/scratch')
 out=Path('/result')
-assert bool(os.statvfs(weights).f_flag & os.ST_RDONLY)==(test!='writable')
+assert runner.readonly_weights()==(test!='writable')
 if test!='writable':
     try:(weights/'probe-write').touch(exist_ok=False)
     except OSError as error:assert error.errno==errno.EROFS
@@ -70,6 +68,8 @@ print(json.dumps({'case':test,'candidate_png':False,'private_staging_remaining':
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--qualification",type=Path,required=True)
+    parser.add_argument("--qualification-sha256",required=True)
     parser.add_argument("--context", default="colima-orange-agent")
     parser.add_argument("--weights", type=Path, default=ROOT/".local/image-model")
     args = parser.parse_args()
@@ -77,7 +77,13 @@ def main():
     endpoint, = json.loads(subprocess.check_output(["docker", "context", "inspect",args.context],timeout=10))
     if not endpoint["Endpoints"]["docker"]["Host"].startswith("unix://"):
         raise RuntimeError("Local Docker context required")
-    image = local_image_id(engine, {"image": "orange-dev-input/sdxl-cuda@"+MANIFEST, "config_digest": CONFIG, "platform":"linux/amd64"})
+    raw=args.qualification.read_bytes()
+    if hashlib.sha256(raw).hexdigest()!=args.qualification_sha256:
+        raise RuntimeError("Different operator-approved image qualification")
+    proof=json.loads(raw)
+    if not proof["no_device_denied"] or proof["hardware_certified"] or not proof.get("runner_installations"):
+        raise RuntimeError("Unqualified target runner revision")
+    image = local_image_id(engine, {"image": "orange-dev-input/sdxl-cuda@"+proof["image"], "config_digest": proof["config_digest"], "platform":"linux/amd64"})
     if not image:
         raise RuntimeError("Import the qualified Linux AMD64 SDXL archive")
     files = json.loads((ROOT/"config/local-image.lock.json").read_bytes())["files"]
@@ -126,7 +132,7 @@ def main():
         if actual != owner:
             raise RuntimeError("Volume ownership changed")
         subprocess.run([*engine,"volume","rm",volume],check=True,stdout=subprocess.DEVNULL,timeout=20)
-    print(json.dumps({"image":MANIFEST,"tokenizer_assets":len(approved),"cases":results,"owned_volume_removed":True}),flush=True)
+    print(json.dumps({"image":proof["image"],"tokenizer_assets":len(approved),"cases":results,"owned_volume_removed":True}),flush=True)
 
 
 if __name__=="__main__":

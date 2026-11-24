@@ -78,6 +78,27 @@ def device(torch):
     return {"device":0,"architecture":f"sm_{major}{minor}","memory_bytes":properties.total_memory,"torch_cuda":torch.version.cuda}
 
 
+def readonly_weights(mountinfo=None):
+    # Per-mount flags in the process mount namespace apply to a bind mount even
+    # when statvfs reports only the writable backing filesystem's flags.
+    if mountinfo is None:
+        mountinfo=Path("/proc/self/mountinfo").read_text()
+    found=False
+    for line in mountinfo.splitlines():
+        fields=line.split(" ")
+        if len(fields)<10 or "-" not in fields[6:]:
+            raise Rejected("mount information unavailable")
+        path=fields[4]
+        if path=="/weights" or path.startswith("/weights/"):
+            options=fields[5].split(",")
+            if "ro" not in options or "rw" in options:
+                return False
+            if path=="/weights":
+                if found:return False
+                found=True
+    return found
+
+
 def generate(request,torch):
     from diffusers import EulerDiscreteScheduler,StableDiffusionXLPipeline
     from diffusers.utils import logging as dl
@@ -89,7 +110,7 @@ def generate(request,torch):
     dl.disable_progress_bar();tl.disable_progress_bar()
     cfg=json.loads((APP/"model.lock.json").read_bytes())
     weights=Path("/weights");work=Path("/scratch");output=Path("/result")
-    if not os.statvfs(weights).f_flag & os.ST_RDONLY:raise Rejected("read-only weight mount required")
+    if not readonly_weights():raise Rejected("read-only weight mount required")
     for folder in (work,output):model_assets.private_dir(folder)
     if any(output.iterdir()):raise Rejected("empty private output directory required")
     with tempfile.TemporaryDirectory(dir=work,prefix="verified-weights-") as stage:

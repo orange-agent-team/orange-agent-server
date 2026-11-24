@@ -41,6 +41,10 @@ def locked_layout(receipt_path):
     if "system_installations" in manifest:
         require(len(manifest["system_installations"])==2 and manifest["system_installations"][0]==manifest["system_installations"][1],"Different system layers")
         all_installs.append(manifest["system_installations"])
+    if "runner_installations" in manifest:
+        pair=manifest["runner_installations"]
+        require(len(pair)==2 and pair[0]==pair[1] and pair[0]["runner_sha256"]==file_sha(ROOT/"distribution/sdxl-linux/runner.py"),"Unbound runtime revision")
+        all_installs.append(pair)
     for installed,diff,layer in zip(all_installs,cfg["rootfs"]["diff_ids"][-len(all_installs):],doc["layers"][-len(all_installs):],strict=True):
         require(installed[0]["diff_id"]==diff and installed[0]["layer"]==layer["digest"],"Different installed layer")
     inventory={item["digest"][7:],doc["config"]["digest"][7:]}

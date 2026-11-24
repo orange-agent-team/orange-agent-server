@@ -23,13 +23,13 @@ Linux 依赖使用独立的 uv.lock 以及 CPython 3.12 / glibc 2.36 / AMD64 whe
 
 官方 Python Bookworm 基础镜像缺少 OpenCV 所需的 libGL。建包时用该镜像的 Debian 密钥环验证 InRelease，再核对 AMD64 Packages.xz 的 SHA-256。用镜像自带的 APT 在禁网条件下解析 libgl1 的必要依赖，锁定所缺的 28 个包。附加的 OCI 层包含签名索引对应的二进制文件、库链接、版权文本和精确的 Debian 来源清单。该层以数据文件形式组装，不执行 Debian 维护脚本。
 
-固定发行包的 Python 安装层和最终系统层来自两个指定提交。在服务器仓库中运行以下命令可从独立的本地 Git 检出重建两个层。首次构建需要 Python 3.12、uv、本地 Docker、AMD64 执行能力以及存放依赖和解包层的磁盘空间。首次下载后，保留缓存与已导入的基础镜像，移除 `--fetch` 即可完全离线重建。两个提交都必须包含在本地 Git 对象库中。
+固定发行包的 Python 安装层和最终系统层来自两个指定提交。在服务器仓库中运行以下命令可从固定的两个 Git 检出重建依赖层，再从当前干净的候选提交组装运行入口。首次构建需要 Python 3.12、uv、本地 Docker、AMD64 执行能力以及存放依赖和解包层的磁盘空间。首次下载后，保留缓存与已导入的基础镜像，移除 `--fetch` 即可完全离线重建。两个提交都必须包含在本地 Git 对象库中。
 
 ```sh
 python3.12 scripts/rebuild-sdxl-release.py --cache "$PWD/.local/sdxl-release" --context default --fetch
 ```
 
-该命令分别执行两次 Python 安装及两次系统层组装，核对固定 OCI manifest 和 tar 的 SHA-256，最后在不带设备的 AMD64 容器中调用已安装的推理入口。可用 `--verify-inputs` 单独检查两个源码检出和锁文件。
+该命令分别执行两次 Python 安装及两次系统层组装，核对父镜像的固定 OCI manifest，并通过 `--expected-sha256` 比对独立登记的最终 tar SHA-256，最后在不带设备的 AMD64 容器中调用已安装的推理入口。可用 `--verify-inputs` 单独检查两个源码检出和锁文件。
 
 ### 意外中断后的设备恢复
 
@@ -42,3 +42,16 @@ python3.12 scripts/run-linux-sdxl-attempt.py --reconcile --context default \
 ```
 
 恢复在设备锁内核对容器 ID、名称、镜像、尝试编号和私有目录身份。已退出的容器经两次真实驱动读数确认显存回到原基线、无计算进程后方可移除。删除请求应答丢失时可重复执行。容器仍在运行、创建请求去向不明、所有者变化或驱动不可观测时，设备继续保留占用记录。恢复路径不读模型输入、不重启任务、不提交图片或账本操作。
+
+
+### NVIDIA 目标机基准
+
+目标宿主使用 Linux AMD64、CPython 3.12、Pillow、可读驱动数据的 nvidia-smi 和能以非 root 用户使用的本地 Docker。报告目录、工作目录和只读权重目录由宿主用户持有并设为 0700。先导入已核验的 OCI 包，使用其独立登记的 qualification 摘要。在授权的单台机器上运行：
+
+```sh
+python3.12 scripts/benchmark-sdxl-device.py --qualification "$QUALIFICATION" \
+  --qualification-sha256 "$APPROVED_SHA256" --gpu-uuid "$GPU_UUID" \
+  --weights "$WEIGHTS" --work-root "$PRIVATE_WORK_ROOT" --reports "$PRIVATE_REPORTS"
+```
+
+基准依次执行固定输入、同种子重放、无效输入、第一次去噪进度后的实际取消，以及取消后的再生成。每次成功都独立验证 PNG 和像素摘要，记录用时及显存峰值。失败和中断保留部分报告，未测过的设备不会获得公共调度资格。恢复及基准均需本机真实驱动读数。
