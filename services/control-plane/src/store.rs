@@ -165,17 +165,6 @@ impl Store {
         key: &str,
         req: &SubmitJob,
     ) -> Result<JobView, StoreError> {
-        if !matches!(
-            req.purpose,
-            orange_protocol::InvocationPurpose::Primary
-                | orange_protocol::InvocationPurpose::Summary
-                | orange_protocol::InvocationPurpose::Memory
-                | orange_protocol::InvocationPurpose::Title
-                | orange_protocol::InvocationPurpose::Continuation
-                | orange_protocol::InvocationPurpose::Transcription
-        ) {
-            return Err(StoreError::Invalid);
-        }
         self.submit_as(Some(actor), owner, key, req, None).await
     }
     pub fn from_pool(pool: PgPool) -> Self {
@@ -275,6 +264,20 @@ impl Store {
         {
             return Err(StoreError::Forbidden);
         }
+        // Resolve the actual price kind only after owner, session and original requester are
+        // known. Unsupported unpriced public requests must still never reach reservation.
+        if priced_requester.is_some() && !req.purpose.uses_text_price() {
+            return Err(StoreError::QuoteModalityMismatch);
+        }
+        if actor.is_some()
+            && matches!(
+                req.purpose,
+                orange_protocol::InvocationPurpose::Image
+                    | orange_protocol::InvocationPurpose::Embedding
+            )
+        {
+            return Err(StoreError::Invalid);
+        }
         if let Some(job) = prior(&mut tx, owner, "submit_job", key, &digest).await? {
             check_submit_actor(&mut tx, &job, actor).await?;
             let view = job_in_tx(&mut tx, owner, &job).await?;
@@ -320,11 +323,6 @@ impl Store {
             )
             .await
             .map_err(artifact_error)?;
-        }
-        // Existing submissions above may be queried idempotently even when older versions
-        // admitted a mismatched purpose. Never create a new hold with those terms.
-        if priced_requester.is_some() && !req.purpose.uses_text_price() {
-            return Err(StoreError::QuoteModalityMismatch);
         }
         let invalid_price:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM quote_metering m JOIN text_prices p USING(price_version) JOIN trusted_meter_profiles mp ON mp.profile_digest=m.meter_profile_digest WHERE m.quote_id=$1 AND (NOT p.enabled OR NOT mp.enabled))").bind(&req.quote_id).fetch_one(&mut *tx).await?;
         if invalid_price {
