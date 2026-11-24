@@ -48,6 +48,7 @@ def inspect(exe, llvm, *, bundled=(), dll=False):
 def main():
     if platform.system()!="Darwin":raise ValueError("Pinned macOS cross-toolchain required")
     parser=argparse.ArgumentParser()
+    parser.add_argument("--profile", choices=("worker","knowledge"), default="worker")
     parser.add_argument("--vendor", type=Path,help="Existing verified versioned cargo vendor tree")
     parser.add_argument("--toolchain-directory", type=Path, default=ROOT/".local/windows-cross", help="Directory containing the checksum-locked cross toolchain archive")
     opts=parser.parse_args()
@@ -63,7 +64,10 @@ def main():
     cargo=Path(subprocess.check_output([rustup,"which","--toolchain",lock["rust"],"cargo"],text=True).strip())
     installed=subprocess.check_output([rustup,"target","list","--installed","--toolchain",lock["rust"]],text=True).splitlines()
     if TARGET not in installed:raise ValueError("Missing pinned Windows standard library")
-    dest=ROOT/".local/windows-worker-distributions"
+    worker=opts.profile=="worker"
+    program="orange-worker" if worker else "orange-knowledge"
+    crate="orange-worker" if worker else "orange-agent-runtime"
+    dest=ROOT/".local"/("windows-"+opts.profile+"-distributions")
     dest.mkdir(parents=True,exist_ok=True)
     with tempfile.TemporaryDirectory(dir=dest,prefix=".qualify-") as directory:
         scratch=Path(directory)
@@ -107,9 +111,9 @@ def main():
             env["CXX_"+suffix]=str(tools/"x86_64-w64-mingw32-clang++")
             env["AR_"+suffix]=str(tools/"x86_64-w64-mingw32-ar")
             env["CFLAGS_"+suffix]=f"-ffile-prefix-map={tree}=/orange-server"
-            subprocess.run([cargo,"build","--locked","--offline","--target",TARGET,"--release","-p","orange-worker",
-                            "--bin","orange-worker"],cwd=tree,env=env,check=True)
-            exe=tree/"target"/TARGET/"release/orange-worker.exe"
+            subprocess.run([cargo,"build","--locked","--offline","--target",TARGET,"--release","-p",crate,
+                            "--bin",program],cwd=tree,env=env,check=True)
+            exe=tree/"target"/TARGET/"release"/(program+".exe")
             imports=inspect(exe,tools/"llvm-readobj",bundled={"libunwind.dll"})
             runtime={}
             if any(i.lower()=="libunwind.dll" for i in imports):
@@ -117,35 +121,43 @@ def main():
                 runtime[lib.name]=inspect(lib,tools/"llvm-readobj",dll=True)
             system_imports=sorted({i.lower() for i in imports if i.lower() not in runtime}|
                                   {i.lower() for module in runtime.values() for i in module})
-            payload={"bin/orange-worker.exe":exe.read_bytes(),"README.md":source("distribution/windows-worker/README.md"),
-                     "docs/nvidia-inventory.md":source("docs/worker/nvidia-inventory.md"),
-                     "Test-WorkerInventory.ps1":source("distribution/windows-worker/Test-WorkerInventory.ps1"),
-                     "Cargo.lock":source("Cargo.lock"),"rust-toolchain.toml":source("rust-toolchain.toml"),
+            payload={"bin/"+program+".exe":exe.read_bytes(),"Cargo.lock":source("Cargo.lock"),
+                     "rust-toolchain.toml":source("rust-toolchain.toml"),
                      "windows-cross-toolchain.lock.json":source("config/windows-cross-toolchain.lock.json")}
-            for name in ("README.md","wsl.conf","oci-base.json","prepare-inference-policy.py","inspect-target.py"):
-                payload["isolation/"+name]=source("distribution/windows-worker/isolation/"+name)
-            payload["isolation/release.json"]=source("config/worker-isolation-release.v1.json")
-            payload["docs/isolation-report.md"]=source("docs/worker/isolation-report.md")
-            diagnostic=tree/"target/orange-isolation-probe"
-            subprocess.run([sys.executable,tree/"scripts/build-worker-isolation-probe.py","--target","x86_64-unknown-linux-musl","--output",diagnostic],
-                           cwd=tree,check=True)
-            payload["isolation/orange-isolation-probe"]=diagnostic.read_bytes()
+            if worker:
+                payload.update({"README.md":source("distribution/windows-worker/README.md"),
+                                "docs/nvidia-inventory.md":source("docs/worker/nvidia-inventory.md"),
+                                "Test-WorkerInventory.ps1":source("distribution/windows-worker/Test-WorkerInventory.ps1")})
+                for name in ("README.md","wsl.conf","oci-base.json","prepare-inference-policy.py","inspect-target.py"):
+                    payload["isolation/"+name]=source("distribution/windows-worker/isolation/"+name)
+                payload["isolation/release.json"]=source("config/worker-isolation-release.v1.json")
+                payload["docs/isolation-report.md"]=source("docs/worker/isolation-report.md")
+                diagnostic=tree/"target/orange-isolation-probe"
+                subprocess.run([sys.executable,tree/"scripts/build-worker-isolation-probe.py","--target","x86_64-unknown-linux-musl","--output",diagnostic],
+                               cwd=tree,check=True)
+                payload["isolation/orange-isolation-probe"]=diagnostic.read_bytes()
+            else:
+                payload["README.md"]=source("docs/local-selected-knowledge.md")
+                for name in ("check-windows-saved-knowledge.py","check-local-knowledge.py"):
+                    payload["qualification/"+name]=source("scripts/"+name)
             payload.update(licenses)
             for name in runtime:
                 payload["bin/"+name]=(tools.parent/"x86_64-w64-mingw32/bin"/name).read_bytes()
             manifest={"source":commit,"target":TARGET,"rust":lock["rust"],"toolchain_sha256":lock["sha256"],
-                      "imported_system_dlls":system_imports,"bundled_runtime_imports":runtime,"isolation_probe_target":"x86_64-unknown-linux-musl","windows_runtime_verified":False,
+                      "imported_system_dlls":system_imports,"bundled_runtime_imports":runtime,"windows_runtime_verified":False,
                       "sha256":{k:hashlib.sha256(v).hexdigest() for k,v in payload.items()}}
-            release=json.loads(payload["isolation/release.json"])
-            if manifest["sha256"]["isolation/orange-isolation-probe"]!=release["linux_probe_sha256"] or manifest["sha256"]["isolation/oci-base.json"]!=release["oci_policy_sha256"]:
-                raise ValueError("Packaged probe and policy differ from the diagnostic release")
-            manifest.update(wasm_enabled=release["wasm_enabled"],isolation_report_version=release["observation_version"],
-                            gpu_supply_from_diagnostic=release["supply_authorized_by_report"])
+            if worker:
+                manifest["isolation_probe_target"]="x86_64-unknown-linux-musl"
+                release=json.loads(payload["isolation/release.json"])
+                if manifest["sha256"]["isolation/orange-isolation-probe"]!=release["linux_probe_sha256"] or manifest["sha256"]["isolation/oci-base.json"]!=release["oci_policy_sha256"]:
+                    raise ValueError("Packaged probe and policy differ from the diagnostic release")
+                manifest.update(wasm_enabled=release["wasm_enabled"],isolation_report_version=release["observation_version"],
+                                gpu_supply_from_diagnostic=release["supply_authorized_by_report"])
             payload["manifest.json"]=(json.dumps(manifest,sort_keys=True,indent=2)+"\n").encode()
             output=scratch/f"worker-{n}.zip"
             with zipfile.ZipFile(output,"x",compression=zipfile.ZIP_DEFLATED,compresslevel=9) as bundle:
                 for name,value in sorted(payload.items()):
-                    item=zipfile.ZipInfo("orange-worker/"+name,(1980,1,1,0,0,0))
+                    item=zipfile.ZipInfo(program+"/"+name,(1980,1,1,0,0,0))
                     item.create_system=3
                     item.external_attr=(0o100755 if name.endswith(".exe") or name=="isolation/orange-isolation-probe" else 0o100644)<<16
                     bundle.writestr(item,value,compress_type=zipfile.ZIP_DEFLATED,compresslevel=9)
@@ -153,18 +165,21 @@ def main():
         checksum=digest(results[0][0])
         if digest(results[1][0])!=checksum or results[0][1]!=results[1][1]:
             raise ValueError("Independent Windows builds differ")
-        final=dest/f"orange-worker-preflight-win-x64-{checksum[:16]}.zip"
+        stem="orange-worker-preflight" if worker else program
+        final=dest/f"{stem}-win-x64-{checksum[:16]}.zip"
         if final.exists():
             if digest(final)!=checksum:raise ValueError("Archive identity collision")
         else:os.link(results[0][0],final)
         with zipfile.ZipFile(final) as verified:
             if verified.testzip() is not None:raise ValueError("Damaged ZIP")
             for name,expected in results[0][1]["sha256"].items():
-                if hashlib.sha256(verified.read("orange-worker/"+name)).hexdigest()!=expected:raise ValueError("Member digest changed")
+                if hashlib.sha256(verified.read(program+"/"+name)).hexdigest()!=expected:raise ValueError("Member digest changed")
         report={"archive":final.name,"sha256":checksum,"bytes":final.stat().st_size,"source":commit,"target":TARGET,
                 "identical_archives":2,"imported_system_dlls":results[0][1]["imported_system_dlls"],
                 "bundled_runtime":sorted(results[0][1]["bundled_runtime_imports"]),
-                "isolation_probe_target":"x86_64-unknown-linux-musl","windows_runtime_verified":False,"physical_gpu_verified":False}
+                "windows_runtime_verified":False}
+        if worker:report.update(isolation_probe_target="x86_64-unknown-linux-musl",physical_gpu_verified=False)
+        else:report.update(executable_sha256=results[0][1]["sha256"]["bin/"+program+".exe"],acl_execution_verified=False)
         final.with_suffix(".json").write_text(json.dumps(report,indent=2)+"\n")
         print(json.dumps(report),flush=True)
 

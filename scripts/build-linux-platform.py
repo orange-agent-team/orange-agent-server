@@ -71,9 +71,14 @@ cargo -V >&2
 "$PROTOC" --version >&2
 test "$(rustc -V | cut -d' ' -f2)" = "$ORANGE_BUILD_RUST"
 test "$("$PROTOC" --version)" = 'libprotoc 36.2'
+if [[ "$ORANGE_BUILD_PROFILE" == knowledge ]]; then
+    packages=(-p orange-agent-runtime)
+else
+    packages=(-p orange-control-plane -p orange-worker)
+fi
 args=()
 for program in "$@"; do args+=(--bin "$program"); done
-cargo build --locked --offline --release --target aarch64-unknown-linux-gnu -p orange-control-plane -p orange-worker "${args[@]}" >&2
+cargo build --locked --offline --release --target aarch64-unknown-linux-gnu "${packages[@]}" "${args[@]}" >&2
 cd "$CARGO_TARGET_DIR/aarch64-unknown-linux-gnu/release"
 tar -cf - "$@"
 """
@@ -81,10 +86,12 @@ tar -cf - "$@"
 def main():
     cli=argparse.ArgumentParser()
     cli.add_argument("--pass-number",required=True,type=int,choices=(1,2))
+    cli.add_argument("--profile",choices=("platform","knowledge"),default="platform")
     cli.add_argument("--source",help="Exact native source commit (defaults to HEAD)")
     cli.add_argument("--context",default="colima-orange-agent")
     cli.add_argument("--cache",type=Path,default=ROOT/".local/linux")
     args=cli.parse_args();cache=args.cache.resolve()
+    programs=("orange-knowledge",) if args.profile=="knowledge" else PLATFORM_PROGRAMS
     commit=git("rev-parse","HEAD").decode().strip()
     if args.source:
         if len(args.source)!=40 or not all(v in "0123456789abcdef" for v in args.source):raise ValueError("Use a full native commit")
@@ -92,11 +99,11 @@ def main():
         commit=args.source
     lock=json.loads(git("show",commit+":"+LOCK))
     stamp=git("show","-s","--format=%ct",commit).decode().strip()
-    directory=ROOT/".local/linux-platform-native"/commit;directory.mkdir(parents=True,mode=0o700,exist_ok=True)
+    directory=ROOT/".local"/("linux-"+args.profile+"-native")/commit;directory.mkdir(parents=True,mode=0o700,exist_ok=True)
     target=directory/str(args.pass_number)
     if target.exists():
         receipt=json.loads((target/"build.json").read_bytes())
-        if receipt["source"]!=commit or receipt["pass"]!=args.pass_number or receipt["build_image"]!=lock["build_image"]["image"] or set(receipt["binaries"])!=set(PLATFORM_PROGRAMS) or any(sha(target/k)!=v for k,v in receipt["binaries"].items()):
+        if receipt["source"]!=commit or receipt["pass"]!=args.pass_number or receipt["build_image"]!=lock["build_image"]["image"] or set(receipt["binaries"])!=set(programs) or any(sha(target/k)!=v for k,v in receipt["binaries"].items()):
             raise ValueError("Retained native build no longer matches its complete receipt")
         print("Verified retained build",args.pass_number,commit,flush=True);return
     docker=["docker","--context",args.context]
@@ -109,8 +116,8 @@ def main():
         command=docker+["run","--rm","--pull=never","--platform","linux/arm64","--name",name,"--label","orange.owned="+nonce,
             "--network","none","--cap-drop","ALL","--security-opt","no-new-privileges","--pids-limit","512",
             "--cpus","1.25","--memory","2600m","--user","65532:65532","--entrypoint","/bin/bash",
-            "-e","CARGO_BUILD_JOBS=1","-e","RUSTUP_TOOLCHAIN="+lock["rust_version"],"-e","ORANGE_BUILD_RUST="+lock["rust_version"],
-            "-e","SOURCE_DATE_EPOCH="+stamp,"-i",image,"-c",COMMAND,"build",*PLATFORM_PROGRAMS]
+            "-e","ORANGE_BUILD_PROFILE="+args.profile,"-e","CARGO_BUILD_JOBS=1","-e","RUSTUP_TOOLCHAIN="+lock["rust_version"],"-e","ORANGE_BUILD_RUST="+lock["rust_version"],
+            "-e","SOURCE_DATE_EPOCH="+stamp,"-i",image,"-c",COMMAND,"build",*programs]
         print("Building Linux arm64 pass",args.pass_number,"source",commit,"isolated container",name,flush=True)
         try:
             with context.open("rb") as payload,outgoing.open("xb") as out:subprocess.run(command,stdin=payload,stdout=out,check=True,timeout=4000)
@@ -120,7 +127,7 @@ def main():
         ready=work/"output";ready.mkdir()
         with tarfile.open(outgoing) as bundle:
             entries=bundle.getmembers()
-            if len(entries)!=len(PLATFORM_PROGRAMS) or {e.name for e in entries}!=set(PLATFORM_PROGRAMS):raise ValueError("Incomplete or duplicated binary set")
+            if len(entries)!=len(programs) or {e.name for e in entries}!=set(programs):raise ValueError("Incomplete or duplicated binary set")
             for entry in entries:
                 if not entry.isfile() or not 0<entry.size<=512*1024*1024:raise ValueError("Unexpected ELF member")
                 path=ready/entry.name
@@ -129,7 +136,7 @@ def main():
                 if hdr[:6]!=b"\x7fELF\x02\x01" or int.from_bytes(hdr[18:20],"little")!=183:raise ValueError("Expected aarch64 ELF: "+entry.name)
                 path.chmod(0o755)
         receipt={"source":commit,"pass":args.pass_number,"target":lock["target"],"build_image":lock["build_image"]["image"],
-                 "protoc":lock["protoc"]["digest"],"context_sha256":sha(context),"network":"none","binaries":{k:sha(ready/k) for k in PLATFORM_PROGRAMS}}
+                 "protoc":lock["protoc"]["digest"],"context_sha256":sha(context),"network":"none","binaries":{k:sha(ready/k) for k in programs}}
         (ready/"build.json").write_text(json.dumps(receipt,indent=2,sort_keys=True)+"\n")
         ready.rename(target);print(json.dumps(receipt,sort_keys=True),flush=True)
 

@@ -41,3 +41,9 @@ orange-knowledge --withdraw-saved local-owner manuals /home/operator/orange-priv
 EOF 表示关闭当前进程并释放文件句柄。撤回先在授权库内持久作废密钥，再清除缓存的词项、版本和引用。恢复旧索引时必须提供当前授权库；它已撤回时，程序在拒绝读取前清理还原出的记录。缺少授权库也会拒绝已有索引，且不会为备份补发密钥。恢复流程须单独维护最新授权库；将整个目录和授权库一同回滚尚需独立的可信水位。命令行在原进程退出后撤回；持有集合的原生宿主也可以调用异步 `withdraw()`，它会阻止新交付并等待已开始的交付完成。工作区自身的授权仍由宿主独立检查。工具调用方无法通过模型参数开启持久化或撤回其他集合。
 
 私有目录和已存在的数据库、锁和旁文件要满足本机访问控制。Unix 目标检查所有者和组/其他用户权限；Windows 路径另检查重解析点、所有者及可继承文件 ACL。Windows 目标运行时和具体文件系统仍需实测。跨设备同步、整个授权库的灾难恢复水位，以及远程 HTTP 读取另行验收。
+
+### Additional native targets
+
+On the build host, `python3.12 scripts/package-linux-knowledge.py --source <full-commit> --cache <verified-linux-inputs>` builds two Linux ARM64 executables in the pinned offline image. It compares both archives and runs the extracted program as an unprivileged user in a read-only container. Its acceptance receipt covers Linux stdio and durable storage. The CPU model and official JavaScript client qualifications are recorded individually on macOS.
+
+On macOS, `python3.12 scripts/package-windows-worker.py --profile knowledge --vendor <verified-vendor> --toolchain-directory <locked-win64-toolchain>` builds the Windows x64 ZIP. After extraction on NTFS, run `py -3 qualification/check-windows-saved-knowledge.py` with a regular Windows user. This check creates private test directories, exercises a real DACL refusal, reopens an issued citation and withdraws the collection. A successful cross-build certifies the PE, its imports and archive identity. Native execution requires a Windows test receipt.
