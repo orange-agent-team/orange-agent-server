@@ -126,6 +126,8 @@ rcgen = { version = "=0.14.10", default-features = false, features = ["ring", "p
 rustix.workspace = true
 
 [dev-dependencies]
+reqsign-core = "=3.3.2"
+reqsign-aws-v4 = "=3.3.1"
 tokio-tungstenite = "=0.29.0"
 futures-util = { version = "=0.3.34", features = ["sink"] }
 jsonschema.workspace = true
@@ -174,3 +176,7 @@ required-features = ["integration-tests"]
 [[example]]
 name = "hosted-repository-api-fixture"
 required-features = ["repository-fixture-tests"]
+
+[[test]]
+name = "s3_artifact_capabilities"
+required-features = ["s3-source-tests"]

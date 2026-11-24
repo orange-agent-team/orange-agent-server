@@ -2241,6 +2241,8 @@ dependencies = [
  "prost",
  "prost-types",
  "rcgen",
+ "reqsign-aws-v4",
+ "reqsign-core",
  "reqwest",
  "ring",
  "rusqlite",

@@ -26,7 +26,10 @@ parser.add_argument("--weed-binary", type=Path, help="Already installed executab
 parser.add_argument("--model-run", action="store_true")
 parser.add_argument("--artifact-versions",action="store_true",help="Check versioned artifact publication against the isolated private bucket")
 parser.add_argument("--model-runtime-root", type=Path)
+parser.add_argument("--signed-lifetimes",action="store_true",help="Observe actual 60-second GET and five-minute PUT expiry in the artifact fixture")
 args = parser.parse_args()
+if args.signed_lifetimes and not args.artifact_versions:
+    parser.error("--signed-lifetimes requires --artifact-versions")
 if args.artifact_versions and (args.model_run or args.web_repo or args.database_url_file):
     parser.error("Artifact version qualification uses its own private bucket")
 if args.model_run and not (args.database_url_file and args.web_repo and args.model_runtime_root):
@@ -64,7 +67,9 @@ cmd = [
     "--test",
     "s3_source",
 ]
-if not args.artifact_versions:
+if args.signed_lifetimes:
+    cmd[-1]="s3_artifact_capabilities"
+if not args.artifact_versions or args.signed_lifetimes:
     subprocess.run(cmd + ["--no-run"], cwd=root, env=env, check=True)
 with tempfile.TemporaryDirectory(prefix="oa-s3-", dir="/tmp") as tmp:
     folder = Path(tmp)
@@ -181,7 +186,14 @@ with tempfile.TemporaryDirectory(prefix="oa-s3-", dir="/tmp") as tmp:
                 raise RuntimeError("Owned bucket creation failed")
             if args.artifact_versions:
                 from artifact_object_versions import check
-                check(endpoint,bucket,owner["credentials"][0],folder)
+                version=check(endpoint,bucket,owner["credentials"][0],folder)
+                if args.signed_lifetimes:
+                    identity_path=folder/"artifact-writer.json"
+                    identity_path.write_text(json.dumps(owner["credentials"][0]))
+                    identity_path.chmod(0o600)
+                    subprocess.run(cmd+["--","--nocapture"],cwd=root,check=True,
+                        env=dict(env,ORANGE_ARTIFACT_FIXTURE_PORT=str(port),ORANGE_ARTIFACT_FIXTURE_IDENTITY=str(identity_path),
+                                 ORANGE_ARTIFACT_FIXTURE_VERSION=version))
                 raise SystemExit(0)  # The enclosing finally always stops the private fixture.
             for name, content in [
                 ("a.txt", b"confirmed source data"),

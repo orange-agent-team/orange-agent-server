@@ -94,3 +94,4 @@ def check(endpoint,bucket,credentials,folder):
     require(wrong==400 and code in {"BadDigest","InvalidDigest","XAmzContentChecksumMismatch"},
             "Storage did not reject mismatched explicit SHA-256; direct artifact admission remains unqualified")
     print("PASS real S3 version-bound copy, exact cleanup, private reads and checksum rejection",flush=True)
+    return dest
