@@ -15,6 +15,7 @@ import tempfile
 import time
 
 from linux_platform_inputs import local_image_id
+from sdxl_device_recovery import DockerInventory, reconcile, store_journal, sync_directory
 
 PROFILE="sdxl-base-1.0-euler-fp16-cuda-v1"
 MAX_PNG=16*1024*1024
@@ -59,18 +60,17 @@ def main():
     cli.add_argument("--qualification",required=True,type=Path,help="Verified local OCI qualification receipt")
     cli.add_argument("--qualification-sha256",required=True,help="Digest from the operator-approved release registry")
     cli.add_argument("--gpu-uuid",required=True)
-    cli.add_argument("--weights",required=True,type=Path)
+    cli.add_argument("--reconcile", action="store_true", help="Confirm a previously stopped owned attempt and release its local device fence")
+    cli.add_argument("--weights",type=Path)
     cli.add_argument("--work-root",required=True,type=Path)
-    cli.add_argument("--output",required=True,type=Path,help="New PNG in a private owner-controlled directory")
+    cli.add_argument("--output",type=Path,help="New PNG in a private owner-controlled directory")
     cli.add_argument("--context",default="default")
     args=cli.parse_args()
     require(sys.platform=="linux","Target launcher requires local Linux or WSL with driver visibility")
     require(os.getuid()!=0,"Run as the non-root owner of the development workspace")
     require(re.fullmatch(r"GPU-[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}",args.gpu_uuid),"One NVIDIA GPU UUID required")
-    require(args.output.is_absolute() and args.output.suffix==".png" and not os.path.lexists(args.output),"Expected a new output PNG")
-    output=local_dir(args.output.parent)/args.output.name
-    weights=local_dir(args.weights);work=local_dir(args.work_root)
-    require(not work.is_relative_to(weights) and not weights.is_relative_to(work) and not output.is_relative_to(weights),"Separate model cache and attempt roots required")
+    work=local_dir(args.work_root)
+    slot=work/("gpu-"+args.gpu_uuid.lower())
     raw_proof=args.qualification.read_bytes()
     require(re.fullmatch("[0-9a-f]{64}",args.qualification_sha256) and hashlib.sha256(raw_proof).hexdigest()==args.qualification_sha256,"Qualification differs from approved registry")
     proof=json.loads(raw_proof);engine=["docker","--context",args.context]
@@ -79,12 +79,21 @@ def main():
     require(proof["platform"]=="linux/amd64" and proof["published"] is False and proof["no_device_denied"] is True,"Unqualified runtime")
     image=local_image_id(engine,{"image":"orange-dev-input/sdxl-cuda@"+proof["image"],"config_digest":proof["config_digest"],"platform":"linux/amd64"})
     require(image,"Target image must already be imported and verified")
+    if args.reconcile:
+        require(args.output is None and args.weights is None,"Reconciliation accepts no output or model mount")
+        print(json.dumps(reconcile(local_dir(slot),args.gpu_uuid,proof,DockerInventory(engine),recovered_gpu)),flush=True)
+        return
+    require(args.weights is not None and args.output is not None and args.output.is_absolute() and args.output.suffix==".png"
+            and not os.path.lexists(args.output),"Expected weights and a new output PNG")
+    output=local_dir(args.output.parent)/args.output.name
+    weights=local_dir(args.weights)
+    require(not work.is_relative_to(weights) and not weights.is_relative_to(work) and not output.is_relative_to(weights)
+            and not output.is_relative_to(work),"Separate model cache, result and attempt roots required")
     # Validate with the exact fixed frame parser. No caller supplies command line, mounts, capabilities or network destinations.
     from importlib.util import spec_from_file_location,module_from_spec
     module=spec_from_file_location("orange_sdxl_frame",Path(__file__).resolve().parents[1]/"distribution/sdxl-linux/runner.py")
     parser=module_from_spec(module);module.loader.exec_module(parser)
     raw=sys.stdin.buffer.read(8193);request=parser.frame(raw)
-    slot=work/("gpu-"+args.gpu_uuid.lower())
     slot.mkdir(mode=0o700,exist_ok=True);local_dir(slot)
     import fcntl
     lock_fd=os.open(slot/"attempt.lock",os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
@@ -98,19 +107,15 @@ def main():
         scratch.mkdir(mode=0o700);result.mkdir(mode=0o700)
         name="orange-sdxl-"+args.gpu_uuid.lower();nonce=request["attempt_id"]
         def save(phase,cid=None):
-            tmp=attempt/"journal.tmp"
-            with tmp.open("w") as out:
-                json.dump({"phase":phase,"attempt":nonce,"image":proof["image"],"device":args.gpu_uuid,"container":cid,"private_directory":attempt.name,"baseline_used_mib":baseline,"directory_device":attempt.stat().st_dev,"directory_inode":attempt.stat().st_ino},out)
-                out.flush();os.fsync(out.fileno())
-            os.replace(tmp,journal)
-            fd=os.open(slot,os.O_DIRECTORY|os.O_RDONLY)
-            try:os.fsync(fd)
-            finally:os.close(fd)
+            store_journal(slot,{"phase":phase,"attempt":nonce,"image":proof["image"],"device":args.gpu_uuid,"container":cid,
+                                "private_directory":attempt.name,"baseline_used_mib":baseline,"directory_device":attempt.stat().st_dev,
+                                "directory_inode":attempt.stat().st_ino})
         save("creating")
         cid=None;reaped=False;gpu_released=False;receipt=None
         def checked_state():
             row=json.loads(subprocess.check_output([*engine,"inspect",cid or name],timeout=15))[0]
-            require(row["Config"]["Labels"].get("orange.owned")==nonce and row["Name"].lstrip("/")==name,"Different container owns device slot")
+            require(row["Config"]["Labels"].get("orange.owned")==nonce and row["Name"]=="/"+name and row["Id"]==cid
+                    and row["Image"] in (proof["image"],proof["config_digest"]),"Different container owns device slot")
             return row["State"]
         def stop(signum,frame):raise InterruptedError("Attempt interrupted")
         old={s:signal.signal(s,stop) for s in (signal.SIGINT,signal.SIGTERM)}
@@ -167,9 +172,7 @@ def main():
             if cid is None:
                 # Distinguish refusal before creation from a lost response after creation.
                 listed=subprocess.check_output([*engine,"ps","-a","--no-trunc","--filter","name=^/"+name+"$","--format","{{.ID}}"],text=True,timeout=15).splitlines()
-                if not listed:
-                    journal.unlink();shutil.rmtree(attempt);reaped=True
-                elif len(listed)==1 and re.fullmatch("[0-9a-f]{64}",listed[0]):cid=listed[0]
+                if len(listed)==1 and re.fullmatch("[0-9a-f]{64}",listed[0]):cid=listed[0]
             if cid:
                 state=checked_state()
                 if state["Running"]:
@@ -180,11 +183,13 @@ def main():
                 if reaped and not gpu_released:
                     gpu_released=recovered_gpu(args.gpu_uuid,baseline)
                 if reaped and gpu_released:
+                    save("removing",cid)
                     subprocess.run([*engine,"rm",cid],check=True,timeout=20,stdout=subprocess.DEVNULL)
-                    journal.unlink();shutil.rmtree(attempt)
+                    require(DockerInventory(engine).find(name) is None,"Container deletion not confirmed")
+                    shutil.rmtree(attempt);journal.unlink();sync_directory(slot)
             if journal.exists():
                 print("Device attempt retained for reconciliation",journal,file=sys.stderr)
-                if reaped:save("recovery_required",cid)
+                if reaped and not gpu_released:save("recovery_required",cid)
             if receipt is not None:
                 require(reaped and gpu_released and not journal.exists(),"Device release is unconfirmed")
                 print(json.dumps(receipt),flush=True)
