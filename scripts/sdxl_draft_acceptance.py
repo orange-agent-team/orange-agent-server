@@ -34,7 +34,7 @@ def check(root,assets,operator,post,read,sql,scope):
     req=str(uuid.uuid4())
     status,receipt=post(manifest,key=req)
     require(status==201 and receipt["model"]["status"]=="draft" and receipt["manifest_sha256"]==measured["manifest_sha256"],"Admin draft differs from measured bytes")
-    require(post(manifest,key=req)==(201,receipt),"Draft replay changed identity")
+    require(post(manifest,key=req)==(200,receipt),"Draft replay changed identity")
     status,readback=read("model-drafts/"+model+scope)
     require(status==200 and readback["manifest"]==manifest,"Unable to read the stored proposal")
     changed=copy.deepcopy(manifest)
