@@ -16,7 +16,9 @@ use std::{
 };
 use uuid::Uuid;
 
+mod rotation;
 mod verify;
+pub use rotation::prepare_rotation;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -254,24 +256,30 @@ pub fn prepare_handoff(
     path: &Path,
     id: &str,
 ) -> Result<orange_protocol::device_enrollment::AuthorizeWorkerEnrollment, Error> {
-    use orange_protocol::device_enrollment::AuthorizeWorkerEnrollment;
     super::validate_id(id)?;
     let dir = open_directory(path)?;
     lock(&dir)?;
+    prepare_handoff_locked(&dir, id)
+}
+fn prepare_handoff_locked(
+    dir: &File,
+    id: &str,
+) -> Result<orange_protocol::device_enrollment::AuthorizeWorkerEnrollment, Error> {
+    use orange_protocol::device_enrollment::AuthorizeWorkerEnrollment;
     let record = format!("{id}.handoff.json");
     let token_name = format!("{id}.exchange-token");
-    let prior = read_at(&dir, record.as_ref(), 8192)?;
-    let intent = read_at(&dir, format!("{id}.redemption.json").as_ref(), 4096)?;
+    let prior = read_at(dir, record.as_ref(), 8192)?;
+    let intent = read_at(dir, format!("{id}.redemption.json").as_ref(), 4096)?;
     let initialized = prior.is_some() || intent.is_some();
-    let key = super::durable_key(&dir, id, !initialized)?;
+    let key = super::durable_key(dir, id, !initialized)?;
     let request = super::request(&key, id)?;
-    let secret = match read_at(&dir, token_name.as_ref(), 46)? {
+    let secret = match read_at(dir, token_name.as_ref(), 46)? {
         Some(raw) => parse_token(&raw)?,
         None if !initialized => {
             let mut random = [0u8; 32];
             getrandom::fill(&mut random).map_err(|_| Error::Local)?;
             let secret = URL_SAFE_NO_PAD.encode(random);
-            publish(&dir, &token_name, secret.as_bytes(), 46)?;
+            publish(dir, &token_name, secret.as_bytes(), 46)?;
             secret
         }
         None => return Err(Error::Conflict),
@@ -291,7 +299,7 @@ pub fn prepare_handoff(
     if prior.as_ref().is_some_and(|raw| *raw != bytes) {
         return Err(Error::Conflict);
     }
-    publish(&dir, &record, &bytes, 8192)?;
+    publish(dir, &record, &bytes, 8192)?;
     Ok(handoff)
 }
 pub async fn redeem(config: &Path) -> Result<Installation, Error> {

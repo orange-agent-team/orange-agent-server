@@ -53,3 +53,28 @@ pub struct WorkerCertificateReceipt {
     pub expires_unix: String,
     pub certificate_pem: String,
 }
+
+/// Signed by the installed device leaf. The replacement CSR independently proves the new key.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerRotationIntent {
+    pub version: u32,
+    pub owner_id: String,
+    pub node_id: String,
+    pub previous_request_id: String,
+    pub previous_certificate_sha256: String,
+    pub previous_issuer_sha256: String,
+    pub replacement: AuthorizeWorkerEnrollment,
+}
+impl WorkerRotationIntent {
+    /// Sign the lowercase ASCII digest using the old Ed25519 key. The domain is distinct from login and enrollment.
+    pub fn signing_message(&self) -> Result<String, serde_json::Error> {
+        crate::request_digest("worker-certificate-rotation.v1", self)
+    }
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerRotationHandoff {
+    pub intent: WorkerRotationIntent,
+    pub previous_key_signature: String,
+}

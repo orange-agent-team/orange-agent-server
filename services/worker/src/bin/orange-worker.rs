@@ -2,6 +2,35 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args_os().skip(1);
     let command = args.next();
+    if command.as_deref() == Some(std::ffi::OsStr::new("prepare-certificate-rotation")) {
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        {
+            let config = args
+                .next()
+                .ok_or("installed device configuration required")?;
+            let owner = args
+                .next()
+                .and_then(|v| v.into_string().ok())
+                .ok_or("owner identity required")?;
+            let next = args
+                .next()
+                .and_then(|v| v.into_string().ok())
+                .ok_or("new request UUID required")?;
+            if args.next().is_some() {
+                return Err("expected installed configuration, owner and new request UUID".into());
+            }
+            let handoff = orange_worker::enrollment::redemption::prepare_rotation(
+                std::path::Path::new(&config),
+                &owner,
+                &next,
+            )?;
+            serde_json::to_writer(std::io::stdout().lock(), &handoff)?;
+            println!();
+            return Ok(());
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        return Err("private device enrollment storage is unavailable on this target".into());
+    }
     if command.as_deref() == Some(std::ffi::OsStr::new("redeem-enrollment")) {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
