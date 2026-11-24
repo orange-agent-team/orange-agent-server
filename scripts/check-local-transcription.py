@@ -112,7 +112,7 @@ def main():
             hung=scratch/"stalled-decoder";pidfile=scratch/"decoder.pid"
             hung.write_text("#!"+str(python)+"\n"+f"""import fcntl,os,time
 from pathlib import Path
-with Path({str(slot/'transcription.lock')!r}).open('a') as lock:
+with os.fdopen(os.open({str(slot/'transcription.lock')!r},os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600),'r+b') as lock:
     fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
     Path({str(pidfile)!r}).write_text(str(os.getpid()))
     print('{{"ready":true,"protocol":1}}',flush=True)
