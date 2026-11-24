@@ -391,9 +391,8 @@ async fn populated_schema_50_keeps_its_live_worker_and_does_not_invent_observati
     sqlx::query("INSERT INTO reviewed_execution_profiles(execution_profile_id,model_version_id,model_sha256,execution_profile_digest)
           VALUES($1,'historical-text',$2,$3)").bind(&profile).bind("0".repeat(64)).bind("1".repeat(64))
         .execute(store.pool()).await.expect("existing independently reviewed text profile");
-    let server = Running::start(&store).await;
-    let mut rpc = server
-        .client(Some(&d.certificate))
+    let legacy = historical_gateway::HistoricalGateway::start(50, &url, None).await;
+    let mut rpc = gateway_client(legacy.port, Some(&d.certificate))
         .await
         .expect("pre-upgrade mTLS");
     let (sender, mut stream) = control(&mut rpc, hello(&d.node))
@@ -403,6 +402,12 @@ async fn populated_schema_50_keeps_its_live_worker_and_does_not_invent_observati
     heartbeat(&sender, &mut stream, &d.node, &before)
         .await
         .expect("old schema heartbeat");
+    let before_migration:(i64,bool)=sqlx::query_as("SELECT max(version),to_regprocedure('lock_worker_issuer_policy()') IS NULL FROM _sqlx_migrations WHERE success").fetch_one(store.pool()).await.expect("actual historical schema");
+    assert_eq!(
+        before_migration,
+        (50, true),
+        "Historical peer must not silently migrate to current"
+    );
     store.migrate().await.expect("upgrade live database");
     store.migrate().await.expect("idempotent upgrade");
     heartbeat(&sender, &mut stream, &d.node, &before)
@@ -436,5 +441,5 @@ async fn populated_schema_50_keeps_its_live_worker_and_does_not_invent_observati
     drop(sender);
     drop(stream);
     drop(rpc);
-    server.stop().await;
+    legacy.stop().await;
 }

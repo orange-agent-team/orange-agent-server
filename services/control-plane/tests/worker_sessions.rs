@@ -6,6 +6,15 @@ mod execution_cases;
 #[cfg(any(feature = "transcription-input-tests", feature = "real-worker-tests"))]
 #[path = "support/finance_sessions.rs"]
 mod finance_sessions;
+#[cfg(all(
+    unix,
+    any(
+        feature = "transcription-input-tests",
+        feature = "transcription-observation-tests"
+    )
+))]
+#[path = "worker_sessions/historical_gateway.rs"]
+mod historical_gateway;
 #[path = "worker_sessions/inputs.rs"]
 mod input_cases;
 #[path = "worker_sessions/isolation_observations.rs"]
@@ -141,22 +150,7 @@ impl Running {
         &self,
         certificate: Option<&str>,
     ) -> Result<WorkerGatewayClient<Channel>, tonic::transport::Error> {
-        let mut tls = ClientTlsConfig::new()
-            .domain_name("localhost")
-            .ca_certificate(Certificate::from_pem(file("ca.pem")));
-        if let Some(name) = certificate {
-            tls = tls.identity(Identity::from_pem(
-                file(&format!("{name}.pem")),
-                file(&format!("{name}.key")),
-            ));
-        }
-        let channel = Channel::from_shared(format!("https://127.0.0.1:{}", self.port))
-            .expect("url")
-            .connect_timeout(Duration::from_secs(3))
-            .tls_config(tls)?
-            .connect()
-            .await?;
-        Ok(WorkerGatewayClient::new(channel))
+        gateway_client(self.port, certificate).await
     }
     async fn stop(self) {
         let _ = self.stop.send(());
@@ -185,6 +179,28 @@ fn hello(node: &str) -> worker::WorkerFrame {
         })),
     }
 }
+async fn gateway_client(
+    port: u16,
+    certificate: Option<&str>,
+) -> Result<WorkerGatewayClient<Channel>, tonic::transport::Error> {
+    let mut tls = ClientTlsConfig::new()
+        .domain_name("localhost")
+        .ca_certificate(Certificate::from_pem(file("ca.pem")));
+    if let Some(name) = certificate {
+        tls = tls.identity(Identity::from_pem(
+            file(&format!("{name}.pem")),
+            file(&format!("{name}.key")),
+        ));
+    }
+    let channel = Channel::from_shared(format!("https://127.0.0.1:{}", port))
+        .expect("url")
+        .connect_timeout(Duration::from_secs(3))
+        .tls_config(tls)?
+        .connect()
+        .await?;
+    Ok(WorkerGatewayClient::new(channel))
+}
+
 async fn control(
     client: &mut WorkerGatewayClient<Channel>,
     frame: worker::WorkerFrame,
@@ -568,8 +584,11 @@ async fn organization_membership_is_current_authority_not_certificate_possession
 }
 
 fn worker_config(server: &Running, device: &Device) -> orange_worker::control::ControlConfig {
+    worker_config_at(server.port, device)
+}
+fn worker_config_at(port: u16, device: &Device) -> orange_worker::control::ControlConfig {
     orange_worker::control::ControlConfig {
-        endpoint: format!("https://127.0.0.1:{}/", server.port),
+        endpoint: format!("https://127.0.0.1:{port}/"),
         server_name: "localhost".into(),
         server_ca_pem: file("ca.pem"),
         certificate_pem: file(&format!("{}.pem", device.certificate)),

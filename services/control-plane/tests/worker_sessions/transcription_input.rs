@@ -1634,7 +1634,8 @@ async fn live_legacy_input_session_survives_upgrade_and_audio_negotiation_cannot
     let store = ArtifactStore::open_local(db.pool().clone(), root.path(), 1048576, 100)
         .await
         .expect("writer");
-    let server = Running::start_with_input(&db, Some(store.reader())).await;
+    let historical =
+        historical_gateway::HistoricalGateway::start(51, &url, Some(root.path())).await;
     let tmp = tempfile::tempdir().expect("journals");
     std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o700))
         .expect("private state");
@@ -1643,7 +1644,7 @@ async fn live_legacy_input_session_survives_upgrade_and_audio_negotiation_cannot
     let mut journal =
         ExecutionJournal::open(&tmp.path().join("exec.sqlite"), d.node.clone()).expect("execution");
     let mut old = ControlConnection::connect_execution_with_inputs(
-        worker_config(&server, &d),
+        worker_config_at(historical.port, &d),
         &mut node,
         &mut journal,
     )
@@ -1655,6 +1656,14 @@ async fn live_legacy_input_session_survives_upgrade_and_audio_negotiation_cannot
             .expect("old dispatch")
             .assignment
             .is_none()
+    );
+    let before: i64 = sqlx::query_scalar("SELECT max(version) FROM _sqlx_migrations WHERE success")
+        .fetch_one(db.pool())
+        .await
+        .expect("real historical schema");
+    assert_eq!(
+        before, 51,
+        "Historical gateway unexpectedly changed the schema"
     );
     db.migrate().await.expect("upgrade while connected");
     db.migrate().await.expect("repeat safely");
@@ -1675,6 +1684,7 @@ async fn live_legacy_input_session_survives_upgrade_and_audio_negotiation_cannot
         .expect("capability")
     };
     assert_eq!(version().await, 0);
+    let server = Running::start_with_input(&db, Some(store.reader())).await;
     let mut audio = ControlConnection::connect_transcription_inputs(
         worker_config(&server, &d),
         &mut node,
@@ -1714,6 +1724,7 @@ async fn live_legacy_input_session_survives_upgrade_and_audio_negotiation_cannot
     drop(old);
     drop(audio);
     drop(legacy);
+    historical.stop().await;
     server.stop().await;
     store.drain().await.expect("close");
 }

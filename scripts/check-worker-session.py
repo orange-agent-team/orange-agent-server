@@ -40,6 +40,11 @@ with tempfile.TemporaryDirectory(prefix='orange-worker-mtls-') as directory:
         command('x509','-req','-in',name+'.csr','-CA',ca+'.pem','-CAkey',ca+'.key','-set_serial',str(secrets.randbits(128)+1),'-days','1','-extfile','leaf.ext','-out',name+'.pem')
         command('x509','-in',name+'.pem','-outform','DER','-out',name+'.der')
     for file in private.iterdir():file.chmod(0o600)
+    if environment.get("ORANGE_TRANSCRIPTION_OBSERVATION_TESTS") or (environment.get("ORANGE_AUDIO_GRANT_TESTS") and not environment.get("ORANGE_SIX_JOURNEY_TEST")):
+        from historical_worker_gateway import prepare
+        version=50 if environment.get("ORANGE_TRANSCRIPTION_OBSERVATION_TESTS") else 51
+        environment["ORANGE_HISTORICAL_GATEWAY_"+str(version)]=str(prepare(ROOT,version))
+
     environment['ORANGE_WORKER_TLS_DIR']=str(private)
     environment.setdefault('ORANGE_TEST_USER_CONFIG_FILE',str(ROOT/'.local/identity/user-config.json'))
     # Financial recovery uses a second, independently configured Admin identity in the same development deployment.
@@ -73,7 +78,13 @@ with tempfile.TemporaryDirectory(prefix='orange-worker-mtls-') as directory:
         features='transcription-observation-tests'
     if environment.get("ORANGE_JOB_REVISION_BROWSER_TEST"): features="job-revision-browser-tests"
     command=[str(cargo),'test','-p','orange-control-plane','--features',features,'--test','worker_sessions','--locked']
-    if environment.get("ORANGE_SUBMIT_ROLLBACK_TEST"):
+    historical_only=environment.get("ORANGE_TEST_HISTORICAL_SCHEMA_ONLY")
+    if historical_only:
+        cases={"50":("ORANGE_TRANSCRIPTION_OBSERVATION_TESTS","transcription_observation::populated_schema_50_keeps_its_live_worker_and_does_not_invent_observations"),
+               "51":("ORANGE_AUDIO_GRANT_TESTS","transcription_input::live_legacy_input_session_survives_upgrade_and_audio_negotiation_cannot_be_inherited")}
+        if historical_only not in cases or not environment.get(cases[historical_only][0]):raise ValueError("Wrong historic schema selector")
+        command += [cases[historical_only][1],"--","--exact"]
+    elif environment.get("ORANGE_SUBMIT_ROLLBACK_TEST"):
         command+=["input_cases::withdrawals::transient_submit_conflicts_replay_only_confirmed_rollbacks_under_one_key","--","--exact"]
     elif environment.get("ORANGE_PEER_PURPOSE_TESTS"):
         command+=["absent_foreign_and_unregistered_certificates_never_claim_session","--","--exact"]
@@ -129,7 +140,8 @@ with tempfile.TemporaryDirectory(prefix='orange-worker-mtls-') as directory:
         if code:raise SystemExit(code)
         if not passed:raise SystemExit('No actual selected Worker tests passed; refusing an empty-filter success')
     subprocess.run([str(cargo),'build','-p','orange-control-plane','--bin','orange-worker-gateway','--locked'],cwd=ROOT,env=environment,check=True)
-if environment.get('ORANGE_SIX_JOURNEY_TEST'):print('PASS six product journeys on the local CPU marketplace; isolated merchant and enrollment fixtures')
+if environment.get("ORANGE_TEST_HISTORICAL_SCHEMA_ONLY"):print("PASS real historical gateway control session across migration from schema "+historical_only)
+elif environment.get('ORANGE_SIX_JOURNEY_TEST'):print('PASS six product journeys on the local CPU marketplace; isolated merchant and enrollment fixtures')
 elif environment.get('ORANGE_AUDIO_GRANT_TESTS'):print('PASS bounded ASR input grants, real authenticated range reads and revocation')
 elif environment.get('ORANGE_TRANSCRIPTION_OBSERVATION_TESTS'):print('PASS real registered CPU ASR observation on the mTLS gateway; independent review fixture, no Job admission or charge')
 elif environment.get('ORANGE_QUEUE_EXPIRY_TESTS'):print('PASS actual PG deadline/queue release and protocol fencing; identity/scheduler/ACK fixtures, no physical cleanup claim')
