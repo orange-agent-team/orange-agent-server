@@ -2,8 +2,8 @@
   "compiler": "libprotoc 36.2",
   "bindings": {
     "orange.host.v1.rs": "471a96430defb9ffc688b876dd92ac284467faa7ed0f3a53ddc5340191fa1704",
-    "orange.worker.v1.rs": "4d4801dfa205f7fa8c30e9db7ecc4bd77d119475ea5f6ed5177943fe2a6f535c"
+    "orange.worker.v1.rs": "0c4b255ac911eaf3cf83356d9df5a7519658ca53267782095847294be5821c9b"
   },
-  "descriptor": "fcf01f14a611d432ecb980a08bf88931abb912a1427e71448710968c37694c5f",
-  "descriptor_with_source_info": "6a4e06bcbcb3e83efff9fe05ebe20ac6bb78977376f1fa5ebf99bc6659c56b85"
+  "descriptor": "c2f62c731cda4f22cba6c1fdb6ed1b266ca03f1fec9abf371dc1f5f6a242a103",
+  "descriptor_with_source_info": "d7fe49711c3a0bc8edeabcd12c46e415d763f26b0595d541a4efb1ff12f48cc0"
 }

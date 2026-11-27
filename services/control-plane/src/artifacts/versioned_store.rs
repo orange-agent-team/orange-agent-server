@@ -424,20 +424,14 @@ impl VersionedStore {
         }
         Ok(())
     }
-    pub async fn checked_version(
-        &self,
-        key: &str,
-        view: &ArtifactView,
-    ) -> Result<String, ArtifactError> {
+    pub async fn checked_version(&self, key: &str, size: u64) -> Result<String, ArtifactError> {
         key_valid(key)?;
         if !key.starts_with("published-") {
             return Err(ArtifactError::StoragePolicy);
         }
         let version = self.version(key).await?;
         let meta = self.op.stat_with(key).version(&version).await?;
-        if meta.version() != Some(version.as_str())
-            || meta.content_length().to_string() != view.size_bytes
-        {
+        if meta.version() != Some(version.as_str()) || meta.content_length() != size {
             return Err(ArtifactError::Integrity);
         }
         Ok(version)

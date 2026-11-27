@@ -54,41 +54,58 @@ impl ControlConnection {
             return Err(ControlError::Stale);
         }
         self.active = false;
-        let mut bytes = Vec::with_capacity(descriptor.size_bytes as usize);
-        while (bytes.len() as u64) < descriptor.size_bytes {
-            let offset = bytes.len() as u64;
-            let request = worker::InputReadRequest {
+        let mut capability = None;
+        let bytes = if let Some(storage) = self.direct_input.clone() {
+            let original = worker::InputDownloadRequest {
+                protocol_version: 1,
                 session_id: self.identity.session_id.clone(),
                 lease: record.assignment.lease.clone(),
-                artifact_id: descriptor.artifact_id.clone(),
-                version_id: descriptor.version_id.clone(),
-                offset,
-                max_bytes: 32768,
+                command_id: command.to_owned(),
+                artifact: Some(descriptor.clone()),
+                verify_only: false,
             };
-            let reply = tokio::time::timeout_at(
-                tokio::time::Instant::from_std(
-                    deadline.min(Instant::now() + Duration::from_secs(5)),
-                ),
-                self.input_client.read_input(request),
-            )
-            .await
-            .map_err(|_| ControlError::Unavailable)?
-            .map_err(status)?
-            .into_inner();
-            if reply.artifact.as_ref() != Some(&descriptor)
-                || reply.offset != offset
-                || reply.data.is_empty()
-                || reply.data.len() > 32768
-                || offset + reply.data.len() as u64 > descriptor.size_bytes
-                || reply.eof != (offset + reply.data.len() as u64 == descriptor.size_bytes)
-            {
-                return Err(ControlError::Protocol);
+            let grant = self.direct_input_rpc(&original, deadline).await?;
+            let data = storage.read(&grant, &descriptor, deadline).await?;
+            capability = Some((original, grant.expires_unix));
+            data
+        } else {
+            let mut bytes = Vec::with_capacity(descriptor.size_bytes as usize);
+            while (bytes.len() as u64) < descriptor.size_bytes {
+                let offset = bytes.len() as u64;
+                let request = worker::InputReadRequest {
+                    session_id: self.identity.session_id.clone(),
+                    lease: record.assignment.lease.clone(),
+                    artifact_id: descriptor.artifact_id.clone(),
+                    version_id: descriptor.version_id.clone(),
+                    offset,
+                    max_bytes: 32768,
+                };
+                let reply = tokio::time::timeout_at(
+                    tokio::time::Instant::from_std(
+                        deadline.min(Instant::now() + Duration::from_secs(5)),
+                    ),
+                    self.input_client.read_input(request),
+                )
+                .await
+                .map_err(|_| ControlError::Unavailable)?
+                .map_err(status)?
+                .into_inner();
+                if reply.artifact.as_ref() != Some(&descriptor)
+                    || reply.offset != offset
+                    || reply.data.is_empty()
+                    || reply.data.len() > 32768
+                    || offset + reply.data.len() as u64 > descriptor.size_bytes
+                    || reply.eof != (offset + reply.data.len() as u64 == descriptor.size_bytes)
+                {
+                    return Err(ControlError::Protocol);
+                }
+                bytes.extend(reply.data);
             }
-            bytes.extend(reply.data);
-        }
-        // Use the shared canonical digest implementation; no model invocation is
-        // permitted from a partial or changed object response.
-        use sha2::{Digest, Sha256};
+            // Use the shared canonical digest implementation; no model invocation is
+            // permitted from a partial or changed object response.
+            use sha2::{Digest, Sha256};
+            bytes
+        };
         if hex::encode(Sha256::digest(&bytes)) != descriptor.sha256 {
             return Err(ControlError::Protocol);
         }
@@ -105,6 +122,13 @@ impl ControlConnection {
             || Instant::now() >= deadline
         {
             return Err(ControlError::Stale);
+        }
+        if let Some((mut original, cutoff)) = capability {
+            original.verify_only = true;
+            let check = self.direct_input_rpc(&original, deadline).await?;
+            if check.expires_unix > cutoff || Instant::now() >= deadline {
+                return Err(ControlError::Stale);
+            }
         }
         self.active = true;
         Ok(request)

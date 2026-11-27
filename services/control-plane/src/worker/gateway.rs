@@ -452,6 +452,52 @@ impl WorkerGateway for Gateway {
             .map_err(|_| Status::deadline_exceeded("audio read deadline"))??;
         Ok(Response::new(result))
     }
+    async fn authorize_input_download(
+        &self,
+        request: Request<worker::InputDownloadRequest>,
+    ) -> Result<Response<worker::InputDownloadReply>, Status> {
+        let _permit = self
+            .input_slots
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| Status::resource_exhausted("input grant limit"))?;
+        let peer = fingerprint(&request)?;
+        let reader = self
+            .artifacts
+            .as_ref()
+            .ok_or_else(|| Status::unimplemented("input storage not configured"))?;
+        let r = request.into_inner();
+        let op = async {
+            let session = self
+                .store
+                .input_peer(&peer, &r.session_id)
+                .await
+                .map_err(status)?;
+            reader
+                .authorize_input_download(&self.store, &session, r)
+                .await
+                .map_err(|e| match e {
+                    crate::artifacts::ArtifactError::Invalid => {
+                        Status::invalid_argument("invalid input grant request")
+                    }
+                    crate::artifacts::ArtifactError::Forbidden => {
+                        Status::permission_denied("input grant not authorized")
+                    }
+                    crate::artifacts::ArtifactError::DirectUnavailable => {
+                        Status::unimplemented("direct input storage not configured")
+                    }
+                    crate::artifacts::ArtifactError::Busy => {
+                        Status::resource_exhausted("input grant limit")
+                    }
+                    _ => Status::failed_precondition("input unavailable or no longer authorized"),
+                })
+        };
+        let reply = tokio::time::timeout(Duration::from_secs(8), op)
+            .await
+            .map_err(|_| Status::deadline_exceeded("input grant deadline"))??;
+        Ok(Response::new(reply))
+    }
+
     async fn read_input(
         &self,
         request: Request<worker::InputReadRequest>,

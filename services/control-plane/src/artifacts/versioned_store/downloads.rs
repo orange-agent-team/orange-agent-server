@@ -1,19 +1,18 @@
 use super::*;
 
-fn now_seconds() -> Result<u64, ArtifactError> {
+pub(super) fn now_seconds() -> Result<u64, ArtifactError> {
     Ok(std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|_| ArtifactError::Unavailable)?
         .as_secs())
 }
 impl VersionedStore {
-    async fn sign_get(
+    pub(in crate::artifacts) async fn sign_published_get(
         &self,
         key: &str,
         version: &str,
-        view: &ArtifactView,
         cutoff: u64,
-    ) -> Result<DownloadAuthorization, ArtifactError> {
+    ) -> Result<String, ArtifactError> {
         let mut url = self
             .bucket_url
             .join(&format!("{}/{}", self.prefix, key))
@@ -44,14 +43,7 @@ impl VersionedStore {
                 .map_err(|_| ArtifactError::Unavailable)?;
             // Bound even a retry crossing a wall-clock second to the original grant deadline.
             if now_seconds()? == now {
-                return Ok(DownloadAuthorization {
-                    artifact_id: view.artifact_id.clone(),
-                    version_id: view.version_id.clone(),
-                    sha256: view.sha256.clone(),
-                    size_bytes: view.size_bytes.clone(),
-                    url: parts.uri.to_string(),
-                    expires_at_unix: cutoff.to_string(),
-                });
+                return Ok(parts.uri.to_string());
             }
         }
         Err(ArtifactError::Unavailable)
@@ -71,7 +63,15 @@ impl ArtifactStore {
         }
         let (source, stamp, key) = self.read_descriptor(actor, owner, upload, version).await?;
         let remote = self.inner.objects.remote()?;
-        let pin = remote.checked_version(&key, &source).await;
+        let pin = remote
+            .checked_version(
+                &key,
+                source
+                    .size_bytes
+                    .parse()
+                    .map_err(|_| ArtifactError::Integrity)?,
+            )
+            .await;
         let mut tx = self.inner.pool.begin().await?;
         authority::scope(&mut tx, actor, owner, false).await?;
         let row = self.row_in(&mut tx, owner, upload).await?;
@@ -98,7 +98,15 @@ impl ArtifactStore {
             .ok_or(ArtifactError::Conflict)?
             .try_into()
             .map_err(|_| ArtifactError::Integrity)?;
-        let grant = remote.sign_get(&key, &pin, &source, cutoff).await?;
+        let url = remote.sign_published_get(&key, &pin, cutoff).await?;
+        let grant = DownloadAuthorization {
+            artifact_id: source.artifact_id,
+            version_id: source.version_id,
+            sha256: source.sha256,
+            size_bytes: source.size_bytes,
+            url,
+            expires_at_unix: cutoff.to_string(),
+        };
         authority::finish(tx, actor).await?;
         if now_seconds()? >= cutoff {
             return Err(ArtifactError::Expired);

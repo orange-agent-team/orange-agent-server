@@ -174,13 +174,28 @@ impl ArtifactReader {
         let assignment = self
             .started_assignment(tx, sessions, s, &r.session_id, lease)
             .await?;
+        let (input, key) = self
+            .bound_input(tx, &assignment, lease, &r.artifact_id, &r.version_id)
+            .await?;
+        if r.offset > input.size_bytes {
+            return Err(ArtifactError::Forbidden);
+        }
+        Ok((input, key))
+    }
+    pub(super) async fn bound_input(
+        &self,
+        tx: &mut Tx<'_>,
+        assignment: &worker::Assignment,
+        lease: &worker::Lease,
+        artifact_id: &str,
+        version_id: &str,
+    ) -> Result<(worker::InputArtifact, String), ArtifactError> {
         let input = super::inputs::check_input_in(tx, &lease.job_id)
             .await?
             .ok_or(ArtifactError::Forbidden)?;
         if assignment.input_artifacts != vec![input.clone()]
-            || r.artifact_id != input.artifact_id
-            || r.version_id != input.version_id
-            || r.offset > input.size_bytes
+            || artifact_id != input.artifact_id
+            || version_id != input.version_id
         {
             return Err(ArtifactError::Forbidden);
         }

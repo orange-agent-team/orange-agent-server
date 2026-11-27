@@ -3,7 +3,7 @@ package orange.worker.v1;
 import "google/protobuf/timestamp.proto";
 
 // Transport peer identity comes from mTLS, never from node_id alone.
-service WorkerGateway { rpc ReportIsolationObservation(IsolationObservation) returns (IsolationObservationReceipt); rpc ReadTranscriptionInput(TranscriptionInputRead) returns (TranscriptionInputChunk); rpc ReportTranscriptionObservation(TranscriptionObservation) returns (TranscriptionObservationReceipt); rpc Control(stream WorkerFrame) returns (stream ServerFrame); rpc ReadInput(InputReadRequest) returns (InputReadReply); rpc RenewExecution(ExecutionRenewalRequest) returns (ExecutionRenewalReply); rpc CommitOutput(stream OutputFrame) returns (OutputReceipt); rpc QueryOutput(OutputQuery) returns (OutputReceipt); rpc ConfirmCpuCleanup(CpuCleanupRequest) returns (CpuCleanupReceipt); }
+service WorkerGateway { rpc ReportIsolationObservation(IsolationObservation) returns (IsolationObservationReceipt); rpc ReadTranscriptionInput(TranscriptionInputRead) returns (TranscriptionInputChunk); rpc ReportTranscriptionObservation(TranscriptionObservation) returns (TranscriptionObservationReceipt); rpc Control(stream WorkerFrame) returns (stream ServerFrame); rpc ReadInput(InputReadRequest) returns (InputReadReply); rpc AuthorizeInputDownload(InputDownloadRequest) returns (InputDownloadReply); rpc RenewExecution(ExecutionRenewalRequest) returns (ExecutionRenewalReply); rpc CommitOutput(stream OutputFrame) returns (OutputReceipt); rpc QueryOutput(OutputQuery) returns (OutputReceipt); rpc ConfirmCpuCleanup(CpuCleanupRequest) returns (CpuCleanupReceipt); }
 message Lease {
   string lease_id = 1;
   string job_id = 2;
@@ -105,6 +105,17 @@ message ServerFrame {
 message InputArtifact { string artifact_id=1; string version_id=2; string sha256=3; uint64 size_bytes=4; string media_type=5; }
 message InputReadRequest { string session_id=1; Lease lease=2; string artifact_id=3; string version_id=4; uint64 offset=5; uint32 max_bytes=6; }
 message InputReadReply { InputArtifact artifact=1; uint64 offset=2; bytes data=3; bool eof=4; }
+
+// Additive direct-input transport. Legacy chunked reads remain valid. The authenticated
+// helper must verify the complete bytes and recheck current control authority before use.
+message InputDownloadRequest {
+  uint32 protocol_version=1; string session_id=2; Lease lease=3;
+  string command_id=4; InputArtifact artifact=5; bool verify_only=6;
+}
+message InputDownloadReply {
+  uint32 protocol_version=1; string session_id=2; string command_id=3; string attempt_id=4;
+  InputArtifact artifact=5; int64 expires_unix=6; string get_url=7; bool verify_only=8;
+}
 
 // Independently negotiated renewal_version1. Original Assignment/Lease remains
 // immutable. Never interpret the legacy Renew/renewed stream draft as permission.

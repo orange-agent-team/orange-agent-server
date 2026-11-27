@@ -23,6 +23,7 @@ mod quarantine;
 mod quote_funding;
 mod retention;
 mod versioned_store;
+mod worker_downloads;
 pub(crate) use quarantine::QuarantineRequest;
 mod metering_retry;
 mod settlement;

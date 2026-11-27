@@ -1,5 +1,6 @@
 //! Authenticated control liveness. A connected session is never an execution lease.
 mod cleanup;
+mod direct_input;
 mod execution;
 mod inputs;
 mod isolation_observation;
@@ -79,6 +80,7 @@ pub struct ControlConnection {
     renewal_version: u32,
     output_version: u32,
     cpu_cleanup_version: u32,
+    direct_input: Option<direct_input::DirectInput>,
     input_client: WorkerGatewayClient<Channel>,
     offered: Option<worker::Assignment>,
 }
@@ -293,6 +295,7 @@ impl ControlConnection {
             renewal_version,
             output_version,
             cpu_cleanup_version,
+            direct_input: direct_input::DirectInput::configured()?,
             input_client: client,
             offered: None,
         })
